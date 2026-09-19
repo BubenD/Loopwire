@@ -4642,6 +4642,36 @@ void MainWindow::syncBreakOptions() {
                 twistCableCheck_->setChecked(editor_->twistCableBody());
             }
         }
+        // AND THE CABLE'S OWN MANAGEMENT, which only means anything while there is a cable: it comes
+        // up with the tick and goes away with it. The finish end's two come up only when the two
+        // ends have been parted, for the same reason the fan's do.
+        const bool covered = straightRun && editor_->twistCableBody();
+        const bool endsApart = covered && !editor_->twistBodySidesSame();
+        if (twistBodySidesCheck_) {
+            twistBodySidesCheck_->setVisible(covered);
+            if (covered) {
+                QSignalBlocker b(twistBodySidesCheck_);
+                twistBodySidesCheck_->setChecked(editor_->twistBodySidesSame());
+            }
+        }
+        showAutoField(twistBodyWidthSpin_, twistBodyWidthLabel_, covered,
+                      editor_->twistBodyWidth() <= 1e-9,
+                      editor_->twistBodyWidth() > 1e-9 ? editor_->twistBodyWidth() : fig.bodyWidth);
+        showAutoField(twistBodyFaceSpin_, twistBodyFaceLabel_, covered,
+                      editor_->twistBodyFace() <= 1e-9,
+                      editor_->twistBodyFace() > 1e-9 ? editor_->twistBodyFace() : fig.bodyFace);
+        showAutoField(twistBodyShrinkSpin_, twistBodyShrinkLabel_, covered,
+                      editor_->twistBodyShrink() < 0.0,
+                      editor_->twistBodyShrink() >= 0.0 ? editor_->twistBodyShrink()
+                                                        : fig.bodyShrink);
+        showAutoField(twistBodyFaceBSpin_, twistBodyFaceBLabel_, endsApart,
+                      editor_->twistBodyFaceFinish() <= 1e-9,
+                      editor_->twistBodyFaceFinish() > 1e-9 ? editor_->twistBodyFaceFinish()
+                                                            : fig.bodyFace);
+        showAutoField(twistBodyShrinkBSpin_, twistBodyShrinkBLabel_, endsApart,
+                      editor_->twistBodyShrinkFinish() < 0.0,
+                      editor_->twistBodyShrinkFinish() >= 0.0 ? editor_->twistBodyShrinkFinish()
+                                                              : fig.bodyShrink);
         if (twistSidesCheck_) {
             twistSidesCheck_->setVisible(straightRun);
             if (straightRun) {
@@ -9335,6 +9365,52 @@ void MainWindow::refreshProperties() {
                                                        ? QStringLiteral("cable")
                                                        : QString());
                      });
+            // AND WHAT THAT CABLE IS DRAWN TO, while there is one: how wide, and at each end how far
+            // across its face is and over what length it comes down to that.
+            if (covered) {
+                addNum(QStringLiteral("Cable width"),
+                       mv(QStringLiteral("twistBodyWidth")).toDouble(0.0), [this](double v) {
+                           editor_->setSelectionMetaNumber(QStringLiteral("twistBodyWidth"),
+                                                           std::max(0.0, v));
+                       });
+                addNum(QStringLiteral("End size"), mv(QStringLiteral("twistBodyFace")).toDouble(0.0),
+                       [this](double v) {
+                           editor_->setSelectionMetaNumber(QStringLiteral("twistBodyFace"),
+                                                           std::max(0.0, v));
+                       });
+                addNum(QStringLiteral("Shrink length"),
+                       mv(QStringLiteral("twistBodyShrink")).toDouble(-1.0), [this](double v) {
+                           editor_->setSelectionMetaNumber(QStringLiteral("twistBodyShrink"),
+                                                           std::max(-1.0, v));
+                       }, autoTip);
+                const bool bothEnds =
+                    !e->meta.contains(QStringLiteral("twistBodySidesSame")) ||
+                    e->meta.value(QStringLiteral("twistBodySidesSame")).toBool();
+                addCombo(QStringLiteral("Cable both sides"),
+                         {QStringLiteral("Alike"), QStringLiteral("Each its own")},
+                         mv(QStringLiteral("twistBodySidesSame")).isVaries()
+                             ? QStringLiteral("#Value")
+                             : (bothEnds ? QStringLiteral("Alike")
+                                         : QStringLiteral("Each its own")),
+                         false, [this](const QString& t) {
+                             editor_->setSelectionMetaBool(QStringLiteral("twistBodySidesSame"),
+                                                           t == QLatin1String("Alike"));
+                         });
+                if (!bothEnds) {
+                    addNum(QStringLiteral("Finish size"),
+                           mv(QStringLiteral("twistBodyFaceFinish")).toDouble(0.0),
+                           [this](double v) {
+                               editor_->setSelectionMetaNumber(
+                                   QStringLiteral("twistBodyFaceFinish"), std::max(0.0, v));
+                           });
+                    addNum(QStringLiteral("Finish shrink"),
+                           mv(QStringLiteral("twistBodyShrinkFinish")).toDouble(-1.0),
+                           [this](double v) {
+                               editor_->setSelectionMetaNumber(
+                                   QStringLiteral("twistBodyShrinkFinish"), std::max(-1.0, v));
+                           }, autoTip);
+                }
+            }
             // AND WHETHER THE ENDS ARE STRIPPED, and by how much: the insulation off the last of
             // each wire, back to bare conductor, which is how a wire is landed in a contact.
             const bool stripping = e->meta.value(QStringLiteral("twistStrip")).toBool();

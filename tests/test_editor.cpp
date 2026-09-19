@@ -11249,6 +11249,97 @@ int run_editor_tests() {
                     int(stillThere.size()), same ? "are" : "are NOT");
         check(same, "cable body: the fan is untouched - every wire ends where it always did");
         }
+
+        // ---- AND THE CABLE IS A THING WITH FIGURES ON IT ----
+        {
+            // How wide it is, and at each end how far across its face is and over what length it
+            // comes down to that. A cover over a loom is shrunk onto a connector at one end and onto
+            // a breakout at the other, and those are not the same size - so the two ends can be
+            // described apart, though most of the time they are not.
+            auto measured = [](const Entity& e) {
+                struct Read { double widest = 0.0, atStart = 0.0, atEnd = 0.0; };
+                Read r;
+                const std::vector<std::vector<Vec2>> body = twistedPairBody(e);
+                if (body.empty()) return r;
+                double from = 1e300, to = -1e300;
+                for (const Vec2& v : body.front()) {
+                    from = std::min(from, v.x);
+                    to = std::max(to, v.x);
+                }
+                for (const Vec2& v : body.front()) {
+                    r.widest = std::max(r.widest, std::abs(v.y) * 2.0);
+                    if (std::abs(v.x - from) < 1e-6) r.atStart = std::max(r.atStart, std::abs(v.y) * 2.0);
+                    if (std::abs(v.x - to) < 1e-6) r.atEnd = std::max(r.atEnd, std::abs(v.y) * 2.0);
+                }
+                return r;
+            };
+            Entity wide = run(true);
+            wide.id = QStringLiteral("WIDE");
+            wide.meta.insert(QStringLiteral("twistBodyWidth"), 40.0);
+            wide.meta.insert(QStringLiteral("twistBodyFace"), 20.0);
+            const auto got = measured(wide);
+            std::printf("  cable body: asked 40 across with a 20 face - %.2f across, %.2f at the "
+                        "ends\n",
+                        got.widest, got.atStart);
+            check(std::abs(got.widest - 40.0) < 1e-6,
+                  "cable body: it is drawn the width it is asked for");
+            check(std::abs(got.atStart - 20.0) < 1e-6 && std::abs(got.atEnd - 20.0) < 1e-6,
+                  "cable body: and shrunk at each end to the size asked for");
+
+            // THE SHRUNK LENGTH IS HOW FAR IN IT TAKES TO GET THERE. Measured by where the outline
+            // reaches full width: a long shoulder reaches it further in than a short one, and NOUGHT
+            // is a square shoulder, which is a thing a drawing can want.
+            auto reachesFullAt = [](const Entity& e) {
+                const std::vector<std::vector<Vec2>> body = twistedPairBody(e);
+                if (body.empty()) return -1.0;
+                double widest = 0.0, from = 1e300;
+                for (const Vec2& v : body.front()) {
+                    widest = std::max(widest, std::abs(v.y));
+                    from = std::min(from, v.x);
+                }
+                double at = 1e300;
+                for (const Vec2& v : body.front())
+                    if (std::abs(std::abs(v.y) - widest) < 1e-6) at = std::min(at, v.x);
+                return at - from;
+            };
+            Entity shoulder = wide;
+            shoulder.id = QStringLiteral("SHOULDER");
+            shoulder.meta.insert(QStringLiteral("twistBodyShrink"), 18.0);
+            Entity square = wide;
+            square.id = QStringLiteral("SQUARE");
+            square.meta.insert(QStringLiteral("twistBodyShrink"), 0.0);
+            std::printf("  cable body: full width %.1f in on an 18 shrink, %.1f in on nought\n",
+                        reachesFullAt(shoulder), reachesFullAt(square));
+            check(std::abs(reachesFullAt(shoulder) - 18.0) < 1e-6,
+                  "cable body: the shrunk length is how far in it takes to reach full width");
+            check(reachesFullAt(square) < 1e-6,
+                  "cable body: and nought is a square shoulder, which a drawing can ask for");
+
+            // THE TWO ENDS CAN BE DESCRIBED APART, and are not unless they are told to be.
+            Entity apart = wide;
+            apart.id = QStringLiteral("APART");
+            apart.meta.insert(QStringLiteral("twistBodyFaceFinish"), 32.0);
+            const auto together = measured(wide);
+            const auto split = measured(apart);
+            std::printf("  cable body: ends %.1f and %.1f alike, %.1f and %.1f once parted\n",
+                        together.atStart, together.atEnd, split.atStart, split.atEnd);
+            check(std::abs(split.atStart - 20.0) < 1e-6 && std::abs(split.atEnd - 20.0) < 1e-6,
+                  "cable body: a finish figure is ignored while both ends are said to be alike");
+            apart.meta.insert(QStringLiteral("twistBodySidesSame"), false);
+            const auto parted = measured(apart);
+            std::printf("  cable body: parted, the ends are %.1f and %.1f\n", parted.atStart,
+                        parted.atEnd);
+            check(std::abs(parted.atStart - 20.0) < 1e-6 && std::abs(parted.atEnd - 32.0) < 1e-6,
+                  "cable body: parted, the finish end shrinks to its own size and the start to its");
+            // AND A FACE CANNOT FLARE WIDER THAN THE CABLE IT IS THE END OF.
+            Entity flared = wide;
+            flared.id = QStringLiteral("FLARED");
+            flared.meta.insert(QStringLiteral("twistBodyFace"), 500.0);
+            const auto held = measured(flared);
+            std::printf("  cable body: asked for a 500 face on a 40 cable, got %.1f\n", held.atStart);
+            check(std::abs(held.atStart - 40.0) < 1e-6,
+                  "cable body: a face wider than the cable is held to the cable, not flared past it");
+        }
     }
 
     // ---- Nought is a sharp corner on the run's knee as well --------------------------------------

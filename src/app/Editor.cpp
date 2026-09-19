@@ -15934,8 +15934,23 @@ void Editor::writeBundleMeta(Entity& e, bool straight) const {
     // not, so most runs carry nothing extra.
     // AND WHETHER THE CONVERGED STRETCH IS A CABLE. Written only when it is, so an ordinary run
     // carries nothing extra and opens on an older build as the run it always was.
-    if (straight && twistCableBody_)
+    if (straight && twistCableBody_) {
         e.meta.insert(QStringLiteral("twistBody"), QStringLiteral("cable"));
+        // Each figure only where it has been said, so a cable drawn without touching any of them
+        // carries nothing extra and is the cable the drawing would have made of it anyway.
+        if (twistBodyWidth_ > 1e-9)
+            e.meta.insert(QStringLiteral("twistBodyWidth"), twistBodyWidth_);
+        if (twistBodyFace_ > 1e-9) e.meta.insert(QStringLiteral("twistBodyFace"), twistBodyFace_);
+        if (twistBodyShrink_ >= 0.0)
+            e.meta.insert(QStringLiteral("twistBodyShrink"), twistBodyShrink_);
+        if (!twistBodySidesSame_) {
+            e.meta.insert(QStringLiteral("twistBodySidesSame"), false);
+            if (twistBodyFaceFinish_ > 1e-9)
+                e.meta.insert(QStringLiteral("twistBodyFaceFinish"), twistBodyFaceFinish_);
+            if (twistBodyShrinkFinish_ >= 0.0)
+                e.meta.insert(QStringLiteral("twistBodyShrinkFinish"), twistBodyShrinkFinish_);
+        }
+    }
     if (straight && twistStrip_) {
         e.meta.insert(QStringLiteral("twistStrip"), true);
         if (twistStripLen_ > 1e-9) e.meta.insert(QStringLiteral("twistStripLen"), twistStripLen_);
@@ -16020,6 +16035,47 @@ void Editor::setTwistCableBody(bool on) {
     if (twistCableBody_ == on) return;
     twistCableBody_ = on;
     emit overlayChanged();   // a pinned run re-draws covered, or as its wires
+}
+
+void Editor::setTwistBodyWidth(double mm) {
+    const double next = std::max(0.0, mm);
+    if (std::abs(twistBodyWidth_ - next) < 1e-9) return;
+    twistBodyWidth_ = next;
+    emit overlayChanged();
+}
+
+void Editor::setTwistBodySidesSame(bool same) {
+    if (twistBodySidesSame_ == same) return;
+    twistBodySidesSame_ = same;
+    emit overlayChanged();
+}
+
+void Editor::setTwistBodyFace(double mm) {
+    const double next = std::max(0.0, mm);
+    if (std::abs(twistBodyFace_ - next) < 1e-9) return;
+    twistBodyFace_ = next;
+    emit overlayChanged();
+}
+
+void Editor::setTwistBodyShrink(double mm) {
+    const double next = std::max(-1.0, mm);
+    if (std::abs(twistBodyShrink_ - next) < 1e-9) return;
+    twistBodyShrink_ = next;
+    emit overlayChanged();
+}
+
+void Editor::setTwistBodyFaceFinish(double mm) {
+    const double next = std::max(0.0, mm);
+    if (std::abs(twistBodyFaceFinish_ - next) < 1e-9) return;
+    twistBodyFaceFinish_ = next;
+    emit overlayChanged();
+}
+
+void Editor::setTwistBodyShrinkFinish(double mm) {
+    const double next = std::max(-1.0, mm);
+    if (std::abs(twistBodyShrinkFinish_ - next) < 1e-9) return;
+    twistBodyShrinkFinish_ = next;
+    emit overlayChanged();
 }
 
 void Editor::setTwistStrip(bool on) {

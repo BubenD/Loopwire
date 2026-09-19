@@ -388,6 +388,13 @@ struct TwistFrames {
     // THE CONVERGED STRETCH IS A BODY, not the lines the wires make: a cable under heatshrink. The
     // fans are untouched either way - it is the part between them that this is about.
     bool cableBody = false;
+    // AND THE FIGURES IT IS DRAWN TO. How wide the cable is, and at each end how far across its face
+    // is and over what length it comes down to it - the shrunk length. The two ends are described
+    // separately where they are told to be: a cover over a loom is shrunk onto a connector at one
+    // end and onto a breakout at the other, and those are not the same size.
+    double bodyHalf = 0.0;
+    double bodyFace = 0.0, bodyFaceB = 0.0;
+    double bodyShrink = 0.0, bodyShrinkB = 0.0;
     // THE RADIUS THE FAN'S OWN CORNERS TURN ON. Below nought is nobody having said: the fan is
     // eased end to end, which is what every run drawn before there was a field for it has. NOUGHT
     // IS A SHARP CORNER, asked for - a drawing that wants the knee shown as a corner and not as a
@@ -609,6 +616,42 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
     f.cableBody =
         f.straight &&
         pair.meta.value(QStringLiteral("twistBody")).toString() == QLatin1String("cable");
+    if (f.cableBody) {
+        // WHAT IT IS DRAWN TO, and what each figure falls back to when nobody has said.
+        //
+        // A cover stands a little off what it covers, so left alone the cable is the bundle plus a
+        // wire's width; and it is shrunk ONTO the bundle at each end, so left alone the face is the
+        // bundle itself and the length it takes to get there is three times the standing-off. Every
+        // one of them can be said instead, and the two ends said apart.
+        const double bundle = 2.0 * (f.reach + f.thick);
+        const double over = std::max(0.2, f.thick * 0.8);
+        const double asked =
+            std::max(0.0, pair.meta.value(QStringLiteral("twistBodyWidth")).toDouble(0.0));
+        f.bodyHalf = (asked > 1e-9 ? asked : bundle + 2.0 * over) / 2.0;
+        const bool bothSides = !pair.meta.contains(QStringLiteral("twistBodySidesSame")) ||
+                               pair.meta.value(QStringLiteral("twistBodySidesSame")).toBool();
+        auto bodySide = [&](const QString& key, bool finish) {
+            if (finish && !bothSides) {
+                const QString own = key + QStringLiteral("Finish");
+                if (pair.meta.contains(own)) return pair.meta.value(own);
+            }
+            return pair.meta.value(key);
+        };
+        auto faceOf = [&](bool finish) {
+            const QJsonValue v = bodySide(QStringLiteral("twistBodyFace"), finish);
+            const double across = v.isUndefined() ? bundle : std::max(0.0, v.toDouble(0.0));
+            // Never wider than the cable it is the end of: a face that flares is not a shrunk end.
+            return std::clamp(across / 2.0, 0.05, f.bodyHalf);
+        };
+        auto shrinkOf = [&](bool finish) {
+            const QJsonValue v = bodySide(QStringLiteral("twistBodyShrink"), finish);
+            return v.isUndefined() ? over * 3.0 : std::max(0.0, v.toDouble(0.0));
+        };
+        f.bodyFace = faceOf(false);
+        f.bodyFaceB = faceOf(true);
+        f.bodyShrink = shrinkOf(false);
+        f.bodyShrinkB = shrinkOf(true);
+    }
     // AND WHAT RADIUS THE FAN'S CORNERS CAME OUT ON, for the outermost wire - the one that travels
     // furthest and so is the one a radius is read off. Left alone the fan gives a quarter of the
     // slant to each corner, and this is the length that share comes to.
@@ -1054,6 +1097,11 @@ QString twistKey(const Entity& e) {
     k += e.meta.value(QLatin1String("twistSidesSame")).toBool(true) ? QLatin1String("|same")
                                                                    : QLatin1String("|apart");
     k += e.meta.value(QLatin1String("twistBody")).toString();
+    for (const char* m : {"twistBodyWidth", "twistBodyFace", "twistBodyShrink",
+                          "twistBodyFaceFinish", "twistBodyShrinkFinish"})
+        put(m);
+    k += e.meta.value(QLatin1String("twistBodySidesSame")).toBool(true) ? QLatin1String("|bs")
+                                                                       : QLatin1String("|ba");
     return k;
 }
 
@@ -1157,12 +1205,10 @@ const TwistCached* twistCached(const Entity& pair) {
         if (to > from) {
             std::vector<Vec2> along;
             for (size_t i = from; i <= to && i < f.pos.size(); ++i) along.push_back(f.pos[i]);
-            // A sleeve stands a little off what it covers and is recovered onto it at each end -
-            // "shrunk ends" - so the body is a touch wider than the bundle and comes down to it.
-            const double bundleHalf = f.reach + f.thick;
-            const double over = std::max(0.2, f.thick * 0.8);
-            std::vector<Vec2> outline = shrunkSleeveOutline(along, bundleHalf + over, bundleHalf,
-                                                            bundleHalf, over * 3.0, over * 3.0);
+            // Drawn to the figures worked out above: how wide the cable is, and at each end how far
+            // across its face is and over what length it comes down to it.
+            std::vector<Vec2> outline = shrunkSleeveOutline(
+                along, f.bodyHalf, f.bodyFace, f.bodyFaceB, f.bodyShrink, f.bodyShrinkB);
             if (outline.size() >= 3) {
                 outline.push_back(outline.front());   // closed: it is a body, not a run of lines
                 c.body.push_back(std::move(outline));
@@ -1209,6 +1255,9 @@ TwistFigures twistedPairFigures(const Entity& pair) {
     out.flushLen = f.tail;
     out.stripLen = f.strip;
     out.trunk = f.trunk;
+    out.bodyWidth = f.bodyHalf * 2.0;
+    out.bodyFace = f.bodyFace * 2.0;
+    out.bodyShrink = f.bodyShrink;
     return out;
 }
 

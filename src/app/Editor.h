@@ -177,6 +177,23 @@ public:
     // changes is the part between them, where a loom is a covered thing.
     bool twistCableBody() const { return twistCableBody_; }
     void setTwistCableBody(bool on);
+    // AND WHAT THAT CABLE IS DRAWN TO. How wide it is, and at each end how far across its face is
+    // and over what length it comes down to it - the shrunk length. Ticked, which is how it starts,
+    // both ends are the same; unticked, the finish end takes its own. 0 for a length or a width is
+    // the drawing's own figure; below 0 on a shrunk length is too, because 0 there is a square
+    // shoulder and that is a thing a drawing can want.
+    double twistBodyWidth() const { return twistBodyWidth_; }
+    void setTwistBodyWidth(double mm);
+    bool twistBodySidesSame() const { return twistBodySidesSame_; }
+    void setTwistBodySidesSame(bool same);
+    double twistBodyFace() const { return twistBodyFace_; }
+    void setTwistBodyFace(double mm);
+    double twistBodyShrink() const { return twistBodyShrink_; }
+    void setTwistBodyShrink(double mm);
+    double twistBodyFaceFinish() const { return twistBodyFaceFinish_; }
+    void setTwistBodyFaceFinish(double mm);
+    double twistBodyShrinkFinish() const { return twistBodyShrinkFinish_; }
+    void setTwistBodyShrinkFinish(double mm);
     double twistStripLen() const { return twistStripLen_; }
     void setTwistStripLen(double mm);
     double twistLaneFinish() const { return twistLaneFinish_; }
@@ -1605,6 +1622,12 @@ private:
     double twistFlushLen_ = 0.0;                   // how long that is; 0 = the drawing's own share
     bool twistStrip_ = false;                      // the insulation is off the last of each wire
     bool twistCableBody_ = false;                  // the converged stretch is drawn as a cable
+    double twistBodyWidth_ = 0.0;                  // how wide; 0 = the drawing's own
+    bool twistBodySidesSame_ = true;               // both its ends shrink alike
+    double twistBodyFace_ = 0.0;                   // the end face across; 0 = the drawing's own
+    double twistBodyShrink_ = -1.0;                // and over what length; <0 = the drawing's own
+    double twistBodyFaceFinish_ = 0.0;
+    double twistBodyShrinkFinish_ = -1.0;
     double twistStripLen_ = 0.0;                   // how much; 0 = the drawing's own
     double twistLaneFinish_ = 0.0;                 // and these three are its own, when it does not
     double twistFanFinish_ = 0.0;

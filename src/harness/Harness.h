@@ -219,6 +219,9 @@ struct TwistFigures {
     double flushLen = 0.0;    // the straight stretch at the very end
     double stripLen = 0.0;    // and how much insulation is off it
     int trunk = 0;            // how many lines the bundle is drawn as
+    double bodyWidth = 0.0;   // the cable over the converged stretch, across
+    double bodyFace = 0.0;    // its end face, across
+    double bodyShrink = 0.0;  // and the length it takes to come down to it
 };
 TwistFigures twistedPairFigures(const Entity& pair);
 // Which end(s) the bundle spreads its wires out at: "left", "right" or "both". Anything else -

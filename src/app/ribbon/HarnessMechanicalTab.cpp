@@ -367,7 +367,11 @@ void MainWindow::buildHarnessMechanicalTab() {
                 og->setColumnMinimumWidth(14, 10);
                 og->setColumnMinimumWidth(17, 10);
                 og->setColumnMinimumWidth(20, 10);
-                og->setColumnMinimumWidth(22, 10);
+                og->setColumnMinimumWidth(23, 10);
+                og->setColumnMinimumWidth(26, 10);
+                og->setColumnMinimumWidth(29, 10);
+                og->setColumnMinimumWidth(31, 10);
+                og->setColumnMinimumWidth(33, 10);
                 auto* l = new QLabel(QStringLiteral("Wires"), optW);
                 l->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
                 twistWiresSpin_ = new QSpinBox(optW);
@@ -595,7 +599,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                     "The finish end of the run repeats the start end. Untick it to give the finish "
                     "end its own pitch, fan length and fan knee - a run out of a header into a ring "
                     "terminal fans quite differently at the two ends."));
-                og->addWidget(twistSidesCheck_, 0, 23, 1, 2);
+                og->addWidget(twistSidesCheck_, 0, 32, 1, 2);
                 auto addFinish = [&](QLabel*& label, QDoubleSpinBox*& spin, const QString& text,
                                      double lo, double value, int row, int col,
                                      const QString& tip) {
@@ -637,7 +641,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                     "End the fan with a straight stretch, so every wire is parallel to the run where "
                     "it is cut and all the cut ends line up square across the fan. Unticked, the "
                     "wires are cut where they are still spreading."));
-                og->addWidget(twistFlushCheck_, 0, 21, 1, 2);
+                og->addWidget(twistFlushCheck_, 0, 30, 1, 2);
                 twistFlushLabel_ = new QLabel(QStringLiteral("Flush length"), optW);
                 twistFlushLabel_->setStyleSheet(
                     QStringLiteral("color:#e6e9ef;background:transparent;"));
@@ -678,7 +682,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                     "Show the insulation stripped off the end of each wire, back to bare conductor - "
                     "which is how a wire is landed in a contact. A second line across each wire marks "
                     "where the insulation stops."));
-                og->addWidget(twistStripCheck_, 1, 21, 1, 2);
+                og->addWidget(twistStripCheck_, 1, 30, 1, 2);
                 twistStripLabel_ = new QLabel(QStringLiteral("Strip length"), optW);
                 twistStripLabel_->setStyleSheet(
                     QStringLiteral("color:#e6e9ef;background:transparent;"));
@@ -720,9 +724,90 @@ void MainWindow::buildHarnessMechanicalTab() {
                     "Draw the converged stretch between the two fans as a cable under heatshrink "
                     "rather than as the lines its wires make: one body, standing a little off what "
                     "it covers and shrunk onto it at each end. The fans are unchanged."));
-                og->addWidget(twistCableCheck_, 1, 23, 1, 2);
+                og->addWidget(twistCableCheck_, 1, 32, 1, 2);
+                // WHAT THE CABLE IS DRAWN TO, which only means anything while there is one - so all
+                // of it comes up with the tick and goes away with it. How wide the cable is, and at
+                // each end how far across its face is and over what length it comes down to that:
+                // the shrunk length. A cover over a loom is shrunk onto a connector at one end and
+                // onto a breakout at the other, and those are not the same size, so the two ends can
+                // be described apart - though most of the time they are not, which is the tick.
+                auto bodyField = [&](QLabel*& label, QDoubleSpinBox*& spin, const QString& text,
+                                     double lo, double value, int row, int col, const QString& tip,
+                                     std::function<void()> toAuto) {
+                    label = new QLabel(text, optW);
+                    label->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
+                    spin = new QDoubleSpinBox(optW);
+                    spin->setRange(lo, 500.0);
+                    spin->setDecimals(1);
+                    spin->setSingleStep(0.5);
+                    spin->setKeyboardTracking(false);
+                    spin->setValue(value);
+                    spin->setMinimumWidth(64);
+                    spin->setToolTip(tip);
+                    og->addWidget(label, row, col);
+                    og->addWidget(autoBeside(spin, toAuto), row, col + 1);
+                };
+                bodyField(twistBodyWidthLabel_, twistBodyWidthSpin_, QStringLiteral("Cable width"),
+                          0.0, editor_->twistBodyWidth(), 0, 21,
+                          QStringLiteral("How wide the cable over the converged stretch is drawn. "
+                                         "Auto is the bundle it covers plus a wire's width."),
+                          [this] { editor_->setTwistBodyWidth(0.0); syncBreakOptions(); });
+                bodyField(twistBodyShrinkLabel_, twistBodyShrinkSpin_,
+                          QStringLiteral("Shrink length"), -1.0, editor_->twistBodyShrink(), 1, 21,
+                          QStringLiteral("How far in from the end the cover takes to come down to "
+                                         "its face. 0 is a square shoulder; Auto is the drawing's "
+                                         "own."),
+                          [this] { editor_->setTwistBodyShrink(-1.0); syncBreakOptions(); });
+                bodyField(twistBodyFaceLabel_, twistBodyFaceSpin_, QStringLiteral("End size"), 0.0,
+                          editor_->twistBodyFace(), 0, 24,
+                          QStringLiteral("How far across the end of the cover is - the size it has "
+                                         "shrunk down to. Auto is the bundle underneath it."),
+                          [this] { editor_->setTwistBodyFace(0.0); syncBreakOptions(); });
+                bodyField(twistBodyShrinkBLabel_, twistBodyShrinkBSpin_,
+                          QStringLiteral("Finish shrink"), -1.0, editor_->twistBodyShrinkFinish(), 1,
+                          24,
+                          QStringLiteral("The shrunk length at the FINISH end of the cable."),
+                          [this] { editor_->setTwistBodyShrinkFinish(-1.0); syncBreakOptions(); });
+                bodyField(twistBodyFaceBLabel_, twistBodyFaceBSpin_, QStringLiteral("Finish size"),
+                          0.0, editor_->twistBodyFaceFinish(), 0, 27,
+                          QStringLiteral("How far across the FINISH end of the cover is."),
+                          [this] { editor_->setTwistBodyFaceFinish(0.0); syncBreakOptions(); });
+                twistBodySidesCheck_ = new QCheckBox(QStringLiteral("Cable both sides"), optW);
+                twistBodySidesCheck_->setChecked(editor_->twistBodySidesSame());
+                twistBodySidesCheck_->setStyleSheet(
+                    QStringLiteral("color:#e6e9ef;background:transparent;"));
+                twistBodySidesCheck_->setToolTip(QStringLiteral(
+                    "Both ends of the cable shrink alike. Untick it to give the finish end its own "
+                    "shrunk length and end size - a cover is shrunk onto a connector at one end and "
+                    "onto a breakout at the other."));
+                og->addWidget(twistBodySidesCheck_, 0, 34, 1, 2);
+                connect(twistBodySidesCheck_, &QCheckBox::toggled, this, [this](bool on) {
+                    editor_->setTwistBodySidesSame(on);
+                    syncBreakOptions();
+                    canvas_->update();
+                    statusBar()->showMessage(
+                        on ? QStringLiteral("Wires run: both ends of the cable shrink alike")
+                           : QStringLiteral("Wires run: each end of the cable shrinks its own way"),
+                        2000);
+                });
+                connect(twistBodyWidthSpin_, &QDoubleSpinBox::valueChanged, this,
+                        [this](double v) { editor_->setTwistBodyWidth(v); canvas_->update(); });
+                connect(twistBodyFaceSpin_, &QDoubleSpinBox::valueChanged, this,
+                        [this](double v) { editor_->setTwistBodyFace(v); canvas_->update(); });
+                connect(twistBodyShrinkSpin_, &QDoubleSpinBox::valueChanged, this,
+                        [this](double v) { editor_->setTwistBodyShrink(v); canvas_->update(); });
+                connect(twistBodyFaceBSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
+                    editor_->setTwistBodyFaceFinish(v);
+                    canvas_->update();
+                });
+                connect(twistBodyShrinkBSpin_, &QDoubleSpinBox::valueChanged, this,
+                        [this](double v) {
+                            editor_->setTwistBodyShrinkFinish(v);
+                            canvas_->update();
+                        });
                 connect(twistCableCheck_, &QCheckBox::toggled, this, [this](bool on) {
                     editor_->setTwistCableBody(on);
+                    syncBreakOptions();   // its own management comes up with it
                     canvas_->update();
                     statusBar()->showMessage(
                         on ? QStringLiteral("Wires run: covered between the fans")

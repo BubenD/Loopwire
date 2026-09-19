@@ -845,6 +845,17 @@ private:
     QLabel* twistFlushLabel_ = nullptr;
     QCheckBox* twistStripCheck_ = nullptr;
     QCheckBox* twistCableCheck_ = nullptr;
+    QCheckBox* twistBodySidesCheck_ = nullptr;
+    QDoubleSpinBox* twistBodyWidthSpin_ = nullptr;
+    QLabel* twistBodyWidthLabel_ = nullptr;
+    QDoubleSpinBox* twistBodyFaceSpin_ = nullptr;
+    QLabel* twistBodyFaceLabel_ = nullptr;
+    QDoubleSpinBox* twistBodyShrinkSpin_ = nullptr;
+    QLabel* twistBodyShrinkLabel_ = nullptr;
+    QDoubleSpinBox* twistBodyFaceBSpin_ = nullptr;
+    QLabel* twistBodyFaceBLabel_ = nullptr;
+    QDoubleSpinBox* twistBodyShrinkBSpin_ = nullptr;
+    QLabel* twistBodyShrinkBLabel_ = nullptr;
     QDoubleSpinBox* twistStripSpin_ = nullptr;
     QLabel* twistStripLabel_ = nullptr;
     // A FIELD WHOSE LOWEST VALUE IS "AUTO" GETS A LITTLE A BESIDE IT. Auto is at the bottom of the
