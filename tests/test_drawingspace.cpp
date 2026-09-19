@@ -15,6 +15,7 @@
 #include "render/EntityRenderer.h"
 
 #include <QCheckBox>
+#include <QFrame>
 #include <QComboBox>
 #include <QDir>
 #include <QCursor>
@@ -1449,6 +1450,99 @@ int run_drawingspace_tests() {
             QApplication::processEvents();
             check(!dock->isHidden(), "calculator: the ribbon button opens the panel");
             dock->hide();
+        }
+    }
+
+    // ---- the option boxes keep their size and their places, whatever is in them -------------------
+    {
+        // Which fields a box shows depends on the sort of body picked and on which ticks are set,
+        // and a grid gives a hidden widget no room at all - so unticking Flush ends took the strip
+        // in by the width of a field and everything to the right of it jumped sideways. A ribbon is
+        // a place on the screen you learn: a field that moves because a DIFFERENT field went away
+        // has to be found again every time.
+        MainWindow win;
+        win.resize(1700, 900);
+        win.show();
+        QApplication::processEvents();
+        for (QTabWidget* t : win.findChildren<QTabWidget*>())
+            for (int i = 0; i < t->count(); ++i)
+                if (t->tabText(i).contains(QStringLiteral("Harness"))) t->setCurrentIndex(i);
+        QApplication::processEvents();
+        Editor* ed = win.editorForTest();
+        if (ed) ed->setTool(ToolId::WiresRun);
+        QApplication::processEvents();
+        QFrame* fanBox = nullptr;
+        QFrame* bodyBox = nullptr;
+        for (QFrame* f : win.findChildren<QFrame*>()) {
+            if (f->objectName() != QStringLiteral("harnessSection")) continue;
+            for (QLabel* l : f->findChildren<QLabel*>()) {
+                if (l->text() == QStringLiteral("Fan out")) fanBox = f;
+                if (l->text() == QStringLiteral("Body") &&
+                    l->objectName() == QStringLiteral("harnessSectionName"))
+                    bodyBox = f;
+            }
+        }
+        check(fanBox != nullptr && bodyBox != nullptr,
+              "boxes: the fan-out and body boxes are both on the ribbon");
+        QComboBox* body = nullptr;
+        for (QComboBox* c : win.findChildren<QComboBox*>())
+            if (c->findText(QStringLiteral("Hook-up wires")) >= 0) body = c;
+        QCheckBox* flush = nullptr;
+        for (QCheckBox* c : win.findChildren<QCheckBox*>())
+            if (c->text() == QStringLiteral("Flush ends")) flush = c;
+        if (fanBox && bodyBox && body && flush) {
+            // THE FIELDS SIT IN THREE LINES, with the caption under them.
+            QGridLayout* fg = fanBox->findChild<QGridLayout*>();
+            auto cellOf = [](QGridLayout* g, const QString& text) {
+                for (int i = 0; g && i < g->count(); ++i) {
+                    QWidget* w = g->itemAt(i)->widget();
+                    QLabel* l = qobject_cast<QLabel*>(w);
+                    if (!l || l->text() != text) continue;
+                    int r = 0, c = 0, rs = 0, cs = 0;
+                    g->getItemPosition(i, &r, &c, &rs, &cs);
+                    return QPoint(c, r);
+                }
+                return QPoint(-1, -1);
+            };
+            const QPoint knee = cellOf(fg, QStringLiteral("Fan knee"));
+            const QPoint flushAt = cellOf(fg, QStringLiteral("Flush length"));
+            std::printf("  boxes: fan knee at row %d col %d, flush length at row %d col %d, %d "
+                        "row(s)\n", knee.y(), knee.x(), flushAt.y(), flushAt.x(),
+                        fg ? fg->rowCount() : 0);
+            check(knee.x() >= 0 && flushAt.x() == knee.x() && flushAt.y() == knee.y() + 1,
+                  "boxes: the flush length stands directly under the fan knee");
+            check(fg && fg->rowCount() == 4,
+                  "boxes: three lines of fields, and the name of the box under them");
+
+            // AND THE SIZE DOES NOT MOVE. Every sort of body, and the flush end both ways.
+            struct Shot { QSize fan, body; };
+            std::vector<Shot> shots;
+            auto snap = [&] {
+                QApplication::processEvents();
+                shots.push_back({fanBox->sizeHint(), bodyBox->sizeHint()});
+            };
+            for (const char* sort : {"Hook-up wires", "Cable", "Heatshrink"}) {
+                body->setCurrentIndex(body->findText(QString::fromUtf8(sort)));
+                snap();
+            }
+            body->setCurrentIndex(body->findText(QStringLiteral("Cable")));
+            flush->click();   // the flush length goes away
+            snap();
+            flush->click();
+            snap();
+            bool steady = true;
+            for (const Shot& s : shots)
+                steady = steady && s.fan == shots.front().fan && s.body == shots.front().body;
+            QStringList said;
+            for (const Shot& s : shots)
+                said << QStringLiteral("%1x%2/%3x%4")
+                            .arg(s.fan.width()).arg(s.fan.height())
+                            .arg(s.body.width()).arg(s.body.height());
+            std::printf("  boxes: fan/body across five settings - %s\n",
+                        qPrintable(said.join(QStringLiteral(", "))));
+            check(steady,
+                  "boxes: neither box changes size when the fields inside it come and go");
+            body->setCurrentIndex(body->findText(QStringLiteral("Hook-up wires")));
         }
     }
 

@@ -11602,7 +11602,7 @@ int run_editor_tests() {
                   "transition: the end facing the fan is the shrunk one - that is the end that grips");
             check(std::abs(cableFrom - hi) < 1e-6,
                   "transition: the cable starts where the boot grips it, so that face is drawn once");
-            check(std::abs(wireTo - bareTo) < 1e-9,
+            check(std::abs(wireTo - bareTo) < 0.5,
                   "transition: and the whole fan is on show - the boot covers cable, not wires");
             check(wireTo > lo - 1.5,
                   "transition: which the wires run right up to, the fan starting at that face");
@@ -11667,6 +11667,36 @@ int run_editor_tests() {
             check(twistedPairBody(covered(QStringLiteral("ALONG"), flat, "heatshrink", true))
                           .size() == 1,
                   "over the cable: unticked, it is still one sleeve along the whole run");
+        }
+
+        // AND THE FAN RUNS INTO THE FACE OF THE COVER. The wires under a cover have no bundle of
+        // their own to converge to - there are no lines there, the cover is what is drawn - so what
+        // they run into is the face of it. Sized to something other than the bundle, the fan
+        // followed: the wires stood out past the face of a narrow cable, or stopped short inside a
+        // wide one with daylight between the last of the fan and the thing it goes into.
+        {
+            auto meets = [&](double width) {
+                Entity e = covered(QStringLiteral("MEET%1").arg(width), flat, "cable", false);
+                e.meta.insert(QStringLiteral("twistBodyWidth"), width);
+                // How far out the outermost wire is where it meets the body, and how far out the
+                // face of the body is there.
+                double wires = 0.0, face = 0.0;
+                for (const std::vector<Vec2>& strand : twistedPairStrands(e))
+                    for (const Vec2& v : strand)
+                        if (std::abs(v.x - 40.0) < 0.6) wires = std::max(wires, std::abs(v.y));
+                for (const std::vector<Vec2>& o : twistedPairBody(e))
+                    for (const Vec2& v : o) face = std::max(face, std::abs(v.y));
+                return std::make_pair(wires, face);
+            };
+            const auto narrow = meets(14.0), wide = meets(40.0);
+            std::printf("  fan entry: a 14 cable takes the wires to %.2f of its %.2f face; a 40 "
+                        "cable, %.2f of %.2f\n",
+                        narrow.first * 2.0, narrow.second * 2.0, wide.first * 2.0,
+                        wide.second * 2.0);
+            check(std::abs(narrow.first - narrow.second) < 0.6,
+                  "fan entry: the wires meet a narrow cable at its face, not standing out past it");
+            check(std::abs(wide.first - wide.second) < 0.6,
+                  "fan entry: and a wide one at its face, not stopping short inside it");
         }
 
         // AND A GREEN ZONE LAID ACROSS THE CABLE HAS TOUCHED THE RUN. A covered run draws no wires

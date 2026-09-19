@@ -405,6 +405,10 @@ struct TwistFrames {
     // toward the fan. The second is the part that grips a breakout, which is why a cable has one
     // of its own.
     bool bodyOverCable = false;
+    // AND WHAT THE FAN RUNS INTO AT EACH END, as a scale on where a wire sits in the run: one is
+    // the bundle the wires would have made on their own, and anything else is the face of whatever
+    // covers them. See the working in twistFrames.
+    double entryA = 1.0, entryB = 1.0;
     // THE RADIUS THE FAN'S OWN CORNERS TURN ON. Below nought is nobody having said: the fan is
     // eased end to end, which is what every run drawn before there was a field for it has. NOUGHT
     // IS A SHARP CORNER, asked for - a drawing that wants the knee shown as a corner and not as a
@@ -687,6 +691,13 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
         // Left alone the boot is a third of the fan long, which is the size one reads as.
         f.bodyOverCable = f.body == RunBody::Heatshrink &&
                           pair.meta.value(QStringLiteral("twistBodyOverCable")).toBool();
+        // EVERY WIRE HAS ITS OWN PLACE AT THE FACE. Converging onto a few trunk lines is how a
+        // bundle of hook-up wires is DRAWN - a handful of lines standing for the lot of them - and
+        // under a cover there are no such lines: what the wires run into is a face, and each of
+        // them arrives at its own place on it. Left trunked, six wires piled onto two lanes and
+        // went into the cable three deep.
+        f.trunk = f.wires;
+        for (int j = 0; j < f.wires; ++j) f.trunkLane[static_cast<size_t>(j)] = j;
         const bool transition =
             f.body == RunBody::Cable
                 ? (!pair.meta.contains(QStringLiteral("twistBodyTransition")) ||
@@ -704,6 +715,28 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
         };
         f.bootA = bootOf(false);
         f.bootB = bootOf(true);
+        // AND THE FAN RUNS INTO THE FACE OF THE COVER, not into the bundle it would have made
+        // without one. The two are the same size while every figure is left alone - the cover is
+        // drawn to the bundle it covers - but set a width, or an end size, or put a boot on it, and
+        // they part company: the wires then stood out past the face, or stopped short inside it
+        // with daylight between the last of the fan and the thing it goes into.
+        //
+        // Said as a SCALE on where each wire sits in the run, so everything else about the fan -
+        // the slant, the corner radius, the flush end - is worked out from it exactly as before,
+        // and a run with everything on Auto is the run that has always been drawn.
+        auto entryOf = [&](bool finish) {
+            const double boot = finish ? f.bootB : f.bootA;
+            // What the wires actually meet: the recovered mouth of the boot where there is one, the
+            // shrunk end of a sleeve laid along the run, or the square face of a bare cable.
+            const bool cut = f.body == RunBody::Cable || f.bodyOverCable;
+            const double face = (boot > 1e-9 || !cut) ? (finish ? f.bodyFaceB : f.bodyFace)
+                                                      : f.bodyHalf;
+            const double want = std::max(0.0, face - f.thick);
+            const double have = f.wires > 1 ? f.packed * (f.wires - 1) / 2.0 : 0.0;
+            return have > 1e-9 ? want / have : 1.0;
+        };
+        f.entryA = entryOf(false);
+        f.entryB = entryOf(true);
     }
     // AND WHAT RADIUS THE FAN'S CORNERS CAME OUT ON, for the outermost wire - the one that travels
     // furthest and so is the one a radius is read off. Left alone the fan gives a quarter of the
@@ -906,10 +939,14 @@ double twistOffset(const TwistFrames& f, int k, double u) {
                    : 0.0;
     };
     auto leadOffset = [&](double into, bool fan, double lead, double tail, double pitch,
-                          double fanKnee) {
+                          double fanKnee, double entry) {
+        // WHERE THE FAN RUNS IN TO. The bundle, ordinarily - and the face of whatever covers the
+        // run where there is one, which is the same place until somebody sizes the cover. See
+        // entryA in twistFrames.
+        const double atBundle = inRun * entry;
         // A spread end lands the wires evenly across the bundle. An unspread end simply carries each
         // wire's place in the run straight out to the end, so the bundle does not open there at all.
-        const double target = fan ? spreadAt(pitch) : inRun;
+        const double target = fan ? spreadAt(pitch) : atBundle;
         double t;
         if (f.straight) {
             // THE STRAIGHT BIT FIRST, THEN THE FAN. Out to the tail the wire is where it is landed and
@@ -937,7 +974,7 @@ double twistOffset(const TwistFrames& f, int k, double u) {
             // is, and leaves the middle half of the slant dead straight.
             double ease = 0.25;
             if (fanKnee >= 0.0) {
-                const double turn = std::atan(std::abs(inRun - target) / fanLen);
+                const double turn = std::atan(std::abs(atBundle - target) / fanLen);
                 ease = fanKnee > 1e-9
                            ? std::clamp(fanKnee * std::tan(turn / 2.0) / fanLen, 0.0, 0.5)
                            : 0.0;
@@ -965,12 +1002,12 @@ double twistOffset(const TwistFrames& f, int k, double u) {
         } else {
             t = lead > 1e-9 ? std::clamp(into / lead, 0.0, 1.0) : 1.0;
         }
-        return target + (inRun - target) * t;
+        return target + (atBundle - target) * t;
     };
     if (u <= f.lead)
-        return leadOffset(u, f.spreadStart, f.lead, f.tail, f.lane, f.fanKnee);
+        return leadOffset(u, f.spreadStart, f.lead, f.tail, f.lane, f.fanKnee, f.entryA);
     if (u >= f.len - f.leadB)
-        return leadOffset(f.len - u, f.spreadEnd, f.leadB, f.tailB, f.laneB, f.fanKneeB);
+        return leadOffset(f.len - u, f.spreadEnd, f.leadB, f.tailB, f.laneB, f.fanKneeB, f.entryB);
     return inRun;
 }
 
