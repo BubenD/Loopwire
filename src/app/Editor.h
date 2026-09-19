@@ -194,6 +194,11 @@ public:
     void setTwistBodyWidth(double mm);
     bool twistBodySidesSame() const { return twistBodySidesSame_; }
     void setTwistBodySidesSame(bool same);
+    // AND WHETHER A CABLE HAS A TRANSITION HEATSHRINK AT EACH END OF IT - the boot the wires come
+    // out of. It has, unless the drawing says otherwise; a cable can be drawn running straight out
+    // into its own fan. Only a cable: a length of tubing over the whole run IS the transition.
+    bool twistBodyTransition() const { return twistBodyTransition_; }
+    void setTwistBodyTransition(bool on);
     double twistBodyFace() const { return twistBodyFace_; }
     void setTwistBodyFace(double mm);
     double twistBodyShrink() const { return twistBodyShrink_; }
@@ -1643,6 +1648,7 @@ private:
     double twistBootFinish_ = 0.0;
     double twistBodyWidth_ = 0.0;                  // how wide; 0 = the drawing's own
     bool twistBodySidesSame_ = true;               // both its ends shrink alike
+    bool twistBodyTransition_ = true;              // a cable has a boot at each end of it
     double twistBodyFace_ = 0.0;                   // the end face across; 0 = the drawing's own
     double twistBodyShrink_ = -1.0;                // and over what length; <0 = the drawing's own
     double twistBodyFaceFinish_ = 0.0;

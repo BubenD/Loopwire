@@ -14,6 +14,7 @@
 #include "render/CanvasWidget.h"
 #include "render/EntityRenderer.h"
 
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
 #include <QCursor>
@@ -1451,6 +1452,49 @@ int run_drawingspace_tests() {
         }
     }
 
+    // ---- the transition heatshrink is a tick, and only a cable has one ----------------------------
+    {
+        // A cable over the converged stretch has a boot at each end of it: the transition the wires
+        // come out of. A length of tubing over the whole run has none - it IS the transition - so
+        // the tick is a cable thing and goes away with the other sort.
+        MainWindow win;
+        win.resize(1400, 860);
+        win.show();
+        QApplication::processEvents();
+        Editor* ed = win.editorForTest();
+        QCheckBox* tick = nullptr;
+        for (QCheckBox* c : win.findChildren<QCheckBox*>())
+            if (c->text() == QStringLiteral("Transition heatshrink")) tick = c;
+        QComboBox* body = nullptr;
+        for (QComboBox* c : win.findChildren<QComboBox*>())
+            if (c->findText(QStringLiteral("Hook-up wires")) >= 0) body = c;
+        check(tick != nullptr && body != nullptr && ed != nullptr,
+              "transition tick: the body menu and the transition tick are both on the ribbon");
+        if (tick && body && ed) {
+            ed->setTool(ToolId::WiresRun);
+            QApplication::processEvents();
+            body->setCurrentIndex(body->findText(QStringLiteral("Heatshrink")));
+            QApplication::processEvents();
+            const bool onTubing = !tick->isHidden();
+            body->setCurrentIndex(body->findText(QStringLiteral("Cable")));
+            QApplication::processEvents();
+            const bool onCable = !tick->isHidden();
+            std::printf("  transition tick: shown for a cable %d, for tubing %d, ticked %d\n",
+                        onCable ? 1 : 0, onTubing ? 1 : 0, tick->isChecked() ? 1 : 0);
+            check(onCable && !onTubing,
+                  "transition tick: a cable is offered one, a length of tubing is not");
+            check(tick->isChecked() && ed->twistBodyTransition(),
+                  "transition tick: and a cable starts with it, which is what a cable looks like");
+            tick->click();
+            QApplication::processEvents();
+            check(!ed->twistBodyTransition(),
+                  "transition tick: unticking it takes the boots off the cable");
+            tick->click();
+            QApplication::processEvents();
+            body->setCurrentIndex(body->findText(QStringLiteral("Hook-up wires")));
+        }
+    }
+
     // ---- the Special group: two equal rows of icons, and no dead columns ----------------------------
     {
         // The pieces of furniture a mechanical drawing needs - the break mark, the twisted runs, the
@@ -1513,6 +1557,12 @@ int run_drawingspace_tests() {
                           QStringLiteral("Cable over the run with heatshrink on ends")) &&
                       allLabels.contains(QStringLiteral("Transition heatshrink")),
                   "special: cable-end and transition sleeves are both on the heatshrink menu");
+            // AND THE WHOLE-RUN CABLE IS CALLED WHAT IT IS. It was "cable over the run with
+            // heatshrink", which is the NEXT choice down - the one with heatshrink on its ends -
+            // and having the two of them share most of a name meant picking between them by
+            // reading to the end of both.
+            check(labels.contains(QStringLiteral("Cable over the run")),
+                  "special: the whole-run cable is named for what it is, and only that");
             bool distinctGlyphs = glyphs.size() == 4;
             for (int i = 0; distinctGlyphs && i < glyphs.size(); ++i)
                 for (int j = i + 1; j < glyphs.size(); ++j)

@@ -565,6 +565,13 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
     // run drawn right-to-left still spreads on the side asked for. On a vertical run there is no left
     // or right end to tell apart; the first point takes "left" and the second "right".
     const QString spread = twistedPairSpread(pair);
+    const bool startIsLeft = path.front().x <= path.back().x;
+    f.spreadStart = spread == QLatin1String("both") ||
+                    (spread == QLatin1String("left") && startIsLeft) ||
+                    (spread == QLatin1String("right") && !startIsLeft);
+    f.spreadEnd = spread == QLatin1String("both") ||
+                  (spread == QLatin1String("right") && startIsLeft) ||
+                  (spread == QLatin1String("left") && !startIsLeft);
     f.straight = pair.meta.value(QStringLiteral("twistStraight")).toBool();
     // AND HOW MANY OF THEM CARRY ON. All of them unless the drawing says fewer; never more than there
     // are, and never none.
@@ -608,6 +615,11 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
     // Never more than the end is long: a strip mark past the fan is a mark on the bundle.
     auto stripOf = [&](bool finish) {
         if (!f.straight) return 0.0;
+        // AND ONLY WHERE THE WIRES ARE SPREAD. A strip mark is a mark on a wire end that is on
+        // show; an end that does not fan has no wire ends drawn at it, only the bundle running
+        // into whatever it runs into, and a step in the bundle's own edges there says the whole
+        // loom has been stripped.
+        if (!(finish ? f.spreadEnd : f.spreadStart)) return 0.0;
         if (!sideValue(QStringLiteral("twistStrip"), finish).toBool(false)) return 0.0;
         const double lead = finish ? f.leadB : f.lead;
         const QJsonValue asked = sideValue(QStringLiteral("twistStripLen"), finish);
@@ -654,15 +666,27 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
         f.bodyFaceB = faceOf(true);
         f.bodyShrink = shrinkOf(false);
         f.bodyShrinkB = shrinkOf(true);
-        // THE BOOT AT EACH END, which only a cable has. Left alone it reaches a third of the way
-        // into the fan - far enough to read as a boot, near enough that the wires are still gathered
-        // close enough to be covered by one. Never more than the fan itself: a boot out past the
-        // wire ends is a boot over nothing.
+        // THE TRANSITION HEATSHRINK AT EACH END, which only a cable has: a length of tubing over
+        // the whole run IS the transition, and a second one at its end would be a part fitted over
+        // itself. It can be turned off - a cable can be drawn running straight out into its wires -
+        // and it is only ever at an end the wires FAN at, because an end that does not fan has
+        // nothing to make the transition to.
+        //
+        // Left alone it reaches a third of the way into the fan - far enough to read as a boot,
+        // near enough that the wires are still gathered close enough for one to cover them.
+        const bool transition =
+            f.body == RunBody::Cable &&
+            (!pair.meta.contains(QStringLiteral("twistBodyTransition")) ||
+             pair.meta.value(QStringLiteral("twistBodyTransition")).toBool());
         auto bootOf = [&](bool finish) {
+            if (!transition) return 0.0;
+            if (!(finish ? f.spreadEnd : f.spreadStart)) return 0.0;
             const QJsonValue v = bodySide(QStringLiteral("twistBoot"), finish);
             const double fan = finish ? f.leadB : f.lead;
             const double want = v.isUndefined() ? fan / 3.0 : std::max(0.0, v.toDouble(0.0));
-            return std::min(want, fan);
+            // Never the whole fan. The wires come out of the boot's MOUTH, so a boot as long as the
+            // fan is a boot they never come out of - the fan would be one covered stub.
+            return std::min(want, fan * 0.9);
         };
         f.bootA = bootOf(false);
         f.bootB = bootOf(true);
@@ -693,13 +717,6 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
     };
     f.fanKnee = fanKneeOf(false);
     f.fanKneeB = fanKneeOf(true);
-    const bool startIsLeft = path.front().x <= path.back().x;
-    f.spreadStart = spread == QLatin1String("both") ||
-                    (spread == QLatin1String("left") && startIsLeft) ||
-                    (spread == QLatin1String("right") && !startIsLeft);
-    f.spreadEnd = spread == QLatin1String("both") ||
-                  (spread == QLatin1String("right") && startIsLeft) ||
-                  (spread == QLatin1String("left") && !startIsLeft);
     // Whole crossings, so each wire comes back to the side it started on and runs level into the
     // straight end: half a crossing would leave the two wires swapped and the ends kinked.
     f.turns = std::max(1, static_cast<int>(std::llround(woven / period)));
@@ -1116,6 +1133,8 @@ QString twistKey(const Entity& e) {
                           "twistBodyFaceFinish", "twistBodyShrinkFinish", "twistBoot",
                           "twistBootFinish"})
         put(m);
+    k += e.meta.value(QLatin1String("twistBodyTransition")).toBool(true) ? QLatin1String("|tr")
+                                                                        : QLatin1String("|nt");
     k += e.meta.value(QLatin1String("twistBodySidesSame")).toBool(true) ? QLatin1String("|bs")
                                                                        : QLatin1String("|ba");
     return k;
@@ -1167,26 +1186,87 @@ const TwistCached* twistCached(const Entity& pair) {
     };
     const size_t stripStart = f.strip > 1e-9 ? placeAt(f.strip) : f.pos.size();
     const size_t stripEnd = f.stripB > 1e-9 ? placeAt(f.len - f.stripB) : f.pos.size();
+    // Where a distance along the run is, taken off the places it was measured at - which is all the
+    // cover and its boots need: they sit on the run and on the fan, and both are measured often.
+    auto posOn = [&f](double u) {
+        if (f.pos.empty()) return Vec2{};
+        const double uu = std::clamp(u, 0.0, f.len);
+        for (size_t i = 1; i < f.u.size(); ++i) {
+            if (f.u[i] < uu) continue;
+            const double span = f.u[i] - f.u[i - 1];
+            return span < 1e-12 ? f.pos[i]
+                                : lerp(f.pos[i - 1], f.pos[i], (uu - f.u[i - 1]) / span);
+        }
+        return f.pos.back();
+    };
+    // HOW FAR THE BOOT AT EACH END LAPS BACK OVER THE CABLE, and so over what length it is shrunk
+    // down onto it. Never more than its share of the cable: on a short run the two boots would
+    // otherwise lap past one another and be drawn as one solid thing.
+    const double cableLen = std::max(0.0, f.len - f.lead - f.leadB);
+    auto lapOf = [&](double boot) {
+        return boot > 1e-6 ? std::max(1e-6, std::min(boot * 0.35, cableLen * 0.45)) : 0.0;
+    };
+    const double lapA = lapOf(f.bootA), lapB = lapOf(f.bootB);
     // CAN THE ROUTE CARRY THE BODY AT ALL?
     //
     // The tool will not let a run be drawn round a corner the bundle cannot take - but a drawing
     // made before it would, or one a route was pulled about under afterwards, still has to be
-    // opened. A cover is one long shape with a taper at each end, and on a route that doubles back
-    // inside its own width that shape turns itself inside out: what came out was a line leaving the
-    // sheet altogether, which is worse than any pinch.
+    // opened. The two sides of a cover are MITRED offsets of its centre line, and a mitre has no
+    // limit: where the route doubles back inside the width of the cover, the two sides of that
+    // corner meet a long way off the paper, and what came out was a line across the whole drawing.
     //
-    // So where the converged stretch cannot carry the cover, the run is drawn as its WIRES. They are
-    // held off their lanes at a bend too tight for them (see holdHi) and so stay on the paper
-    // whatever the route does. A bundle drawn as wires where a cover was asked for says something is
-    // wrong with the route, which is true; a line across the drawing says nothing at all.
+    // So the outline is built here and LOOKED AT before it is used. Every point of an honest one
+    // lies within a few widths of the route it covers - the outline has one point per point of the
+    // route and no more - and one that does not is a mitre that has run away. This is asked of the
+    // SHAPE rather than of the route, because the route it would be asked about is the sampled one:
+    // its legs are the facets of a rounded knee, a fraction of a millimetre each, so anything that
+    // measures legs against the width of the bundle refuses every bend there has ever been. That is
+    // what turned a cable back into hook-up wires the moment the run was bent.
+    //
+    // Where the cover really cannot be laid, the run is drawn as its WIRES. They are held off their
+    // lanes at a bend too tight for them (see holdHi) and so stay on the paper whatever the route
+    // does. A bundle drawn as wires where a cover was asked for says something is wrong with the
+    // route, which is true; a line across the drawing says nothing at all.
     std::vector<Vec2> along;
-    bool drawBody = f.cableBody;
+    std::vector<Vec2> cover;
+    bool drawBody = f.cableBody && f.pos.size() >= 2;
     if (drawBody) {
-        const size_t from = firstAtOrAfter(f.lead), to = lastAtOrBefore(f.len - f.leadB);
-        if (to > from)
-            for (size_t i = from; i <= to && i < f.pos.size(); ++i) along.push_back(f.pos[i]);
-        drawBody = along.size() >= 2 && runRouteCarries(along, f.bodyHalf * 2.0);
+        // From the end of one fan to the start of the other - and to the very end of the run at an
+        // end that does not fan, because there is no fan there for the cover to stop short of.
+        //
+        // Stopping short of the BOOT as well, where there is one. The boot laps back over the end
+        // of the cable and is shrunk down onto it there, so the two meet at one face of one width;
+        // carry the cable on to its own end as well and that face is drawn a second time, inside
+        // the boot, which on the sheet is a line across a part for no reason at all.
+        const double bodyFrom = f.spreadStart ? f.lead + lapA : 0.0;
+        const double bodyTo = f.spreadEnd ? f.len - f.leadB - lapB : f.len;
+        if (bodyTo > bodyFrom + 1e-6) {
+            along.push_back(posOn(bodyFrom));
+            for (size_t i = 0; i < f.u.size() && i < f.pos.size(); ++i)
+                if (f.u[i] > bodyFrom + 1e-9 && f.u[i] < bodyTo - 1e-9) along.push_back(f.pos[i]);
+            along.push_back(posOn(bodyTo));
+        }
+        if (along.size() >= 2)
+            cover = f.body == RunBody::Cable
+                        ? shrunkSleeveOutline(along, f.bodyHalf, f.bodyHalf, f.bodyHalf, 0.0, 0.0)
+                        : shrunkSleeveOutline(along, f.bodyHalf, f.bodyFace, f.bodyFaceB,
+                                              f.bodyShrink, f.bodyShrinkB);
+        const double reach =
+            4.0 * std::max(0.05, std::max(f.bodyHalf, std::max(f.bodyFace, f.bodyFaceB)));
+        drawBody = cover.size() >= 3;
+        for (const Vec2& pt : cover) {
+            double off = 1e300;
+            for (const Vec2& on : along) off = std::min(off, distance(pt, on));
+            if (off > reach) {
+                drawBody = false;
+                break;
+            }
+        }
+        if (!drawBody) cover.clear();
     }
+    // How much of the fan the transition heatshrink hides, where one is drawn at all.
+    const double hideA = drawBody ? f.bootA : 0.0;
+    const double hideB = drawBody ? f.bootB : 0.0;
     for (int k = 0; k < f.wires; ++k) {
         std::vector<std::pair<size_t, size_t>> spans;
         const bool carriesOn =
@@ -1196,8 +1276,13 @@ const TwistCached* twistCached(const Entity& pair) {
         if (carriesOn && !drawBody) {
             spans.push_back({0, f.pos.size() - 1});
         } else {
-            if (f.spreadStart) spans.push_back({0, lastAtOrBefore(f.lead)});
-            if (f.spreadEnd) spans.push_back({firstAtOrAfter(f.len - f.leadB), f.pos.size() - 1});
+            // AND THEY COME OUT OF THE BOOT, not out from under it. A transition heatshrink over
+            // the first of the fan covers the wires it is fitted over, so each one is drawn from
+            // the mouth of the boot outward and not from the end of the cable. With no boot the
+            // mouth IS the end of the cable and nothing is hidden.
+            if (f.spreadStart) spans.push_back({0, lastAtOrBefore(f.lead - hideA)});
+            if (f.spreadEnd)
+                spans.push_back({firstAtOrAfter(f.len - f.leadB + hideB), f.pos.size() - 1});
         }
         for (const auto& span : spans) {
             if (span.second <= span.first) continue;
@@ -1233,19 +1318,6 @@ const TwistCached* twistCached(const Entity& pair) {
             c.strands.push_back(std::move(edgeB));
         }
     }
-    // Where a distance along the run is, taken off the places it was measured at - which is all a
-    // boot needs: it sits on the fan, and the fan is measured every degree or so of it.
-    auto posOn = [&f](double u) {
-        if (f.pos.empty()) return Vec2{};
-        const double uu = std::clamp(u, 0.0, f.len);
-        for (size_t i = 1; i < f.u.size(); ++i) {
-            if (f.u[i] < uu) continue;
-            const double span = f.u[i] - f.u[i - 1];
-            return span < 1e-12 ? f.pos[i]
-                                : lerp(f.pos[i - 1], f.pos[i], (uu - f.u[i - 1]) / span);
-        }
-        return f.pos.back();
-    };
     // THE BODY OVER THE CONVERGED STRETCH, from the end of one fan to the start of the other. Its
     // own centre line is the route between those two places, knees and all, so a run that bends
     // bends its cable with it.
@@ -1257,17 +1329,13 @@ const TwistCached* twistCached(const Entity& pair) {
             // length of tubing over the run has no boot and does shrink onto what it grips, which is
             // the face and the shrunk length.
             const bool square = f.body == RunBody::Cable;
-            std::vector<Vec2> outline =
-                square ? shrunkSleeveOutline(along, f.bodyHalf, f.bodyHalf, f.bodyHalf, 0.0, 0.0)
-                       : shrunkSleeveOutline(along, f.bodyHalf, f.bodyFace, f.bodyFaceB,
-                                             f.bodyShrink, f.bodyShrinkB);
+            std::vector<Vec2> outline = cover;
             if (outline.size() >= 3) {
                 outline.push_back(outline.front());   // closed: it is a body, not a run of lines
                 c.body.push_back(std::move(outline));
             }
             // AND THE TRANSITION AT EACH END OF A CABLE: the boot that takes a bundle of wires down
-            // to one cable. Square where it meets the cable and flaring out over the first of the
-            // fan, which is where the wires are still gathered close enough to be covered.
+            // to one cable.
             if (square) {
                 // How far across the wires are at a place along the run - what a boot has to cover.
                 auto spreadHalfAt = [&](double u) {
@@ -1276,19 +1344,27 @@ const TwistCached* twistCached(const Entity& pair) {
                         most = std::max(most, std::abs(twistOffset(f, k, u)));
                     return most + f.thick;
                 };
-                auto bootAt = [&](double atCable, double reach, double intoTheFan) {
+                // IT IS A SLEEVE OVER THE JOIN, NOT A CONE OFF THE END OF THE CABLE. The part goes
+                // on over the end of the cable and is shrunk down onto it there - that is the end
+                // that grips - and it runs out over the first of the fan at one width, stopping
+                // square where the wires come out of it. Which is the shape the Heatshrink tool
+                // draws for a cable with heatshrink on its ends, because it is the same part.
+                auto bootAt = [&](double atCable, double reach, double lap, double intoTheFan) {
                     if (reach < 1e-6) return;
                     const double atFan = atCable + intoTheFan * reach;
-                    const double mouth = std::max(f.bodyHalf, spreadHalfAt(atFan));
-                    std::vector<Vec2> run{posOn(atCable), posOn(atFan)};
+                    const double onCable = atCable - intoTheFan * lap;
+                    // Wide enough to read as a part fitted over the cable, and wide enough to cover
+                    // the wires where it lets go of them.
+                    const double mouth = std::max(f.bodyHalf * 1.25, spreadHalfAt(atFan));
+                    std::vector<Vec2> run{posOn(onCable), posOn(atFan)};
                     std::vector<Vec2> boot =
-                        shrunkSleeveOutline(run, mouth, f.bodyHalf, mouth, reach, 0.0);
+                        shrunkSleeveOutline(run, mouth, f.bodyHalf, mouth, lap, 0.0);
                     if (boot.size() < 3) return;
                     boot.push_back(boot.front());
                     c.body.push_back(std::move(boot));
                 };
-                bootAt(f.lead, f.bootA, -1.0);
-                bootAt(f.len - f.leadB, f.bootB, +1.0);
+                bootAt(f.lead, f.bootA, lapA, -1.0);
+                bootAt(f.len - f.leadB, f.bootB, lapB, +1.0);
             }
         }
     }

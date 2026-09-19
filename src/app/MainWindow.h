@@ -850,6 +850,7 @@ private:
     QDoubleSpinBox* twistBootBSpin_ = nullptr;
     QLabel* twistBootBLabel_ = nullptr;
     QCheckBox* twistBodySidesCheck_ = nullptr;
+    QCheckBox* twistBodyTransitionCheck_ = nullptr;
     QDoubleSpinBox* twistBodyWidthSpin_ = nullptr;
     QLabel* twistBodyWidthLabel_ = nullptr;
     QDoubleSpinBox* twistBodyFaceSpin_ = nullptr;

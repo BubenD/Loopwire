@@ -11481,6 +11481,146 @@ int run_editor_tests() {
         }
     }
 
+    // ---- A BENT CABLE IS STILL A CABLE, and the transition at each end of it is a part ----------
+    {
+        // Three things, all about the stretch between the fans: it survives a bend, the boot at
+        // each end of it can be turned off, and where there is one the wires come out of its mouth
+        // rather than out from underneath it.
+        auto covered = [](const QString& id, const std::vector<Vec2>& route, const char* sort,
+                          bool transition) {
+            Entity w;
+            w.id = id;
+            w.type = EntityType::TwistedPair;
+            w.points = route;
+            w.a = route.front();
+            w.b = route.back();
+            w.meta.insert(QStringLiteral("twistStraight"), true);
+            w.meta.insert(QStringLiteral("twistWires"), 6);
+            w.meta.insert(QStringLiteral("twistWidth"), 12.0);
+            w.meta.insert(QStringLiteral("twistPitch"), 8.0);
+            w.meta.insert(QStringLiteral("twistWireWidth"), 2.0);
+            w.meta.insert(QStringLiteral("twistEnds"), 40.0);
+            w.meta.insert(QStringLiteral("twistLane"), 10.0);
+            w.meta.insert(QStringLiteral("twistKnee"), 30.0);
+            w.meta.insert(QStringLiteral("twistBody"), QString::fromLatin1(sort));
+            if (!transition) w.meta.insert(QStringLiteral("twistBodyTransition"), false);
+            return w;
+        };
+        // A ROUTE WITH KNEES IN IT. The cover is laid along the sampled route, whose legs are the
+        // facets of a rounded knee - a fraction of a millimetre each - so a test that measured
+        // those legs against the width of the bundle refused every bend there has ever been, and
+        // the cable quietly turned back into hook-up wires the moment the run was bent.
+        const std::vector<Vec2> bent{{0.0, 0.0}, {160.0, 0.0}, {240.0, -70.0}, {380.0, -70.0}};
+        auto offTheRoute = [&bent](const Vec2& p) {
+            double least = 1e300;
+            for (size_t i = 1; i < bent.size(); ++i)
+                least = std::min(least, distance(p, closestPointOnSegment(p, bent[i - 1], bent[i]).point));
+            return least;
+        };
+        for (const char* sort : {"cable", "heatshrink"}) {
+            const Entity round = covered(QStringLiteral("BENT"), bent, sort, true);
+            const std::vector<std::vector<Vec2>> drawn = twistedPairBody(round);
+            double reach = 0.0;
+            for (const std::vector<Vec2>& outline : drawn)
+                for (const Vec2& v : outline) reach = std::max(reach, offTheRoute(v));
+            std::printf("  bent body: %s - %d outline(s), the furthest point %.2f off the route\n",
+                        sort, int(drawn.size()), reach);
+            check(!drawn.empty(), "bent body: a run taken round a corner keeps the cover it was given");
+            check(reach < 60.0,
+                  "bent body: and the cover lies along the route, not away across the sheet");
+        }
+
+        // THE TRANSITION IS A TICK. A cable has one at each end unless the drawing says otherwise;
+        // a length of tubing over the whole run never has one, because it IS the transition.
+        const std::vector<Vec2> flat{{0.0, 0.0}, {300.0, 0.0}};
+        const Entity booted = covered(QStringLiteral("BOOT"), flat, "cable", true);
+        const Entity bare = covered(QStringLiteral("BARE"), flat, "cable", false);
+        std::printf("  transition: %d outline(s) with the boots, %d without\n",
+                    int(twistedPairBody(booted).size()), int(twistedPairBody(bare).size()));
+        check(twistedPairBody(booted).size() == 3,
+              "transition: a cable takes a boot at each end of it");
+        check(twistedPairBody(bare).size() == 1,
+              "transition: and unticked it runs straight out into its own fan");
+        check(twistedPairBody(covered(QStringLiteral("TUBE"), flat, "heatshrink", true)).size() == 1,
+              "transition: a length of tubing over the run has none either way");
+
+        // AND IT IS A SLEEVE OVER THE JOIN. It laps back over the end of the cable and is shrunk
+        // down onto it there; it is wider than the cable over the rest of itself; and it stops
+        // square at the mouth, which is where the WIRES START. A wire drawn on through the boot is
+        // a wire drawn through the part that is covering it.
+        const std::vector<std::vector<Vec2>> parts = twistedPairBody(booted);
+        if (parts.size() == 3) {
+            double cableFrom = 1e300, cableHalf = 0.0;
+            for (const Vec2& v : parts.front()) {
+                cableFrom = std::min(cableFrom, v.x);
+                cableHalf = std::max(cableHalf, std::abs(v.y));
+            }
+            // The boot at the START end: the one whose points are all before the middle of the run.
+            double lo = 1e300, hi = -1e300, widest = 0.0, onTheCable = 0.0;
+            for (size_t i = 1; i < parts.size(); ++i) {
+                double least = 1e300, most = -1e300;
+                for (const Vec2& v : parts[i]) {
+                    least = std::min(least, v.x);
+                    most = std::max(most, v.x);
+                }
+                if (most > 150.0) continue;   // the finish end is the same part the other way round
+                lo = least;
+                hi = most;
+                for (const Vec2& v : parts[i]) {
+                    widest = std::max(widest, std::abs(v.y));
+                    if (std::abs(v.x - most) < 1e-6) onTheCable = std::max(onTheCable, std::abs(v.y));
+                }
+            }
+            // How far into the run the wires at the start end are drawn - where the fan comes out.
+            // Measured off the EDGES of the wires, which are offset across each one, so the last of
+            // a slanting wire sits a fraction of its own width beyond the place it stops at.
+            auto fanTo = [](const Entity& e) {
+                double most = 0.0;
+                for (const std::vector<Vec2>& strand : twistedPairStrands(e))
+                    for (const Vec2& v : strand)
+                        if (v.x < 150.0) most = std::max(most, v.x);
+                return most;
+            };
+            const double wireTo = fanTo(booted), bareTo = fanTo(bare);
+            std::printf("  transition: the boot runs %.2f..%.2f, %.2f across, %.2f where it grips "
+                        "the %.2f cable, and the wires stop at %.2f against %.2f with no boot\n",
+                        lo, hi, widest * 2.0, onTheCable * 2.0, cableHalf * 2.0, wireTo, bareTo);
+            check(hi > 40.0 + 1e-6,
+                  "transition: it laps back over the end of the cable, which is what it grips");
+            check(std::abs(onTheCable - cableHalf) < 1e-6,
+                  "transition: and is shrunk down onto it there, to the width of the cable itself");
+            check(widest > cableHalf + 1e-6,
+                  "transition: over the rest of itself it stands wider, being fitted over it");
+            check(std::abs(cableFrom - hi) < 1e-6,
+                  "transition: the cable stops where the boot grips it, so that face is drawn once");
+            check(wireTo < lo + 1.5 && wireTo > lo - 1.5,
+                  "transition: and the wires come out of its mouth, not from under it");
+            check(bareTo > 40.0 - 1.5,
+                  "transition: with no boot they run right up to the end of the cable, as before");
+        }
+
+        // AND THE STRIPPED ENDS BELONG TO THE ENDS THAT FAN. An end that does not fan has no wire
+        // ends drawn at it at all - only the bundle running into whatever it runs into - so a strip
+        // mark there would be a step in the edges of the bundle saying the whole loom is bare.
+        Entity oneSided = covered(QStringLiteral("ONESIDED"), flat, "", true);
+        oneSided.meta.remove(QStringLiteral("twistBody"));
+        oneSided.meta.insert(QStringLiteral("twistStrip"), true);
+        oneSided.meta.insert(QStringLiteral("twistStripLen"), 8.0);
+        oneSided.meta.insert(QStringLiteral("twistSpread"), QStringLiteral("left"));
+        int atStart = 0, atFinish = 0;
+        for (const std::vector<Vec2>& cap : twistedPairEndCaps(oneSided)) {
+            if (cap.size() != 2) continue;
+            const double x = (cap.front().x + cap.back().x) / 2.0;
+            if (std::abs(x - 8.0) < 1e-6) ++atStart;
+            if (std::abs(x - 292.0) < 1e-6) ++atFinish;
+        }
+        std::printf("  strip and spread: %d mark(s) at the end that fans, %d at the end that does "
+                    "not\n", atStart, atFinish);
+        check(atStart == 6, "strip and spread: every wire at the end that fans is marked");
+        check(atFinish == 0,
+              "strip and spread: and the end that does not fan has no wire ends to strip");
+    }
+
     // ---- A loom that cannot go there stops where it can ------------------------------------------
     {
         // The bundle has a width, and a width cannot be bent round a corner tighter than half of it

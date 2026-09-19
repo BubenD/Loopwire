@@ -852,6 +852,31 @@ void MainWindow::buildHarnessMechanicalTab() {
                     "shrunk length and end size - a cover is shrunk onto a connector at one end and "
                     "onto a breakout at the other."));
                 bg->addWidget(twistBodySidesCheck_, 0, 12, 1, 2);
+                // THE TRANSITION HEATSHRINK, which is a cable thing only: a length of tubing over
+                // the whole run is already the transition and cannot have a second one over its
+                // own end. Ticked, which is how a cable starts - the boot is what makes a cable
+                // read as a cable rather than as a thick line - and unticked the cable runs
+                // straight out into its fan.
+                twistBodyTransitionCheck_ =
+                    new QCheckBox(QStringLiteral("Transition heatshrink"), optW);
+                twistBodyTransitionCheck_->setChecked(editor_->twistBodyTransition());
+                twistBodyTransitionCheck_->setStyleSheet(
+                    QStringLiteral("color:#e6e9ef;background:transparent;"));
+                twistBodyTransitionCheck_->setToolTip(QStringLiteral(
+                    "A boot over each end of the cable: shrunk down onto the cable where it grips "
+                    "it, out over the first of the fan at one width, and the wires come out of its "
+                    "mouth. Untick it and the cable runs straight out into its wires."));
+                bg->addWidget(twistBodyTransitionCheck_, 1, 12, 1, 2);
+                connect(twistBodyTransitionCheck_, &QCheckBox::toggled, this, [this](bool on) {
+                    editor_->setTwistBodyTransition(on);
+                    syncBreakOptions();   // the boot lengths come and go with it
+                    canvas_->update();
+                    statusBar()->showMessage(
+                        on ? QStringLiteral("Wires run: a transition heatshrink at each end of the "
+                                            "cable")
+                           : QStringLiteral("Wires run: the cable runs straight out into its fan"),
+                        2000);
+                });
                 connect(twistBodySidesCheck_, &QCheckBox::toggled, this, [this](bool on) {
                     editor_->setTwistBodySidesSame(on);
                     syncBreakOptions();
@@ -978,7 +1003,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                  "Heatshrink over the run: click along the stretch it covers, Enter finishes. Drawn "
                  "recovered - pulled in at both ends onto what it grips, and following the knees in "
                  "between."},
-                {ShrinkRouteMode::Cable, 1, "Cable", "Cable over the run with heatshrink",
+                {ShrinkRouteMode::Cable, 1, "Cable", "Cable over the run",
                  "A cable running along the run under a length of heatshrink: one width from end to "
                  "end, cut square across each end rather than recovered onto what is under it."},
                 {ShrinkRouteMode::CableEnds, 2, "Cable ends",

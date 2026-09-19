@@ -4677,9 +4677,18 @@ void MainWindow::syncBreakOptions() {
                       editor_->twistBodyShrinkFinish() < 0.0,
                       editor_->twistBodyShrinkFinish() >= 0.0 ? editor_->twistBodyShrinkFinish()
                                                               : fig.bodyShrink);
-        showAutoField(twistBootSpin_, twistBootLabel_, asCable, editor_->twistBoot() <= 1e-9,
+        // The transition is a cable thing, and its two lengths mean nothing while it is off.
+        if (twistBodyTransitionCheck_) {
+            twistBodyTransitionCheck_->setVisible(asCable);
+            if (asCable) {
+                QSignalBlocker b(twistBodyTransitionCheck_);
+                twistBodyTransitionCheck_->setChecked(editor_->twistBodyTransition());
+            }
+        }
+        const bool booted = asCable && editor_->twistBodyTransition();
+        showAutoField(twistBootSpin_, twistBootLabel_, booted, editor_->twistBoot() <= 1e-9,
                       editor_->twistBoot() > 1e-9 ? editor_->twistBoot() : fig.boot);
-        showAutoField(twistBootBSpin_, twistBootBLabel_, asCable && endsApart,
+        showAutoField(twistBootBSpin_, twistBootBLabel_, booted && endsApart,
                       editor_->twistBootFinish() <= 1e-9,
                       editor_->twistBootFinish() > 1e-9 ? editor_->twistBootFinish() : fig.boot);
         if (twistSidesCheck_) {

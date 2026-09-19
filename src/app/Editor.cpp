@@ -12459,13 +12459,55 @@ int Editor::trimPass(const Vec2& a, const Vec2& b, const std::vector<QString>& o
                 placeOnPath(route, piece.back(), s1, off);
                 alive.emplace_back(std::min(s0, s1), std::max(s0, s1));
             }
-            auto survives = [&](const Vec2& p) {
+            // Asked tightly, because the answer is also where a part is CUT: a millimetre of slack
+            // here is a millimetre of wire left sticking out past the thing it was cut back to.
+            auto liveAt = [&](const Vec2& p) {
                 if (alive.empty()) return true;
                 double s = 0.0, off = 0.0;
                 placeOnPath(route, p, s, off);
                 for (const auto& span : alive)
-                    if (s >= span.first - 1e-6 && s <= span.second + 1e-6) return true;
+                    if (s >= span.first - 1e-9 && s <= span.second + 1e-9) return true;
                 return false;
+            };
+            // AND EVERY DRAWN LINE IS CUT WHERE THE RUN IS CUT, not where the fence happens to
+            // fall across it. The fence is drawn over the wires. It need not touch the cover, or
+            // the line across the far end, or the boot at that end - and a part the fence missed
+            // was kept WHOLE, so a cable came back in one piece lying beside its own cut wires. It
+            // only ever looked right because the fence grazed the end face of the cover on the way
+            // past, which is luck and not a rule. What settles it is where a part lies ALONG the
+            // run, which is the one thing every part of a run has in common.
+            auto clipToAlive = [&](const std::vector<Vec2>& line) {
+                std::vector<std::vector<Vec2>> out;
+                if (line.size() < 2) return out;
+                std::vector<Vec2> run;
+                bool was = liveAt(line.front());
+                if (was) run.push_back(line.front());
+                for (size_t i = 1; i < line.size(); ++i) {
+                    const bool now = liveAt(line[i]);
+                    if (now != was) {
+                        // Where it crosses, halved until the two sides of the answer meet. The end
+                        // taken is the one on the LIVE side of it, so what is kept never reaches
+                        // past what it was cut back to, even by a hair.
+                        Vec2 lo = line[i - 1], hi = line[i];
+                        for (int k = 0; k < 40; ++k) {
+                            const Vec2 mid = lerp(lo, hi, 0.5);
+                            (liveAt(mid) == was ? lo : hi) = mid;
+                        }
+                        const Vec2 edge = was ? lo : hi;
+                        if (was) {
+                            run.push_back(edge);
+                            if (run.size() >= 2) out.push_back(run);
+                            run.clear();
+                        } else {
+                            run.clear();
+                            run.push_back(edge);
+                        }
+                        was = now;
+                    }
+                    if (now) run.push_back(line[i]);
+                }
+                if (was && run.size() >= 2) out.push_back(run);
+                return out;
             };
             // EACH WIRE COMES APART AS ONE LINE, not as the fifty little steps it is measured at.
             // Cut a wire into its steps first and the fence only crosses ONE of them, so one step
@@ -12510,23 +12552,14 @@ int Editor::trimPass(const Vec2& a, const Vec2& b, const std::vector<QString>& o
             for (Entity& part : parts) {
                 const std::vector<Vec2> line =
                     part.type == EntityType::Polyline ? part.points : std::vector<Vec2>{part.a, part.b};
-                auto at = cutCrossOn(line);
-                if (!at || !objectCrosses(part, refs)) {
-                    // Untouched by the fence, so it stands or falls by where it sits along the run.
-                    if (survives(lerp(line.front(), line.back(), 0.5))) kept.push_back(std::move(part));
-                    else cutAny = true;
-                    continue;
-                }
-                auto bits = trimPolylinePieces(line, *at, joints, selfId);
-                if (bits.empty()) {
-                    if (survives(lerp(line.front(), line.back(), 0.5))) kept.push_back(std::move(part));
-                    else cutAny = true;
+                const std::vector<std::vector<Vec2>> bits = clipToAlive(line);
+                if (bits.size() == 1 && bits.front().size() == line.size()) {
+                    kept.push_back(std::move(part));   // wholly inside the part that stayed
                     continue;
                 }
                 cutAny = true;
                 for (const std::vector<Vec2>& bit : bits) {
                     if (bit.size() < 2) continue;
-                    if (!survives(lerp(bit.front(), bit.back(), 0.5))) continue;
                     Entity piece = part;
                     piece.id.clear();
                     piece.type = EntityType::Polyline;
@@ -15985,6 +16018,10 @@ void Editor::writeBundleMeta(Entity& e, bool straight) const {
         if (twistBodyShrink_ >= 0.0)
             e.meta.insert(QStringLiteral("twistBodyShrink"), twistBodyShrink_);
         if (twistBoot_ > 1e-9) e.meta.insert(QStringLiteral("twistBoot"), twistBoot_);
+        // Written only where it is off: a cable has its transition, and a cable drawn on an older
+        // build had one too.
+        if (twistBodyKind_ == RunBody::Cable && !twistBodyTransition_)
+            e.meta.insert(QStringLiteral("twistBodyTransition"), false);
         if (!twistBodySidesSame_) {
             e.meta.insert(QStringLiteral("twistBodySidesSame"), false);
             if (twistBodyFaceFinish_ > 1e-9)
@@ -16106,6 +16143,12 @@ void Editor::setTwistBodySidesSame(bool same) {
     if (twistBodySidesSame_ == same) return;
     twistBodySidesSame_ = same;
     emit overlayChanged();
+}
+
+void Editor::setTwistBodyTransition(bool on) {
+    if (twistBodyTransition_ == on) return;
+    twistBodyTransition_ = on;
+    emit overlayChanged();   // the boots come and go, and the fans are drawn from a new place
 }
 
 void Editor::setTwistBodyFace(double mm) {
