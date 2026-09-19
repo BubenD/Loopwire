@@ -15907,7 +15907,7 @@ double Editor::twistedBundleWidth() const {
     const double wire = fig.ok && fig.wireWidth > 1e-9 ? fig.wireWidth : kWiresRunWire;
     const double packed = wire * (kWiresRunPitch / kWiresRunWire);
     const double bundle = packed * (wires - 1) + wire;
-    return twistCableBody_ && fig.ok && fig.bodyWidth > bundle ? fig.bodyWidth : bundle;
+    return twistCableBody() && fig.ok && fig.bodyWidth > bundle ? fig.bodyWidth : bundle;
 }
 
 TwistFigures Editor::twistPreviewFigures() const {
@@ -15971,8 +15971,10 @@ void Editor::writeBundleMeta(Entity& e, bool straight) const {
     // not, so most runs carry nothing extra.
     // AND WHETHER THE CONVERGED STRETCH IS A CABLE. Written only when it is, so an ordinary run
     // carries nothing extra and opens on an older build as the run it always was.
-    if (straight && twistCableBody_) {
-        e.meta.insert(QStringLiteral("twistBody"), QStringLiteral("cable"));
+    if (straight && twistBodyKind_ != RunBody::Wires) {
+        e.meta.insert(QStringLiteral("twistBody"), twistBodyKind_ == RunBody::Cable
+                                                       ? QStringLiteral("cable")
+                                                       : QStringLiteral("heatshrink"));
         // Each figure only where it has been said, so a cable drawn without touching any of them
         // carries nothing extra and is the cable the drawing would have made of it anyway.
         if (twistBodyWidth_ > 1e-9)
@@ -15980,12 +15982,15 @@ void Editor::writeBundleMeta(Entity& e, bool straight) const {
         if (twistBodyFace_ > 1e-9) e.meta.insert(QStringLiteral("twistBodyFace"), twistBodyFace_);
         if (twistBodyShrink_ >= 0.0)
             e.meta.insert(QStringLiteral("twistBodyShrink"), twistBodyShrink_);
+        if (twistBoot_ > 1e-9) e.meta.insert(QStringLiteral("twistBoot"), twistBoot_);
         if (!twistBodySidesSame_) {
             e.meta.insert(QStringLiteral("twistBodySidesSame"), false);
             if (twistBodyFaceFinish_ > 1e-9)
                 e.meta.insert(QStringLiteral("twistBodyFaceFinish"), twistBodyFaceFinish_);
             if (twistBodyShrinkFinish_ >= 0.0)
                 e.meta.insert(QStringLiteral("twistBodyShrinkFinish"), twistBodyShrinkFinish_);
+            if (twistBootFinish_ > 1e-9)
+                e.meta.insert(QStringLiteral("twistBootFinish"), twistBootFinish_);
         }
     }
     if (straight && twistStrip_) {
@@ -16068,10 +16073,24 @@ void Editor::setTwistFlushLen(double mm) {
     emit overlayChanged();
 }
 
-void Editor::setTwistCableBody(bool on) {
-    if (twistCableBody_ == on) return;
-    twistCableBody_ = on;
+void Editor::setTwistBodyKind(RunBody kind) {
+    if (twistBodyKind_ == kind) return;
+    twistBodyKind_ = kind;
     emit overlayChanged();   // a pinned run re-draws covered, or as its wires
+}
+
+void Editor::setTwistBoot(double mm) {
+    const double next = std::max(0.0, mm);
+    if (std::abs(twistBoot_ - next) < 1e-9) return;
+    twistBoot_ = next;
+    emit overlayChanged();
+}
+
+void Editor::setTwistBootFinish(double mm) {
+    const double next = std::max(0.0, mm);
+    if (std::abs(twistBootFinish_ - next) < 1e-9) return;
+    twistBootFinish_ = next;
+    emit overlayChanged();
 }
 
 void Editor::setTwistBodyWidth(double mm) {

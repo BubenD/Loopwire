@@ -202,6 +202,19 @@ std::vector<std::pair<Vec2, Vec2>> twistedPairStraights(const Entity& pair);
 // Empty unless the run asks for it, and empty for a laid-up bundle, which is a cable already.
 std::vector<std::vector<Vec2>> twistedPairBody(const Entity& pair);
 
+// WHAT THE CONVERGED STRETCH IS MADE OF - the part between the two fans, which is most of a loom.
+//
+//   Wires      the lines the wires themselves make, which is what a run has always been drawn as.
+//   Cable      a cable of one width, cut square at each end, with a TRANSITION HEATSHRINK at each
+//              end of it: the boot that takes a bundle of wires down to one cable, flaring from the
+//              cable out over the first of the fan. That is what a breakout looks like.
+//   Heatshrink a length of tubing over the run and nothing else: one body, recovered - shrunk - onto
+//              what it grips at each end, and no boot, because there is no transition to cover.
+//
+// The FANS are untouched by all three: what changes is the part between them.
+enum class RunBody { Wires, Cable, Heatshrink };
+RunBody runBodyOf(const Entity& pair);
+
 // CAN A BUNDLE THIS WIDE ACTUALLY GO ROUND THIS ROUTE?
 //
 // A loom is not a line. Where a route turns, every wire in the bundle turns with it on a radius its
@@ -238,6 +251,7 @@ struct TwistFigures {
     double bodyWidth = 0.0;   // the cable over the converged stretch, across
     double bodyFace = 0.0;    // its end face, across
     double bodyShrink = 0.0;  // and the length it takes to come down to it
+    double boot = 0.0;        // how far a cable's boot reaches into the fan
 };
 TwistFigures twistedPairFigures(const Entity& pair);
 // Which end(s) the bundle spreads its wires out at: "left", "right" or "both". Anything else -

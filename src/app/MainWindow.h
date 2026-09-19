@@ -844,7 +844,11 @@ private:
     QDoubleSpinBox* twistFlushSpin_ = nullptr;
     QLabel* twistFlushLabel_ = nullptr;
     QCheckBox* twistStripCheck_ = nullptr;
-    QCheckBox* twistCableCheck_ = nullptr;
+    QComboBox* twistBodyCombo_ = nullptr;
+    QDoubleSpinBox* twistBootSpin_ = nullptr;
+    QLabel* twistBootLabel_ = nullptr;
+    QDoubleSpinBox* twistBootBSpin_ = nullptr;
+    QLabel* twistBootBLabel_ = nullptr;
     QCheckBox* twistBodySidesCheck_ = nullptr;
     QDoubleSpinBox* twistBodyWidthSpin_ = nullptr;
     QLabel* twistBodyWidthLabel_ = nullptr;

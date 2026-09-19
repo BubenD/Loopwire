@@ -385,9 +385,10 @@ struct TwistFrames {
     // show the figure it stands for. Both are the radius a WIRE turns on, not the centreline's.
     double kneeUsed = 0.0;
     double fanKneeUsed = 0.0;
-    // THE CONVERGED STRETCH IS A BODY, not the lines the wires make: a cable under heatshrink. The
-    // fans are untouched either way - it is the part between them that this is about.
-    bool cableBody = false;
+    // WHAT THE CONVERGED STRETCH IS MADE OF: the wires themselves, a cable with a boot at each end,
+    // or a length of tubing over the lot. The fans are untouched by all three.
+    RunBody body = RunBody::Wires;
+    bool cableBody = false;   // either of the two that draw a body rather than the wires
     // AND THE FIGURES IT IS DRAWN TO. How wide the cable is, and at each end how far across its face
     // is and over what length it comes down to it - the shrunk length. The two ends are described
     // separately where they are told to be: a cover over a loom is shrunk onto a connector at one
@@ -395,6 +396,9 @@ struct TwistFrames {
     double bodyHalf = 0.0;
     double bodyFace = 0.0, bodyFaceB = 0.0;
     double bodyShrink = 0.0, bodyShrinkB = 0.0;
+    // AND HOW FAR THE BOOT REACHES at each end of a cable: the transition heatshrink that takes the
+    // bundle of wires down to the one cable, measured from the cable's end out into the fan.
+    double bootA = 0.0, bootB = 0.0;
     // THE RADIUS THE FAN'S OWN CORNERS TURN ON. Below nought is nobody having said: the fan is
     // eased end to end, which is what every run drawn before there was a field for it has. NOUGHT
     // IS A SHARP CORNER, asked for - a drawing that wants the knee shown as a corner and not as a
@@ -613,9 +617,8 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
     };
     f.strip = stripOf(false);
     f.stripB = stripOf(true);
-    f.cableBody =
-        f.straight &&
-        pair.meta.value(QStringLiteral("twistBody")).toString() == QLatin1String("cable");
+    f.body = runBodyOf(pair);
+    f.cableBody = f.straight && f.body != RunBody::Wires;
     if (f.cableBody) {
         // WHAT IT IS DRAWN TO, and what each figure falls back to when nobody has said.
         //
@@ -651,6 +654,18 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
         f.bodyFaceB = faceOf(true);
         f.bodyShrink = shrinkOf(false);
         f.bodyShrinkB = shrinkOf(true);
+        // THE BOOT AT EACH END, which only a cable has. Left alone it reaches a third of the way
+        // into the fan - far enough to read as a boot, near enough that the wires are still gathered
+        // close enough to be covered by one. Never more than the fan itself: a boot out past the
+        // wire ends is a boot over nothing.
+        auto bootOf = [&](bool finish) {
+            const QJsonValue v = bodySide(QStringLiteral("twistBoot"), finish);
+            const double fan = finish ? f.leadB : f.lead;
+            const double want = v.isUndefined() ? fan / 3.0 : std::max(0.0, v.toDouble(0.0));
+            return std::min(want, fan);
+        };
+        f.bootA = bootOf(false);
+        f.bootB = bootOf(true);
     }
     // AND WHAT RADIUS THE FAN'S CORNERS CAME OUT ON, for the outermost wire - the one that travels
     // furthest and so is the one a radius is read off. Left alone the fan gives a quarter of the
@@ -1098,7 +1113,8 @@ QString twistKey(const Entity& e) {
                                                                    : QLatin1String("|apart");
     k += e.meta.value(QLatin1String("twistBody")).toString();
     for (const char* m : {"twistBodyWidth", "twistBodyFace", "twistBodyShrink",
-                          "twistBodyFaceFinish", "twistBodyShrinkFinish"})
+                          "twistBodyFaceFinish", "twistBodyShrinkFinish", "twistBoot",
+                          "twistBootFinish"})
         put(m);
     k += e.meta.value(QLatin1String("twistBodySidesSame")).toBool(true) ? QLatin1String("|bs")
                                                                        : QLatin1String("|ba");
@@ -1197,6 +1213,19 @@ const TwistCached* twistCached(const Entity& pair) {
             c.strands.push_back(std::move(edgeB));
         }
     }
+    // Where a distance along the run is, taken off the places it was measured at - which is all a
+    // boot needs: it sits on the fan, and the fan is measured every degree or so of it.
+    auto posOn = [&f](double u) {
+        if (f.pos.empty()) return Vec2{};
+        const double uu = std::clamp(u, 0.0, f.len);
+        for (size_t i = 1; i < f.u.size(); ++i) {
+            if (f.u[i] < uu) continue;
+            const double span = f.u[i] - f.u[i - 1];
+            return span < 1e-12 ? f.pos[i]
+                                : lerp(f.pos[i - 1], f.pos[i], (uu - f.u[i - 1]) / span);
+        }
+        return f.pos.back();
+    };
     // THE BODY OVER THE CONVERGED STRETCH, from the end of one fan to the start of the other. Its
     // own centre line is the route between those two places, knees and all, so a run that bends
     // bends its cable with it.
@@ -1205,13 +1234,44 @@ const TwistCached* twistCached(const Entity& pair) {
         if (to > from) {
             std::vector<Vec2> along;
             for (size_t i = from; i <= to && i < f.pos.size(); ++i) along.push_back(f.pos[i]);
-            // Drawn to the figures worked out above: how wide the cable is, and at each end how far
-            // across its face is and over what length it comes down to it.
-            std::vector<Vec2> outline = shrunkSleeveOutline(
-                along, f.bodyHalf, f.bodyFace, f.bodyFaceB, f.bodyShrink, f.bodyShrinkB);
+            // A CABLE IS CUT SQUARE AND A HEATSHRINK IS RECOVERED. A cable running the length of the
+            // run does not shrink onto anything: it is one width end to end and it stops at a face
+            // square across it, and what takes it down to the wires is the BOOT at each end. A
+            // length of tubing over the run has no boot and does shrink onto what it grips, which is
+            // the face and the shrunk length.
+            const bool square = f.body == RunBody::Cable;
+            std::vector<Vec2> outline =
+                square ? shrunkSleeveOutline(along, f.bodyHalf, f.bodyHalf, f.bodyHalf, 0.0, 0.0)
+                       : shrunkSleeveOutline(along, f.bodyHalf, f.bodyFace, f.bodyFaceB,
+                                             f.bodyShrink, f.bodyShrinkB);
             if (outline.size() >= 3) {
                 outline.push_back(outline.front());   // closed: it is a body, not a run of lines
                 c.body.push_back(std::move(outline));
+            }
+            // AND THE TRANSITION AT EACH END OF A CABLE: the boot that takes a bundle of wires down
+            // to one cable. Square where it meets the cable and flaring out over the first of the
+            // fan, which is where the wires are still gathered close enough to be covered.
+            if (square) {
+                // How far across the wires are at a place along the run - what a boot has to cover.
+                auto spreadHalfAt = [&](double u) {
+                    double most = 0.0;
+                    for (int k = 0; k < f.wires; ++k)
+                        most = std::max(most, std::abs(twistOffset(f, k, u)));
+                    return most + f.thick;
+                };
+                auto bootAt = [&](double atCable, double reach, double intoTheFan) {
+                    if (reach < 1e-6) return;
+                    const double atFan = atCable + intoTheFan * reach;
+                    const double mouth = std::max(f.bodyHalf, spreadHalfAt(atFan));
+                    std::vector<Vec2> run{posOn(atCable), posOn(atFan)};
+                    std::vector<Vec2> boot =
+                        shrunkSleeveOutline(run, mouth, f.bodyHalf, mouth, reach, 0.0);
+                    if (boot.size() < 3) return;
+                    boot.push_back(boot.front());
+                    c.body.push_back(std::move(boot));
+                };
+                bootAt(f.lead, f.bootA, -1.0);
+                bootAt(f.len - f.leadB, f.bootB, +1.0);
             }
         }
     }
@@ -1238,6 +1298,13 @@ std::vector<std::vector<Vec2>> twistedPairBody(const Entity& pair) {
     if (pair.type != EntityType::TwistedPair) return {};
     const TwistCached* c = twistCached(pair);
     return c ? c->body : std::vector<std::vector<Vec2>>{};
+}
+
+RunBody runBodyOf(const Entity& pair) {
+    const QString said = pair.meta.value(QStringLiteral("twistBody")).toString();
+    if (said == QLatin1String("cable")) return RunBody::Cable;
+    if (said == QLatin1String("heatshrink")) return RunBody::Heatshrink;
+    return RunBody::Wires;
 }
 
 bool runRouteCarries(const std::vector<Vec2>& route, double bundleWidth, QString* why) {
@@ -1293,6 +1360,7 @@ TwistFigures twistedPairFigures(const Entity& pair) {
     out.bodyWidth = f.bodyHalf * 2.0;
     out.bodyFace = f.bodyFace * 2.0;
     out.bodyShrink = f.bodyShrink;
+    out.boot = f.bootA;
     return out;
 }
 

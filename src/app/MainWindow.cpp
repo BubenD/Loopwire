@@ -4635,17 +4635,22 @@ void MainWindow::syncBreakOptions() {
         showAutoField(twistStripSpin_, twistStripLabel_, straightRun && editor_->twistStrip(),
                       editor_->twistStripLen() <= 1e-9,
                       editor_->twistStripLen() > 1e-9 ? editor_->twistStripLen() : fig.stripLen);
-        if (twistCableCheck_) {
-            twistCableCheck_->setVisible(straightRun);
+        if (twistBodyCombo_) {
+            twistBodyCombo_->setVisible(straightRun);
             if (straightRun) {
-                QSignalBlocker b(twistCableCheck_);
-                twistCableCheck_->setChecked(editor_->twistCableBody());
+                QSignalBlocker b(twistBodyCombo_);
+                const int at =
+                    twistBodyCombo_->findData(static_cast<int>(editor_->twistBodyKind()));
+                twistBodyCombo_->setCurrentIndex(at >= 0 ? at : 0);
             }
         }
-        // AND THE CABLE'S OWN MANAGEMENT, which only means anything while there is a cable: it comes
-        // up with the tick and goes away with it. The finish end's two come up only when the two
-        // ends have been parted, for the same reason the fan's do.
-        const bool covered = straightRun && editor_->twistCableBody();
+        // AND EACH SORT OF BODY BRINGS ITS OWN FIGURES, and only its own. A cable is cut square and
+        // has a boot at each end; a length of tubing over the run is shrunk onto what it grips and
+        // has none. Showing both sets at once would be offering half of them about nothing.
+        const RunBody kind = editor_->twistBodyKind();
+        const bool covered = straightRun && kind != RunBody::Wires;
+        const bool asCable = straightRun && kind == RunBody::Cable;
+        const bool asSleeve = straightRun && kind == RunBody::Heatshrink;
         const bool endsApart = covered && !editor_->twistBodySidesSame();
         if (twistBodySidesCheck_) {
             twistBodySidesCheck_->setVisible(covered);
@@ -4657,21 +4662,26 @@ void MainWindow::syncBreakOptions() {
         showAutoField(twistBodyWidthSpin_, twistBodyWidthLabel_, covered,
                       editor_->twistBodyWidth() <= 1e-9,
                       editor_->twistBodyWidth() > 1e-9 ? editor_->twistBodyWidth() : fig.bodyWidth);
-        showAutoField(twistBodyFaceSpin_, twistBodyFaceLabel_, covered,
+        showAutoField(twistBodyFaceSpin_, twistBodyFaceLabel_, asSleeve,
                       editor_->twistBodyFace() <= 1e-9,
                       editor_->twistBodyFace() > 1e-9 ? editor_->twistBodyFace() : fig.bodyFace);
-        showAutoField(twistBodyShrinkSpin_, twistBodyShrinkLabel_, covered,
+        showAutoField(twistBodyShrinkSpin_, twistBodyShrinkLabel_, asSleeve,
                       editor_->twistBodyShrink() < 0.0,
                       editor_->twistBodyShrink() >= 0.0 ? editor_->twistBodyShrink()
                                                         : fig.bodyShrink);
-        showAutoField(twistBodyFaceBSpin_, twistBodyFaceBLabel_, endsApart,
+        showAutoField(twistBodyFaceBSpin_, twistBodyFaceBLabel_, asSleeve && endsApart,
                       editor_->twistBodyFaceFinish() <= 1e-9,
                       editor_->twistBodyFaceFinish() > 1e-9 ? editor_->twistBodyFaceFinish()
                                                             : fig.bodyFace);
-        showAutoField(twistBodyShrinkBSpin_, twistBodyShrinkBLabel_, endsApart,
+        showAutoField(twistBodyShrinkBSpin_, twistBodyShrinkBLabel_, asSleeve && endsApart,
                       editor_->twistBodyShrinkFinish() < 0.0,
                       editor_->twistBodyShrinkFinish() >= 0.0 ? editor_->twistBodyShrinkFinish()
                                                               : fig.bodyShrink);
+        showAutoField(twistBootSpin_, twistBootLabel_, asCable, editor_->twistBoot() <= 1e-9,
+                      editor_->twistBoot() > 1e-9 ? editor_->twistBoot() : fig.boot);
+        showAutoField(twistBootBSpin_, twistBootBLabel_, asCable && endsApart,
+                      editor_->twistBootFinish() <= 1e-9,
+                      editor_->twistBootFinish() > 1e-9 ? editor_->twistBootFinish() : fig.boot);
         if (twistSidesCheck_) {
             twistSidesCheck_->setVisible(straightRun);
             if (straightRun) {
@@ -9352,27 +9362,39 @@ void MainWindow::refreshProperties() {
                                                            std::max(0.0, v));
                        });
             // WHETHER THE CONVERGED STRETCH IS A CABLE under heatshrink, or the lines its wires make.
-            const bool covered =
-                e->meta.value(QStringLiteral("twistBody")).toString() == QLatin1String("cable");
+            const RunBody kind = runBodyOf(*e);
+            const bool covered = kind != RunBody::Wires;
+            const QString kindName = kind == RunBody::Cable      ? QStringLiteral("Cable")
+                                     : kind == RunBody::Heatshrink ? QStringLiteral("Heatshrink")
+                                                                   : QStringLiteral("Hook-up wires");
             addCombo(QStringLiteral("Between the fans"),
-                     {QStringLiteral("Wires"), QStringLiteral("Cable body")},
-                     mv(QStringLiteral("twistBody")).isVaries()
-                         ? QStringLiteral("#Value")
-                         : (covered ? QStringLiteral("Cable body") : QStringLiteral("Wires")),
+                     {QStringLiteral("Hook-up wires"), QStringLiteral("Cable"),
+                      QStringLiteral("Heatshrink")},
+                     mv(QStringLiteral("twistBody")).isVaries() ? QStringLiteral("#Value") : kindName,
                      false, [this](const QString& t) {
-                         editor_->setSelectionMeta(QStringLiteral("twistBody"),
-                                                   t == QLatin1String("Cable body")
-                                                       ? QStringLiteral("cable")
-                                                       : QString());
+                         editor_->setSelectionMeta(
+                             QStringLiteral("twistBody"),
+                             t == QLatin1String("Cable")        ? QStringLiteral("cable")
+                             : t == QLatin1String("Heatshrink") ? QStringLiteral("heatshrink")
+                                                                : QString());
                      });
             // AND WHAT THAT CABLE IS DRAWN TO, while there is one: how wide, and at each end how far
             // across its face is and over what length it comes down to that.
             if (covered) {
-                addNum(QStringLiteral("Cable width"),
+                addNum(QStringLiteral("Body width"),
                        mv(QStringLiteral("twistBodyWidth")).toDouble(0.0), [this](double v) {
                            editor_->setSelectionMetaNumber(QStringLiteral("twistBodyWidth"),
                                                            std::max(0.0, v));
                        });
+                // A cable is cut square and has a boot at each end; a sleeve is shrunk onto what it
+                // grips and has none. Each sort is offered its own figures and not the other's.
+                if (kind == RunBody::Cable)
+                    addNum(QStringLiteral("Boot length"),
+                           mv(QStringLiteral("twistBoot")).toDouble(0.0), [this](double v) {
+                               editor_->setSelectionMetaNumber(QStringLiteral("twistBoot"),
+                                                               std::max(0.0, v));
+                           });
+                if (kind == RunBody::Heatshrink) {
                 addNum(QStringLiteral("End size"), mv(QStringLiteral("twistBodyFace")).toDouble(0.0),
                        [this](double v) {
                            editor_->setSelectionMetaNumber(QStringLiteral("twistBodyFace"),
@@ -9383,6 +9405,7 @@ void MainWindow::refreshProperties() {
                            editor_->setSelectionMetaNumber(QStringLiteral("twistBodyShrink"),
                                                            std::max(-1.0, v));
                        }, autoTip);
+                }
                 const bool bothEnds =
                     !e->meta.contains(QStringLiteral("twistBodySidesSame")) ||
                     e->meta.value(QStringLiteral("twistBodySidesSame")).toBool();
@@ -9396,7 +9419,13 @@ void MainWindow::refreshProperties() {
                              editor_->setSelectionMetaBool(QStringLiteral("twistBodySidesSame"),
                                                            t == QLatin1String("Alike"));
                          });
-                if (!bothEnds) {
+                if (!bothEnds && kind == RunBody::Cable)
+                    addNum(QStringLiteral("Finish boot"),
+                           mv(QStringLiteral("twistBootFinish")).toDouble(0.0), [this](double v) {
+                               editor_->setSelectionMetaNumber(QStringLiteral("twistBootFinish"),
+                                                               std::max(0.0, v));
+                           });
+                if (!bothEnds && kind == RunBody::Heatshrink) {
                     addNum(QStringLiteral("Finish size"),
                            mv(QStringLiteral("twistBodyFaceFinish")).toDouble(0.0),
                            [this](double v) {

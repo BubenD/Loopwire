@@ -175,8 +175,16 @@ public:
     // THE CONVERGED STRETCH AS A CABLE UNDER HEATSHRINK, rather than as the lines its wires make.
     // The fans are untouched: the wires come out of it at both ends exactly as they do now, and what
     // changes is the part between them, where a loom is a covered thing.
-    bool twistCableBody() const { return twistCableBody_; }
-    void setTwistCableBody(bool on);
+    // WHAT THE CONVERGED STRETCH IS MADE OF: the wires themselves, a cable with a boot at each end,
+    // or a length of tubing over the lot. See RunBody. The fans are untouched by all three.
+    RunBody twistBodyKind() const { return twistBodyKind_; }
+    void setTwistBodyKind(RunBody kind);
+    bool twistCableBody() const { return twistBodyKind_ != RunBody::Wires; }
+    // How far a cable's boot reaches into the fan at each end. 0 takes the drawing's own.
+    double twistBoot() const { return twistBoot_; }
+    void setTwistBoot(double mm);
+    double twistBootFinish() const { return twistBootFinish_; }
+    void setTwistBootFinish(double mm);
     // AND WHAT THAT CABLE IS DRAWN TO. How wide it is, and at each end how far across its face is
     // and over what length it comes down to it - the shrunk length. Ticked, which is how it starts,
     // both ends are the same; unticked, the finish end takes its own. 0 for a length or a width is
@@ -1630,7 +1638,9 @@ private:
     bool twistFlush_ = true;                       // the ends are cut square across the fan
     double twistFlushLen_ = 0.0;                   // how long that is; 0 = the drawing's own share
     bool twistStrip_ = false;                      // the insulation is off the last of each wire
-    bool twistCableBody_ = false;                  // the converged stretch is drawn as a cable
+    RunBody twistBodyKind_ = RunBody::Wires;       // what the converged stretch is made of
+    double twistBoot_ = 0.0;                       // a cable's boot; 0 = the drawing's own
+    double twistBootFinish_ = 0.0;
     double twistBodyWidth_ = 0.0;                  // how wide; 0 = the drawing's own
     bool twistBodySidesSame_ = true;               // both its ends shrink alike
     double twistBodyFace_ = 0.0;                   // the end face across; 0 = the drawing's own

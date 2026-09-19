@@ -11159,9 +11159,9 @@ int run_editor_tests() {
         // and drawing the two or three lines its wires make there says the wires are on show when
         // they are not. THE FANS ARE UNTOUCHED: the wires come out of it at both ends exactly as they
         // did, and what changes is only the part between them.
-        auto run = [](bool cable) {
+        auto run = [](const char* body) {
             Entity w;
-            w.id = cable ? QStringLiteral("CABLE") : QStringLiteral("WIRES");
+            w.id = QStringLiteral("BODY%1").arg(QString::fromLatin1(body));
             w.type = EntityType::TwistedPair;
             w.points = {{0.0, 0.0}, {320.0, 0.0}};
             w.a = w.points.front();
@@ -11174,10 +11174,13 @@ int run_editor_tests() {
             w.meta.insert(QStringLiteral("twistTrunkWires"), 3);
             w.meta.insert(QStringLiteral("twistLane"), 11.0);
             w.meta.insert(QStringLiteral("twistEnds"), 55.0);
-            if (cable) w.meta.insert(QStringLiteral("twistBody"), QStringLiteral("cable"));
+            if (body[0])
+                w.meta.insert(QStringLiteral("twistBody"), QString::fromLatin1(body));
             return w;
         };
-        const Entity wires = run(false), cable = run(true);
+        // The SLEEVE sort: a length of tubing over the run, shrunk onto what it grips at each end.
+        // The cable sort is cut square and has a boot at each end instead - see below.
+        const Entity wires = run(""), cable = run("heatshrink");
         const std::vector<std::vector<Vec2>> body = twistedPairBody(cable);
         std::printf("  cable body: %d outline(s) asked for, %d when it is not\n", int(body.size()),
                     int(twistedPairBody(wires).size()));
@@ -11273,7 +11276,7 @@ int run_editor_tests() {
                 }
                 return r;
             };
-            Entity wide = run(true);
+            Entity wide = run("heatshrink");
             wide.id = QStringLiteral("WIDE");
             wide.meta.insert(QStringLiteral("twistBodyWidth"), 40.0);
             wide.meta.insert(QStringLiteral("twistBodyFace"), 20.0);
@@ -11339,6 +11342,63 @@ int run_editor_tests() {
             std::printf("  cable body: asked for a 500 face on a 40 cable, got %.1f\n", held.atStart);
             check(std::abs(held.atStart - 40.0) < 1e-6,
                   "cable body: a face wider than the cable is held to the cable, not flared past it");
+        }
+
+        // ---- AND A CABLE IS CUT SQUARE, WITH A BOOT AT EACH END ----
+        {
+            // A cable running the length of the run does not shrink onto anything: it is one width
+            // end to end and it stops at a face square across it. What takes it down to the wires is
+            // the TRANSITION HEATSHRINK at each end - the boot - flaring from the cable out over the
+            // first of the fan. That is what a breakout looks like, and it is the difference between
+            // this sort and the length of tubing above.
+            const Entity asCable = run("cable");
+            const std::vector<std::vector<Vec2>> drawn = twistedPairBody(asCable);
+            std::printf("  cable: %d outline(s) - a body and a boot at each end\n",
+                        int(drawn.size()));
+            check(drawn.size() == 3,
+                  "cable: three outlines - the cable, and the boot at each end of it");
+            check(twistedPairBody(run("heatshrink")).size() == 1,
+                  "cable: where a length of tubing is asked for there is one, and no boot");
+            if (drawn.size() == 3) {
+            // THE CABLE IS SQUARE: as wide at its ends as in the middle.
+            double widest = 0.0, atEnds = 0.0, from = 1e300, to = -1e300;
+            for (const Vec2& v : drawn.front()) {
+                widest = std::max(widest, std::abs(v.y));
+                from = std::min(from, v.x);
+                to = std::max(to, v.x);
+            }
+            for (const Vec2& v : drawn.front())
+                if (std::abs(v.x - from) < 1e-6 || std::abs(v.x - to) < 1e-6)
+                    atEnds = std::max(atEnds, std::abs(v.y));
+            std::printf("  cable: %.3f across the middle and %.3f at the ends\n", widest * 2.0,
+                        atEnds * 2.0);
+            check(std::abs(widest - atEnds) < 1e-6,
+                  "cable: one width end to end, cut square, not recovered onto anything");
+
+            // AND THE BOOTS REACH OUT OVER THE FAN, one at each end, flaring from the cable.
+            int overTheFan = 0;
+            for (size_t i = 1; i < drawn.size(); ++i) {
+                double lo = 1e300, hi = -1e300, atCable = 0.0, atMouth = 0.0;
+                for (const Vec2& v : drawn[i]) {
+                    lo = std::min(lo, v.x);
+                    hi = std::max(hi, v.x);
+                }
+                // Which end of the boot is against the cable: the one nearer the middle of the run.
+                const bool atStartFan = hi <= 160.0;
+                const double cableSide = atStartFan ? hi : lo;
+                const double mouthSide = atStartFan ? lo : hi;
+                for (const Vec2& v : drawn[i]) {
+                    if (std::abs(v.x - cableSide) < 1e-6) atCable = std::max(atCable, std::abs(v.y));
+                    if (std::abs(v.x - mouthSide) < 1e-6) atMouth = std::max(atMouth, std::abs(v.y));
+                }
+                std::printf("  cable: a boot from %.1f to %.1f, %.2f across at the cable and %.2f at "
+                            "the fan\n",
+                            lo, hi, atCable * 2.0, atMouth * 2.0);
+                if (atMouth > atCable + 1e-6) ++overTheFan;
+            }
+            check(overTheFan == 2,
+                  "cable: each boot flares from the cable out over the fan, which is a breakout");
+            }
         }
     }
 
