@@ -683,11 +683,13 @@ int run_mechmodels_tests() {
         ed.setDocument(&d);
         noSnap(ed);
         ed.beginLabelPlacement(partDrawingEntities(builtInMechModel(MechModelKind::Label).drawing));
-        // The stroke is started first and Shift asked for over it: held before the stroke begins,
-        // Shift means the other thing - put it down here, on nothing.
+        // The stroke is started first and Shift pressed over it: pressed before the stroke begins,
+        // Shift means the other thing - put it down here, on nothing. It is a switch and not a
+        // grip, so it is pressed once and the hand is free for the click.
         ed.onPointerPress({50.0, -3.0}, Qt::LeftButton, Qt::NoModifier);
         ed.onPointerMove({50.0, 11.0});
-        ed.onPointerPress({50.0, 11.0}, Qt::LeftButton, Qt::ShiftModifier);
+        ed.setShiftMode(true);
+        ed.onPointerPress({50.0, 11.0}, Qt::LeftButton, Qt::NoModifier);
         const Entity* mark = nullptr;
         const Entity* piece = nullptr;
         for (const Entity& e : d.entities()) {
@@ -749,7 +751,8 @@ int run_mechmodels_tests() {
         e3.setTool(ToolId::LengthBreak);
         e3.onPointerPress({50.0, -3.0}, Qt::LeftButton, Qt::NoModifier);
         e3.onPointerMove({50.0, 11.0});
-        e3.onPointerPress({50.0, 11.0}, Qt::LeftButton, Qt::ShiftModifier);
+        e3.setShiftMode(true);
+        e3.onPointerPress({50.0, 11.0}, Qt::LeftButton, Qt::NoModifier);
         const Entity* bmark = nullptr;
         const Entity* blabel = nullptr;
         for (const Entity& e : both.entities()) {
@@ -799,9 +802,9 @@ int run_mechmodels_tests() {
         e4.onPointerPress({50.0, -3.0}, Qt::LeftButton, Qt::NoModifier);
         e4.onPointerMove({50.0, 11.0});
         const bool beforeKey = !e4.breakLabelPreview().empty();
-        e4.setShiftHeld(true);
+        e4.setShiftMode(true);
         const bool afterKey = !e4.breakLabelPreview().empty();
-        e4.setShiftHeld(false);
+        e4.setShiftMode(false);
         const bool afterLetGo = !e4.breakLabelPreview().empty();
         std::printf("  ghosts: break band - label ghost %d before the key, %d with it, %d after\n",
                     beforeKey ? 1 : 0, afterKey ? 1 : 0, afterLetGo ? 1 : 0);
@@ -818,13 +821,13 @@ int run_mechmodels_tests() {
         e5.onPointerPress({50.0, -3.0}, Qt::LeftButton, Qt::NoModifier);
         e5.onPointerMove({50.0, 11.0});
         const bool markBefore = e5.labelBreakPreview().type == EntityType::LengthBreak;
-        e5.setShiftHeld(true);
+        e5.setShiftMode(true);
         const bool markWith = e5.labelBreakPreview().type == EntityType::LengthBreak;
         std::printf("  ghosts: label stroke - break ghost %d before the key, %d with it\n",
                     markBefore ? 1 : 0, markWith ? 1 : 0);
         check(!markBefore && markWith,
               "ghosts: and the break mark appears on the key while a label is being stroked on");
-        e5.setShiftHeld(false);
+        e5.setShiftMode(false);
         e5.onKey(Qt::Key_Escape, Qt::NoModifier);
     }
 
@@ -844,10 +847,13 @@ int run_mechmodels_tests() {
         ed.onPointerMove({40.0, 25.0});
         check(ed.freeBreakPreview().type != EntityType::LengthBreak,
               "free: nothing is offered until Shift asks for it");
-        ed.setShiftHeld(true);
+        ed.setShiftMode(true);
         check(ed.freeBreakPreview().type == EntityType::LengthBreak,
               "free: the mark appears under the cursor the moment the key goes down");
-        ed.onPointerPress({40.0, 25.0}, Qt::LeftButton, Qt::ShiftModifier);
+        // AND STAYS WHEN THE KEY IS LET GO. A ghost that lives only while a finger is held down has
+        // to be held through the aiming, the snapping and the click.
+        check(ed.shiftMode(), "free: and it is a switch - let go of the key and it is still on");
+        ed.onPointerPress({40.0, 25.0}, Qt::LeftButton, Qt::NoModifier);
         const Entity* mark = nullptr;
         for (const Entity& e : bare.entities())
             if (e.type == EntityType::LengthBreak) mark = &e;
@@ -866,11 +872,16 @@ int run_mechmodels_tests() {
         e2.beginLabelPlacement(partDrawingEntities(builtInMechModel(MechModelKind::Label).drawing));
         e2.onPointerMove({90.0, 60.0});
         check(e2.freeLabelPreview().empty(), "free label: nothing until Shift asks");
-        e2.setShiftHeld(true);
+        e2.setShiftMode(true);
         check(!e2.freeLabelPreview().empty(),
               "free label: the label appears under the cursor on the key");
+        // Pressed again it goes off, and the stroke is back - which is the way out of it.
+        e2.toggleShiftMode();
+        check(e2.freeLabelPreview().empty() && !e2.shiftMode(),
+              "free label: pressing it again puts it away and the stroke is back");
+        e2.toggleShiftMode();
         const int was = static_cast<int>(bare.entities().size());
-        e2.onPointerPress({90.0, 60.0}, Qt::LeftButton, Qt::ShiftModifier);
+        e2.onPointerPress({90.0, 60.0}, Qt::LeftButton, Qt::NoModifier);
         const Entity* laid = nullptr;
         for (const Entity& e : bare.entities())
             if (e.meta.value(QStringLiteral("labelMask")).toBool()) laid = &e;
@@ -879,6 +890,7 @@ int run_mechmodels_tests() {
                     laid ? (laid->bounds().min.x + laid->bounds().max.x) / 2.0 : 0.0,
                     laid ? (laid->bounds().min.y + laid->bounds().max.y) / 2.0 : 0.0);
         check(!e2.placingLabel(), "free label: the click places it, as a click on a stroke would");
+        check(!e2.shiftMode(), "free label: and the switch is put out by the placing, not left on");
         check(laid != nullptr, "free label: and it goes down with nothing under it to measure");
         if (laid) {
             const Bounds b = laid->bounds();

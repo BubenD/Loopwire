@@ -250,10 +250,6 @@ protected:
     void mouseReleaseEvent(QMouseEvent* e) override;
     void mouseDoubleClickEvent(QMouseEvent* e) override;
     void keyPressEvent(QKeyEvent* e) override;
-    // Shift is watched going down AND coming up: it is the key that says "and the other one with
-    // it", and the ghost of that other one has to come and go with the key rather than with the
-    // next movement of the mouse.
-    void keyReleaseEvent(QKeyEvent* e) override;
     void enterEvent(QEnterEvent* e) override; // show the drawn crosshair
     void leaveEvent(QEvent* e) override;      // hide it
     bool eventFilter(QObject* obj, QEvent* e) override; // dynamic-input field keys

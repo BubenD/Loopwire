@@ -630,9 +630,6 @@ public:
     // made from - a mark standing square on the sheet, and a label at the size it was drawn.
     void refreshFreePreviews();
     Entity freeBreakMarkAt(const Vec2& at) const;
-    // Told, or asked of the keyboard where nobody has said - so the app answers from the real key
-    // and everything else answers from what it was told.
-    bool shiftIsDown() const;
     // The transition sleeve a crossing line from `a` to `b` describes. It needs at least two
     // parallel line segments; false for any other catch.
     bool transitionFromBand(const Vec2& a, const Vec2& b, Entity& out) const;
@@ -770,12 +767,16 @@ public:
     // Shift to see what it would do gets nothing until they jog the mouse, and a ghost that appears
     // on the next twitch has not answered the question the key was asking.
     void refreshPairPreviews();
-    // WHETHER SHIFT IS DOWN, told rather than looked up. The live keyboard is the right answer in
-    // the app and no answer at all anywhere else - a test can click and drag but it cannot hold a
-    // key down - so the canvas says so as the key goes down and comes up, and every click settles it
-    // again from the modifiers that came with the click.
-    void setShiftHeld(bool on);
-    bool shiftHeld() const { return shiftHeld_; }
+    // SHIFT IS A SWITCH, NOT A GRIP. Pressing it turns the other way of placing on and pressing it
+    // again turns it off: a ghost that only lives while a finger is held down has to be held down
+    // through the aiming, the snapping and the click, which is a lot to ask of a hand that is
+    // already driving a mouse. Let go, the ghost stays; pressed again, it goes.
+    //
+    // It is put out at every tool change and at the end of every placement, so a switch left on
+    // cannot lie in wait for the next thing somebody draws.
+    void toggleShiftMode();
+    void setShiftMode(bool on);
+    bool shiftMode() const { return shiftMode_; }
     // AND SHIFT BEFORE ANY LINE HAS BEEN DRAWN puts the thing itself under the cursor, to be
     // dropped WHEREVER IT IS WANTED. A break mark and a label are ordinarily described by a line
     // drawn across the runs they belong to - that is what says which runs are meant, and it is the
@@ -1755,7 +1756,7 @@ private:
     bool labelWithBreak_ = false;   // Shift: the break mark goes on with the label
     Entity labelBreakPreview_;      // and what it would look like, while the stroke is drawn
     bool breakWithLabel_ = false;   // Shift: the label goes on with the break mark
-    bool shiftHeld_ = false;        // ...and whether the key is down at all
+    bool shiftMode_ = false;        // ...and whether the switch is on
     Entity freeMarkPreview_;                 // the mark a click would drop where the cursor is
     std::vector<Entity> freeLabelPreview_;   // ...and the label
     std::vector<Entity> breakLabelPreview_;

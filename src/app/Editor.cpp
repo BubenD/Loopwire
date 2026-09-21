@@ -1580,6 +1580,11 @@ void Editor::setTool(ToolId t) {
     if (t != ToolId::ModelOutputLine) haveOutputFirst_ = false;
     if (t != ToolId::DetailView) { detailStage_ = 0; detailRadius_ = 0.0; }
     clearRefusal();   // a fresh command starts with a clean drawing
+    // AND A SWITCH LEFT ON DOES NOT LIE IN WAIT for the next thing somebody draws: Shift
+    // turns the other way of placing on, and picking up a tool is the moment to start again.
+    shiftMode_ = false;
+    freeMarkPreview_ = Entity();
+    freeLabelPreview_.clear();
     cancelDraw();
     modifyPts_.clear();
     moveTurn_ = 0.0;   // the move ended: nothing is carrying a turn any more
@@ -3253,6 +3258,7 @@ void Editor::beginLabelPlacement(const std::vector<Entity>& drawing, double exce
     labelStrokeHasStart_ = false;
     labelWithBreak_ = false;
     labelBreakPreview_ = Entity();
+    shiftMode_ = false;
     labelFrozen_ = false;
     labelPreview_.clear();
     labelCovers_.clear();
@@ -3715,15 +3721,13 @@ void Editor::stampLabelFit(Entity& e, const QString& group, const LabelFit& fit,
 // gesture is two clicks with a drag between them, and whether the pair goes on is a thing the hand
 // changes its mind about while the stroke is being drawn. Read live, the mark appears and disappears
 // under the cursor as the key is held and let go, which is what says the two are going on together.
-bool Editor::shiftIsDown() const {
-    return shiftHeld_ || QGuiApplication::keyboardModifiers().testFlag(Qt::ShiftModifier);
-}
-
-void Editor::setShiftHeld(bool on) {
-    if (shiftHeld_ == on) return;
-    shiftHeld_ = on;
+void Editor::setShiftMode(bool on) {
+    if (shiftMode_ == on) return;
+    shiftMode_ = on;
     refreshPairPreviews();
 }
+
+void Editor::toggleShiftMode() { setShiftMode(!shiftMode_); }
 
 // A MARK STANDING ON ITS OWN, square to the sheet and attached to nothing. Drawn to whatever the
 // ribbon says, or to what the drawing would have made of it - the same figures the fields show.
@@ -3762,7 +3766,7 @@ Editor::LabelFit Editor::freeLabelFitAt(const Vec2& at) const {
 void Editor::refreshFreePreviews() {
     freeMarkPreview_ = Entity();
     freeLabelPreview_.clear();
-    if (!shiftIsDown()) return;
+    if (!shiftMode_) return;
     if (tool_ == ToolId::LengthBreak && !wireBandHasStart_)
         freeMarkPreview_ = freeBreakMarkAt(cursor_);
     if (labelPlacing_ && !labelStrokeHasStart_) {
@@ -3802,7 +3806,7 @@ void Editor::setPairedLabel(const std::vector<Entity>& drawing, double exceedMm)
 // the runs a line crosses, and which line that is does not depend on which tool drew it. Put back
 // afterwards, so a label already in hand is not disturbed by a break mark being drawn near it.
 void Editor::refreshBreakLabelPreview() {
-    breakWithLabel_ = shiftIsDown() && !pairedLabelProto_.empty();
+    breakWithLabel_ = shiftMode_ && !pairedLabelProto_.empty();
     breakLabelPreview_.clear();
     if (!breakWithLabel_ || tool_ != ToolId::LengthBreak || !wireBandHasStart_) return;
     const std::vector<Entity> hadProto = labelProto_;
@@ -3816,7 +3820,7 @@ void Editor::refreshBreakLabelPreview() {
 }
 
 void Editor::refreshLabelBreakPreview() {
-    const bool shift = shiftIsDown();
+    const bool shift = shiftMode_;
     labelWithBreak_ = shift;
     labelBreakPreview_ = Entity();
     if (!shift || !labelPlacing_ || !labelStrokeHasStart_) return;
@@ -3887,6 +3891,8 @@ void Editor::commitLabel(bool withBreak, const Vec2& strokeEnd) {
     labelStrokeHasStart_ = false;
     labelWithBreak_ = false;
     labelBreakPreview_ = Entity();
+    shiftMode_ = false;
+    freeLabelPreview_.clear();
     labelFrozen_ = false;
     labelPreview_.clear();
     labelCovers_.clear();
@@ -4669,7 +4675,6 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         return;
     }
     pressMods_ = mods; // available to every press path (draw/modify), not just selection
-    shiftHeld_ = mods.testFlag(Qt::ShiftModifier);   // the click is the honest moment to ask
     // A label goes on with a stroke across the runs it covers: the first click starts the stroke, and the
     // second ends it and places the label on whatever the stroke crossed.
     if (labelPlacing_) {
@@ -4677,7 +4682,7 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         // drawn. The stroke is what MEASURES a label - how far it has to reach across is however
         // wide the bundle is where it goes - and a label that is not going on a bundle has nothing
         // to measure and no reason to be asked for a stroke.
-        if (!labelStrokeHasStart_ && shiftIsDown()) {
+        if (!labelStrokeHasStart_ && shiftMode_) {
             labelFit_ = freeLabelFitAt(p);
             labelPreview_ = labelEntities(labelFit_, labelCovers_);
             if (!labelPreview_.empty()) {
@@ -4710,8 +4715,7 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         }
         // Shift at the click that lays it, or Shift seen while the stroke was drawn: either is
         // somebody asking for the two of them, and the second is what the preview has been showing.
-        commitLabel(labelWithBreak_ || mods.testFlag(Qt::ShiftModifier),
-                    labelFrozen_ ? labelFrozenAt_ : p);
+        commitLabel(labelWithBreak_, labelFrozen_ ? labelFrozenAt_ : p);
         return;
     }
     // A DETAIL VIEW goes on in three clicks, because it is three separate decisions: WHAT is wanted (the
@@ -4996,12 +5000,13 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         // nothing. Which runs a break interrupts is ordinarily a fact the line states, and that is
         // the right way round nearly every time - but a mark standing on its own, over a gap or
         // beside a note, has no runs to state and nothing to draw a line across.
-        if (!wireBandHasStart_ && shiftIsDown()) {
+        if (!wireBandHasStart_ && shiftMode_) {
             Entity mark = freeBreakMarkAt(p);
             pushUndo();
             mark.layer = doc_->activeLayer();
             addEntity(std::move(mark));
             freeMarkPreview_ = Entity();
+            shiftMode_ = false;
             doc_->setDirty(true);
             emit changed();
             emit message(QStringLiteral("Break placed"));
@@ -5026,7 +5031,7 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         // same gesture the other way round, and the pair goes down as one part either way. Handed
         // to the label placement, which then does the whole of it - the label, the mark in the
         // label's own group, and one step to undo the pair of them.
-        if ((breakWithLabel_ || mods.testFlag(Qt::ShiftModifier)) && !pairedLabelProto_.empty()) {
+        if (breakWithLabel_ && !pairedLabelProto_.empty()) {
             const std::vector<Entity> hadProto = labelProto_;
             const double hadExceed = labelExceedMm_;
             labelProto_ = pairedLabelProto_;
@@ -5064,6 +5069,7 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         breakFrozen_ = false;
         breakWithLabel_ = false;
         breakLabelPreview_.clear();
+        shiftMode_ = false;
         doc_->setDirty(true);
         emit changed();
         emit message(QStringLiteral("Break placed"));
@@ -16037,35 +16043,61 @@ bool Editor::transitionFromBand(const Vec2& a, const Vec2& b, Entity& out) const
         QString owner;
     };
     std::vector<Crossed> crossed;
-    const auto tryLine = [&](const Entity& e, const Vec2& p1, const Vec2& p2) {
-        const double len = distance(p1, p2);
-        if (len < 1e-7) return;
-        const auto x = segmentSegmentIntersection(a, b, p1, p2);
-        if (!x) return;
-        // WHICH END IT IS NEARER, and a band across the middle is nearer NEITHER. Left to the
-        // floating point, a crossing a hair off the middle of one rail and a hair the other way on
-        // the next put the two rails' near ends at opposite ends of the same run, and the band was
-        // then read as crossing two families of linework rather than one. So a crossing within a
-        // whisker of the middle is settled the same way every time instead of by the last bit.
-        const double d1 = distance(*x, p1), d2 = distance(*x, p2);
-        const bool atStart = d1 <= d2 + len * 1e-6;
-        const Vec2 end = atStart ? p1 : p2;
-        const Vec2 other = atStart ? p2 : p1;
-        const double endLen = distance(end, other);
-        if (endLen < 1e-7) return;
-        const Vec2 unit{(p2.x - p1.x) / len, (p2.y - p1.y) / len};
-        const Vec2 outward{(end.x - other.x) / endLen, (end.y - other.y) / endLen};
-        bool duplicate = false;
-        for (const Crossed& c : crossed) {
-            // Two segments of the same run meeting at a joint are one crossing, not two rails.
-            if (c.owner == e.id && distance(c.at, *x) < 1e-6) {
-                duplicate = true;
-                break;
+    // A CROSSING BELONGS TO THE WHOLE RUN, not to the one segment of it the line happened to cross.
+    //
+    // A transition goes on the END of what it is fitted to, and on a run with a knee in it the end
+    // of the crossed SEGMENT is the knee - so a band drawn over the straight before a corner fitted
+    // the sleeve at the corner, lying along the wrong leg and pointing off past it. The end wanted
+    // is the end of the drawn polyline, and the direction wanted is the direction of the leg that
+    // finishes there, whatever the run does in between.
+    //
+    // So a run is offered whole and measured along its own length: how far the crossing is from
+    // each end ALONG the run, which end that makes the near one, and which way the last leg of it
+    // points. `unit` stays the crossed segment's own direction - it is what says which rails are
+    // parallel to each other, and that question is about where the band cut them.
+    const auto tryPath = [&](const Entity& e, const std::vector<Vec2>& path) {
+        if (path.size() < 2) return;
+        for (size_t i = 1; i < path.size(); ++i) {
+            const Vec2& p1 = path[i - 1];
+            const Vec2& p2 = path[i];
+            const double len = distance(p1, p2);
+            if (len < 1e-7) continue;
+            const auto x = segmentSegmentIntersection(a, b, p1, p2);
+            if (!x) continue;
+            // How far along the whole run the crossing is, and how long the run is.
+            double before = 0.0;
+            for (size_t k = 1; k < i; ++k) before += distance(path[k - 1], path[k]);
+            const double at = before + distance(p1, *x);
+            double total = 0.0;
+            for (size_t k = 1; k < path.size(); ++k) total += distance(path[k - 1], path[k]);
+            if (total < 1e-7) continue;
+            // WHICH END IT IS NEARER, and a band across the middle is nearer NEITHER. Left to the
+            // floating point, a crossing a hair off the middle of one rail and a hair the other way
+            // on the next put the two rails' near ends at opposite ends of the same run, and the
+            // band was then read as crossing two families of linework rather than one. So a
+            // crossing within a whisker of the middle is settled the same way every time.
+            const bool atStart = at <= (total - at) + total * 1e-6;
+            const Vec2 end = atStart ? path.front() : path.back();
+            const Vec2 inward = atStart ? path[1] : path[path.size() - 2];
+            const double legLen = distance(end, inward);
+            if (legLen < 1e-7) continue;
+            const Vec2 unit{(p2.x - p1.x) / len, (p2.y - p1.y) / len};
+            const Vec2 outward{(end.x - inward.x) / legLen, (end.y - inward.y) / legLen};
+            bool duplicate = false;
+            for (const Crossed& c : crossed) {
+                // Two segments of the same run meeting at a joint are one crossing, not two rails.
+                if (c.owner == e.id && distance(c.at, *x) < 1e-6) {
+                    duplicate = true;
+                    break;
+                }
             }
+            if (!duplicate)
+                crossed.push_back({*x, p1, p2, unit, outward, end, total,
+                                   atStart ? at : total - at, e.id});
         }
-        if (!duplicate)
-            crossed.push_back({*x, p1, p2, unit, outward, end, len,
-                               distance(*x, end), e.id});
+    };
+    const auto tryLine = [&](const Entity& e, const Vec2& p1, const Vec2& p2) {
+        tryPath(e, {p1, p2});
     };
     for (const auto& e : doc_->entities()) {
         switch (e.type) {
@@ -16081,13 +16113,12 @@ bool Editor::transitionFromBand(const Vec2& a, const Vec2& b, Entity& out) const
         }
         case EntityType::Wire:
         case EntityType::Spline:
-            for (size_t i = 1; i < e.points.size(); ++i) tryLine(e, e.points[i - 1], e.points[i]);
+            tryPath(e, e.points);
             break;
         case EntityType::TwistedPair: {
             // A WIRES RUN IS RUNS OF WIRE - see the same case in the label stroke. Its own points are
             // the route down the middle, which is never drawn; the strands are what a band crosses.
-            for (const std::vector<Vec2>& strand : twistedPairStrands(e))
-                for (size_t i = 1; i < strand.size(); ++i) tryLine(e, strand[i - 1], strand[i]);
+            for (const std::vector<Vec2>& strand : twistedPairStrands(e)) tryPath(e, strand);
             break;
         }
         case EntityType::Polyline:
@@ -16097,12 +16128,9 @@ bool Editor::transitionFromBand(const Vec2& a, const Vec2& b, Entity& out) const
             if (e.meta.value(QStringLiteral("shrunkEnds")).toBool()) break;
             if (e.meta.value(QStringLiteral("double")).toBool() && e.points.size() >= 2) {
                 const double gap = e.meta.value(QStringLiteral("gap")).toDouble(10.0);
-                for (double side : {gap / 2.0, -gap / 2.0}) {
-                    const auto run = offsetPolyline(e.points, side);
-                    for (size_t i = 1; i < run.size(); ++i) tryLine(e, run[i - 1], run[i]);
-                }
+                for (double side : {gap / 2.0, -gap / 2.0}) tryPath(e, offsetPolyline(e.points, side));
             } else {
-                for (size_t i = 1; i < e.points.size(); ++i) tryLine(e, e.points[i - 1], e.points[i]);
+                tryPath(e, e.points);
             }
             break;
         default:
@@ -16157,7 +16185,10 @@ bool Editor::transitionFromBand(const Vec2& a, const Vec2& b, Entity& out) const
     double nearSide = 0.0, farSide = 0.0;
     for (size_t i : railsSet) {
         const Crossed& c = crossed[i];
-        const Vec2 endAt = c.a + c.unit * dot(on.end - c.a, c.unit);
+        // The rail's OWN end, brought level with the host's: a rail that stops short does not pull
+        // the face back, and a rail that has turned since the band cut it is still measured where
+        // it finishes rather than along the leg the band happened to cross.
+        const Vec2 endAt = c.end + on.outward * dot(on.end - c.end, on.outward);
         const double side = dot(endAt - on.end, perp);
         nearSide = std::min(nearSide, side);
         farSide = std::max(farSide, side);

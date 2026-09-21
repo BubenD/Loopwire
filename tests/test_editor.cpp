@@ -10049,6 +10049,80 @@ int run_editor_tests() {
             check(ed.tool() == ToolId::Select, "transition: placing it returns to Select");
         }
 
+        // ---- A RUN WITH A KNEE IN IT ENDS WHERE THE RUN ENDS, not at the knee ----
+        //
+        // A transition goes on the END of what it is fitted to, and the end of the crossed SEGMENT
+        // of a run that turns is the corner. A band drawn over the straight before a corner fitted
+        // the sleeve AT the corner, lying along the leg it had crossed and pointing off past it -
+        // sitting in mid-air beside the turn with nothing under it. The end wanted is the end of
+        // the drawn polyline, and the angle wanted is the angle of the leg that finishes there.
+        {
+            // Out from the left, then down and away to the right: the band crosses the horizontal
+            // stretch near the corner, so the corner is the nearer end of that SEGMENT while the
+            // left-hand end is the nearer end of the RUN.
+            auto bent = [](const QString& id, double off) {
+                Entity e;
+                e.id = id;
+                e.type = EntityType::Polyline;
+                e.points = {{0.0, off}, {60.0, off}, {110.0, off - 50.0}};
+                e.a = e.points.front();
+                e.b = e.points.back();
+                return e;
+            };
+            Document knee;
+            knee.entities().push_back(bent(QStringLiteral("K1"), 4.0));
+            knee.entities().push_back(bent(QStringLiteral("K2"), -4.0));
+            Editor kneeEd;
+            kneeEd.setDocument(&knee);
+            noSnap(kneeEd);
+            kneeEd.setShrinkRouteMode(ShrinkRouteMode::Transition);
+            kneeEd.setTool(ToolId::HeatshrinkRoute);
+            kneeEd.onPointerPress({50.0, -12.0}, Qt::LeftButton, Qt::NoModifier);
+            kneeEd.onPointerMove({50.0, 12.0});
+            kneeEd.onPointerPress({50.0, 12.0}, Qt::LeftButton, Qt::NoModifier);
+            check(knee.entities().size() == 3, "knee: crossing the bent pair adds one sleeve");
+            if (knee.entities().size() == 3) {
+                const Entity& s = knee.entities().back();
+                std::printf("  knee: the sleeve runs %.1f,%.1f to %.1f,%.1f\n", s.points.front().x,
+                            s.points.front().y, s.points.back().x, s.points.back().y);
+                check(s.points.size() == 2 && near(s.points.front().x, 0.0) &&
+                          near(s.points.front().y, 0.0),
+                      "knee: it is fitted at the END of the run, not at the corner nearer the band");
+                check(s.points.back().x < s.points.front().x - 1.0 &&
+                          near(s.points.back().y, 0.0),
+                      "knee: and lies along the leg that finishes there, pointing out of the run");
+            }
+
+            // AND THE OTHER WAY ROUND: a band over the far leg belongs to the far end, which is the
+            // one on the slant - so the sleeve is on the slant too.
+            Document knee2;
+            knee2.entities().push_back(bent(QStringLiteral("L1"), 4.0));
+            knee2.entities().push_back(bent(QStringLiteral("L2"), -4.0));
+            Editor farEd;
+            farEd.setDocument(&knee2);
+            noSnap(farEd);
+            farEd.setShrinkRouteMode(ShrinkRouteMode::Transition);
+            farEd.setTool(ToolId::HeatshrinkRoute);
+            farEd.onPointerPress({98.0, -50.0}, Qt::LeftButton, Qt::NoModifier);
+            farEd.onPointerMove({86.0, -20.0});
+            farEd.onPointerPress({86.0, -20.0}, Qt::LeftButton, Qt::NoModifier);
+            if (knee2.entities().size() == 3) {
+                const Entity& s = knee2.entities().back();
+                const Vec2 dir = (s.points.back() - s.points.front()).normalized();
+                std::printf("  knee: the far end takes it to %.1f,%.1f running %.2f,%.2f\n",
+                            s.points.front().x, s.points.front().y, dir.x, dir.y);
+                // At the far end, give or take: these two rails are drawn as parallel Y
+                // offsets rather than true offsets of the slant, so their ends are
+                // staggered along it and the face squares up between them.
+                check(distance(s.points.front(), Vec2{110.0, -50.0}) < 4.0,
+                      "knee: a band over the far leg fits it at the far end of the run");
+                check(dir.x > 0.3 && dir.y < -0.3,
+                      "knee: at the angle that leg runs at, which is the whole of what a knee changes");
+            } else {
+                check(false, "knee: a band over the far leg fits a sleeve at all");
+            }
+        }
+
         // EVERY PARALLEL LINE THE MARK CROSSES IS INSIDE THE SLEEVE - a fan of five, not only a
         // pair. The vertical line sharing the mark's end is unrelated linework, not another rail.
         Document many;
