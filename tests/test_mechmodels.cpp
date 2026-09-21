@@ -860,6 +860,8 @@ int run_mechmodels_tests() {
         std::printf("  free: %d object(s) on an empty sheet, the mark at %.1f,%.1f\n",
                     int(bare.entities().size()), mark ? mark->a.x : 0.0, mark ? mark->a.y : 0.0);
         check(mark != nullptr, "free: and one click puts it down, with nothing to cross at all");
+        check(int(bare.entities().size()) == 1,
+              "free: on its own, because this editor has no label to pair it with");
         if (mark)
             check(std::abs(mark->a.x - 40.0) < 1e-6 && std::abs(mark->a.y - 25.0) < 1e-6,
                   "free: where the cursor was, which is the whole of what was asked");
@@ -898,6 +900,48 @@ int run_mechmodels_tests() {
                       std::abs((b.min.y + b.max.y) / 2.0 - 60.0) < 1e-6,
                   "free label: centred where the cursor was");
         }
+    }
+
+    // ---- and with nothing drawn, Shift still means THE PAIR ---------------------------------------
+    {
+        // Shift means "and the other one with it" everywhere else it is pressed - a break mark with
+        // a label, a label with a break mark, on the one line - and it cannot mean something
+        // different with no line just because there is no line to hang them on. A stroke put down
+        // on its own with no label beside it is half of what the key has always asked for.
+        Document both;
+        Editor ed;
+        ed.setDocument(&both);
+        noSnap(ed);
+        ed.setPairedLabel(partDrawingEntities(builtInMechModel(MechModelKind::Label).drawing),
+                          builtInMechModel(MechModelKind::Label).exceedMm);
+        ed.setTool(ToolId::LengthBreak);
+        ed.onPointerMove({30.0, 10.0});
+        ed.setShiftMode(true);
+        std::printf("  free pair: %d mark ghost, %d label ghost part(s)\n",
+                    ed.freeBreakPreview().type == EntityType::LengthBreak ? 1 : 0,
+                    int(ed.freeLabelPreview().size()));
+        check(ed.freeBreakPreview().type == EntityType::LengthBreak &&
+                  !ed.freeLabelPreview().empty(),
+              "free pair: both ghosts are shown, because Shift means the pair");
+        ed.onPointerPress({30.0, 10.0}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* fm = nullptr;
+        const Entity* fl = nullptr;
+        for (const Entity& e : both.entities()) {
+            if (e.type == EntityType::LengthBreak) fm = &e;
+            if (e.meta.value(QStringLiteral("labelMask")).toBool()) fl = &e;
+        }
+        std::printf("  free pair: %d object(s) down, mark %d, label %d, group %s\n",
+                    int(both.entities().size()), fm ? 1 : 0, fl ? 1 : 0,
+                    fm && fl && entityBlockInstance(*fm) == entityBlockInstance(*fl) ? "shared"
+                                                                                    : "apart");
+        check(fm != nullptr && fl != nullptr,
+              "free pair: and one click puts both of them down on an empty sheet");
+        if (fm && fl)
+            check(!entityBlockInstance(*fm).isEmpty() &&
+                      entityBlockInstance(*fm) == entityBlockInstance(*fl),
+                  "free pair: in one group, so the two of them are one part");
+        ed.undo();
+        check(both.entities().empty(), "free pair: and one undo takes the pair of them off");
     }
 
     // ---- what the app scales BY, and how far past the wires it goes ------------------------------
