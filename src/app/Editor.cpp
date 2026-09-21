@@ -3715,6 +3715,26 @@ void Editor::stampLabelFit(Entity& e, const QString& group, const LabelFit& fit,
 // gesture is two clicks with a drag between them, and whether the pair goes on is a thing the hand
 // changes its mind about while the stroke is being drawn. Read live, the mark appears and disappears
 // under the cursor as the key is held and let go, which is what says the two are going on together.
+bool Editor::shiftIsDown() const {
+    return shiftHeld_ || QGuiApplication::keyboardModifiers().testFlag(Qt::ShiftModifier);
+}
+
+void Editor::setShiftHeld(bool on) {
+    if (shiftHeld_ == on) return;
+    shiftHeld_ = on;
+    refreshPairPreviews();
+}
+
+void Editor::refreshPairPreviews() {
+    const bool hadMark = labelBreakPreview_.type == EntityType::LengthBreak;
+    const size_t hadLabel = breakLabelPreview_.size();
+    refreshLabelBreakPreview();
+    refreshBreakLabelPreview();
+    if ((labelBreakPreview_.type == EntityType::LengthBreak) != hadMark ||
+        breakLabelPreview_.size() != hadLabel)
+        emit overlayChanged();
+}
+
 void Editor::setPairedLabel(const std::vector<Entity>& drawing, double exceedMm) {
     pairedLabelProto_ = drawing;
     pairedLabelExceed_ = std::max(0.0, exceedMm);
@@ -3725,8 +3745,7 @@ void Editor::setPairedLabel(const std::vector<Entity>& drawing, double exceedMm)
 // the runs a line crosses, and which line that is does not depend on which tool drew it. Put back
 // afterwards, so a label already in hand is not disturbed by a break mark being drawn near it.
 void Editor::refreshBreakLabelPreview() {
-    breakWithLabel_ = QGuiApplication::keyboardModifiers().testFlag(Qt::ShiftModifier) &&
-                      !pairedLabelProto_.empty();
+    breakWithLabel_ = shiftIsDown() && !pairedLabelProto_.empty();
     breakLabelPreview_.clear();
     if (!breakWithLabel_ || tool_ != ToolId::LengthBreak || !wireBandHasStart_) return;
     const std::vector<Entity> hadProto = labelProto_;
@@ -3740,8 +3759,7 @@ void Editor::refreshBreakLabelPreview() {
 }
 
 void Editor::refreshLabelBreakPreview() {
-    const bool shift =
-        QGuiApplication::keyboardModifiers().testFlag(Qt::ShiftModifier);
+    const bool shift = shiftIsDown();
     labelWithBreak_ = shift;
     labelBreakPreview_ = Entity();
     if (!shift || !labelPlacing_ || !labelStrokeHasStart_) return;
@@ -4433,11 +4451,14 @@ void Editor::onPointerMove(const Vec2& raw) {
     // Rubber-band preview (line/rect/etc. while drawing), modify reference
     // points, and region selection follow the cursor: repaint only, no panel
     // rebuild, so the preview tracks the cursor without lag.
+    // The label Shift would lay along a break mark's own band, kept in step with the band.
+    if (tool_ == ToolId::LengthBreak && wireBandHasStart_) refreshBreakLabelPreview();
     if (drafting_ || !modifyPts_.empty() || regionMode_ != RegionMode::None || pastePlacing_ ||
         trimFenceActive_ || (tool_ == ToolId::Connector && connectorArmed_) ||
         arrayAwaitingCenter() || // a polar array's centre tracks the cursor until clicked
         harnessPlacing_ ||       // the generated harness ghosts under the cursor
         transitionBandStarted() ||
+        (tool_ == ToolId::LengthBreak && wireBandHasStart_) ||
         ((!twistArmType_.isEmpty() || screenArm_) && wireBandHasStart_))
         emit overlayChanged(); // armed connector ghost / twist-screen band preview tracks cursor
 }
@@ -4583,6 +4604,7 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         return;
     }
     pressMods_ = mods; // available to every press path (draw/modify), not just selection
+    shiftHeld_ = mods.testFlag(Qt::ShiftModifier);   // the click is the honest moment to ask
     // A label goes on with a stroke across the runs it covers: the first click starts the stroke, and the
     // second ends it and places the label on whatever the stroke crossed.
     if (labelPlacing_) {

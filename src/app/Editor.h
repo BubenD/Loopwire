@@ -626,6 +626,9 @@ public:
     void refreshLabelBreakPreview();
     // ...and the label the break mark's own band would place, the same way round.
     void refreshBreakLabelPreview();
+    // Told, or asked of the keyboard where nobody has said - so the app answers from the real key
+    // and everything else answers from what it was told.
+    bool shiftIsDown() const;
     // The transition sleeve a crossing line from `a` to `b` describes. It needs at least two
     // parallel line segments; false for any other catch.
     bool transitionFromBand(const Vec2& a, const Vec2& b, Entity& out) const;
@@ -758,6 +761,17 @@ public:
     // made of is the drawing office's business and is kept where the models are kept, so it is
     // handed in rather than looked up here.
     void setPairedLabel(const std::vector<Entity>& drawing, double exceedMm);
+    // THE PAIR SHIFT WOULD LAY, ASKED AGAIN BECAUSE THE KEY MOVED and not the cursor. Both previews
+    // are worked out as the cursor goes, which is the wrong moment for a key: somebody who presses
+    // Shift to see what it would do gets nothing until they jog the mouse, and a ghost that appears
+    // on the next twitch has not answered the question the key was asking.
+    void refreshPairPreviews();
+    // WHETHER SHIFT IS DOWN, told rather than looked up. The live keyboard is the right answer in
+    // the app and no answer at all anywhere else - a test can click and drag but it cannot hold a
+    // key down - so the canvas says so as the key goes down and comes up, and every click settles it
+    // again from the modifiers that came with the click.
+    void setShiftHeld(bool on);
+    bool shiftHeld() const { return shiftHeld_; }
     bool breakLabelsToo() const { return breakWithLabel_; }
     const std::vector<Entity>& breakLabelPreview() const { return breakLabelPreview_; }
     Vec2 labelStrokeStart() const { return labelStrokeStart_; }
@@ -1729,6 +1743,7 @@ private:
     bool labelWithBreak_ = false;   // Shift: the break mark goes on with the label
     Entity labelBreakPreview_;      // and what it would look like, while the stroke is drawn
     bool breakWithLabel_ = false;   // Shift: the label goes on with the break mark
+    bool shiftHeld_ = false;        // ...and whether the key is down at all
     std::vector<Entity> breakLabelPreview_;
     std::vector<Entity> pairedLabelProto_;   // the drawing that label is made of
     double pairedLabelExceed_ = 0.0;

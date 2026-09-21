@@ -1433,8 +1433,18 @@ void CanvasWidget::mouseDoubleClickEvent(QMouseEvent* e) {
     }
 }
 
+void CanvasWidget::keyReleaseEvent(QKeyEvent* e) {
+    if (e->key() == Qt::Key_Shift && !e->isAutoRepeat() && editor_) editor_->setShiftHeld(false);
+    QWidget::keyReleaseEvent(e);
+}
+
 void CanvasWidget::keyPressEvent(QKeyEvent* e) {
     syncEditorScale();
+    // SHIFT SAYS "AND THE OTHER ONE WITH IT" while a stroke or a band is being drawn - a break mark
+    // with a label, a label with a break mark - and what it asks for has to be SEEN. The previews
+    // are worked out as the cursor moves, which is the wrong moment for a key: without this, the
+    // ghost waited for the next twitch of the mouse and the key appeared to do nothing at all.
+    if (e->key() == Qt::Key_Shift && !e->isAutoRepeat() && editor_) editor_->setShiftHeld(true);
     // Esc first lets go of a part or harness being placed inside a window. Leaving the viewport would
     // take the user out of the function while the ghost was still in hand, which is exactly the
     // half-cancelled state Esc exists to avoid.

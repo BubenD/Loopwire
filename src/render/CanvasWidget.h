@@ -162,13 +162,12 @@ public:
                           int(c.green() + (target.green() - c.green()) * t + 0.5),
                           int(c.blue() + (target.blue() - c.blue()) * t + 0.5));
         };
-        // THE SQUARES HAVE TO BE SQUARES. The grid is there to judge distance by, and one so close
-        // to the ground that it can only be seen by looking for it is not doing that job - it was
-        // quietened to 0.076 to keep it off the drawing and went too far, leaving a canvas that
-        // reads as empty paper until you lean in. Read at arm's length now, and still well under
-        // the lines drawn on top of it.
-        gridMinor_ = mix(0.16);
-        gridMajor_ = mix(0.32);
+        // THE SQUARES HAVE TO BE SQUARES, AND NO MORE THAN THAT. The grid is there to judge distance
+        // by: at 0.076 it could only be seen by looking for it, which is not doing that job, and at
+        // 0.16 it was reading as part of the drawing, which is worse. Between the two it is there
+        // when the eye asks for it and gone when the eye is on the lines.
+        gridMinor_ = mix(0.11);
+        gridMajor_ = mix(0.24);
         invalidateScene();
     }
     static QColor withBrightness(const QColor& c, int pct) {
@@ -251,6 +250,10 @@ protected:
     void mouseReleaseEvent(QMouseEvent* e) override;
     void mouseDoubleClickEvent(QMouseEvent* e) override;
     void keyPressEvent(QKeyEvent* e) override;
+    // Shift is watched going down AND coming up: it is the key that says "and the other one with
+    // it", and the ghost of that other one has to come and go with the key rather than with the
+    // next movement of the mouse.
+    void keyReleaseEvent(QKeyEvent* e) override;
     void enterEvent(QEnterEvent* e) override; // show the drawn crosshair
     void leaveEvent(QEvent* e) override;      // hide it
     bool eventFilter(QObject* obj, QEvent* e) override; // dynamic-input field keys

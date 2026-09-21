@@ -772,6 +772,58 @@ int run_mechmodels_tests() {
                     int(both.entities().size()));
         check(int(both.entities().size()) == 3,
               "break+label: and one undo takes the pair of them off, not half of them");
+
+        // AND THE KEY SHOWS ITS WORK. Shift says "and the other one with it", and what it asks for
+        // has to be SEEN before the click that lays it - both ways round. The ghost has to come and
+        // go with the KEY, too: worked out only as the cursor moves, pressing Shift did nothing at
+        // all until the mouse was jogged, which reads as a key that does nothing.
+        Document ghosts;
+        for (int i = 0; i < 3; ++i) {
+            Entity w;
+            w.id = QStringLiteral("g%1").arg(i);
+            w.type = EntityType::Line;
+            w.a = {0.0, static_cast<double>(i) * 4.0};
+            w.b = {100.0, static_cast<double>(i) * 4.0};
+            ghosts.entities().push_back(w);
+        }
+        Editor e4;
+        e4.setDocument(&ghosts);
+        noSnap(e4);
+        e4.setPairedLabel(partDrawingEntities(builtInMechModel(MechModelKind::Label).drawing),
+                          builtInMechModel(MechModelKind::Label).exceedMm);
+        // Placing a break mark: the band is started, and then the key is pressed without the mouse
+        // moving at all.
+        e4.setTool(ToolId::LengthBreak);
+        e4.onPointerPress({50.0, -3.0}, Qt::LeftButton, Qt::NoModifier);
+        e4.onPointerMove({50.0, 11.0});
+        const bool beforeKey = !e4.breakLabelPreview().empty();
+        e4.setShiftHeld(true);
+        const bool afterKey = !e4.breakLabelPreview().empty();
+        e4.setShiftHeld(false);
+        const bool afterLetGo = !e4.breakLabelPreview().empty();
+        std::printf("  ghosts: break band - label ghost %d before the key, %d with it, %d after\n",
+                    beforeKey ? 1 : 0, afterKey ? 1 : 0, afterLetGo ? 1 : 0);
+        check(!beforeKey, "ghosts: nothing extra is shown until Shift asks for it");
+        check(afterKey, "ghosts: the label appears the moment the key goes down");
+        check(!afterLetGo, "ghosts: and goes again when it comes up");
+        e4.onKey(Qt::Key_Escape, Qt::NoModifier);
+
+        // The same the other way round: a label being stroked on shows the break mark Shift adds.
+        Editor e5;
+        e5.setDocument(&ghosts);
+        noSnap(e5);
+        e5.beginLabelPlacement(partDrawingEntities(builtInMechModel(MechModelKind::Label).drawing));
+        e5.onPointerPress({50.0, -3.0}, Qt::LeftButton, Qt::NoModifier);
+        e5.onPointerMove({50.0, 11.0});
+        const bool markBefore = e5.labelBreakPreview().type == EntityType::LengthBreak;
+        e5.setShiftHeld(true);
+        const bool markWith = e5.labelBreakPreview().type == EntityType::LengthBreak;
+        std::printf("  ghosts: label stroke - break ghost %d before the key, %d with it\n",
+                    markBefore ? 1 : 0, markWith ? 1 : 0);
+        check(!markBefore && markWith,
+              "ghosts: and the break mark appears on the key while a label is being stroked on");
+        e5.setShiftHeld(false);
+        e5.onKey(Qt::Key_Escape, Qt::NoModifier);
     }
 
     // ---- what the app scales BY, and how far past the wires it goes ------------------------------
