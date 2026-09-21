@@ -11721,6 +11721,47 @@ int run_editor_tests() {
                   "transition: and the shoulder moves toward the body as the shrink is lengthened");
         }
 
+        // A COVER SURVIVES EVERY KNEE THERE IS. Not "nearly every": a cable that turns into a fan of
+        // loose wires at some angles and some lengths is worse than one that never covered anything,
+        // because it does it while you are drawing. A knee is clicked and then drawn away from, so
+        // the leg past it starts at nothing and grows - and a cover that needs a long leg before it
+        // appears comes and goes under the cursor. A part that does that is not a part.
+        //
+        // It used to be thrown away wherever a point of the outline had run too far from the route,
+        // which was guarding against an unclipped mitre flying off the sheet. The mitre is clipped
+        // where it is made now, so there is nothing left to guard against - and this says so at
+        // every angle and every length, which is the only way to say it about a rule like that.
+        {
+            int tried = 0, lost = 0, worstDeg = 0;
+            double worstLeg = 0.0;
+            for (int deg = 5; deg <= 175; deg += 5) {
+                for (double leg = 5.0; leg <= 120.0; leg += 5.0) {
+                    const double t = deg * M_PI / 180.0;
+                    const std::vector<Vec2> route{{0.0, 0.0},
+                                                  {100.0, 0.0},
+                                                  {100.0 + leg * std::cos(t), leg * std::sin(t)}};
+                    for (const char* sort : {"cable", "heatshrink"}) {
+                        Entity e = covered(QStringLiteral("K%1_%2_%3").arg(deg).arg(leg).arg(sort),
+                                           route, sort, true);
+                        ++tried;
+                        if (!twistedPairBody(e).empty()) continue;
+                        ++lost;
+                        worstDeg = deg;
+                        worstLeg = leg;
+                    }
+                }
+            }
+            std::printf("  every knee: %d route(s) tried, %d lost the cover%s\n", tried, lost,
+                        lost ? QStringLiteral(" (last %1 deg, leg %2)")
+                                   .arg(worstDeg)
+                                   .arg(worstLeg)
+                                   .toLocal8Bit()
+                                   .constData()
+                             : "");
+            check(lost == 0,
+                  "every knee: a covered run keeps its cover at every angle and every leg length");
+        }
+
         // AND A LENGTH OF TUBING COMES TWO WAYS. ALONG the run - one sleeve, recovered at each end,
         // which is what a heatshrink has always been here - or OVER a cable: the cable is drawn and
         // the heatshrink is a piece fitted over each of its ends, the same part a cable takes.

@@ -124,12 +124,28 @@ std::vector<Vec2> offsetPolyline(const std::vector<Vec2>& pts, double dist) {
     }
 
     // Vertices = ends of the offset chain, with mitered interior joints.
+    //
+    // A MITRE HAS TO BE CLIPPED. Where two segments meet at a sharp enough angle their offsets meet
+    // a long way out - at a hairpin, off the paper altogether - and the corner of a line half a
+    // millimetre thick then reaches across the whole drawing. Held to a few times the offset it is
+    // still a point rather than a bevel (one vertex in, one vertex out: everything that maps
+    // vertices of the offset back onto vertices of the source keeps working), and a corner too
+    // sharp to mitre is simply blunted, which is what a real part does there anyway.
+    constexpr double kMitreLimit = 4.0;
+    const double reach = std::abs(dist) * kMitreLimit;
     std::vector<Vec2> out;
     out.reserve(n);
     out.push_back(segA[0]);
     for (int i = 1; i < n - 1; ++i) {
         const auto x = lineLineIntersection(segA[i - 1], segB[i - 1], segA[i], segB[i]);
-        out.push_back(x.value_or(segB[i - 1])); // parallel -> just use the seam point
+        if (!x) {
+            out.push_back(segB[i - 1]); // parallel -> just use the seam point
+            continue;
+        }
+        const Vec2 from = pts[i];
+        const Vec2 along = *x - from;
+        const double len = along.length();
+        out.push_back(len > reach && len > 1e-12 ? from + along * (reach / len) : *x);
     }
     out.push_back(segB[n - 2]);
     return out;

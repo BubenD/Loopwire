@@ -1268,26 +1268,19 @@ const TwistCached* twistCached(const Entity& pair) {
     // either down to the wires is the boot. A sleeve laid ALONG the run is the cover itself and is
     // recovered at each end, because there is nothing else there to do it.
     const bool squareBody = f.body == RunBody::Cable || f.bodyOverCable;
-    // CAN THE ROUTE CARRY THE BODY AT ALL?
+    // THE COVER IS ALWAYS DRAWN. A cable is a cable at every bend it is taken round.
     //
-    // The tool will not let a run be drawn round a corner the bundle cannot take - but a drawing
-    // made before it would, or one a route was pulled about under afterwards, still has to be
-    // opened. The two sides of a cover are MITRED offsets of its centre line, and a mitre has no
-    // limit: where the route doubles back inside the width of the cover, the two sides of that
-    // corner meet a long way off the paper, and what came out was a line across the whole drawing.
+    // It used to be built here, LOOKED AT, and thrown away where a point of it had run too far from
+    // the route - the run then being drawn as its bare wires instead. That was guarding against a
+    // real thing: the two sides of a cover are MITRED offsets of its centre line, and an unclipped
+    // mitre at a sharp corner meets a long way off the paper, so what came out was a line across the
+    // whole drawing. But the cure was worse than the disease. A short last leg - which is every
+    // knee, for the moment between clicking it and drawing away from it - tripped the test, and the
+    // cable one was drawing turned into a fan of loose wires under the cursor and turned back again
+    // when the leg grew. A part that comes and goes while you draw it is not a part.
     //
-    // So the outline is built here and LOOKED AT before it is used. Every point of an honest one
-    // lies within a few widths of the route it covers - the outline has one point per point of the
-    // route and no more - and one that does not is a mitre that has run away. This is asked of the
-    // SHAPE rather than of the route, because the route it would be asked about is the sampled one:
-    // its legs are the facets of a rounded knee, a fraction of a millimetre each, so anything that
-    // measures legs against the width of the bundle refuses every bend there has ever been. That is
-    // what turned a cable back into hook-up wires the moment the run was bent.
-    //
-    // Where the cover really cannot be laid, the run is drawn as its WIRES. They are held off their
-    // lanes at a bend too tight for them (see holdHi) and so stay on the paper whatever the route
-    // does. A bundle drawn as wires where a cover was asked for says something is wrong with the
-    // route, which is true; a line across the drawing says nothing at all.
+    // The mitre is clipped where it is made now (see offsetPolyline), so a cover cannot fly off the
+    // sheet however the route doubles back, and there is nothing left to guard against.
     std::vector<Vec2> along;
     std::vector<Vec2> cover;
     bool drawBody = f.cableBody && f.pos.size() >= 2;
@@ -1312,18 +1305,7 @@ const TwistCached* twistCached(const Entity& pair) {
                         ? shrunkSleeveOutline(along, f.bodyHalf, f.bodyHalf, f.bodyHalf, 0.0, 0.0)
                         : shrunkSleeveOutline(along, f.bodyHalf, f.bodyFace, f.bodyFaceB,
                                               f.bodyShrink, f.bodyShrinkB);
-        const double reach =
-            4.0 * std::max(0.05, std::max(f.bodyHalf, std::max(f.bodyFace, f.bodyFaceB)));
         drawBody = cover.size() >= 3;
-        for (const Vec2& pt : cover) {
-            double off = 1e300;
-            for (const Vec2& on : along) off = std::min(off, distance(pt, on));
-            if (off > reach) {
-                drawBody = false;
-                break;
-            }
-        }
-        if (!drawBody) cover.clear();
     }
     for (int k = 0; k < f.wires; ++k) {
         std::vector<std::pair<size_t, size_t>> spans;
