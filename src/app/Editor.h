@@ -630,10 +630,6 @@ public:
     // made from - a mark standing square on the sheet, and a label at the size it was drawn.
     void refreshFreePreviews();
     Entity freeBreakMarkAt(const Vec2& at) const;
-    // The pair put down where the cursor is: the label and the mark, in one group. False when
-    // there is no label to lay - then the mark goes down on its own, which is better than nothing
-    // going down at all.
-    bool layFreePairAt(const Vec2& at);
     // The transition sleeve a crossing line from `a` to `b` describes. It needs at least two
     // parallel line segments; false for any other catch.
     bool transitionFromBand(const Vec2& a, const Vec2& b, Entity& out) const;

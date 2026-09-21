@@ -3763,72 +3763,24 @@ Editor::LabelFit Editor::freeLabelFitAt(const Vec2& at) const {
     return fit;
 }
 
-// WHAT SHIFT WOULD PUT DOWN WHERE THE CURSOR IS, with no line drawn at all: THE PAIR. Shift means
-// "and the other one with it" everywhere else it is pressed - a break mark with a label, a label
-// with a break mark, on the one line - and it cannot mean something different here just because
-// there is no line. A stroke put down on its own with no label beside it was half of what the key
-// has always asked for.
+// WHAT SHIFT WOULD PUT DOWN WHERE THE CURSOR IS, with no line drawn at all: WHAT THE TOOL IN HAND
+// IS FOR, and only that. The stroke function puts down a stroke and the label function puts down a
+// label - pressing Shift on the stroke function is asking to place a stroke somewhere, not to be
+// handed a label as well.
+//
+// Which is NOT what Shift means over a line that has been started: there it says "and the other one
+// with it", because there the pair goes on the runs the line crossed and the two of them belong
+// together on those runs. Off a line there are no runs and nothing to belong to.
 void Editor::refreshFreePreviews() {
     freeMarkPreview_ = Entity();
     freeLabelPreview_.clear();
     if (!shiftMode_) return;
-    const bool breakFree = tool_ == ToolId::LengthBreak && !wireBandHasStart_;
-    const bool labelFree = labelPlacing_ && !labelStrokeHasStart_;
-    if (!breakFree && !labelFree) return;
-    freeMarkPreview_ = freeBreakMarkAt(cursor_);
-    // The label being placed is laid from its own drawing; a break mark on its own borrows the
-    // office's label, which is the same one the band pairs with.
-    const std::vector<Entity> hadProto = labelProto_;
-    const double hadExceed = labelExceedMm_;
-    if (!labelFree) {
-        labelProto_ = pairedLabelProto_;
-        labelExceedMm_ = pairedLabelExceed_;
-    }
-    if (!labelProto_.empty()) {
+    if (tool_ == ToolId::LengthBreak && !wireBandHasStart_)
+        freeMarkPreview_ = freeBreakMarkAt(cursor_);
+    if (labelPlacing_ && !labelStrokeHasStart_ && !labelProto_.empty()) {
         std::vector<Vec2> covers;
         freeLabelPreview_ = labelEntities(freeLabelFitAt(cursor_), covers);
     }
-    labelProto_ = hadProto;
-    labelExceedMm_ = hadExceed;
-}
-
-bool Editor::layFreePairAt(const Vec2& at) {
-    if (!doc_) return false;
-    const bool borrowed = !labelPlacing_;
-    const std::vector<Entity> hadProto = labelProto_;
-    const double hadExceed = labelExceedMm_;
-    if (borrowed) {
-        if (pairedLabelProto_.empty()) return false;
-        labelProto_ = pairedLabelProto_;
-        labelExceedMm_ = pairedLabelExceed_;
-        labelAcrossManual_ = false;
-        labelAlongManual_ = false;
-    }
-    labelFit_ = freeLabelFitAt(at);
-    labelPreview_ = labelEntities(labelFit_, labelCovers_);
-    if (labelPreview_.empty()) {
-        if (borrowed) {
-            labelProto_ = hadProto;
-            labelExceedMm_ = hadExceed;
-        }
-        labelCovers_.clear();
-        return false;
-    }
-    labelStrokeStart_ = at;
-    labelFrozen_ = false;
-    // commitLabel takes the one undo step for the pair: it is called first and the mark is stamped
-    // into the group it made, so both go on and come off together.
-    commitLabel(false, at);
-    Entity mark = freeBreakMarkAt(at);
-    mark.id = uid();
-    mark.layer = doc_->activeLayer();
-    stampEntityGroup(mark, labelGroup_);
-    doc_->entities().push_back(std::move(mark));
-    freeMarkPreview_ = Entity();
-    freeLabelPreview_.clear();
-    doc_->setDirty(true);
-    emit changed();
-    return true;
 }
 
 void Editor::refreshPairPreviews() {
@@ -4738,9 +4690,14 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         // drawn. The stroke is what MEASURES a label - how far it has to reach across is however
         // wide the bundle is where it goes - and a label that is not going on a bundle has nothing
         // to measure and no reason to be asked for a stroke.
-        if (!labelStrokeHasStart_ && shiftMode_ && layFreePairAt(p)) {
-            emit message(QStringLiteral("Label and break mark placed as one part"));
-            return;
+        if (!labelStrokeHasStart_ && shiftMode_) {
+            labelFit_ = freeLabelFitAt(p);
+            labelPreview_ = labelEntities(labelFit_, labelCovers_);
+            if (!labelPreview_.empty()) {
+                freeLabelPreview_.clear();
+                commitLabel(false, p);
+                return;
+            }
         }
         if (!labelStrokeHasStart_) {
             labelStrokeStart_ = p;
@@ -5052,21 +5009,15 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         // the right way round nearly every time - but a mark standing on its own, over a gap or
         // beside a note, has no runs to state and nothing to draw a line across.
         if (!wireBandHasStart_ && shiftMode_) {
-            // The pair where the cursor is, which is what Shift asks for; and where the office has
-            // no label drawn, the mark on its own rather than nothing at all.
-            const bool pair = layFreePairAt(p);
-            if (!pair) {
-                Entity mark = freeBreakMarkAt(p);
-                pushUndo();
-                mark.layer = doc_->activeLayer();
-                addEntity(std::move(mark));
-                freeMarkPreview_ = Entity();
-                doc_->setDirty(true);
-                emit changed();
-            }
+            Entity mark = freeBreakMarkAt(p);
+            pushUndo();
+            mark.layer = doc_->activeLayer();
+            addEntity(std::move(mark));
+            freeMarkPreview_ = Entity();
             shiftMode_ = false;
-            emit message(pair ? QStringLiteral("Break mark and label placed as one part")
-                              : QStringLiteral("Break placed"));
+            doc_->setDirty(true);
+            emit changed();
+            emit message(QStringLiteral("Break placed"));
             setTool(ToolId::Select);
             return;
         }
@@ -18650,8 +18601,8 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         const QColor ink = paperInk(QColor("#8fd3ff"));
         for (const Entity& e : labelPreview_) EntityRenderer::draw(p, e, *doc_, vt, ink);
     }
-    // AND THE PAIR SHIFT WOULD DROP WHERE THE CURSOR IS, before any line has been drawn at all -
-    // drawn whichever of the two tools is in hand, because either of them lays both.
+    // AND WHAT SHIFT WOULD DROP WHERE THE CURSOR IS, before any line has been drawn at all: the
+    // label on the label function, the stroke on the stroke function, and never one on the other.
     for (const Entity& e : freeLabelPreview_)
         EntityRenderer::draw(p, e, *doc_, vt, paperInk(QColor("#8fd3ff")));
     if (freeMarkPreview_.type == EntityType::LengthBreak) {
