@@ -2586,7 +2586,6 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
     // until there is a drawing.
     applyTheme(darkTheme_);
 
-    refreshPairedLabel();
     QMetaObject::invokeMethod(this, [this] { canvas_->fitView(); canvas_->setFocus(); },
                               Qt::QueuedConnection);
 }
@@ -13649,8 +13648,6 @@ void MainWindow::showMechModels() {
                        [this] { if (modelsDlg_) modelsDlg_->cancelCaptureFromSheet(); });
         });
         connect(modelsDlg_, &MechModelsDialog::captureFinished, this, [this] { disarmCapture(); });
-        // A model drawn or captured in there may be the label a break mark pairs with.
-        connect(modelsDlg_, &QDialog::finished, this, [this](int) { refreshPairedLabel(); });
     }
     modelsDlg_->show();
     modelsDlg_->raise();
@@ -13842,19 +13839,6 @@ void MainWindow::armMechModelConnect() {
     canvas_->setFocus();
     statusBar()->showMessage(
         tr("Click where the part connects — then click along the direction it runs from there"), 6000);
-}
-
-// THE LABEL THAT GOES ON WITH A BREAK MARK, where Shift asks for the pair. The office's own drawing
-// when there is one and the built-in otherwise, which is the same rule the Place button follows -
-// asked again whenever the models may have changed, rather than read off disk on every mouse move.
-void MainWindow::refreshPairedLabel() {
-    if (!editor_) return;
-    MechModelSet set;
-    set.load();
-    const MechModel* found = set.of(MechModelKind::Label);
-    const MechModel model =
-        found && !found->isEmpty() ? *found : builtInMechModel(MechModelKind::Label);
-    editor_->setPairedLabel(partDrawingEntities(model.drawing), model.exceedMm);
 }
 
 // A default model put on the sheet by hand, at the size it was drawn. The office's own drawing of the

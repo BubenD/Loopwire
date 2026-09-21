@@ -3785,16 +3785,13 @@ void Editor::refreshFreePreviews() {
 
 void Editor::refreshPairPreviews() {
     const bool hadMark = labelBreakPreview_.type == EntityType::LengthBreak;
-    const size_t hadLabel = breakLabelPreview_.size();
     const bool hadFreeMark = freeMarkPreview_.type == EntityType::LengthBreak;
     const size_t hadFreeLabel = freeLabelPreview_.size();
     refreshLabelBreakPreview();
-    refreshBreakLabelPreview();
     refreshFreePreviews();
     const bool freeNow =
         freeMarkPreview_.type == EntityType::LengthBreak || !freeLabelPreview_.empty();
     if ((labelBreakPreview_.type == EntityType::LengthBreak) != hadMark ||
-        breakLabelPreview_.size() != hadLabel ||
         (freeMarkPreview_.type == EntityType::LengthBreak) != hadFreeMark ||
         freeLabelPreview_.size() != hadFreeLabel) {
         if (freeNow)
@@ -3802,29 +3799,6 @@ void Editor::refreshPairPreviews() {
                 "Shift held — click to put it down where the cursor is, on nothing in particular"));
         emit overlayChanged();
     }
-}
-
-void Editor::setPairedLabel(const std::vector<Entity>& drawing, double exceedMm) {
-    pairedLabelProto_ = drawing;
-    pairedLabelExceed_ = std::max(0.0, exceedMm);
-}
-
-// THE LABEL THE BREAK MARK'S OWN BAND WOULD LAY, while Shift is held. Worked out with the label
-// placement's own state, because it is the same fitting done by the same code - a label is laid on
-// the runs a line crosses, and which line that is does not depend on which tool drew it. Put back
-// afterwards, so a label already in hand is not disturbed by a break mark being drawn near it.
-void Editor::refreshBreakLabelPreview() {
-    breakWithLabel_ = shiftMode_ && !pairedLabelProto_.empty();
-    breakLabelPreview_.clear();
-    if (!breakWithLabel_ || tool_ != ToolId::LengthBreak || !wireBandHasStart_) return;
-    const std::vector<Entity> hadProto = labelProto_;
-    const double hadExceed = labelExceedMm_;
-    labelProto_ = pairedLabelProto_;
-    labelExceedMm_ = pairedLabelExceed_;
-    std::vector<Vec2> covers;
-    breakLabelPreview_ = labelEntities(labelFitFor(wireBandStart_, breakBandEnd()), covers);
-    labelProto_ = hadProto;
-    labelExceedMm_ = hadExceed;
 }
 
 void Editor::refreshLabelBreakPreview() {
@@ -4522,8 +4496,6 @@ void Editor::onPointerMove(const Vec2& raw) {
     // Rubber-band preview (line/rect/etc. while drawing), modify reference
     // points, and region selection follow the cursor: repaint only, no panel
     // rebuild, so the preview tracks the cursor without lag.
-    // The label Shift would lay along a break mark's own band, kept in step with the band.
-    if (tool_ == ToolId::LengthBreak && wireBandHasStart_) refreshBreakLabelPreview();
     // And what Shift would drop where the cursor is, with no line drawn at all: it follows the
     // cursor, because where the cursor is IS where it would go.
     if ((tool_ == ToolId::LengthBreak && !wireBandHasStart_) ||
@@ -5035,48 +5007,11 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
             emit message(QStringLiteral("Draw the line ACROSS the runs you want to break"));
             return;
         }
-        // SHIFT LAYS THE LABEL WITH IT. The label tool lays a break mark on its stroke; this is the
-        // same gesture the other way round, and the pair goes down as one part either way. Handed
-        // to the label placement, which then does the whole of it - the label, the mark in the
-        // label's own group, and one step to undo the pair of them.
-        if (breakWithLabel_ && !pairedLabelProto_.empty()) {
-            const std::vector<Entity> hadProto = labelProto_;
-            const double hadExceed = labelExceedMm_;
-            labelProto_ = pairedLabelProto_;
-            labelExceedMm_ = pairedLabelExceed_;
-            labelAcrossManual_ = false;
-            labelAlongManual_ = false;
-            labelStrokeStart_ = wireBandStart_;
-            labelStrokeHasStart_ = true;
-            labelFrozen_ = false;
-            labelPlacing_ = true;
-            labelFit_ = labelFitFor(wireBandStart_, end);
-            labelPreview_ = labelEntities(labelFit_, labelCovers_);
-            if (!labelPreview_.empty()) {
-                commitLabel(true, end);
-                wireBandHasStart_ = false;
-                breakFrozen_ = false;
-                breakWithLabel_ = false;
-                breakLabelPreview_.clear();
-                setTool(ToolId::Select);
-                return;
-            }
-            // Nothing there to label: the mark goes on by itself, which is what was asked for
-            // anyway, and the state borrowed from the label placement is handed back.
-            labelPlacing_ = false;
-            labelStrokeHasStart_ = false;
-            labelPreview_.clear();
-            labelCovers_.clear();
-            labelProto_ = hadProto;
-            labelExceedMm_ = hadExceed;
-        }
         pushUndo();
         mark.layer = doc_->activeLayer();
         addEntity(std::move(mark));
         wireBandHasStart_ = false;
         breakFrozen_ = false;
-        breakWithLabel_ = false;
-        breakLabelPreview_.clear();
         shiftMode_ = false;
         doc_->setDirty(true);
         emit changed();
@@ -16556,7 +16491,6 @@ void Editor::freezeBreakPreview() {
     // Pins the loose end of the marking line, so the mark it describes stops moving while the numbers
     // on the ribbon are tried on it. There is nothing to pin before the line has a start.
     if (tool_ != ToolId::LengthBreak || breakFrozen_ || !wireBandHasStart_) return;
-    refreshBreakLabelPreview();   // and the label Shift would lay along the same band
     breakFrozen_ = true;
     breakFrozenAt_ = cursor_;
     emit message(QStringLiteral(
@@ -18170,10 +18104,6 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             }
             p.restore();
         }
-        // AND THE LABEL GOING ON WITH IT, while Shift is held: the pair is laid by the one band, so
-        // the pair is what the band shows.
-        for (const Entity& e : breakLabelPreview_)
-            EntityRenderer::draw(p, e, *doc_, vt, paperInk(QColor("#8fd3ff")));
     }
 
     if (transitionBandStarted()) {

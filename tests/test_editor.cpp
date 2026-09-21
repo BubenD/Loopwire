@@ -11312,9 +11312,10 @@ int run_editor_tests() {
         check(shell.size() > 3 && distance(shell.front(), shell.back()) < 1e-9,
               "cable body: and it is closed, because it is a body and not a run of lines");
 
-        // IT STANDS A LITTLE OFF WHAT IT COVERS AND IS SHRUNK ONTO IT AT EACH END - eight 2.5 mm
-        // wires at a 3.75 pitch make a bundle 28.75 across, so half of it is 14.375, and the cover
-        // is a wire's width more than that in the middle and back down to it at the ends.
+        // A CABLE IS TWO LINES WIDE, WHATEVER IT CARRIES, and shrunk onto what it grips at each
+        // end. Two of these 2.5 mm wires at a 3.75 pitch stand 6.25 apart, so the cover is 6.25
+        // across - half of it 3.125 - whether there are eight wires inside it or eighty, and the
+        // face is a millimetre inside that at each end.
         double widest = 0.0, atTheEnd = 0.0;
         double from = 1e300, to = 0.0;
         for (const Vec2& v : shell) {
@@ -11328,10 +11329,10 @@ int run_editor_tests() {
                     from, to, widest, atTheEnd);
         check(std::abs(from - 55.0) < 1e-6 && std::abs(to - 265.0) < 1e-6,
               "cable body: it runs from the end of one fan to the start of the other, and no further");
-        check(std::abs(widest - 15.375) < 1e-6,
-              "cable body: standing a wire's width off the bundle it covers");
-        check(std::abs(atTheEnd - 14.375) < 1e-6,
-              "cable body: and shrunk back onto the bundle where it meets the fan");
+        check(std::abs(widest - 3.125) < 1e-6,
+              "cable body: as wide as two hook-up lines, and not as wide as the bundle it covers");
+        check(std::abs(atTheEnd - 2.125) < 1e-6,
+              "cable body: and shrunk a little inside that where it meets the fan");
 
         // AND NO WIRE RUNS THROUGH IT. A wire drawn through a cable is a wire drawn through a cable.
         // Counted by what CROSSES the middle, not by points landing in it: down the bundle a wire is

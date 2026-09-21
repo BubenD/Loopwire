@@ -624,8 +624,6 @@ public:
     // The break mark the label's own stroke would place, kept in step with the cursor and with
     // whether Shift is down.
     void refreshLabelBreakPreview();
-    // ...and the label the break mark's own band would place, the same way round.
-    void refreshBreakLabelPreview();
     // What Shift would drop under the cursor with no line drawn at all, and the two shapes it is
     // made from - a mark standing square on the sheet, and a label at the size it was drawn.
     void refreshFreePreviews();
@@ -757,11 +755,6 @@ public:
     // style the ribbon is set to, straight strokes or S-curves.
     bool labelBreaksToo() const { return labelWithBreak_; }
     const Entity& labelBreakPreview() const { return labelBreakPreview_; }
-    // AND THE SAME GESTURE THE OTHER WAY ROUND. A break mark is placed by drawing the same line
-    // across the same runs, so Shift there lays the LABEL with the mark. Which drawing a label is
-    // made of is the drawing office's business and is kept where the models are kept, so it is
-    // handed in rather than looked up here.
-    void setPairedLabel(const std::vector<Entity>& drawing, double exceedMm);
     // THE PAIR SHIFT WOULD LAY, ASKED AGAIN BECAUSE THE KEY MOVED and not the cursor. Both previews
     // are worked out as the cursor goes, which is the wrong moment for a key: somebody who presses
     // Shift to see what it would do gets nothing until they jog the mouse, and a ghost that appears
@@ -785,8 +778,6 @@ public:
     // line across for that.
     const Entity& freeBreakPreview() const { return freeMarkPreview_; }
     const std::vector<Entity>& freeLabelPreview() const { return freeLabelPreview_; }
-    bool breakLabelsToo() const { return breakWithLabel_; }
-    const std::vector<Entity>& breakLabelPreview() const { return breakLabelPreview_; }
     Vec2 labelStrokeStart() const { return labelStrokeStart_; }
     Vec2 labelStrokeEnd() const;
     // Tab pins the preview, so the two sizes can be tried on the real thing instead of on something
@@ -1755,13 +1746,9 @@ private:
     bool labelPlacing_ = false;
     bool labelWithBreak_ = false;   // Shift: the break mark goes on with the label
     Entity labelBreakPreview_;      // and what it would look like, while the stroke is drawn
-    bool breakWithLabel_ = false;   // Shift: the label goes on with the break mark
     bool shiftMode_ = false;        // ...and whether the switch is on
     Entity freeMarkPreview_;                 // the mark a click would drop where the cursor is
     std::vector<Entity> freeLabelPreview_;   // ...and the label
-    std::vector<Entity> breakLabelPreview_;
-    std::vector<Entity> pairedLabelProto_;   // the drawing that label is made of
-    double pairedLabelExceed_ = 0.0;
     bool labelStrokeHasStart_ = false;
     bool labelFrozen_ = false;      // the stroke pinned with Tab, so the ribbon can be used on it
     Vec2 labelStrokeStart_;

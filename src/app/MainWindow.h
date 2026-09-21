@@ -850,9 +850,6 @@ private:
     QDoubleSpinBox* twistBootBSpin_ = nullptr;
     QLabel* twistBootBLabel_ = nullptr;
     QLabel* breakGapLabel_ = nullptr;
-    // The office's own label drawing, handed to the editor so that Shift on a break mark can lay
-    // the pair. Which drawing a label is made of is settled here, where the models are kept.
-    void refreshPairedLabel();
     QLabel* breakAngleLabel_ = nullptr;
     QCheckBox* twistBodySidesCheck_ = nullptr;
     QCheckBox* twistBodyTransitionCheck_ = nullptr;

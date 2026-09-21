@@ -731,57 +731,11 @@ int run_mechmodels_tests() {
         std::printf("  label+break: %d break mark(s) without Shift\n", marks);
         check(marks == 0, "label+break: without Shift a label is a label, and nothing else goes on");
 
-        // AND THE SAME GESTURE THE OTHER WAY ROUND. A break mark is placed by drawing the same line
-        // across the same runs, so Shift there lays the label with the mark - and the pair is one
-        // part, exactly as it is when the label is the thing being placed.
-        Document both;
-        for (int i = 0; i < 3; ++i) {
-            Entity w;
-            w.id = QStringLiteral("b%1").arg(i);
-            w.type = EntityType::Line;
-            w.a = {0.0, static_cast<double>(i) * 4.0};
-            w.b = {100.0, static_cast<double>(i) * 4.0};
-            both.entities().push_back(w);
-        }
-        Editor e3;
-        e3.setDocument(&both);
-        noSnap(e3);
-        e3.setPairedLabel(partDrawingEntities(builtInMechModel(MechModelKind::Label).drawing),
-                          builtInMechModel(MechModelKind::Label).exceedMm);
-        e3.setTool(ToolId::LengthBreak);
-        e3.onPointerPress({50.0, -3.0}, Qt::LeftButton, Qt::NoModifier);
-        e3.onPointerMove({50.0, 11.0});
-        e3.setShiftMode(true);
-        e3.onPointerPress({50.0, 11.0}, Qt::LeftButton, Qt::NoModifier);
-        const Entity* bmark = nullptr;
-        const Entity* blabel = nullptr;
-        for (const Entity& e : both.entities()) {
-            if (e.type == EntityType::LengthBreak) bmark = &e;
-            if (e.meta.value(QStringLiteral("labelMask")).toBool()) blabel = &e;
-        }
-        std::printf("  break+label: %s, %s, group %s\n", bmark ? "a break mark" : "NO break mark",
-                    blabel ? "a label" : "NO label",
-                    bmark && blabel && entityBlockInstance(*bmark) == entityBlockInstance(*blabel)
-                        ? "shared"
-                        : "apart");
-        check(bmark != nullptr, "break+label: the break mark goes on, as it always did");
-        check(blabel != nullptr, "break+label: and Shift lays the label with it");
-        if (bmark && blabel)
-            check(!entityBlockInstance(*bmark).isEmpty() &&
-                      entityBlockInstance(*bmark) == entityBlockInstance(*blabel),
-                  "break+label: one group, so the pair is one part - the same either way round");
-        // AND ONE STEP TO UNDO THE PAIR. Two objects placed by one click are one thing done.
-        const int after = static_cast<int>(both.entities().size());
-        e3.undo();
-        std::printf("  break+label: %d object(s) after, %d after one undo\n", after,
-                    int(both.entities().size()));
-        check(int(both.entities().size()) == 3,
-              "break+label: and one undo takes the pair of them off, not half of them");
-
-        // AND THE KEY SHOWS ITS WORK. Shift says "and the other one with it", and what it asks for
-        // has to be SEEN before the click that lays it - both ways round. The ghost has to come and
-        // go with the KEY, too: worked out only as the cursor moves, pressing Shift did nothing at
-        // all until the mouse was jogged, which reads as a key that does nothing.
+        // AND THE KEY SHOWS ITS WORK while a LABEL is being stroked on: Shift says "and a break
+        // mark with it", and what it asks for has to be seen before the click that lays it. The
+        // ghost has to come and go with the KEY, too - worked out only as the cursor moves,
+        // pressing Shift did nothing until the mouse was jogged, which reads as a key that does
+        // nothing. Nothing of the sort happens on the STROKE function: a stroke is a stroke.
         Document ghosts;
         for (int i = 0; i < 3; ++i) {
             Entity w;
@@ -791,29 +745,6 @@ int run_mechmodels_tests() {
             w.b = {100.0, static_cast<double>(i) * 4.0};
             ghosts.entities().push_back(w);
         }
-        Editor e4;
-        e4.setDocument(&ghosts);
-        noSnap(e4);
-        e4.setPairedLabel(partDrawingEntities(builtInMechModel(MechModelKind::Label).drawing),
-                          builtInMechModel(MechModelKind::Label).exceedMm);
-        // Placing a break mark: the band is started, and then the key is pressed without the mouse
-        // moving at all.
-        e4.setTool(ToolId::LengthBreak);
-        e4.onPointerPress({50.0, -3.0}, Qt::LeftButton, Qt::NoModifier);
-        e4.onPointerMove({50.0, 11.0});
-        const bool beforeKey = !e4.breakLabelPreview().empty();
-        e4.setShiftMode(true);
-        const bool afterKey = !e4.breakLabelPreview().empty();
-        e4.setShiftMode(false);
-        const bool afterLetGo = !e4.breakLabelPreview().empty();
-        std::printf("  ghosts: break band - label ghost %d before the key, %d with it, %d after\n",
-                    beforeKey ? 1 : 0, afterKey ? 1 : 0, afterLetGo ? 1 : 0);
-        check(!beforeKey, "ghosts: nothing extra is shown until Shift asks for it");
-        check(afterKey, "ghosts: the label appears the moment the key goes down");
-        check(!afterLetGo, "ghosts: and goes again when it comes up");
-        e4.onKey(Qt::Key_Escape, Qt::NoModifier);
-
-        // The same the other way round: a label being stroked on shows the break mark Shift adds.
         Editor e5;
         e5.setDocument(&ghosts);
         noSnap(e5);
@@ -911,8 +842,6 @@ int run_mechmodels_tests() {
         Editor ed;
         ed.setDocument(&sheet);
         noSnap(ed);
-        ed.setPairedLabel(partDrawingEntities(builtInMechModel(MechModelKind::Label).drawing),
-                          builtInMechModel(MechModelKind::Label).exceedMm);
         ed.setTool(ToolId::LengthBreak);
         ed.onPointerMove({30.0, 10.0});
         ed.setShiftMode(true);

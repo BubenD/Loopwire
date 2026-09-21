@@ -644,15 +644,22 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
     if (f.cableBody) {
         // WHAT IT IS DRAWN TO, and what each figure falls back to when nobody has said.
         //
-        // A cover stands a little off what it covers, so left alone the cable is the bundle plus a
-        // wire's width; and it is shrunk ONTO the bundle at each end, so left alone the face is the
-        // bundle itself and the length it takes to get there is three times the standing-off. Every
-        // one of them can be said instead, and the two ends said apart.
-        const double bundle = 2.0 * (f.reach + f.thick);
+        // A CABLE IS DRAWN AS TWO LINES, whatever it carries. The stretch between the fans is one
+        // part on the sheet - a cable, a length of tubing - and a drawing office draws that as a
+        // pair of lines the width of two hook-up wires, whether there are four wires inside it or
+        // forty. Drawn to the BUNDLE, as it was, a forty-way loom came out as a slab half the
+        // height of the sheet with its fans hanging off the ends of it: the width of the thing
+        // drawn was standing for a count nobody reads off the drawing anyway, and the part itself
+        // had stopped looking like a part.
+        //
+        // It is shrunk ONTO what it grips at each end, so the face falls back to a little inside
+        // the cable and the length it takes to get there is three times the standing-off. Every one
+        // of them can be said instead, and the two ends said apart.
         const double over = std::max(0.2, f.thick * 0.8);
+        const double twoWires = f.packed + 2.0 * f.thick;
         const double asked =
             std::max(0.0, pair.meta.value(QStringLiteral("twistBodyWidth")).toDouble(0.0));
-        f.bodyHalf = (asked > 1e-9 ? asked : bundle + 2.0 * over) / 2.0;
+        f.bodyHalf = (asked > 1e-9 ? asked : twoWires) / 2.0;
         const bool bothSides = !pair.meta.contains(QStringLiteral("twistBodySidesSame")) ||
                                pair.meta.value(QStringLiteral("twistBodySidesSame")).toBool();
         auto bodySide = [&](const QString& key, bool finish) {
@@ -664,7 +671,8 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
         };
         auto faceOf = [&](bool finish) {
             const QJsonValue v = bodySide(QStringLiteral("twistBodyFace"), finish);
-            const double across = v.isUndefined() ? bundle : std::max(0.0, v.toDouble(0.0));
+            const double across =
+                v.isUndefined() ? std::max(0.1, twoWires - 2.0 * over) : std::max(0.0, v.toDouble(0.0));
             // Never wider than the cable it is the end of: a face that flares is not a shrunk end.
             return std::clamp(across / 2.0, 0.05, f.bodyHalf);
         };
