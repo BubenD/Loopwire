@@ -683,7 +683,9 @@ int run_mechmodels_tests() {
         ed.setDocument(&d);
         noSnap(ed);
         ed.beginLabelPlacement(partDrawingEntities(builtInMechModel(MechModelKind::Label).drawing));
-        ed.onPointerPress({50.0, -3.0}, Qt::LeftButton, Qt::ShiftModifier);
+        // The stroke is started first and Shift asked for over it: held before the stroke begins,
+        // Shift means the other thing - put it down here, on nothing.
+        ed.onPointerPress({50.0, -3.0}, Qt::LeftButton, Qt::NoModifier);
         ed.onPointerMove({50.0, 11.0});
         ed.onPointerPress({50.0, 11.0}, Qt::LeftButton, Qt::ShiftModifier);
         const Entity* mark = nullptr;
@@ -745,7 +747,7 @@ int run_mechmodels_tests() {
         e3.setPairedLabel(partDrawingEntities(builtInMechModel(MechModelKind::Label).drawing),
                           builtInMechModel(MechModelKind::Label).exceedMm);
         e3.setTool(ToolId::LengthBreak);
-        e3.onPointerPress({50.0, -3.0}, Qt::LeftButton, Qt::ShiftModifier);
+        e3.onPointerPress({50.0, -3.0}, Qt::LeftButton, Qt::NoModifier);
         e3.onPointerMove({50.0, 11.0});
         e3.onPointerPress({50.0, 11.0}, Qt::LeftButton, Qt::ShiftModifier);
         const Entity* bmark = nullptr;
@@ -824,6 +826,66 @@ int run_mechmodels_tests() {
               "ghosts: and the break mark appears on the key while a label is being stroked on");
         e5.setShiftHeld(false);
         e5.onKey(Qt::Key_Escape, Qt::NoModifier);
+    }
+
+    // ---- Shift BEFORE the line is drawn puts the thing down where the cursor is ------------------
+    {
+        // A break mark and a label are described by a line drawn across the runs they belong to, and
+        // that is the right way round nearly every time: the line is what says which runs are meant.
+        // Nearly - a drawing also wants one standing on its own, over a gap, beside a note, on a run
+        // that has not been drawn yet, and there is nothing to draw a line across for that. So Shift
+        // held BEFORE the line is started puts the thing itself under the cursor, to be dropped
+        // wherever it is wanted. An empty sheet is the case that could not be done at all.
+        Document bare;
+        Editor ed;
+        ed.setDocument(&bare);
+        noSnap(ed);
+        ed.setTool(ToolId::LengthBreak);
+        ed.onPointerMove({40.0, 25.0});
+        check(ed.freeBreakPreview().type != EntityType::LengthBreak,
+              "free: nothing is offered until Shift asks for it");
+        ed.setShiftHeld(true);
+        check(ed.freeBreakPreview().type == EntityType::LengthBreak,
+              "free: the mark appears under the cursor the moment the key goes down");
+        ed.onPointerPress({40.0, 25.0}, Qt::LeftButton, Qt::ShiftModifier);
+        const Entity* mark = nullptr;
+        for (const Entity& e : bare.entities())
+            if (e.type == EntityType::LengthBreak) mark = &e;
+        std::printf("  free: %d object(s) on an empty sheet, the mark at %.1f,%.1f\n",
+                    int(bare.entities().size()), mark ? mark->a.x : 0.0, mark ? mark->a.y : 0.0);
+        check(mark != nullptr, "free: and one click puts it down, with nothing to cross at all");
+        if (mark)
+            check(std::abs(mark->a.x - 40.0) < 1e-6 && std::abs(mark->a.y - 25.0) < 1e-6,
+                  "free: where the cursor was, which is the whole of what was asked");
+
+        // AND THE SAME FOR A LABEL, which is measured by its stroke and so had even less to go on:
+        // with no bundle to cover it is laid at the size it was drawn.
+        Editor e2;
+        e2.setDocument(&bare);
+        noSnap(e2);
+        e2.beginLabelPlacement(partDrawingEntities(builtInMechModel(MechModelKind::Label).drawing));
+        e2.onPointerMove({90.0, 60.0});
+        check(e2.freeLabelPreview().empty(), "free label: nothing until Shift asks");
+        e2.setShiftHeld(true);
+        check(!e2.freeLabelPreview().empty(),
+              "free label: the label appears under the cursor on the key");
+        const int was = static_cast<int>(bare.entities().size());
+        e2.onPointerPress({90.0, 60.0}, Qt::LeftButton, Qt::ShiftModifier);
+        const Entity* laid = nullptr;
+        for (const Entity& e : bare.entities())
+            if (e.meta.value(QStringLiteral("labelMask")).toBool()) laid = &e;
+        std::printf("  free label: %d object(s) added, the mask centred on %.1f,%.1f\n",
+                    int(bare.entities().size()) - was,
+                    laid ? (laid->bounds().min.x + laid->bounds().max.x) / 2.0 : 0.0,
+                    laid ? (laid->bounds().min.y + laid->bounds().max.y) / 2.0 : 0.0);
+        check(!e2.placingLabel(), "free label: the click places it, as a click on a stroke would");
+        check(laid != nullptr, "free label: and it goes down with nothing under it to measure");
+        if (laid) {
+            const Bounds b = laid->bounds();
+            check(std::abs((b.min.x + b.max.x) / 2.0 - 90.0) < 1e-6 &&
+                      std::abs((b.min.y + b.max.y) / 2.0 - 60.0) < 1e-6,
+                  "free label: centred where the cursor was");
+        }
     }
 
     // ---- what the app scales BY, and how far past the wires it goes ------------------------------

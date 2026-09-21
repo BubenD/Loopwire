@@ -3725,14 +3725,71 @@ void Editor::setShiftHeld(bool on) {
     refreshPairPreviews();
 }
 
+// A MARK STANDING ON ITS OWN, square to the sheet and attached to nothing. Drawn to whatever the
+// ribbon says, or to what the drawing would have made of it - the same figures the fields show.
+Entity Editor::freeBreakMarkAt(const Vec2& at) const {
+    const BreakFigures f = breakPreviewFigures();
+    Entity mark;
+    mark.type = EntityType::LengthBreak;
+    mark.a = at;
+    mark.rotation = 0.0;
+    mark.meta.insert(QStringLiteral("breakStyle"), breakStyle_);
+    mark.meta.insert(QStringLiteral("size"), f.size);
+    mark.meta.insert(QStringLiteral("gap"), f.gap);
+    if (breakAngle_ >= 0.0) mark.meta.insert(QStringLiteral("angle"), breakAngle_);
+    return mark;
+}
+
+// A LABEL AT THE SIZE IT WAS DRAWN. The stroke is what measures a label - how far across it has to
+// reach is however wide the bundle is where it goes - and with no bundle to measure there is one
+// honest answer left: the proportions of the model itself, laid square to the sheet.
+Editor::LabelFit Editor::freeLabelFitAt(const Vec2& at) const {
+    LabelFit fit;
+    if (labelProto_.empty()) return fit;
+    const Bounds proto = labelReferenceBounds();
+    if (!proto.valid || proto.width() < 1e-9) return fit;
+    fit.mid = at;
+    fit.runDir = {1.0, 0.0};
+    fit.acrossDir = {0.0, 1.0};
+    fit.alongMm = labelAlongMm_;
+    fit.acrossMm = labelAcrossManual_
+                       ? labelAcrossMm_
+                       : std::max(1e-3, labelAlongMm_ * proto.height() / proto.width());
+    fit.ok = true;
+    return fit;
+}
+
+void Editor::refreshFreePreviews() {
+    freeMarkPreview_ = Entity();
+    freeLabelPreview_.clear();
+    if (!shiftIsDown()) return;
+    if (tool_ == ToolId::LengthBreak && !wireBandHasStart_)
+        freeMarkPreview_ = freeBreakMarkAt(cursor_);
+    if (labelPlacing_ && !labelStrokeHasStart_) {
+        std::vector<Vec2> covers;
+        freeLabelPreview_ = labelEntities(freeLabelFitAt(cursor_), covers);
+    }
+}
+
 void Editor::refreshPairPreviews() {
     const bool hadMark = labelBreakPreview_.type == EntityType::LengthBreak;
     const size_t hadLabel = breakLabelPreview_.size();
+    const bool hadFreeMark = freeMarkPreview_.type == EntityType::LengthBreak;
+    const size_t hadFreeLabel = freeLabelPreview_.size();
     refreshLabelBreakPreview();
     refreshBreakLabelPreview();
+    refreshFreePreviews();
+    const bool freeNow =
+        freeMarkPreview_.type == EntityType::LengthBreak || !freeLabelPreview_.empty();
     if ((labelBreakPreview_.type == EntityType::LengthBreak) != hadMark ||
-        breakLabelPreview_.size() != hadLabel)
+        breakLabelPreview_.size() != hadLabel ||
+        (freeMarkPreview_.type == EntityType::LengthBreak) != hadFreeMark ||
+        freeLabelPreview_.size() != hadFreeLabel) {
+        if (freeNow)
+            emit message(QStringLiteral(
+                "Shift held — click to put it down where the cursor is, on nothing in particular"));
         emit overlayChanged();
+    }
 }
 
 void Editor::setPairedLabel(const std::vector<Entity>& drawing, double exceedMm) {
@@ -4453,6 +4510,14 @@ void Editor::onPointerMove(const Vec2& raw) {
     // rebuild, so the preview tracks the cursor without lag.
     // The label Shift would lay along a break mark's own band, kept in step with the band.
     if (tool_ == ToolId::LengthBreak && wireBandHasStart_) refreshBreakLabelPreview();
+    // And what Shift would drop where the cursor is, with no line drawn at all: it follows the
+    // cursor, because where the cursor is IS where it would go.
+    if ((tool_ == ToolId::LengthBreak && !wireBandHasStart_) ||
+        (labelPlacing_ && !labelStrokeHasStart_)) {
+        refreshFreePreviews();
+        if (freeMarkPreview_.type == EntityType::LengthBreak || !freeLabelPreview_.empty())
+            emit overlayChanged();
+    }
     if (drafting_ || !modifyPts_.empty() || regionMode_ != RegionMode::None || pastePlacing_ ||
         trimFenceActive_ || (tool_ == ToolId::Connector && connectorArmed_) ||
         arrayAwaitingCenter() || // a polar array's centre tracks the cursor until clicked
@@ -4608,6 +4673,19 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
     // A label goes on with a stroke across the runs it covers: the first click starts the stroke, and the
     // second ends it and places the label on whatever the stroke crossed.
     if (labelPlacing_) {
+        // SHIFT BEFORE THE STROKE IS STARTED lays the label where the cursor is, at the size it was
+        // drawn. The stroke is what MEASURES a label - how far it has to reach across is however
+        // wide the bundle is where it goes - and a label that is not going on a bundle has nothing
+        // to measure and no reason to be asked for a stroke.
+        if (!labelStrokeHasStart_ && shiftIsDown()) {
+            labelFit_ = freeLabelFitAt(p);
+            labelPreview_ = labelEntities(labelFit_, labelCovers_);
+            if (!labelPreview_.empty()) {
+                freeLabelPreview_.clear();
+                commitLabel(false, p);
+                return;
+            }
+        }
         if (!labelStrokeHasStart_) {
             labelStrokeStart_ = p;
             labelStrokeHasStart_ = true;
@@ -4914,6 +4992,22 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
     // click takes one end, the cursor draws the line and the mark it would make, and the second click
     // places it. Tab pins the line so the ribbon's numbers can be tried before committing.
     if (tool_ == ToolId::LengthBreak) {
+        // SHIFT BEFORE THE LINE IS STARTED puts the mark down where the cursor is, attached to
+        // nothing. Which runs a break interrupts is ordinarily a fact the line states, and that is
+        // the right way round nearly every time - but a mark standing on its own, over a gap or
+        // beside a note, has no runs to state and nothing to draw a line across.
+        if (!wireBandHasStart_ && shiftIsDown()) {
+            Entity mark = freeBreakMarkAt(p);
+            pushUndo();
+            mark.layer = doc_->activeLayer();
+            addEntity(std::move(mark));
+            freeMarkPreview_ = Entity();
+            doc_->setDirty(true);
+            emit changed();
+            emit message(QStringLiteral("Break placed"));
+            setTool(ToolId::Select);
+            return;
+        }
         if (!wireBandHasStart_) {
             wireBandStart_ = raw;
             wireBandHasStart_ = true;
@@ -18041,6 +18135,22 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         // the pair is what the band shows.
         for (const Entity& e : breakLabelPreview_)
             EntityRenderer::draw(p, e, *doc_, vt, paperInk(QColor("#8fd3ff")));
+        // AND THE MARK SHIFT WOULD DROP WHERE THE CURSOR IS, before any line has been drawn.
+        if (freeMarkPreview_.type == EntityType::LengthBreak) {
+            p.save();
+            QPen pv(paperInk(QColor(120, 200, 255, 190)));
+            pv.setCosmetic(true);
+            pv.setWidthF(1.4);
+            pv.setStyle(Qt::DashLine);
+            p.setPen(pv);
+            p.setBrush(Qt::NoBrush);
+            for (const std::vector<Vec2>& stroke : breakStrokes(freeMarkPreview_)) {
+                QPolygonF poly;
+                for (const Vec2& q : stroke) poly << vt.toScreen(q);
+                p.drawPolyline(poly);
+            }
+            p.restore();
+        }
     }
 
     if (transitionBandStarted()) {
@@ -18468,6 +18578,9 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         const QColor ink = paperInk(QColor("#8fd3ff"));
         for (const Entity& e : labelPreview_) EntityRenderer::draw(p, e, *doc_, vt, ink);
     }
+    // AND THE LABEL SHIFT WOULD DROP WHERE THE CURSOR IS, before any stroke has been drawn.
+    for (const Entity& e : freeLabelPreview_)
+        EntityRenderer::draw(p, e, *doc_, vt, paperInk(QColor("#8fd3ff")));
     // AND THE BREAK MARK GOING ON WITH IT, while Shift is held: the pair is laid by the one stroke,
     // so the pair is what the stroke shows.
     if (labelPlacing_ && labelBreakPreview_.type == EntityType::LengthBreak) {

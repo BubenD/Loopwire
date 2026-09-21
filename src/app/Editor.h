@@ -626,6 +626,10 @@ public:
     void refreshLabelBreakPreview();
     // ...and the label the break mark's own band would place, the same way round.
     void refreshBreakLabelPreview();
+    // What Shift would drop under the cursor with no line drawn at all, and the two shapes it is
+    // made from - a mark standing square on the sheet, and a label at the size it was drawn.
+    void refreshFreePreviews();
+    Entity freeBreakMarkAt(const Vec2& at) const;
     // Told, or asked of the keyboard where nobody has said - so the app answers from the real key
     // and everything else answers from what it was told.
     bool shiftIsDown() const;
@@ -772,6 +776,14 @@ public:
     // again from the modifiers that came with the click.
     void setShiftHeld(bool on);
     bool shiftHeld() const { return shiftHeld_; }
+    // AND SHIFT BEFORE ANY LINE HAS BEEN DRAWN puts the thing itself under the cursor, to be
+    // dropped WHEREVER IT IS WANTED. A break mark and a label are ordinarily described by a line
+    // drawn across the runs they belong to - that is what says which runs are meant, and it is the
+    // right way round nearly every time. Nearly: a drawing also wants one standing on its own, over
+    // a gap, beside a note, on a run that has not been drawn yet, and there is nothing to draw a
+    // line across for that.
+    const Entity& freeBreakPreview() const { return freeMarkPreview_; }
+    const std::vector<Entity>& freeLabelPreview() const { return freeLabelPreview_; }
     bool breakLabelsToo() const { return breakWithLabel_; }
     const std::vector<Entity>& breakLabelPreview() const { return breakLabelPreview_; }
     Vec2 labelStrokeStart() const { return labelStrokeStart_; }
@@ -1744,6 +1756,8 @@ private:
     Entity labelBreakPreview_;      // and what it would look like, while the stroke is drawn
     bool breakWithLabel_ = false;   // Shift: the label goes on with the break mark
     bool shiftHeld_ = false;        // ...and whether the key is down at all
+    Entity freeMarkPreview_;                 // the mark a click would drop where the cursor is
+    std::vector<Entity> freeLabelPreview_;   // ...and the label
     std::vector<Entity> breakLabelPreview_;
     std::vector<Entity> pairedLabelProto_;   // the drawing that label is made of
     double pairedLabelExceed_ = 0.0;
@@ -1816,6 +1830,8 @@ private:
     std::vector<Vec2> runPathThrough(const QString& hostId) const;
 
     LabelFit labelFitFor(const Vec2& a, const Vec2& b) const;
+    // ...and the fit a label laid on NOTHING takes: square to the sheet, at the size it was drawn.
+    LabelFit freeLabelFitAt(const Vec2& at) const;
     // The captured drawing laid out to that fit, and the ground it covers.
     std::vector<Entity> labelEntities(const LabelFit& fit, std::vector<Vec2>& covers) const;
     // The layout itself. labelEntities calls it, CHECKS what came back, and falls back to a straight label if
