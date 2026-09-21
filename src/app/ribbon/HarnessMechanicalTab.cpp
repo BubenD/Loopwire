@@ -257,8 +257,13 @@ void MainWindow::buildHarnessMechanicalTab() {
             auto* og = new QGridLayout(optW);
             og->setContentsMargins(6, 0, 0, 0);
             og->setSpacing(2);
+            // THE FIELD SAYS WHAT IS GOING TO BE DRAWN, not the word "auto". A field reading "auto"
+            // tells nobody how far apart the strokes will be or how far they lean; the figure the
+            // drawing has worked out does, and the little A beside it is what says the figure is
+            // the drawing's own rather than one somebody typed. See syncBreakOptions.
             auto field = [&](const QString& text, double lo, double hi, double step,
-                             QDoubleSpinBox** out, int row) {
+                             QDoubleSpinBox** out, QLabel** outLabel, int row,
+                             std::function<void()> toAuto) {
                 auto* l = new QLabel(text, optW);
                 l->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
                 auto* s = new QDoubleSpinBox(optW);
@@ -266,23 +271,27 @@ void MainWindow::buildHarnessMechanicalTab() {
                 s->setSingleStep(step);
                 s->setDecimals(1);
                 s->setMinimumWidth(66);
-                s->setSpecialValueText(QStringLiteral("auto"));
                 og->addWidget(l, row, 0);
-                og->addWidget(autoBeside(s), row, 1);
+                og->addWidget(autoBeside(s, std::move(toAuto)), row, 1);
                 *out = s;
+                *outLabel = l;
                 return s;
             };
-            field(QStringLiteral("Distance between"), 0.0, 500.0, 1.0, &breakGapSpin_, 0)
+            field(QStringLiteral("Distance between"), 0.0, 500.0, 1.0, &breakGapSpin_,
+                  &breakGapLabel_, 0,
+                  [this] { editor_->breakGap() = 0.0; syncBreakOptions(); })
                 ->setToolTip(QStringLiteral(
-                    "How far apart the two strokes are drawn. On auto: a proportion of the reach."));
-            field(QStringLiteral("Length"), 0.0, 2000.0, 1.0, &breakSizeSpin_, 1)
+                    "How far apart the two strokes are drawn. Auto is a proportion of the reach, and "
+                    "the field shows what that comes to."));
+            field(QStringLiteral("Length"), 0.0, 2000.0, 1.0, &breakSizeSpin_, &breakSizeLabel_, 1,
+                  [this] { editor_->breakSize() = 0.0; syncBreakOptions(); })
                 ->setToolTip(QStringLiteral(
-                    "How far the mark reaches across the run. On auto: as wide as the run it is placed "
+                    "How far the mark reaches across the run. Auto is as wide as the run it is placed "
                     "on, with a margin either side."));
-            breakSizeLabel_ = qobject_cast<QLabel*>(og->itemAtPosition(1, 0)->widget());
-            field(QStringLiteral("Angle"), -1.0, 75.0, 5.0, &breakAngleSpin_, 2)
+            field(QStringLiteral("Angle"), -1.0, 75.0, 5.0, &breakAngleSpin_, &breakAngleLabel_, 2,
+                  [this] { editor_->breakAngle() = -1.0; syncBreakOptions(); })
                 ->setToolTip(QStringLiteral(
-                    "How far the strokes lean out of square, in degrees. On auto: the lean each style "
+                    "How far the strokes lean out of square, in degrees. Auto is the lean each style "
                     "is drawn with."));
             connect(breakGapSpin_, &QDoubleSpinBox::valueChanged, this,
                     [this](double v) { editor_->breakGap() = v; });

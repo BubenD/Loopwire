@@ -611,9 +611,21 @@ public:
     // The mark a line drawn from `a` to `b` across the runs describes: where it sits, which way it
     // lies, how far it reaches, and which run it belongs to. False when the line crossed nothing.
     bool breakFromBand(const Vec2& a, const Vec2& b, Entity& out) const;
+    // WHAT A BREAK MARK PLACED NOW WOULD ACTUALLY BE DRAWN TO, so a field left to the drawing can
+    // show the figure the drawing works out instead of the word "auto". "Auto" tells nobody how far
+    // apart the strokes will be; the number does, and the little A beside it is what says the number
+    // is the drawing's own and not one somebody typed.
+    struct BreakFigures {
+        double size = 6.0;       // how far it reaches either side of the run
+        double gap = 4.8;        // how far apart the two strokes are
+        double angleDeg = 0.0;   // how far they lean out of square
+    };
+    BreakFigures breakPreviewFigures() const;
     // The break mark the label's own stroke would place, kept in step with the cursor and with
     // whether Shift is down.
     void refreshLabelBreakPreview();
+    // ...and the label the break mark's own band would place, the same way round.
+    void refreshBreakLabelPreview();
     // The transition sleeve a crossing line from `a` to `b` describes. It needs at least two
     // parallel line segments; false for any other catch.
     bool transitionFromBand(const Vec2& a, const Vec2& b, Entity& out) const;
@@ -741,6 +753,13 @@ public:
     // style the ribbon is set to, straight strokes or S-curves.
     bool labelBreaksToo() const { return labelWithBreak_; }
     const Entity& labelBreakPreview() const { return labelBreakPreview_; }
+    // AND THE SAME GESTURE THE OTHER WAY ROUND. A break mark is placed by drawing the same line
+    // across the same runs, so Shift there lays the LABEL with the mark. Which drawing a label is
+    // made of is the drawing office's business and is kept where the models are kept, so it is
+    // handed in rather than looked up here.
+    void setPairedLabel(const std::vector<Entity>& drawing, double exceedMm);
+    bool breakLabelsToo() const { return breakWithLabel_; }
+    const std::vector<Entity>& breakLabelPreview() const { return breakLabelPreview_; }
     Vec2 labelStrokeStart() const { return labelStrokeStart_; }
     Vec2 labelStrokeEnd() const;
     // Tab pins the preview, so the two sizes can be tried on the real thing instead of on something
@@ -1709,6 +1728,10 @@ private:
     bool labelPlacing_ = false;
     bool labelWithBreak_ = false;   // Shift: the break mark goes on with the label
     Entity labelBreakPreview_;      // and what it would look like, while the stroke is drawn
+    bool breakWithLabel_ = false;   // Shift: the label goes on with the break mark
+    std::vector<Entity> breakLabelPreview_;
+    std::vector<Entity> pairedLabelProto_;   // the drawing that label is made of
+    double pairedLabelExceed_ = 0.0;
     bool labelStrokeHasStart_ = false;
     bool labelFrozen_ = false;      // the stroke pinned with Tab, so the ribbon can be used on it
     Vec2 labelStrokeStart_;

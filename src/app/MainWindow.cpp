@@ -2576,6 +2576,9 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
         const QString l = st.value(QStringLiteral("ui/chromeBackLight")).toString();
         if (!d.isEmpty() && QColor::isValidColorName(d)) Chrome::setChosenBack(true, QColor(d));
         if (!l.isEmpty() && QColor::isValidColorName(l)) Chrome::setChosenBack(false, QColor(l));
+        // And how much light was on the canvas. Set before the theme, which is what puts the ground
+        // colour on: the brightness rides on whatever colour that turns out to be.
+        canvas_->setCanvasBrightness(st.value(QStringLiteral("ui/canvasBrightness"), 0).toInt());
     }
 
     // The scheme last chosen. AFTER the first drawing exists: colouring the chrome ends by filling the
@@ -2583,6 +2586,7 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
     // until there is a drawing.
     applyTheme(darkTheme_);
 
+    refreshPairedLabel();
     QMetaObject::invokeMethod(this, [this] { canvas_->fitView(); canvas_->setFocus(); },
                               Qt::QueuedConnection);
 }
@@ -4797,18 +4801,17 @@ void MainWindow::syncBreakOptions() {
     const bool curved = editor_->breakStyle() == QLatin1String("curved");
     if (breakSizeLabel_)
         breakSizeLabel_->setText(curved ? QStringLiteral("Size") : QStringLiteral("Lines length"));
-    if (breakGapSpin_) {
-        QSignalBlocker b(breakGapSpin_);
-        breakGapSpin_->setValue(editor_->breakGap());
-    }
-    if (breakSizeSpin_) {
-        QSignalBlocker b(breakSizeSpin_);
-        breakSizeSpin_->setValue(editor_->breakSize());
-    }
-    if (breakAngleSpin_) {
-        QSignalBlocker b(breakAngleSpin_);
-        breakAngleSpin_->setValue(editor_->breakAngle() < 0.0 ? -1.0 : editor_->breakAngle());
-    }
+    // EACH FIELD SHOWS WHAT IS GOING TO BE DRAWN. Left to the drawing, that is the figure the drawing
+    // has worked out - off the mark being made where a line has been drawn across something, and off
+    // the same sums with nothing crossed yet where it has not - with the A lit to say so. Typed into,
+    // it is the figure that was typed and the A goes dark. The word "auto" said neither.
+    const Editor::BreakFigures bf = editor_->breakPreviewFigures();
+    showAutoField(breakGapSpin_, breakGapLabel_, true, editor_->breakGap() <= 1e-6,
+                  editor_->breakGap() > 1e-6 ? editor_->breakGap() : bf.gap);
+    showAutoField(breakSizeSpin_, breakSizeLabel_, true, editor_->breakSize() <= 1e-6,
+                  editor_->breakSize() > 1e-6 ? editor_->breakSize() : bf.size);
+    showAutoField(breakAngleSpin_, breakAngleLabel_, true, editor_->breakAngle() < 0.0,
+                  editor_->breakAngle() >= 0.0 ? editor_->breakAngle() : bf.angleDeg);
 }
 
 void MainWindow::updateSchematicRibbonGroups() {
@@ -8295,6 +8298,21 @@ void MainWindow::showOptions(const QString& page) {
         if (c.isValid()) { bgCol = c; bgChanged = true; }
     });
 
+    // HOW MUCH LIGHT IS ON THAT GROUND, which is not the same question as what colour it is. A
+    // drawing office in the sun and one at night want the same colour scheme and a different amount
+    // of light on it, and picking a fresh grey out of a colour wheel every time is not how anybody
+    // wants to answer that. The grid follows it, so the squares keep their footing either way.
+    auto* bright = new QSlider(Qt::Horizontal, disp);
+    bright->setRange(-60, 60);
+    bright->setValue(canvas_->canvasBrightness());
+    bright->setToolTip(QStringLiteral(
+        "Lighter or darker than the background colour itself. 0 is the colour as it is set."));
+    df->addRow(QStringLiteral("Canvas brightness"), sliderRow(bright, QStringLiteral("%")));
+    // Shown on the canvas as it is dragged, so it is judged on the drawing and not on a number.
+    const int brightWas = canvas_->canvasBrightness();
+    connect(bright, &QSlider::valueChanged, canvas_,
+            [this](int v) { canvas_->setCanvasBrightness(v); });
+
     // Grid + secondary-grid colours, each adjustable independently.
     QColor gridCol = canvas_->gridMinorColor();
     QColor gridCol2 = canvas_->gridMajorColor();
@@ -8470,6 +8488,7 @@ void MainWindow::showOptions(const QString& page) {
             Chrome::setChosenBack(false, origBackLight);
             applyTheme(origDark);
         }
+        canvas_->setCanvasBrightness(brightWas);   // the light went on as it was dragged
         return;
     }
 
@@ -8507,6 +8526,11 @@ void MainWindow::showOptions(const QString& page) {
     canvas_->setCrosshairSize(crossSize->value());
     if (crossChanged) canvas_->setCrosshairColor(crossCol);
     if (bgChanged) canvas_->setBackgroundColor(bgCol); // auto-derives grid colours
+    canvas_->setCanvasBrightness(bright->value());
+    {
+        QSettings st;
+        st.setValue(QStringLiteral("ui/canvasBrightness"), bright->value());
+    }
     if (gridChanged) canvas_->setGridColors(gridCol, gridCol2); // explicit override
     canvas_->setGridVisible(showGrid->isChecked());
     canvas_->setGridSize(gridStep->value());
@@ -13625,6 +13649,8 @@ void MainWindow::showMechModels() {
                        [this] { if (modelsDlg_) modelsDlg_->cancelCaptureFromSheet(); });
         });
         connect(modelsDlg_, &MechModelsDialog::captureFinished, this, [this] { disarmCapture(); });
+        // A model drawn or captured in there may be the label a break mark pairs with.
+        connect(modelsDlg_, &QDialog::finished, this, [this](int) { refreshPairedLabel(); });
     }
     modelsDlg_->show();
     modelsDlg_->raise();
@@ -13816,6 +13842,19 @@ void MainWindow::armMechModelConnect() {
     canvas_->setFocus();
     statusBar()->showMessage(
         tr("Click where the part connects — then click along the direction it runs from there"), 6000);
+}
+
+// THE LABEL THAT GOES ON WITH A BREAK MARK, where Shift asks for the pair. The office's own drawing
+// when there is one and the built-in otherwise, which is the same rule the Place button follows -
+// asked again whenever the models may have changed, rather than read off disk on every mouse move.
+void MainWindow::refreshPairedLabel() {
+    if (!editor_) return;
+    MechModelSet set;
+    set.load();
+    const MechModel* found = set.of(MechModelKind::Label);
+    const MechModel model =
+        found && !found->isEmpty() ? *found : builtInMechModel(MechModelKind::Label);
+    editor_->setPairedLabel(partDrawingEntities(model.drawing), model.exceedMm);
 }
 
 // A default model put on the sheet by hand, at the size it was drawn. The office's own drawing of the

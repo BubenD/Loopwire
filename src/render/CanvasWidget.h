@@ -125,6 +125,34 @@ public:
     // major grid lines stay visible (lighter than a dark bg, darker than a light
     // bg), the secondary grid a touch stronger.
     void setBackgroundColor(const QColor& c) {
+        bgBase_ = c;
+        applyBackground();
+    }
+    QColor backgroundBaseColor() const { return bgBase_; }
+    // HOW MUCH LIGHT IS ON THE CANVAS, either side of the colour it was given. The same drawing is
+    // worked on in a bright office and in a dark one, and the ground under it is what settles
+    // whether the grid can be read at all - so it is worth a knob of its own, and one that does not
+    // mean picking a colour out of a wheel every time the light changes.
+    //
+    // Kept APART from the colour: a scheme, or a ground picked in Options, still means what it says,
+    // and this only says how much light to put on it. Nought is the colour exactly as given.
+    void setCanvasBrightness(int pct) {
+        const int next = std::clamp(pct, -100, 100);
+        if (next == brightnessPct_) return;
+        brightnessPct_ = next;
+        applyBackground();
+    }
+    int canvasBrightness() const { return brightnessPct_; }
+    void setGridColors(const QColor& minor, const QColor& major) {
+        gridMinor_ = minor; gridMajor_ = major; invalidateScene();
+    }
+    QColor gridMinorColor() const { return gridMinor_; }
+    QColor gridMajorColor() const { return gridMajor_; }
+
+    // The ground as it is actually painted - the colour it was given with the brightness on it - and
+    // the grid worked out from THAT, so the squares keep their footing whichever way the light goes.
+    void applyBackground() {
+        const QColor c = withBrightness(bgBase_, brightnessPct_);
         bgColor_ = c;
         EntityRenderer::setBackgroundColor(layoutMode_ ? QColor(Qt::white) : c);
         const int lum = (c.red() * 299 + c.green() * 587 + c.blue() * 114) / 1000;
@@ -134,17 +162,23 @@ public:
                           int(c.green() + (target.green() - c.green()) * t + 0.5),
                           int(c.blue() + (target.blue() - c.blue()) * t + 0.5));
         };
-        // Five per cent quieter than it was (0.08 -> 0.076, 0.20 -> 0.19): the grid is there to
-        // judge distance by, not to compete with the drawing on top of it.
-        gridMinor_ = mix(0.076);
-        gridMajor_ = mix(0.19);
+        // THE SQUARES HAVE TO BE SQUARES. The grid is there to judge distance by, and one so close
+        // to the ground that it can only be seen by looking for it is not doing that job - it was
+        // quietened to 0.076 to keep it off the drawing and went too far, leaving a canvas that
+        // reads as empty paper until you lean in. Read at arm's length now, and still well under
+        // the lines drawn on top of it.
+        gridMinor_ = mix(0.16);
+        gridMajor_ = mix(0.32);
         invalidateScene();
     }
-    void setGridColors(const QColor& minor, const QColor& major) {
-        gridMinor_ = minor; gridMajor_ = major; invalidateScene();
+    static QColor withBrightness(const QColor& c, int pct) {
+        if (pct == 0) return c;
+        const double t = std::abs(pct) / 100.0;
+        const QColor target = pct > 0 ? QColor(255, 255, 255) : QColor(0, 0, 0);
+        return QColor(int(c.red() + (target.red() - c.red()) * t + 0.5),
+                      int(c.green() + (target.green() - c.green()) * t + 0.5),
+                      int(c.blue() + (target.blue() - c.blue()) * t + 0.5));
     }
-    QColor gridMinorColor() const { return gridMinor_; }
-    QColor gridMajorColor() const { return gridMajor_; }
 
     // Command words for the dynamic-input autocomplete (suggests/filters as you type).
     // Command autocomplete: `words` are the inserted completions (aliases/names),
@@ -301,7 +335,9 @@ private:
     int crosshairPct_ = 15;             // crosshair arm length (% of viewport)
     QColor crosshairColor_{"#cdd6e4"};
     int pickboxPx_ = 3;                 // half-size of the central pick box
-    QColor bgColor_{"#1e2832"};         // canvas (model space) background (dark slate)
+    QColor bgColor_{"#1e2832"};         // canvas (model space) background, as painted
+    QColor bgBase_{"#1e2832"};          // ...and as it was given, before the brightness
+    int brightnessPct_ = 0;             // how much light is on it: -100 black, 0 as given, 100 white
     QColor gridMinor_{"#2b3743"};   // 5% quieter than the #2c3845 it was
     bool layoutMode_ = false;
     int layoutIndex_ = 0;

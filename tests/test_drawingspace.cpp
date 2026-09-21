@@ -1453,6 +1453,59 @@ int run_drawingspace_tests() {
         }
     }
 
+    // ---- the break mark's fields say what they are going to draw ---------------------------------
+    {
+        // A field reading "auto" tells nobody how far apart the strokes will be or how far they
+        // lean. The figure the drawing has worked out does, and the little A beside it is what says
+        // the figure is the drawing's own rather than one somebody typed.
+        MainWindow win;
+        win.resize(1500, 860);
+        win.show();
+        QApplication::processEvents();
+        Editor* ed = win.editorForTest();
+        if (ed) ed->setTool(ToolId::LengthBreak);
+        QApplication::processEvents();
+        // The break mark's own three fields, found in the box the first of them stands in - "Angle"
+        // on its own is a word half the properties in the program use.
+        QWidget* box = nullptr;
+        for (QLabel* l : win.findChildren<QLabel*>())
+            if (l->text() == QStringLiteral("Distance between")) box = l->parentWidget();
+        auto besideLabel = [&](const QString& text) -> QDoubleSpinBox* {
+            auto* g = box ? qobject_cast<QGridLayout*>(box->layout()) : nullptr;
+            if (!g) return nullptr;
+            for (QLabel* l : box->findChildren<QLabel*>()) {
+                if (l->text() != text) continue;
+                int r = 0, c = 0, rs = 0, cs = 0;
+                const int at = g->indexOf(l);
+                if (at < 0) continue;
+                g->getItemPosition(at, &r, &c, &rs, &cs);
+                if (QLayoutItem* it = g->itemAtPosition(r, c + 1))
+                    if (QWidget* cell = it->widget()) return cell->findChild<QDoubleSpinBox*>();
+            }
+            return nullptr;
+        };
+        QDoubleSpinBox* gap = besideLabel(QStringLiteral("Distance between"));
+        QDoubleSpinBox* lean = besideLabel(QStringLiteral("Angle"));
+        check(gap != nullptr && lean != nullptr,
+              "break fields: the gap and the lean are both on the ribbon");
+        if (gap && lean && ed) {
+            // The lean is the one figure the two styles differ on - an S sweeps square, a stroke
+            // leans - so the field is asked about a stroke, where there is a lean to report.
+            ed->breakStyle() = QStringLiteral("straight");
+            ed->setTool(ToolId::Select);
+            ed->setTool(ToolId::LengthBreak);
+            QApplication::processEvents();
+            std::printf("  break fields: gap shows %.1f, lean shows %.1f, and the word is \"%s\"\n",
+                        gap->value(), lean->value(), qPrintable(gap->specialValueText()));
+            check(gap->value() > 0.1,
+                  "break fields: the gap shows the figure the drawing would use, not nothing");
+            check(lean->value() > 1.0,
+                  "break fields: and so does the lean - a straight stroke leans, and says how far");
+            check(gap->specialValueText().isEmpty(),
+                  "break fields: and neither of them says the word auto any more");
+        }
+    }
+
     // ---- the option boxes keep their size and their places, whatever is in them -------------------
     {
         // Which fields a box shows depends on the sort of body picked and on which ticks are set,

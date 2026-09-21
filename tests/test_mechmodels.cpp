@@ -726,6 +726,52 @@ int run_mechmodels_tests() {
             if (e.type == EntityType::LengthBreak) ++marks;
         std::printf("  label+break: %d break mark(s) without Shift\n", marks);
         check(marks == 0, "label+break: without Shift a label is a label, and nothing else goes on");
+
+        // AND THE SAME GESTURE THE OTHER WAY ROUND. A break mark is placed by drawing the same line
+        // across the same runs, so Shift there lays the label with the mark - and the pair is one
+        // part, exactly as it is when the label is the thing being placed.
+        Document both;
+        for (int i = 0; i < 3; ++i) {
+            Entity w;
+            w.id = QStringLiteral("b%1").arg(i);
+            w.type = EntityType::Line;
+            w.a = {0.0, static_cast<double>(i) * 4.0};
+            w.b = {100.0, static_cast<double>(i) * 4.0};
+            both.entities().push_back(w);
+        }
+        Editor e3;
+        e3.setDocument(&both);
+        noSnap(e3);
+        e3.setPairedLabel(partDrawingEntities(builtInMechModel(MechModelKind::Label).drawing),
+                          builtInMechModel(MechModelKind::Label).exceedMm);
+        e3.setTool(ToolId::LengthBreak);
+        e3.onPointerPress({50.0, -3.0}, Qt::LeftButton, Qt::ShiftModifier);
+        e3.onPointerMove({50.0, 11.0});
+        e3.onPointerPress({50.0, 11.0}, Qt::LeftButton, Qt::ShiftModifier);
+        const Entity* bmark = nullptr;
+        const Entity* blabel = nullptr;
+        for (const Entity& e : both.entities()) {
+            if (e.type == EntityType::LengthBreak) bmark = &e;
+            if (e.meta.value(QStringLiteral("labelMask")).toBool()) blabel = &e;
+        }
+        std::printf("  break+label: %s, %s, group %s\n", bmark ? "a break mark" : "NO break mark",
+                    blabel ? "a label" : "NO label",
+                    bmark && blabel && entityBlockInstance(*bmark) == entityBlockInstance(*blabel)
+                        ? "shared"
+                        : "apart");
+        check(bmark != nullptr, "break+label: the break mark goes on, as it always did");
+        check(blabel != nullptr, "break+label: and Shift lays the label with it");
+        if (bmark && blabel)
+            check(!entityBlockInstance(*bmark).isEmpty() &&
+                      entityBlockInstance(*bmark) == entityBlockInstance(*blabel),
+                  "break+label: one group, so the pair is one part - the same either way round");
+        // AND ONE STEP TO UNDO THE PAIR. Two objects placed by one click are one thing done.
+        const int after = static_cast<int>(both.entities().size());
+        e3.undo();
+        std::printf("  break+label: %d object(s) after, %d after one undo\n", after,
+                    int(both.entities().size()));
+        check(int(both.entities().size()) == 3,
+              "break+label: and one undo takes the pair of them off, not half of them");
     }
 
     // ---- what the app scales BY, and how far past the wires it goes ------------------------------

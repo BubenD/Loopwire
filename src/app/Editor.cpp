@@ -3715,6 +3715,30 @@ void Editor::stampLabelFit(Entity& e, const QString& group, const LabelFit& fit,
 // gesture is two clicks with a drag between them, and whether the pair goes on is a thing the hand
 // changes its mind about while the stroke is being drawn. Read live, the mark appears and disappears
 // under the cursor as the key is held and let go, which is what says the two are going on together.
+void Editor::setPairedLabel(const std::vector<Entity>& drawing, double exceedMm) {
+    pairedLabelProto_ = drawing;
+    pairedLabelExceed_ = std::max(0.0, exceedMm);
+}
+
+// THE LABEL THE BREAK MARK'S OWN BAND WOULD LAY, while Shift is held. Worked out with the label
+// placement's own state, because it is the same fitting done by the same code - a label is laid on
+// the runs a line crosses, and which line that is does not depend on which tool drew it. Put back
+// afterwards, so a label already in hand is not disturbed by a break mark being drawn near it.
+void Editor::refreshBreakLabelPreview() {
+    breakWithLabel_ = QGuiApplication::keyboardModifiers().testFlag(Qt::ShiftModifier) &&
+                      !pairedLabelProto_.empty();
+    breakLabelPreview_.clear();
+    if (!breakWithLabel_ || tool_ != ToolId::LengthBreak || !wireBandHasStart_) return;
+    const std::vector<Entity> hadProto = labelProto_;
+    const double hadExceed = labelExceedMm_;
+    labelProto_ = pairedLabelProto_;
+    labelExceedMm_ = pairedLabelExceed_;
+    std::vector<Vec2> covers;
+    breakLabelPreview_ = labelEntities(labelFitFor(wireBandStart_, breakBandEnd()), covers);
+    labelProto_ = hadProto;
+    labelExceedMm_ = hadExceed;
+}
+
 void Editor::refreshLabelBreakPreview() {
     const bool shift =
         QGuiApplication::keyboardModifiers().testFlag(Qt::ShiftModifier);
@@ -4882,11 +4906,48 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
             emit message(QStringLiteral("Draw the line ACROSS the runs you want to break"));
             return;
         }
+        // SHIFT LAYS THE LABEL WITH IT. The label tool lays a break mark on its stroke; this is the
+        // same gesture the other way round, and the pair goes down as one part either way. Handed
+        // to the label placement, which then does the whole of it - the label, the mark in the
+        // label's own group, and one step to undo the pair of them.
+        if ((breakWithLabel_ || mods.testFlag(Qt::ShiftModifier)) && !pairedLabelProto_.empty()) {
+            const std::vector<Entity> hadProto = labelProto_;
+            const double hadExceed = labelExceedMm_;
+            labelProto_ = pairedLabelProto_;
+            labelExceedMm_ = pairedLabelExceed_;
+            labelAcrossManual_ = false;
+            labelAlongManual_ = false;
+            labelStrokeStart_ = wireBandStart_;
+            labelStrokeHasStart_ = true;
+            labelFrozen_ = false;
+            labelPlacing_ = true;
+            labelFit_ = labelFitFor(wireBandStart_, end);
+            labelPreview_ = labelEntities(labelFit_, labelCovers_);
+            if (!labelPreview_.empty()) {
+                commitLabel(true, end);
+                wireBandHasStart_ = false;
+                breakFrozen_ = false;
+                breakWithLabel_ = false;
+                breakLabelPreview_.clear();
+                setTool(ToolId::Select);
+                return;
+            }
+            // Nothing there to label: the mark goes on by itself, which is what was asked for
+            // anyway, and the state borrowed from the label placement is handed back.
+            labelPlacing_ = false;
+            labelStrokeHasStart_ = false;
+            labelPreview_.clear();
+            labelCovers_.clear();
+            labelProto_ = hadProto;
+            labelExceedMm_ = hadExceed;
+        }
         pushUndo();
         mark.layer = doc_->activeLayer();
         addEntity(std::move(mark));
         wireBandHasStart_ = false;
         breakFrozen_ = false;
+        breakWithLabel_ = false;
+        breakLabelPreview_.clear();
         doc_->setDirty(true);
         emit changed();
         emit message(QStringLiteral("Break placed"));
@@ -15720,6 +15781,31 @@ void Editor::armConnectorPlacement() {
 // twist are marked out. Which runs are broken is then a fact about the drawing rather than a guess
 // from one click: the line says so, and the mark takes its width, its angle and the run it belongs to
 // from what the line actually crossed.
+// Off the mark the cursor is making where a line has been drawn across something, and off the same
+// sums with nothing to measure where it has not: the mark a single run would get, which is the one
+// honest answer before anything has been crossed.
+Editor::BreakFigures Editor::breakPreviewFigures() const {
+    BreakFigures out;
+    Entity mark = breakPreview();
+    if (mark.type != EntityType::LengthBreak) {
+        const double half = breakSize_ > 1e-6 ? breakSize_ : 6.0;
+        mark.type = EntityType::LengthBreak;
+        mark.meta.insert(QStringLiteral("size"), half);
+        mark.meta.insert(QStringLiteral("gap"),
+                         breakGap_ > 1e-6 ? breakGap_ : std::max(half * 0.8, 3.0));
+    }
+    out.size = mark.meta.value(QStringLiteral("size")).toDouble(6.0);
+    out.gap = mark.meta.value(QStringLiteral("gap")).toDouble(out.size * 0.9);
+    // The lean is kept as an angle because that is how a draughtsman thinks of it. Left alone, each
+    // style has the one it has always been drawn with: an S sweeps square, a stroke leans.
+    out.angleDeg = breakAngle_ >= 0.0
+                       ? breakAngle_
+                       : (breakStyle_ == QLatin1String("curved")
+                              ? 0.0
+                              : std::atan(0.55) * 180.0 / 3.14159265358979323846);
+    return out;
+}
+
 bool Editor::breakFromBand(const Vec2& a, const Vec2& b, Entity& out) const {
     if (!doc_) return false;
     // Everything the line crosses, and which way that run was going there. A double line is crossed
@@ -16315,6 +16401,7 @@ void Editor::freezeBreakPreview() {
     // Pins the loose end of the marking line, so the mark it describes stops moving while the numbers
     // on the ribbon are tried on it. There is nothing to pin before the line has a start.
     if (tool_ != ToolId::LengthBreak || breakFrozen_ || !wireBandHasStart_) return;
+    refreshBreakLabelPreview();   // and the label Shift would lay along the same band
     breakFrozen_ = true;
     breakFrozenAt_ = cursor_;
     emit message(QStringLiteral(
@@ -17928,6 +18015,10 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             }
             p.restore();
         }
+        // AND THE LABEL GOING ON WITH IT, while Shift is held: the pair is laid by the one band, so
+        // the pair is what the band shows.
+        for (const Entity& e : breakLabelPreview_)
+            EntityRenderer::draw(p, e, *doc_, vt, paperInk(QColor("#8fd3ff")));
     }
 
     if (transitionBandStarted()) {
