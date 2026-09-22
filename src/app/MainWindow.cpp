@@ -4754,7 +4754,10 @@ void MainWindow::syncBreakOptions() {
         fieldRoom(twistBootSpin_, twistBootLabel_, covered);
         fieldRoom(twistBootBSpin_, twistBootBLabel_, covered);
         room(twistBodySidesCheck_, covered);
-        room(twistBodyTransitionCheck_, asCable);
+        room(twistTransitionCombo_, asCable);
+        room(twistTransitionLabel_, asCable);
+        room(twistLayCombo_, straightRun && kind == RunBody::Wires);
+        room(twistLayLabel_, straightRun && kind == RunBody::Wires);
         room(twistBodyOverCableCheck_, asSleeve);
         if (twistBodySidesCheck_) {
             twistBodySidesCheck_->setVisible(covered);
@@ -4766,14 +4769,29 @@ void MainWindow::syncBreakOptions() {
         showAutoField(twistBodyWidthSpin_, twistBodyWidthLabel_, covered,
                       editor_->twistBodyWidth() <= 1e-9,
                       editor_->twistBodyWidth() > 1e-9 ? editor_->twistBodyWidth() : fig.bodyWidth);
-        // THE TRANSITION IS A CABLE THING, and which of the two sorts of tubing is a heatshrink
-        // thing. They ask the same question of the two sorts - is there a boot at each end - so
-        // they stand in the same place, and only one of them is ever on show.
-        if (twistBodyTransitionCheck_) {
-            twistBodyTransitionCheck_->setVisible(asCable);
+        // THE TRANSITION IS A CABLE THING, and WHICH ENDS wear one is the question: a loom is not
+        // symmetrical, and an end going into a connector wants the boot while one running into a
+        // splice does not.
+        const RunEnds transitionEnds = editor_->twistTransitionEnds();
+        if (twistTransitionCombo_ && twistTransitionLabel_) {
+            twistTransitionCombo_->setVisible(asCable);
+            twistTransitionLabel_->setVisible(asCable);
             if (asCable) {
-                QSignalBlocker b(twistBodyTransitionCheck_);
-                twistBodyTransitionCheck_->setChecked(editor_->twistBodyTransition());
+                QSignalBlocker b(twistTransitionCombo_);
+                const int at = twistTransitionCombo_->findData(static_cast<int>(transitionEnds));
+                twistTransitionCombo_->setCurrentIndex(at >= 0 ? at : 3);
+            }
+        }
+        // AND HOW THE GATHERED WIRES RUN, which is a hook-up-wires thing and of no other: under a
+        // cable or a sleeve there is nothing of the wires to see, laid up or not.
+        const bool loose = straightRun && kind == RunBody::Wires;
+        if (twistLayCombo_ && twistLayLabel_) {
+            twistLayCombo_->setVisible(loose);
+            twistLayLabel_->setVisible(loose);
+            if (loose) {
+                QSignalBlocker b(twistLayCombo_);
+                const int at = twistLayCombo_->findData(static_cast<int>(editor_->twistLay()));
+                twistLayCombo_->setCurrentIndex(at >= 0 ? at : 0);
             }
         }
         if (twistBodyOverCableCheck_) {
@@ -4783,31 +4801,40 @@ void MainWindow::syncBreakOptions() {
                 twistBodyOverCableCheck_->setChecked(editor_->twistBodyOverCable());
             }
         }
-        const bool booted = (asCable && editor_->twistBodyTransition()) ||
-                            (asSleeve && editor_->twistBodyOverCable());
-        // AND THE RECOVERED END IS WHEREVER SOMETHING IS RECOVERED: the ends of a sleeve laid along
-        // the run, or the fan-facing end of the boot at each end of a cable. The same two figures
-        // describe both, because it is the same thing being asked - how far across the end is, and
-        // over what length it comes down to that.
-        const bool recovered = (asSleeve && !editor_->twistBodyOverCable()) || booted;
-        showAutoField(twistBodyFaceSpin_, twistBodyFaceLabel_, recovered,
+        // WHICH END HAS ANYTHING TO SAY. A sleeve laid along the run is recovered at both of its
+        // ends by the nature of the thing; a cable has whatever its transition gives it, which may
+        // be one end, the other, both or neither. An end with no boot on it has no boot length and
+        // no recovered face to set, so its figures stand down rather than sitting there describing
+        // a part that is not on the drawing.
+        const bool alongSleeve = asSleeve && !editor_->twistBodyOverCable();
+        const bool bootStart = (asCable && runEndsHas(transitionEnds, false)) ||
+                               (asSleeve && editor_->twistBodyOverCable());
+        const bool bootFinish = (asCable && runEndsHas(transitionEnds, true)) ||
+                                (asSleeve && editor_->twistBodyOverCable());
+        const bool recoveredStart = alongSleeve || bootStart;
+        const bool recoveredFinish = alongSleeve || bootFinish;
+        // Told apart, each end answers for itself; told alike, the START fields answer for both -
+        // so they show while EITHER end has something, and the finish ones never show at all.
+        const bool startShown = endsApart ? recoveredStart : (recoveredStart || recoveredFinish);
+        const bool bootShown = endsApart ? bootStart : (bootStart || bootFinish);
+        showAutoField(twistBodyFaceSpin_, twistBodyFaceLabel_, startShown,
                       editor_->twistBodyFace() <= 1e-9,
                       editor_->twistBodyFace() > 1e-9 ? editor_->twistBodyFace() : fig.bodyFace);
-        showAutoField(twistBodyShrinkSpin_, twistBodyShrinkLabel_, recovered,
+        showAutoField(twistBodyShrinkSpin_, twistBodyShrinkLabel_, startShown,
                       editor_->twistBodyShrink() < 0.0,
                       editor_->twistBodyShrink() >= 0.0 ? editor_->twistBodyShrink()
                                                         : fig.bodyShrink);
-        showAutoField(twistBodyFaceBSpin_, twistBodyFaceBLabel_, recovered && endsApart,
+        showAutoField(twistBodyFaceBSpin_, twistBodyFaceBLabel_, recoveredFinish && endsApart,
                       editor_->twistBodyFaceFinish() <= 1e-9,
                       editor_->twistBodyFaceFinish() > 1e-9 ? editor_->twistBodyFaceFinish()
                                                             : fig.bodyFace);
-        showAutoField(twistBodyShrinkBSpin_, twistBodyShrinkBLabel_, recovered && endsApart,
+        showAutoField(twistBodyShrinkBSpin_, twistBodyShrinkBLabel_, recoveredFinish && endsApart,
                       editor_->twistBodyShrinkFinish() < 0.0,
                       editor_->twistBodyShrinkFinish() >= 0.0 ? editor_->twistBodyShrinkFinish()
                                                               : fig.bodyShrink);
-        showAutoField(twistBootSpin_, twistBootLabel_, booted, editor_->twistBoot() <= 1e-9,
+        showAutoField(twistBootSpin_, twistBootLabel_, bootShown, editor_->twistBoot() <= 1e-9,
                       editor_->twistBoot() > 1e-9 ? editor_->twistBoot() : fig.boot);
-        showAutoField(twistBootBSpin_, twistBootBLabel_, booted && endsApart,
+        showAutoField(twistBootBSpin_, twistBootBLabel_, bootFinish && endsApart,
                       editor_->twistBootFinish() <= 1e-9,
                       editor_->twistBootFinish() > 1e-9 ? editor_->twistBootFinish() : fig.boot);
         if (twistSidesCheck_) {
@@ -4837,8 +4864,7 @@ void MainWindow::syncBreakOptions() {
         // HOW MANY WIRES CARRY ON is a figure of the hook-up-wires body and of no other: it says how
         // many lines the stretch between the fans is drawn as, and a stretch covered by a cable or
         // by a length of tubing draws none of them at all. Offered against a cover it was a setting
-        // that changed nothing on the sheet.
-        const bool loose = straightRun && kind == RunBody::Wires;
+        // that changed nothing on the sheet. The same `loose` the lay menu is shown by.
         fieldRoom(twistTrunkSpin_, twistTrunkLabel_, loose);
         if (twistTrunkSpin_ && twistTrunkLabel_) {
             autoFieldCell(twistTrunkSpin_)->setVisible(loose);
@@ -9590,19 +9616,19 @@ void MainWindow::refreshProperties() {
             // WHETHER THE CONVERGED STRETCH IS A CABLE under heatshrink, or the lines its wires make.
             const RunBody kind = runBodyOf(*e);
             const bool covered = kind != RunBody::Wires;
-            const QString kindName = kind == RunBody::Cable      ? QStringLiteral("Cable")
-                                     : kind == RunBody::Heatshrink ? QStringLiteral("Heatshrink")
+            const QString kindName = kind == RunBody::Cable        ? QStringLiteral("Cable")
+                                     : kind == RunBody::Heatshrink ? QStringLiteral("Hshrink")
                                                                    : QStringLiteral("Hook-up wires");
             addCombo(QStringLiteral("Between the fans"),
                      {QStringLiteral("Hook-up wires"), QStringLiteral("Cable"),
-                      QStringLiteral("Heatshrink")},
+                      QStringLiteral("Hshrink")},
                      mv(QStringLiteral("twistBody")).isVaries() ? QStringLiteral("#Value") : kindName,
                      false, [this](const QString& t) {
                          editor_->setSelectionMeta(
                              QStringLiteral("twistBody"),
-                             t == QLatin1String("Cable")        ? QStringLiteral("cable")
-                             : t == QLatin1String("Heatshrink") ? QStringLiteral("heatshrink")
-                                                                : QString());
+                             t == QLatin1String("Cable")     ? QStringLiteral("cable")
+                             : t == QLatin1String("Hshrink") ? QStringLiteral("heatshrink")
+                                                             : QString());
                      });
             // AND WHAT THAT CABLE IS DRAWN TO, while there is one: how wide, and at each end how far
             // across its face is and over what length it comes down to that.
@@ -9616,7 +9642,7 @@ void MainWindow::refreshProperties() {
                 // A cable is cut square and has a boot at each end; a sleeve is shrunk onto what it
                 // grips and has none. Each sort is offered its own figures and not the other's.
                 if (kind == RunBody::Cable)
-                    addNum(QStringLiteral("Heatshrink length"),
+                    addNum(QStringLiteral("Hshrink length"),
                            mv(QStringLiteral("twistBoot")).toDouble(drawn.boot),
                            [this](double v) {
                                editor_->setSelectionMetaNumber(QStringLiteral("twistBoot"),
@@ -9628,7 +9654,7 @@ void MainWindow::refreshProperties() {
                            editor_->setSelectionMetaNumber(QStringLiteral("twistBodyFace"),
                                                            std::max(0.0, v));
                        });
-                addNum(QStringLiteral("Heatshrink recover length"),
+                addNum(QStringLiteral("Hshrink recover length"),
                        mv(QStringLiteral("twistBodyShrink")).toDouble(drawn.bodyShrink),
                        [this](double v) {
                            editor_->setSelectionMetaNumber(QStringLiteral("twistBodyShrink"),

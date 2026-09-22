@@ -222,6 +222,22 @@ std::vector<std::vector<Vec2>> runDrawnLines(const Entity& pair);
 enum class RunBody { Wires, Cable, Heatshrink };
 RunBody runBodyOf(const Entity& pair);
 
+// WHICH ENDS OF A CABLE WEAR THE TRANSITION. A breakout is a real part fitted to a real end, and a
+// loom is not symmetrical: one end goes into a connector and wants the boot, the other runs into a
+// splice or a clamp and does not. It was a tick - both ends or neither - which could not say that.
+enum class RunEnds { None, Start, Finish, Both };
+RunEnds runTransitionEndsOf(const Entity& pair);
+bool runEndsHas(RunEnds ends, bool finish);
+
+// AND HOW THE WIRES RUN WHERE THEY ARE GATHERED. Drawn as its wires, the body IS those wires, and
+// a bundle of hook-up wire is not the only thing a drawing office runs between two fans: pairs are
+// laid up against interference, and a loom that carries both is drawn with both. STRAIGHT is the
+// bundle as it has always been drawn; PAIRS lays every pair of neighbouring lanes up together;
+// MIXED lays up every other pair, which is what a harness carrying a few signal pairs among its
+// power wires actually looks like.
+enum class RunLay { Straight, Pairs, Mixed };
+RunLay runLayOf(const Entity& pair);
+
 // CAN A BUNDLE THIS WIDE ACTUALLY GO ROUND THIS ROUTE?
 //
 // A loom is not a line. Where a route turns, every wire in the bundle turns with it on a radius its

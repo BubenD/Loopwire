@@ -214,7 +214,16 @@ public:
     // AND WHETHER A CABLE HAS A TRANSITION HEATSHRINK AT EACH END OF IT - the boot the wires come
     // out of. It has, unless the drawing says otherwise; a cable can be drawn running straight out
     // into its own fan. Only a cable: a length of tubing over the whole run IS the transition.
-    bool twistBodyTransition() const { return twistBodyTransition_; }
+    bool twistBodyTransition() const { return twistTransitionEnds_ != RunEnds::None; }
+    // WHICH ENDS OF THE CABLE WEAR ONE. A breakout is a real part fitted to a real end, and a loom
+    // is not symmetrical: one end goes into a connector and wants the boot, the other runs into a
+    // splice and does not. A tick could only say both or neither.
+    RunEnds twistTransitionEnds() const { return twistTransitionEnds_; }
+    void setTwistTransitionEnds(RunEnds ends);
+    // AND HOW THE WIRES RUN WHERE THEY ARE GATHERED: straight, laid up in pairs, or every other
+    // pair laid up. Only means anything while the body IS the wires.
+    RunLay twistLay() const { return twistLay_; }
+    void setTwistLay(RunLay lay);
     void setTwistBodyTransition(bool on);
     // AND WHICH OF THE TWO SORTS OF TUBING a heatshrink body is: one sleeve ALONG the run, which is
     // what it has always been, or a cable with a piece fitted OVER each of its ends.
@@ -1720,7 +1729,8 @@ private:
     double twistBootFinish_ = 0.0;
     double twistBodyWidth_ = 0.0;                  // how wide; 0 = the drawing's own
     bool twistBodySidesSame_ = true;               // both its ends shrink alike
-    bool twistBodyTransition_ = true;              // a cable has a boot at each end of it
+    RunEnds twistTransitionEnds_ = RunEnds::Both;  // which ends of a cable wear the boot
+    RunLay twistLay_ = RunLay::Straight;           // and how the gathered wires run
     bool twistBodyOverCable_ = false;              // tubing along the run, or over a cable
     double twistBodyFace_ = 0.0;                   // the end face across; 0 = the drawing's own
     double twistBodyShrink_ = -1.0;                // and over what length; <0 = the drawing's own

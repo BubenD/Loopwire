@@ -838,7 +838,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                 twistBodyCombo_->addItem(QStringLiteral("Hook-up wires"),
                                          static_cast<int>(RunBody::Wires));
                 twistBodyCombo_->addItem(QStringLiteral("Cable"), static_cast<int>(RunBody::Cable));
-                twistBodyCombo_->addItem(QStringLiteral("Heatshrink"),
+                twistBodyCombo_->addItem(QStringLiteral("Hshrink"),
                                          static_cast<int>(RunBody::Heatshrink));
                 twistBodyCombo_->setMinimumWidth(96);
                 twistBodyCombo_->setToolTip(QStringLiteral(
@@ -900,7 +900,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                                          "Auto is the bundle it covers plus a wire's width."),
                           [this] { editor_->setTwistBodyWidth(0.0); syncBreakOptions(); });
                 bodyField(bg, twistBodyShrinkLabel_, twistBodyShrinkSpin_,
-                          QStringLiteral("Heatshrink recover length"), -1.0, editor_->twistBodyShrink(), 1, 6,
+                          QStringLiteral("Hshrink recover length"), -1.0, editor_->twistBodyShrink(), 1, 6,
                           QStringLiteral("How far in from the end the cover takes to come down to "
                                          "its face. 0 is a square shoulder; Auto is the drawing's "
                                          "own."),
@@ -911,7 +911,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                                          "shrunk down to. Auto is the bundle underneath it."),
                           [this] { editor_->setTwistBodyFace(0.0); syncBreakOptions(); });
                 bodyField(bg, twistBodyShrinkBLabel_, twistBodyShrinkBSpin_,
-                          QStringLiteral("Finish heatshrink recover"), -1.0,
+                          QStringLiteral("Finish Hshrink recover"), -1.0,
                           editor_->twistBodyShrinkFinish(), 1, 9,
                           QStringLiteral("The shrunk length at the FINISH end of the cable."),
                           [this] { editor_->setTwistBodyShrinkFinish(-1.0); syncBreakOptions(); });
@@ -922,13 +922,13 @@ void MainWindow::buildHarnessMechanicalTab() {
                 // THE BOOT AT EACH END OF A CABLE: the transition heatshrink that takes the bundle
                 // of wires down to the one cable. A cable's, not a sleeve's - a length of tubing
                 // over the run has no transition to cover.
-                bodyField(bg, twistBootLabel_, twistBootSpin_, QStringLiteral("Heatshrink length"), 0.0,
+                bodyField(bg, twistBootLabel_, twistBootSpin_, QStringLiteral("Hshrink length"), 0.0,
                           editor_->twistBoot(), 2, 6,
                           QStringLiteral("How far the transition heatshrink at each end of the cable "
                                          "reaches back along the cable. The fan starts at its face. "
                                          "Auto is a third of the fan."),
                           [this] { editor_->setTwistBoot(0.0); syncBreakOptions(); });
-                bodyField(bg, twistBootBLabel_, twistBootBSpin_, QStringLiteral("Finish heatshrink length"), 0.0,
+                bodyField(bg, twistBootBLabel_, twistBootBSpin_, QStringLiteral("Finish Hshrink length"), 0.0,
                           editor_->twistBootFinish(), 2, 9,
                           QStringLiteral("The boot at the FINISH end of the cable."),
                           [this] { editor_->setTwistBootFinish(0.0); syncBreakOptions(); });
@@ -945,21 +945,71 @@ void MainWindow::buildHarnessMechanicalTab() {
                     "shrunk length and end size - a cover is shrunk onto a connector at one end and "
                     "onto a breakout at the other."));
                 bg->addWidget(twistBodySidesCheck_, 0, 12, 1, 2);
-                // THE TRANSITION HEATSHRINK, which is a cable thing only: a length of tubing over
-                // the whole run is already the transition and cannot have a second one over its
-                // own end. Ticked, which is how a cable starts - the boot is what makes a cable
-                // read as a cable rather than as a thick line - and unticked the cable runs
-                // straight out into its fan.
-                twistBodyTransitionCheck_ =
-                    new QCheckBox(QStringLiteral("Transition heatshrink"), optW);
-                twistBodyTransitionCheck_->setChecked(editor_->twistBodyTransition());
-                twistBodyTransitionCheck_->setStyleSheet(
+                // THE TRANSITION HSHRINK, which is a cable thing only: a length of tubing over the
+                // whole run is already the transition and cannot have a second one over its own
+                // end. WHICH ENDS wear one is a question a tick could not answer: a loom is not
+                // symmetrical, and one end going into a connector wants the boot while the other
+                // running into a splice does not. It stands under the knee radius, with the rest of
+                // what the body is made of.
+                twistTransitionLabel_ = new QLabel(QStringLiteral("Transition Hshrink"), optW);
+                twistTransitionLabel_->setStyleSheet(
                     QStringLiteral("color:#e6e9ef;background:transparent;"));
-                twistBodyTransitionCheck_->setToolTip(QStringLiteral(
-                    "A boot over each end of the cable: sat back along the cable, shrunk down onto "
-                    "it where it grips, and cut square at the mouth the fan starts from. Untick it "
-                    "and the cable runs straight out into its wires."));
-                bg->addWidget(twistBodyTransitionCheck_, 1, 12, 1, 2);
+                twistTransitionCombo_ = new QComboBox(optW);
+                twistTransitionCombo_->addItem(QStringLiteral("None"),
+                                               static_cast<int>(RunEnds::None));
+                twistTransitionCombo_->addItem(QStringLiteral("Start"),
+                                               static_cast<int>(RunEnds::Start));
+                twistTransitionCombo_->addItem(QStringLiteral("Finish"),
+                                               static_cast<int>(RunEnds::Finish));
+                twistTransitionCombo_->addItem(QStringLiteral("Both"),
+                                               static_cast<int>(RunEnds::Both));
+                twistTransitionCombo_->setMinimumWidth(72);
+                twistTransitionCombo_->setToolTip(QStringLiteral(
+                    "Which ends of the cable wear a boot: sat back along the cable, shrunk down "
+                    "onto it where it grips, and cut square at the mouth the fan starts from. An "
+                    "end without one runs straight out into its wires, and its own figures stand "
+                    "down with it."));
+                bg->addWidget(twistTransitionLabel_, 1, 3);
+                bg->addWidget(twistTransitionCombo_, 1, 4);
+                connect(twistTransitionCombo_, &QComboBox::currentIndexChanged, this, [this](int at) {
+                    if (!twistTransitionCombo_) return;
+                    editor_->setTwistTransitionEnds(
+                        static_cast<RunEnds>(twistTransitionCombo_->itemData(at).toInt()));
+                    syncBreakOptions();   // the boot figures come and go with the ends
+                    canvas_->update();
+                    statusBar()->showMessage(
+                        QStringLiteral("Harness run: transition Hshrink on %1")
+                            .arg(twistTransitionCombo_->itemText(at).toLower()),
+                        2000);
+                });
+                // AND HOW THE GATHERED WIRES RUN, which only means anything while the body IS the
+                // wires: under a cable or a sleeve there is nothing of them to see.
+                twistLayLabel_ = new QLabel(QStringLiteral("Wires run"), optW);
+                twistLayLabel_->setStyleSheet(
+                    QStringLiteral("color:#e6e9ef;background:transparent;"));
+                twistLayCombo_ = new QComboBox(optW);
+                twistLayCombo_->addItem(QStringLiteral("Straight"),
+                                        static_cast<int>(RunLay::Straight));
+                twistLayCombo_->addItem(QStringLiteral("Twisted pairs"),
+                                        static_cast<int>(RunLay::Pairs));
+                twistLayCombo_->addItem(QStringLiteral("Mixed"), static_cast<int>(RunLay::Mixed));
+                twistLayCombo_->setMinimumWidth(72);
+                twistLayCombo_->setToolTip(QStringLiteral(
+                    "How the wires run where they are gathered. Straight: side by side, as a loom "
+                    "of hook-up wire is drawn. Twisted pairs: every pair of neighbouring wires laid "
+                    "up together. Mixed: every other pair laid up, which is a harness carrying a few "
+                    "signal pairs among its power wires."));
+                bg->addWidget(twistLayLabel_, 2, 3);
+                bg->addWidget(twistLayCombo_, 2, 4);
+                connect(twistLayCombo_, &QComboBox::currentIndexChanged, this, [this](int at) {
+                    if (!twistLayCombo_) return;
+                    editor_->setTwistLay(static_cast<RunLay>(twistLayCombo_->itemData(at).toInt()));
+                    canvas_->update();
+                    statusBar()->showMessage(
+                        QStringLiteral("Harness run: the gathered wires run %1")
+                            .arg(twistLayCombo_->itemText(at).toLower()),
+                        2000);
+                });
                 twistBodyOverCableCheck_ = new QCheckBox(QStringLiteral("Over the cable"), optW);
                 twistBodyOverCableCheck_->setChecked(editor_->twistBodyOverCable());
                 twistBodyOverCableCheck_->setStyleSheet(
@@ -977,16 +1027,6 @@ void MainWindow::buildHarnessMechanicalTab() {
                     statusBar()->showMessage(
                         on ? QStringLiteral("Harness run: heatshrink over the cable, at each end")
                            : QStringLiteral("Harness run: heatshrink along the whole run"),
-                        2000);
-                });
-                connect(twistBodyTransitionCheck_, &QCheckBox::toggled, this, [this](bool on) {
-                    editor_->setTwistBodyTransition(on);
-                    syncBreakOptions();   // the boot lengths come and go with it
-                    canvas_->update();
-                    statusBar()->showMessage(
-                        on ? QStringLiteral("Harness run: a transition heatshrink at each end of the "
-                                            "cable")
-                           : QStringLiteral("Harness run: the cable runs straight out into its fan"),
                         2000);
                 });
                 connect(twistBodySidesCheck_, &QCheckBox::toggled, this, [this](bool on) {

@@ -1639,28 +1639,30 @@ int run_drawingspace_tests() {
         }
     }
 
-    // ---- the transition heatshrink is a tick, and only a cable has one ----------------------------
+    // ---- which ends wear the transition, and only a cable is asked ------------------------------
     {
         // A cable over the converged stretch has a boot at each end of it: the transition the wires
         // come out of. A length of tubing over the whole run has none - it IS the transition - so
-        // the tick is a cable thing and goes away with the other sort.
+        // the question is a cable thing and goes away with the other sort. WHICH ENDS is the
+        // question, because a loom is not symmetrical: an end going into a connector wants the boot
+        // and one running into a splice does not, which a tick could not say.
         MainWindow win;
         win.resize(1400, 860);
         win.show();
         QApplication::processEvents();
         Editor* ed = win.editorForTest();
-        QCheckBox* tick = nullptr;
-        for (QCheckBox* c : win.findChildren<QCheckBox*>())
-            if (c->text() == QStringLiteral("Transition heatshrink")) tick = c;
+        QComboBox* tick = nullptr;
+        for (QComboBox* c : win.findChildren<QComboBox*>())
+            if (c->findText(QStringLiteral("Finish")) >= 0 && c->count() == 4) tick = c;
         QComboBox* body = nullptr;
         for (QComboBox* c : win.findChildren<QComboBox*>())
             if (c->findText(QStringLiteral("Hook-up wires")) >= 0) body = c;
         check(tick != nullptr && body != nullptr && ed != nullptr,
-              "transition tick: the body menu and the transition tick are both on the ribbon");
+              "transition: the body menu and the transition menu are both on the ribbon");
         if (tick && body && ed) {
             ed->setTool(ToolId::WiresRun);
             QApplication::processEvents();
-            body->setCurrentIndex(body->findText(QStringLiteral("Heatshrink")));
+            body->setCurrentIndex(body->findText(QStringLiteral("Hshrink")));
             QApplication::processEvents();
             const bool onTubing = !tick->isHidden();
             // AND THE TUBING HAS A TICK OF ITS OWN IN THE SAME PLACE: which of its two sorts it is.
@@ -1677,18 +1679,40 @@ int run_drawingspace_tests() {
                         sortOnTubing ? 1 : 0, sortOnCable ? 1 : 0);
             check(sortOnTubing && !sortOnCable,
                   "over the cable: it is a tubing question, and stands where the cable asks its own");
-            std::printf("  transition tick: shown for a cable %d, for tubing %d, ticked %d\n",
-                        onCable ? 1 : 0, onTubing ? 1 : 0, tick->isChecked() ? 1 : 0);
+            std::printf("  transition: shown for a cable %d, for tubing %d, set to \"%s\"\n",
+                        onCable ? 1 : 0, onTubing ? 1 : 0, qPrintable(tick->currentText()));
             check(onCable && !onTubing,
-                  "transition tick: a cable is offered one, a length of tubing is not");
-            check(tick->isChecked() && ed->twistBodyTransition(),
-                  "transition tick: and a cable starts with it, which is what a cable looks like");
-            tick->click();
-            QApplication::processEvents();
-            check(!ed->twistBodyTransition(),
-                  "transition tick: unticking it takes the boots off the cable");
-            tick->click();
-            QApplication::processEvents();
+                  "transition: a cable is asked, a length of tubing is not");
+            check(tick->currentText() == QStringLiteral("Both") &&
+                      ed->twistTransitionEnds() == RunEnds::Both,
+                  "transition: and a cable starts with both, which is what a cable looks like");
+            // ONE END ONLY, and the other end's own figures stand down with it - which is the whole
+            // point of being able to say one end: an end with no boot has no boot length to set.
+            QLabel* finishBoot = nullptr;
+            for (QLabel* l : win.findChildren<QLabel*>())
+                if (l->text() == QStringLiteral("Finish Hshrink length")) finishBoot = l;
+            QCheckBox* bothSides = nullptr;
+            for (QCheckBox* c : win.findChildren<QCheckBox*>())
+                if (c->text() == QStringLiteral("Cable both sides")) bothSides = c;
+            check(finishBoot != nullptr && bothSides != nullptr,
+                  "transition: the finish end has a boot length of its own to stand down");
+            if (finishBoot && bothSides) {
+                if (bothSides->isChecked()) bothSides->click();   // the two ends told apart
+                QApplication::processEvents();
+                const bool onBoth = !finishBoot->isHidden();
+                tick->setCurrentIndex(tick->findText(QStringLiteral("Start")));
+                QApplication::processEvents();
+                const bool onStartOnly = !finishBoot->isHidden();
+                std::printf("  transition: the finish boot length is shown on Both %d, on Start "
+                            "%d\n", onBoth ? 1 : 0, onStartOnly ? 1 : 0);
+                check(ed->twistTransitionEnds() == RunEnds::Start,
+                      "transition: picking Start puts the boot on the start end alone");
+                check(onBoth && !onStartOnly,
+                      "transition: and the finish end's figures go with the boot it no longer has");
+                tick->setCurrentIndex(tick->findText(QStringLiteral("Both")));
+                bothSides->click();
+                QApplication::processEvents();
+            }
             // AND CONVERGE-TO IS A FIGURE OF THE HOOK-UP-WIRES BODY AND OF NO OTHER: it says how
             // many lines the stretch between the fans is drawn as, and a stretch covered by a cable
             // or by a length of tubing draws none of them. So it stands in the Body box with the

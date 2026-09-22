@@ -11610,6 +11610,78 @@ int run_editor_tests() {
         }
     }
 
+    // ---- the gathered wires run straight, or laid up in pairs, or every other pair -------------
+    {
+        // Drawn as its wires, the body IS those wires, and a bundle of hook-up wire is not the only
+        // thing a drawing office runs between two fans: pairs are laid up against interference, and
+        // a loom that carries both is drawn with both. The fans are untouched by any of it - the
+        // weave is a whole number of turns, so every wire is back on its own lane where the fan
+        // meets it - which is what lets a pair be laid up without disturbing anything else.
+        auto laid = [](const QString& id, const char* lay, int wires) {
+            Entity w;
+            w.id = id;
+            w.type = EntityType::TwistedPair;
+            w.points = {{0.0, 0.0}, {300.0, 0.0}};
+            w.a = w.points.front();
+            w.b = w.points.back();
+            w.meta.insert(QStringLiteral("twistStraight"), true);
+            w.meta.insert(QStringLiteral("twistWires"), wires);
+            w.meta.insert(QStringLiteral("twistWidth"), 9.0);
+            w.meta.insert(QStringLiteral("twistPitch"), 30.0);
+            w.meta.insert(QStringLiteral("twistEnds"), 45.0);
+            w.meta.insert(QStringLiteral("twistLane"), 12.0);
+            if (lay) w.meta.insert(QStringLiteral("twistLay"), QString::fromUtf8(lay));
+            return w;
+        };
+        // How many of the drawn lines move up and down BETWEEN the fans, and how far the furthest
+        // of them goes: a wire running straight in its lane does neither.
+        auto swinging = [](const Entity& e, double* most) {
+            int moving = 0;
+            *most = 0.0;
+            for (const std::vector<Vec2>& s : twistedPairStrands(e)) {
+                double lo = 1e300, hi = -1e300;
+                for (const Vec2& v : s)
+                    if (v.x > 60.0 && v.x < 240.0) {
+                        lo = std::min(lo, v.y);
+                        hi = std::max(hi, v.y);
+                    }
+                if (hi <= lo) continue;
+                *most = std::max(*most, hi - lo);
+                if (hi - lo > 0.5) ++moving;
+            }
+            return moving;
+        };
+        double flat = 0.0, all = 0.0, some = 0.0, odd = 0.0;
+        const int nFlat = swinging(laid(QStringLiteral("LAY0"), nullptr, 6), &flat);
+        const int nAll = swinging(laid(QStringLiteral("LAY1"), "pairs", 6), &all);
+        const int nSome = swinging(laid(QStringLiteral("LAY2"), "mixed", 6), &some);
+        const int nOdd = swinging(laid(QStringLiteral("LAY3"), "pairs", 5), &odd);
+        std::printf("  lay: straight %d line(s) move (%.2f), pairs %d (%.2f), mixed %d (%.2f), "
+                    "five wires %d (%.2f)\n", nFlat, flat, nAll, all, nSome, some, nOdd, odd);
+        check(nFlat == 0 && flat < 1e-6,
+              "lay: straight, every wire holds its lane from one fan to the other");
+        check(nAll == 12, "lay: laid up in pairs, all six wires go round each other");
+        check(nSome == 8, "lay: mixed, every other pair does - four wires of the six");
+        check(nOdd == 8, "lay: and the odd wire of five has nobody to twist with, so it runs on");
+        // AND THE FAN IS UNTOUCHED: the wires meet it exactly where they always did.
+        auto fanEnds = [](const Entity& e) {
+            std::vector<double> ys;
+            for (const std::vector<Vec2>& s : twistedPairStrands(e))
+                for (const Vec2& v : s)
+                    if (v.x < 1e-6) ys.push_back(v.y);
+            std::sort(ys.begin(), ys.end());
+            return ys;
+        };
+        const std::vector<double> before = fanEnds(laid(QStringLiteral("LAY4"), nullptr, 6));
+        const std::vector<double> after = fanEnds(laid(QStringLiteral("LAY5"), "pairs", 6));
+        bool same = before.size() == after.size() && !before.empty();
+        for (size_t i = 0; same && i < before.size(); ++i)
+            same = std::abs(before[i] - after[i]) < 1e-9;
+        std::printf("  lay: %d wire end(s) at the fan, %s once the pairs are laid up\n",
+                    int(before.size()), same ? "where they were" : "MOVED");
+        check(same, "lay: laying the pairs up moves nothing about the fan at either end");
+    }
+
     // ---- A BENT CABLE IS STILL A CABLE, and the transition at each end of it is a part ----------
     {
         // Three things, all about the stretch between the fans: it survives a bend, the boot at

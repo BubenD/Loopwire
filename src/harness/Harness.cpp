@@ -411,6 +411,8 @@ struct TwistFrames {
     // toward the fan. The second is the part that grips a breakout, which is why a cable has one
     // of its own.
     bool bodyOverCable = false;
+    RunEnds transitionEnds = RunEnds::None;   // which ends of a cable wear the boot
+    RunLay lay = RunLay::Straight;            // and how the wires run where they are gathered
     // AND WHAT THE FAN RUNS INTO AT EACH END, as a scale on where a wire sits in the run: one is
     // the bundle the wires would have made on their own, and anything else is the face of whatever
     // covers them. See the working in twistFrames.
@@ -656,6 +658,9 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
     f.strip = stripOf(false);
     f.stripB = stripOf(true);
     f.body = runBodyOf(pair);
+    // HOW THE WIRES RUN WHERE THEY ARE GATHERED. Only a straight run has a bundle to lay up - a
+    // laid-up one is already a braid of the lot.
+    f.lay = f.straight ? runLayOf(pair) : RunLay::Straight;
     f.cableBody = f.straight && f.body != RunBody::Wires;
     if (f.cableBody) {
         // WHAT IT IS DRAWN TO, and what each figure falls back to when nobody has said.
@@ -725,13 +730,13 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
         // went into the cable three deep.
         f.trunk = f.wires;
         for (int j = 0; j < f.wires; ++j) f.trunkLane[static_cast<size_t>(j)] = j;
-        const bool transition =
-            f.body == RunBody::Cable
-                ? (!pair.meta.contains(QStringLiteral("twistBodyTransition")) ||
-                   pair.meta.value(QStringLiteral("twistBodyTransition")).toBool())
-                : f.bodyOverCable;
+        // WHICH ENDS WEAR ONE. A cable is told outright - neither, one, or both - and a length of
+        // tubing fitted OVER a cable wears one at each end by the nature of the thing.
+        f.transitionEnds =
+            f.body == RunBody::Cable ? runTransitionEndsOf(pair)
+                                     : (f.bodyOverCable ? RunEnds::Both : RunEnds::None);
         auto bootOf = [&](bool finish) {
-            if (!transition) return 0.0;
+            if (!runEndsHas(f.transitionEnds, finish)) return 0.0;
             if (!(finish ? f.spreadEnd : f.spreadStart)) return 0.0;
             const QJsonValue v = bodySide(QStringLiteral("twistBoot"), finish);
             const double face = 2.0 * (finish ? f.bodyFaceB : f.bodyFace);
@@ -837,6 +842,11 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
             us.push_back(f.lead * i / 24.0);
             us.push_back(f.len - f.leadB * i / 24.0);
         }
+        // AND THROUGH THE BUNDLE TOO, where a pair of lanes is laid up in it: the middle of a
+        // straight run needs no places at all while every wire in it runs straight, and needs them
+        // every few degrees the moment two of them start going round each other.
+        if (f.lay != RunLay::Straight)
+            for (int i = 0; i <= grid; ++i) us.push_back(f.lead + woven * i / grid);
     } else {
         for (int i = 0; i <= grid; ++i) us.push_back(f.lead + woven * i / grid);
     }
@@ -933,6 +943,38 @@ double twistPhase(const TwistFrames& f, int k) {
     return f.wires > 0 ? 2.0 * M_PI * k / f.wires : 0.0;
 }
 
+// WHICH LANE OF A GATHERED BUNDLE WIRE k RUNS IN. A wire that is not one of the trunk lines heads
+// for the nearest one and stops there, so it has a lane too, all the way in.
+int laneOf(const TwistFrames& f, int k) {
+    const int mine = k < static_cast<int>(f.trunkLane.size()) ? f.trunkLane[size_t(k)] : -1;
+    if (mine >= 0) return mine;
+    const double where = f.wires > 1 ? double(k) * (f.trunk - 1) / (f.wires - 1) : 0.0;
+    return std::clamp(static_cast<int>(std::llround(where)), 0, std::max(0, f.trunk - 1));
+}
+
+// AND WHICH LANE IS LAID UP WITH WHICH. Neighbours, two by two, the way a pair is made: lane 0 with
+// 1, 2 with 3, and so on. An odd lane left over at the end has nobody to twist with and runs
+// straight, which is what the odd wire in a real loom does.
+//
+// MIXED lays up every other pair: a harness carrying a few signal pairs among its power wires,
+// which is the commonest loom there is and the one a drawing cannot show at all if the only choice
+// is all of them or none of them.
+int laneTwinOf(const TwistFrames& f, int j) {
+    if (f.lay == RunLay::Straight || j < 0) return -1;
+    const int twin = (j % 2 == 0) ? j + 1 : j - 1;
+    if (twin < 0 || twin >= f.trunk) return -1;
+    if (f.lay == RunLay::Mixed && ((std::min(j, twin) / 2) % 2) != 0) return -1;
+    return twin;
+}
+
+// How far round its twist a laid-up lane is at u. The weave is a WHOLE number of turns between the
+// fans, so at both ends every wire is back on its own lane and the fan runs into the same place it
+// always did - which is what lets a pair be laid up without touching anything else about the run.
+double lanePhase(const TwistFrames& f, int j, double u) {
+    const double at = std::clamp(u, f.lead, f.len - f.leadB);
+    return 2.0 * M_PI * (at - f.lead) / std::max(1e-9, f.turn) + (j % 2 == 0 ? 0.0 : M_PI);
+}
+
 // Where wire k's middle is, across the path, at distance u along it.
 //
 // Through the weave it swings from side to side, a whole turn at a time. At the ends it runs straight,
@@ -952,24 +994,28 @@ double twistOffset(const TwistFrames& f, int k, double u) {
     // a wire that is not one of them is drawn running into the bundle and stopping (see the ranges in
     // twistCached), and until it stops it is heading for the trunk line nearest it.
     double lane;
+    int j = -1, twin = -1;
+    double centre = 0.0, swing = 0.0;
     if (!f.straight) {
         lane = f.wires > 1 ? f.reach * (1.0 - 2.0 * double(k) / (f.wires - 1)) : 0.0;
     } else {
-        const int mine = k < static_cast<int>(f.trunkLane.size()) ? f.trunkLane[size_t(k)] : -1;
         const double half = f.packed * (f.trunk - 1) / 2.0;
-        int j = mine;
-        if (j < 0) {
-            // Not one of the trunk lines: head for the nearest one, worked out from where it sits in
-            // the fan, so it runs in alongside its neighbours rather than across them.
-            const double where = f.wires > 1 ? double(k) * (f.trunk - 1) / (f.wires - 1) : 0.0;
-            j = std::clamp(static_cast<int>(std::llround(where)), 0, std::max(0, f.trunk - 1));
-        }
+        j = laneOf(f, k);
         lane = half - f.packed * j;
+        // LAID UP WITH ITS NEIGHBOUR, where the drawing says so: the two of them swing about the
+        // middle of the pair, half a lane either way, crossing twice a turn. At the ends of the
+        // weave the swing is back on the lane itself, so the fan is untouched by any of it.
+        twin = laneTwinOf(f, j);
+        if (twin >= 0) {
+            centre = half - f.packed * (j + twin) / 2.0;
+            swing = f.packed / 2.0;
+        }
     }
     const double inRun = f.straight ? lane : f.reach * std::cos(phase);
     if (u > f.lead && u < f.len - f.leadB)
-        return f.straight ? lane
-                          : f.reach * std::cos(2.0 * M_PI * (u - f.lead) / f.turn + phase);
+        return !f.straight ? f.reach * std::cos(2.0 * M_PI * (u - f.lead) / f.turn + phase)
+               : twin >= 0 ? centre + swing * std::cos(lanePhase(f, j, u))
+                           : lane;
     // WHERE A SPREAD END PUTS IT. Laid up, the wires are spread evenly across the bundle - they are
     // being stripped and landed, so they come out square. Running straight they open out to a pitch
     // of their own instead, because the bundle's width is not what settles how far apart the things
@@ -1058,8 +1104,14 @@ double twistOffset(const TwistFrames& f, int k, double u) {
 // says which wire hides which where they cross.
 double twistDepth(const TwistFrames& f, int k, double u) {
     // Running straight, no wire is ever in front of another - they lie side by side the whole way -
-    // so the order is just the lanes, and it never changes along the run.
-    if (f.straight) return double(k);
+    // so the order is just the lanes, and it never changes along the run. Unless a pair of lanes is
+    // LAID UP: those two do cross, and which of them is in front changes at every crossing, which is
+    // the whole of what a twist looks like on paper.
+    if (f.straight) {
+        const int j = laneOf(f, k);
+        if (laneTwinOf(f, j) < 0) return double(k);
+        return double(k) + std::sin(lanePhase(f, j, u));
+    }
     const double uu = std::clamp(u, f.lead, f.len - f.leadB);
     return std::sin(2.0 * M_PI * (uu - f.lead) / f.turn + twistPhase(f, k));
 }
@@ -1247,6 +1299,8 @@ QString twistKey(const Entity& e) {
                                                                         : QLatin1String("|nt");
     k += e.meta.value(QLatin1String("twistBodyOverCable")).toBool() ? QLatin1String("|oc")
                                                                    : QLatin1String("|al");
+    k += e.meta.value(QLatin1String("twistBodyTransitionSides")).toString();
+    k += e.meta.value(QLatin1String("twistLay")).toString();
     k += e.meta.value(QLatin1String("twistBodySidesSame")).toBool(true) ? QLatin1String("|bs")
                                                                        : QLatin1String("|ba");
     return k;
@@ -1521,6 +1575,30 @@ std::vector<std::vector<Vec2>> runDrawnLines(const Entity& pair) {
     return out;
 }
 
+RunEnds runTransitionEndsOf(const Entity& pair) {
+    // The older drawings said it with a tick, and a tick that was off meant neither end. Read that
+    // way round still, so a cable drawn before there was a choice opens as the cable it was.
+    const QString said =
+        pair.meta.value(QStringLiteral("twistBodyTransitionSides")).toString().toLower();
+    if (said == QLatin1String("none")) return RunEnds::None;
+    if (said == QLatin1String("start")) return RunEnds::Start;
+    if (said == QLatin1String("finish")) return RunEnds::Finish;
+    if (said == QLatin1String("both")) return RunEnds::Both;
+    return pair.meta.value(QStringLiteral("twistBodyTransition")).toBool(true) ? RunEnds::Both
+                                                                              : RunEnds::None;
+}
+
+bool runEndsHas(RunEnds ends, bool finish) {
+    return ends == RunEnds::Both || ends == (finish ? RunEnds::Finish : RunEnds::Start);
+}
+
+RunLay runLayOf(const Entity& pair) {
+    const QString said = pair.meta.value(QStringLiteral("twistLay")).toString().toLower();
+    if (said == QLatin1String("pairs")) return RunLay::Pairs;
+    if (said == QLatin1String("mixed")) return RunLay::Mixed;
+    return RunLay::Straight;
+}
+
 RunBody runBodyOf(const Entity& pair) {
     const QString said = pair.meta.value(QStringLiteral("twistBody")).toString();
     if (said == QLatin1String("cable")) return RunBody::Cable;
@@ -1677,7 +1755,7 @@ std::vector<TwistedPairStretch> twistedPairWeave(const Entity& pair) {
     // which wire is in front changes, and cutting it up anyway would only draw the same wires in the
     // same order several times over.
     std::vector<double> cuts{0.0};
-    if (!f.straight) {
+    if (!f.straight || f.lay != RunLay::Straight) {
         cuts.push_back(f.lead);
         for (int k = 1; k < 2 * f.turns; ++k) cuts.push_back(f.lead + f.turn * k / 2.0);
         cuts.push_back(f.len - f.lead);

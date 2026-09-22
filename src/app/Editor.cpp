@@ -16303,6 +16303,12 @@ void Editor::writeBundleMeta(Entity& e, bool straight) const {
     // not, so most runs carry nothing extra.
     // AND WHETHER THE CONVERGED STRETCH IS A CABLE. Written only when it is, so an ordinary run
     // carries nothing extra and opens on an older build as the run it always was.
+    // HOW THE GATHERED WIRES RUN, written only where they are laid up: a bundle of straight
+    // wires is what every run drawn so far has been, and carries nothing extra for it.
+    if (straight && twistBodyKind_ == RunBody::Wires && twistLay_ != RunLay::Straight)
+        e.meta.insert(QStringLiteral("twistLay"), twistLay_ == RunLay::Pairs
+                                                      ? QStringLiteral("pairs")
+                                                      : QStringLiteral("mixed"));
     if (straight && twistBodyKind_ != RunBody::Wires) {
         e.meta.insert(QStringLiteral("twistBody"), twistBodyKind_ == RunBody::Cable
                                                        ? QStringLiteral("cable")
@@ -16317,8 +16323,13 @@ void Editor::writeBundleMeta(Entity& e, bool straight) const {
         if (twistBoot_ > 1e-9) e.meta.insert(QStringLiteral("twistBoot"), twistBoot_);
         // Written only where it is off: a cable has its transition, and a cable drawn on an older
         // build had one too.
-        if (twistBodyKind_ == RunBody::Cable && !twistBodyTransition_)
-            e.meta.insert(QStringLiteral("twistBodyTransition"), false);
+        // WHICH ENDS WEAR THE TRANSITION, written only where it is not both - so a cable drawn
+        // without touching it carries nothing extra and opens as the cable it always was.
+        if (twistBodyKind_ == RunBody::Cable && twistTransitionEnds_ != RunEnds::Both)
+            e.meta.insert(QStringLiteral("twistBodyTransitionSides"),
+                          twistTransitionEnds_ == RunEnds::None     ? QStringLiteral("none")
+                          : twistTransitionEnds_ == RunEnds::Start  ? QStringLiteral("start")
+                                                                    : QStringLiteral("finish"));
         // And which sort of tubing, written only where it is the newer one - so a sleeve drawn
         // without touching it is the sleeve this has always drawn.
         if (twistBodyKind_ == RunBody::Heatshrink && twistBodyOverCable_)
@@ -16447,9 +16458,22 @@ void Editor::setTwistBodySidesSame(bool same) {
 }
 
 void Editor::setTwistBodyTransition(bool on) {
-    if (twistBodyTransition_ == on) return;
-    twistBodyTransition_ = on;
+    const RunEnds want = on ? RunEnds::Both : RunEnds::None;
+    if (twistTransitionEnds_ == want) return;
+    twistTransitionEnds_ = want;
     emit overlayChanged();   // the boots come and go, and the fans are drawn from a new place
+}
+
+void Editor::setTwistTransitionEnds(RunEnds ends) {
+    if (twistTransitionEnds_ == ends) return;
+    twistTransitionEnds_ = ends;
+    emit overlayChanged();   // the boots come and go, and the fans start from a new place
+}
+
+void Editor::setTwistLay(RunLay lay) {
+    if (twistLay_ == lay) return;
+    twistLay_ = lay;
+    emit overlayChanged();   // the bundle between the fans is drawn a different way
 }
 
 void Editor::setTwistBodyOverCable(bool on) {

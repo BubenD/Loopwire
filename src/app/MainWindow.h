@@ -858,7 +858,10 @@ private:
     QLabel* breakGapLabel_ = nullptr;
     QLabel* breakAngleLabel_ = nullptr;
     QCheckBox* twistBodySidesCheck_ = nullptr;
-    QCheckBox* twistBodyTransitionCheck_ = nullptr;
+    QComboBox* twistTransitionCombo_ = nullptr;
+    QLabel* twistTransitionLabel_ = nullptr;
+    QComboBox* twistLayCombo_ = nullptr;
+    QLabel* twistLayLabel_ = nullptr;
     QCheckBox* twistBodyOverCableCheck_ = nullptr;
     QDoubleSpinBox* twistBodyWidthSpin_ = nullptr;
     QLabel* twistBodyWidthLabel_ = nullptr;
