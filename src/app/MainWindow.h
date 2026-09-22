@@ -840,6 +840,12 @@ private:
     QDoubleSpinBox* twistFanKneeSpin_ = nullptr;
     QLabel* twistFanKneeLabel_ = nullptr;
     QCheckBox* twistSidesCheck_ = nullptr;
+    QWidget* twistBodyBox_ = nullptr;              // the Body box, hidden for a fanout
+    QLabel* twistSpreadLabel_ = nullptr;           // "Spread", beside the left/right/both combo
+    QDoubleSpinBox* twistBodyPitchSpin_ = nullptr; // how far apart the wires run in the body
+    QLabel* twistBodyPitchLabel_ = nullptr;
+    QComboBox* twistEndBootCombo_ = nullptr;       // a transition on the body end
+    QComboBox* twistEndBootFaceCombo_ = nullptr;   // ...recovered, or cut square
     QCheckBox* twistFlushCheck_ = nullptr;
     QDoubleSpinBox* twistFlushSpin_ = nullptr;
     QLabel* twistFlushLabel_ = nullptr;

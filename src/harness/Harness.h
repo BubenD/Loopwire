@@ -201,6 +201,13 @@ std::vector<std::pair<Vec2, Vec2>> twistedPairStraights(const Entity& pair);
 //
 // Empty unless the run asks for it, and empty for a laid-up bundle, which is a cable already.
 std::vector<std::vector<Vec2>> twistedPairBody(const Entity& pair);
+// EVERY LINE A HARNESS RUN PUTS ON THE SHEET: the wires where wires are drawn, and the cover and its
+// boots where the run is drawn as a cable or a sleeve. Everything that asks where a run IS asks this
+// - a label measuring the bundle it goes on, a stroke crossing it, a mark laid over it, a cutter
+// trimming to it. Asking only for the wires misses a run with a body entirely: between its two fans
+// there are no wires on the sheet at all, so a stroke drawn squarely across a cable crossed nothing
+// and placed nothing.
+std::vector<std::vector<Vec2>> runDrawnLines(const Entity& pair);
 
 // WHAT THE CONVERGED STRETCH IS MADE OF - the part between the two fans, which is most of a loom.
 //
@@ -259,6 +266,7 @@ struct TwistFigures {
     double bodyFace = 0.0;    // its end face, across
     double bodyShrink = 0.0;  // and the length it takes to come down to it
     double boot = 0.0;        // how far a cable's boot reaches into the fan
+    double packed = 0.0;      // and how far apart the wires run where the bundle is gathered
 };
 TwistFigures twistedPairFigures(const Entity& pair);
 // Which end(s) the bundle spreads its wires out at: "left", "right" or "both". Anything else -

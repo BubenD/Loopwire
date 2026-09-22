@@ -290,6 +290,20 @@ QIcon makeToolIcon(ToolId id, const QColor& ink, int variant) {
         }
         break;
     }
+    case ToolId::Fanout: {
+        // THE FAN, AND ONLY THE FAN: a bundle arriving at the left and the wires breaking out of it
+        // to their own lanes, each running level to the end. What tells it from the harness run
+        // beside it is that there is no second fan - the bundle simply stops.
+        p.drawLine(QPointF(2, 12), QPointF(7, 12));
+        for (int k = 0; k < 4; ++k) {
+            const double out = 3.0 + k * 6.0;    // where it lands, spread apart
+            QPainterPath pa(QPointF(7, 12));
+            pa.cubicTo(QPointF(11, 12), QPointF(12, out), QPointF(16, out));
+            pa.lineTo(QPointF(22, out));
+            p.drawPath(pa);
+        }
+        break;
+    }
     case ToolId::WiresRun: {
         // THE SAME BUNDLE, NOT LAID UP: wires side by side the whole way, spread out at the ends and
         // packed together in between. Drawn as the fan, the trunk and the fan, because that is what

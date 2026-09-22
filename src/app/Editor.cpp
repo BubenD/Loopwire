@@ -1851,9 +1851,12 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
             best = toPath;
             break;
         }
-        for (const auto& strand : twistedPairStrands(e))
-            for (size_t i = 1; i < strand.size(); ++i)
-                best = std::min(best, segDist(strand[i - 1], strand[i]));
+        // WHAT IS PICKED IS WHAT IS DRAWN. Between the two fans of a run wearing a cable there are
+        // no wires on the sheet - the cover is the only thing there - so a click on the cable found
+        // nothing and the run could be caught only by its fans.
+        for (const auto& line : runDrawnLines(e))
+            for (size_t i = 1; i < line.size(); ++i)
+                best = std::min(best, segDist(line[i - 1], line[i]));
         break;
     }
     case EntityType::Dimension:
@@ -3350,10 +3353,12 @@ Editor::LabelFit Editor::labelFitFor(const Vec2& a, const Vec2& b) const {
             //
             // It was not tested at all, so a stroke drawn squarely across a bundle of eight wires
             // crossed nothing and placed nothing - on the one object on the sheet most likely to be
-            // labelled. Its own points are the ROUTE down the middle, which is not drawn; what is
-            // drawn is the strands, so those are what a stroke crosses.
-            for (const std::vector<Vec2>& strand : twistedPairStrands(e))
-                for (size_t i = 1; i < strand.size(); ++i) tryLine(strand[i - 1], strand[i]);
+            // labelled. Its own points are the ROUTE down the middle, which is not drawn; what IS
+            // drawn is what a stroke crosses - the wires, and the cover where the run wears one.
+            // Under a cable there are no wires on the sheet at all, so asking only for those put a
+            // label on a bundle of hook-up wires and nothing on the cable beside it.
+            for (const std::vector<Vec2>& line : runDrawnLines(e))
+                for (size_t i = 1; i < line.size(); ++i) tryLine(line[i - 1], line[i]);
             ownPath(was, e.id);
             break;
         }
@@ -3727,7 +3732,24 @@ void Editor::setShiftMode(bool on) {
     refreshPairPreviews();
 }
 
-void Editor::toggleShiftMode() { setShiftMode(!shiftMode_); }
+void Editor::toggleShiftMode() {
+    // SHIFT TURNS A FANOUT ROUND. Which end fans is the one thing a fanout has to be told, and it
+    // is told by the gesture rather than by a list: ordinarily the first click is at the spread
+    // wires and the run goes back to the bundle, and with Shift it is the other way about.
+    //
+    // Read WHENEVER IT IS PRESSED, not only as a modifier on the first click. Latched at that click
+    // it could not be changed once drawing had started, which is exactly when you can see that it is
+    // the wrong way round - the ghost is in front of you.
+    if (tool_ == ToolId::Fanout) {
+        fanoutAtFinish_ = !fanoutAtFinish_;
+        emit message(fanoutAtFinish_
+                         ? QStringLiteral("Fanout: from the bundle out to the wires")
+                         : QStringLiteral("Fanout: from the wires back to the bundle"));
+        emit overlayChanged();
+        return;
+    }
+    setShiftMode(!shiftMode_);
+}
 
 // A MARK STANDING ON ITS OWN, square to the sheet and attached to nothing. Drawn to whatever the
 // ribbon says, or to what the drawing would have made of it - the same figures the fields show.
@@ -4399,7 +4421,7 @@ void Editor::onPointerMove(const Vec2& raw) {
             twistedHeldAt_ = cursor_;
         } else if (!twistedHeld_) {
             twistedHeld_ = true;
-            emit message(QStringLiteral("Wires run: held - %1. Come back round and it follows again.")
+            emit message(QStringLiteral("Harness run: held - %1. Come back round and it follows again.")
                              .arg(why));
         }
     }
@@ -9811,6 +9833,7 @@ void Editor::handleDrawPress(const Vec2& p) {
         emit message(QStringLiteral(
             "Twisted harness route: click the next knee — Enter finishes the run, Esc exits"));
         break;
+    case ToolId::Fanout:
     case ToolId::WiresRun:
         // The same run, laid STRAIGHT: the wires keep their own lanes the whole way instead of being
         // laid up round one another.
@@ -9825,16 +9848,22 @@ void Editor::handleDrawPress(const Vec2& p) {
         if (twistedFrozen_) {
             twistedFrozen_ = false;
             emit overlayChanged();
-            emit message(QStringLiteral("Wires run: back to the drawing - click the next knee"));
+            emit message(QStringLiteral("Harness run: back to the drawing - click the next knee"));
             break;
         }
+        // WHICH WAY ROUND A FANOUT IS DRAWN. Ordinarily the first click is at the spread wires and
+        // the run goes back to the bundle; with SHIFT it is the other way about - start at the
+        // bundle and draw out to the wires. Read at the FIRST click, because that is the one that
+        // says which end you began at, and held for the rest of the drawing.
+        if (tool_ == ToolId::Fanout && draftPts_.empty())
+            fanoutAtFinish_ = (pressMods_ & Qt::ShiftModifier) != 0;
         // AND A KNEE IS NOT PUT WHERE THE RUN IS NOT. Held back, the run is drawn at the last place
         // the bundle could be taken and the cursor is somewhere else: clicking means the place on
         // screen, which is the held one.
         draftPts_.push_back(twistedHeldFor(p));
         drafting_ = true;
         emit message(QStringLiteral(
-            "Wires run: click the next knee — Enter finishes the run, Esc exits"));
+            "Harness run: click the next knee — Enter finishes the run, Esc exits"));
         break;
     case ToolId::TwistedHarness:
     case ToolId::TwistedPair:
@@ -10609,6 +10638,7 @@ void Editor::finishDraw() {
         writeBundleMeta(e, /*straight=*/false);
         break;
     case ToolId::WiresRun:
+    case ToolId::Fanout:
         // The same bundle, running STRAIGHT. One object, one set of handles, one ribbon: what says
         // which of the two it is, here and ever after, is the lay written on it.
         if (draftPts_.size() < 2) { cancelDraw(); return; }
@@ -10617,6 +10647,15 @@ void Editor::finishDraw() {
         e.a = draftPts_.front();
         e.b = draftPts_.back();
         writeBundleMeta(e, /*straight=*/true);
+        // A FANOUT IS THE FAN ALONE, drawn as its wires: there is no run to put a cable or a sleeve
+        // on. It fans at the end it was STARTED from - or at the end it finishes at, when it was
+        // begun with Shift at the bundle - and simply stops at the other.
+        if (tool_ == ToolId::Fanout) {
+            e.meta.insert(QStringLiteral("twistSpread"), fanoutAtFinish_
+                                                             ? QStringLiteral("finish")
+                                                             : QStringLiteral("start"));
+            e.meta.remove(QStringLiteral("twistBody"));
+        }
         break;
     case ToolId::VolumeArrow:
         // A BLOCK ARROW, tail to tip. The object keeps the two ends and the outline is worked out when
@@ -11213,6 +11252,7 @@ std::vector<QString> Editor::drawInputFieldLabels() const {
     case ToolId::TwistedHarness:
     case ToolId::HeatshrinkRoute:
     case ToolId::TwistedHarnessRoute:
+    case ToolId::Fanout:
     case ToolId::WiresRun:
     case ToolId::Polyline:
     case ToolId::DoublePolyline:
@@ -11278,9 +11318,10 @@ QString Editor::drawCommandHint() const {
         return QStringLiteral(
                    "TWISTED HARNESS ROUTE: click each knee  ·  Enter finishes  ·  %1 wires, all laid up")
             .arg(std::clamp(twistWires_, 2, kTwistedMaxWires));
+    case ToolId::Fanout:
     case ToolId::WiresRun:
         return QStringLiteral(
-                   "WIRES RUN: click each knee  ·  Enter finishes  ·  %1 wires running straight  ·  "
+                   "HARNESS RUN: click each knee  ·  Enter finishes  ·  %1 wires running straight  ·  "
                    "Tab pins it to set it up on the ribbon")
             .arg(std::clamp(twistWires_, 2, kTwistedMaxWires));
     case ToolId::HeatshrinkRoute:
@@ -11422,6 +11463,7 @@ bool Editor::commitDrawFields() {
     case ToolId::TwistedRoute:
     case ToolId::TwistedHarness:
     case ToolId::TwistedHarnessRoute:
+    case ToolId::Fanout:
     case ToolId::WiresRun:
     case ToolId::HeatshrinkRoute:
     case ToolId::Polyline:
@@ -15902,10 +15944,11 @@ bool Editor::breakFromBand(const Vec2& a, const Vec2& b, Entity& out) const {
             for (size_t i = 1; i < e.points.size(); ++i) tryLine(e, e.points[i - 1], e.points[i]);
             break;
         case EntityType::TwistedPair: {
-            // A WIRES RUN IS RUNS OF WIRE - see the same case in the label stroke. Its own points are
-            // the route down the middle, which is never drawn; the strands are what a band crosses.
-            for (const std::vector<Vec2>& strand : twistedPairStrands(e))
-                for (size_t i = 1; i < strand.size(); ++i) tryLine(e, strand[i - 1], strand[i]);
+            // A HARNESS RUN IS WHAT IT DRAWS - see the same case in the label stroke. Its own points
+            // are the route down the middle, which is never drawn; its wires and its cover are, and
+            // a mark laid across a cable has to measure the cable.
+            for (const std::vector<Vec2>& line : runDrawnLines(e))
+                for (size_t i = 1; i < line.size(); ++i) tryLine(e, line[i - 1], line[i]);
             break;
         }
         case EntityType::Polyline: {
@@ -16059,9 +16102,9 @@ bool Editor::transitionFromBand(const Vec2& a, const Vec2& b, Entity& out) const
             tryPath(e, e.points);
             break;
         case EntityType::TwistedPair: {
-            // A WIRES RUN IS RUNS OF WIRE - see the same case in the label stroke. Its own points are
-            // the route down the middle, which is never drawn; the strands are what a band crosses.
-            for (const std::vector<Vec2>& strand : twistedPairStrands(e)) tryPath(e, strand);
+            // A HARNESS RUN IS WHAT IT DRAWS - see the same case in the label stroke. Its own points
+            // are the route down the middle, which is never drawn; its wires and its cover are.
+            for (const std::vector<Vec2>& line : runDrawnLines(e)) tryPath(e, line);
             break;
         }
         case EntityType::Polyline:
@@ -16162,7 +16205,13 @@ Entity Editor::transitionPreview() const {
 }
 
 void Editor::setTwistSpread(const QString& spread) {
-    const QString next = spread == QLatin1String("left") || spread == QLatin1String("right")
+    // THE SAME FOUR THE DRAWING UNDERSTANDS - see twistedPairSpread, which is what reads this back.
+    // Left and right are sheet sides; start and finish are the order the run was drawn in. This knew
+    // only the first two and quietly turned everything else into "both", so ticking Single end asked
+    // for the start end and got a run that fanned at both.
+    const QString next = spread == QLatin1String("left") || spread == QLatin1String("right") ||
+                                 spread == QLatin1String("start") ||
+                                 spread == QLatin1String("finish")
                              ? spread
                              : QStringLiteral("both");
     if (twistSpread_ == next) return;
@@ -16210,6 +16259,17 @@ void Editor::writeBundleMeta(Entity& e, bool straight) const {
     e.meta.insert(QStringLiteral("twistStraight"), straight);
     if (straight && twistLane_ > 1e-9)
         e.meta.insert(QStringLiteral("twistLane"), twistLane_);
+    // A TRANSITION ON THE BODY END, and how its free end is finished. Written only when there is one
+    // to write, so a run drawn without carries nothing extra.
+    if (straight && twistBodyPitch_ > 1e-9)
+        e.meta.insert(QStringLiteral("twistBodyPitch"), twistBodyPitch_);
+    // WHAT FINISHES THE BODY END, written whenever there IS one. The recovered/square answer used to
+    // ride along with the transition tick, which is a CABLE setting - so a sleeve told not to recover
+    // never carried the word and its end was drawn recovered whatever had been chosen.
+    if (straight && twistSingleEnd()) {
+        if (twistEndBoot_) e.meta.insert(QStringLiteral("twistEndBoot"), true);
+        e.meta.insert(QStringLiteral("twistEndBootRecovered"), twistEndBootRecovered_);
+    }
     // WHETHER THE FINISH END REPEATS THE START, and what it says instead when it does not. Written
     // only when they have been parted, so a run drawn the ordinary way carries nothing extra and
     // reads on an older build exactly as it does here.
@@ -16465,6 +16525,26 @@ void Editor::setTwistWireWidth(double mm) {
     if (std::abs(twistWireWidth_ - next) < 1e-9) return;
     twistWireWidth_ = next;
     emit overlayChanged();   // and with the new wire
+}
+
+// HOW FAR APART THE WIRES RUN WHERE THE BUNDLE IS GATHERED. Nought is the drawing's own figure.
+void Editor::setTwistBodyPitch(double mm) {
+    const double next = std::max(0.0, mm);
+    if (std::abs(twistBodyPitch_ - next) < 1e-9) return;
+    twistBodyPitch_ = next;
+    emit overlayChanged();   // a pinned run re-draws at the new pitch
+}
+
+void Editor::setTwistEndBoot(bool on) {
+    if (twistEndBoot_ == on) return;
+    twistEndBoot_ = on;
+    emit overlayChanged();
+}
+
+void Editor::setTwistEndBootRecovered(bool on) {
+    if (twistEndBootRecovered_ == on) return;
+    twistEndBootRecovered_ = on;
+    emit overlayChanged();
 }
 
 void Editor::setTwistLane(double mm) {
@@ -19061,7 +19141,8 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             EntityRenderer::draw(p, tp, *doc_, vt,
                                  paperInk(twistedFrozen_ ? QColor(150, 162, 178, 170)
                                                          : QColor("#ffffff")));
-        } else if ((tool_ == ToolId::TwistedHarnessRoute || tool_ == ToolId::WiresRun) &&
+        } else if ((tool_ == ToolId::TwistedHarnessRoute || tool_ == ToolId::WiresRun ||
+                    tool_ == ToolId::Fanout) &&
                    pts.size() >= 2) {
             // Both generalisations previewed together: the knees so far (route) as the object's
             // points, and the bundle's wire count (harness) on it - in the lay the tool draws, so a
@@ -19073,7 +19154,14 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             else tp.points.back() = twistedHeldFor(tp.points.back());
             tp.a = tp.points.front();
             tp.b = tp.points.back();
-            writeBundleMeta(tp, /*straight=*/tool_ == ToolId::WiresRun);
+            writeBundleMeta(tp, /*straight=*/tool_ == ToolId::WiresRun ||
+                                tool_ == ToolId::Fanout);
+            if (tool_ == ToolId::Fanout) {
+                tp.meta.insert(QStringLiteral("twistSpread"),
+                               fanoutAtFinish_ ? QStringLiteral("finish")
+                                               : QStringLiteral("start"));
+                tp.meta.remove(QStringLiteral("twistBody"));
+            }
             EntityRenderer::draw(p, tp, *doc_, vt,
                                  paperInk(twistedFrozen_ ? QColor(150, 162, 178, 170)
                                                          : QColor("#ffffff")));

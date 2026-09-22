@@ -4420,7 +4420,14 @@ void MainWindow::showAutoField(QDoubleSpinBox* field, QLabel* label, bool shown,
     if (QWidget* cell = autoFieldCell(field)) cell->setVisible(shown);
     if (!shown) return;
     QSignalBlocker block(field);
-    field->setValue(value);
+    // ONLY WHILE IT IS THE DRAWING'S OWN FIGURE. Lit, the A means "you work it out", and what stands
+    // in the field is the drawing's answer - so it is written here every time that answer changes.
+    // Dark, the number is one somebody typed, and it is theirs: the drawing may not be able to use
+    // it in full - a fan longer than the run it is on, a radius tighter than the bundle can turn -
+    // and it makes what it can of it, but the figure that was ASKED FOR does not quietly become the
+    // figure that was possible. Typing 40 and watching the field say 12 reads as the field refusing
+    // to take what you typed.
+    if (isAuto) field->setValue(value);
     if (QToolButton* mark = autoMarkOf(field)) {
         QSignalBlocker lit(mark);
         mark->setChecked(isAuto);
@@ -4575,7 +4582,10 @@ void MainWindow::syncBreakOptions() {
     if (!editor_) return;
     // Each function on this tab shows its own settings and only while it is armed.
     if (twistOptionsGroup_) {
-        const bool straightRun = editor_->tool() == ToolId::WiresRun;
+        // A FANOUT IS A STRAIGHT RUN - the fan of one, drawn on its own - so every field a straight
+        // run offers is a field it offers. Left out of this list it was armed with an empty ribbon.
+        const bool straightRun =
+            editor_->tool() == ToolId::WiresRun || editor_->tool() == ToolId::Fanout;
         const bool twisting = editor_->tool() == ToolId::TwistedHarness ||
                               editor_->tool() == ToolId::TwistedHarnessRoute || straightRun;
         twistOptionsGroup_->setVisible(twisting);
@@ -4583,11 +4593,27 @@ void MainWindow::syncBreakOptions() {
             QSignalBlocker b(twistWiresSpin_);
             twistWiresSpin_->setValue(editor_->twistWires());
         }
+        // WHICH END FANS IS ASKED ONCE. Left / right / both names the ends as sides of the sheet;
+        // Single end names them in draw order and has its own box for it. Showing both at once would
+        // be two controls for one setting, and the left/right one cannot even say "start" - it used
+        // to fall back to showing Both, which is the one answer that was certainly wrong.
+        // A FANOUT IS THE FAN AND NOTHING ELSE. It is drawn as hook-up wires always - there is no
+        // run to put a cable or a sleeve on - so the Body box goes away and what is left is every
+        // fan setting and only those. Which end it fans at is the gesture, not a list: Shift says
+        // whether the drawing starts at the spread wires or at the bundle.
+        const bool fanout = editor_->tool() == ToolId::Fanout;
+        if (twistBodyBox_) twistBodyBox_->setVisible(!fanout);
+
+        // WHICH END FANS, asked once: the Spread list says it, and every one of its answers but
+        // Both leaves the other end as body.
+        const bool singleEnd = editor_->twistSingleEnd();
         if (twisting && twistSpreadCombo_) {
             QSignalBlocker b(twistSpreadCombo_);
             const int at = twistSpreadCombo_->findData(editor_->twistSpread());
-            twistSpreadCombo_->setCurrentIndex(at >= 0 ? at : 2);
+            twistSpreadCombo_->setCurrentIndex(at >= 0 ? at : twistSpreadCombo_->count() - 1);
         }
+        if (twistSpreadCombo_) twistSpreadCombo_->setVisible(twisting && !fanout);
+        if (twistSpreadLabel_) twistSpreadLabel_->setVisible(twisting && !fanout);
         // WHAT A RUN DRAWN WITH THESE SETTINGS WOULD ACTUALLY COME OUT WITH, so a field left to the
         // drawing can show the figure the drawing worked out instead of the word "Auto". That is the
         // whole of what the little A says now: lit, this field is the drawing's own and the number
@@ -4623,7 +4649,40 @@ void MainWindow::syncBreakOptions() {
         fieldRoom(twistFanKneeBSpin_, twistFanKneeBLabel_, straightRun);
         room(twistFlushCheck_, straightRun);
         room(twistStripCheck_, straightRun);
-        room(twistSidesCheck_, straightRun);
+        // A FANOUT HAS ONE END. "Both sides same" is an answer about the other one, and there is
+        // no other one - the tick would be a setting that cannot do anything.
+        room(twistSidesCheck_, straightRun && !fanout);
+        if (twistSidesCheck_) twistSidesCheck_->setVisible(straightRun && !fanout);
+        // ONE END FANS: the tick belongs to the straight run, and the three under it come and go
+        // with the tick - a run that fans at both ends has no body end to say anything about.
+        // The wires' own pitch in the body is a HOOK-UP WIRES setting: under a cover the wires are
+        // not drawn, so how far apart they run is not a thing you can see.
+        const bool wiresBody = editor_->twistBodyKind() == RunBody::Wires;
+        fieldRoom(twistBodyPitchSpin_, twistBodyPitchLabel_, straightRun && wiresBody);
+        showAutoField(twistBodyPitchSpin_, twistBodyPitchLabel_, straightRun && wiresBody,
+                      editor_->twistBodyPitch() <= 1e-9,
+                      editor_->twistBodyPitch() > 1e-9 ? editor_->twistBodyPitch() : fig.packed);
+        const bool single = straightRun && singleEnd;
+        // WHAT THE BODY END CAN BE ASKED ABOUT DEPENDS ON WHAT THE BODY IS. A transition is a part
+        // fitted over the end of a CABLE; a sleeve laid along the run is the cover itself and what
+        // there is to say about its end is whether it has recovered onto what comes out. Neither
+        // question means anything about bare wires, which have no end to finish.
+        const RunBody bodyKind = editor_->twistBodyKind();
+        const bool cableEnd = single && bodyKind == RunBody::Cable;
+        const bool shrinkEnd = single && bodyKind == RunBody::Heatshrink;
+        room(twistEndBootCombo_, cableEnd);
+        room(twistEndBootFaceCombo_, shrinkEnd);
+
+        if (twistEndBootCombo_) {
+            twistEndBootCombo_->setVisible(cableEnd);
+            QSignalBlocker b(twistEndBootCombo_);
+            twistEndBootCombo_->setCurrentIndex(editor_->twistEndBoot() ? 1 : 0);
+        }
+        if (twistEndBootFaceCombo_) {
+            twistEndBootFaceCombo_->setVisible(shrinkEnd);
+            QSignalBlocker b(twistEndBootFaceCombo_);
+            twistEndBootFaceCombo_->setCurrentIndex(editor_->twistEndBootRecovered() ? 0 : 1);
+        }
         room(twistSpreadCombo_, straightRun);
         // The spacing is the straight run's own: a laid-up bundle spreads its wires across its width,
         // so the row would be a setting that does nothing while its tool is armed.
@@ -4752,7 +4811,9 @@ void MainWindow::syncBreakOptions() {
                       editor_->twistBootFinish() <= 1e-9,
                       editor_->twistBootFinish() > 1e-9 ? editor_->twistBootFinish() : fig.boot);
         if (twistSidesCheck_) {
-            twistSidesCheck_->setVisible(straightRun);
+            // ...and not on a fanout, which has one end. Set here as well as above, because this is
+            // the later of the two and the one that decides.
+            twistSidesCheck_->setVisible(straightRun && !fanout);
             if (straightRun) {
                 QSignalBlocker b(twistSidesCheck_);
                 twistSidesCheck_->setChecked(editor_->twistSidesSame());
@@ -9360,53 +9421,121 @@ void MainWindow::refreshProperties() {
     // drawn again.
     if (e && e->type == EntityType::TwistedPair) {
         addHeader(QStringLiteral("Harness run"));
+        // WHAT THE RUN IN FRONT OF YOU IS ACTUALLY DRAWN WITH. A figure nobody set is not nought - it
+        // is whatever the drawing made of it, and nought is what the panel showed: a fan pitch of 0
+        // on a run whose wires are plainly 4.5 apart, and the same for the wire pitch, the fan
+        // length, the wire width and the rest. Reading a value out of the drawing is the whole of
+        // what this panel is for, so each field falls back to the figure the drawing worked out.
+        const TwistFigures drawn = twistedPairFigures(*e);
         addNum(QStringLiteral("Wires"), mv(QStringLiteral("twistWires")).toDouble(2.0),
                [this](double v) {
                    editor_->setSelectionMetaNumber(
                        QStringLiteral("twistWires"),
                        std::clamp(static_cast<int>(std::lround(v)), 2, kTwistedMaxWires));
                });
+        // WHICH END FANS, in every way the drawing can say it: as a side of the sheet, in the order
+        // the run was drawn, or both ends. The ribbon offers start and finish, so this has to as
+        // well - a run that fans at one end was shown here as "Both", which is the one answer that
+        // is certainly wrong.
         const QString spread = twistedPairSpread(*e);
-        const QString shown = spread == QLatin1String("left") ? QStringLiteral("Left")
-                              : spread == QLatin1String("right") ? QStringLiteral("Right")
+        const QString shown = spread == QLatin1String("left")     ? QStringLiteral("Left")
+                              : spread == QLatin1String("right")  ? QStringLiteral("Right")
+                              : spread == QLatin1String("start")  ? QStringLiteral("Start end")
+                              : spread == QLatin1String("finish") ? QStringLiteral("Finish end")
                                                                   : QStringLiteral("Both");
         const QString current = mv(QStringLiteral("twistSpread")).isVaries()
                                     ? QStringLiteral("#Value")
                                     : shown;
         addCombo(QStringLiteral("Spread wires"),
-                 {QStringLiteral("Left"), QStringLiteral("Right"), QStringLiteral("Both")}, current,
-                 false, [this](const QString& t) {
-                     editor_->setSelectionMeta(QStringLiteral("twistSpread"), t.toLower());
+                 {QStringLiteral("Left"), QStringLiteral("Right"), QStringLiteral("Start end"),
+                  QStringLiteral("Finish end"), QStringLiteral("Both")},
+                 current, false, [this](const QString& t) {
+                     const QString said = t == QLatin1String("Start end") ? QStringLiteral("start")
+                                          : t == QLatin1String("Finish end")
+                                              ? QStringLiteral("finish")
+                                              : t.toLower();
+                     editor_->setSelectionMeta(QStringLiteral("twistSpread"), said);
                  });
         // WHICH LAY, and it can be changed here. The two are one object - the same route, the same
         // count, the same ends - so a run drawn straight that turns out to be twisted after all is a
         // value on it rather than a thing to delete and draw again.
         const bool straight = e->meta.value(QStringLiteral("twistStraight")).toBool();
-        addCombo(QStringLiteral("Lay"),
-                 {QStringLiteral("Straight"), QStringLiteral("Laid up")},
-                 mv(QStringLiteral("twistStraight")).isVaries()
-                     ? QStringLiteral("#Value")
-                     : (straight ? QStringLiteral("Straight") : QStringLiteral("Laid up")),
-                 false, [this](const QString& t) {
-                     editor_->setSelectionMetaBool(QStringLiteral("twistStraight"),
-                                                   t == QLatin1String("Straight"));
-                 });
+        // BUT ONLY WHILE THE RUN IS ITS WIRES. Under a cable or a sleeve there are no wires on the
+        // sheet to lay up or to converge: what is drawn between the fans is the cover, and both
+        // questions are about lines that are not there. Asked anyway, they offered a setting that
+        // changed nothing you could see.
+        const RunBody bodyKind = runBodyOf(*e);
+        const bool bareWires = bodyKind == RunBody::Wires;
+        if (bareWires) {
+            addCombo(QStringLiteral("Lay"),
+                     {QStringLiteral("Straight"), QStringLiteral("Laid up")},
+                     mv(QStringLiteral("twistStraight")).isVaries()
+                         ? QStringLiteral("#Value")
+                         : (straight ? QStringLiteral("Straight") : QStringLiteral("Laid up")),
+                     false, [this](const QString& t) {
+                         editor_->setSelectionMetaBool(QStringLiteral("twistStraight"),
+                                                       t == QLatin1String("Straight"));
+                     });
+        }
         // And the two a straight run lays itself out from: how far apart the spread wires sit, and
         // how many of them carry on through the bundle.
         if (straight) {
-            addNum(QStringLiteral("Spread spacing"),
-                   mv(QStringLiteral("twistLane")).toDouble(0.0), [this](double v) {
+            // PITCH, which is what this drawing calls how far apart a repeated thing sits, every
+            // other place it says it.
+            addNum(QStringLiteral("Fan pitch"),
+                   mv(QStringLiteral("twistLane")).toDouble(drawn.lane), [this](double v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("twistLane"),
                                                        std::max(0.0, v));
                    });
-            addNum(QStringLiteral("Converge to"),
-                   mv(QStringLiteral("twistTrunkWires"))
-                       .toDouble(mv(QStringLiteral("twistWires")).toDouble(2.0)),
-                   [this](double v) {
-                       editor_->setSelectionMetaNumber(
-                           QStringLiteral("twistTrunkWires"),
-                           std::clamp(static_cast<int>(std::lround(v)), 1, kTwistedMaxWires));
-                   });
+            if (bareWires) {
+                addNum(QStringLiteral("Converge to"),
+                       mv(QStringLiteral("twistTrunkWires")).toDouble(drawn.trunk),
+                       [this](double v) {
+                           editor_->setSelectionMetaNumber(
+                               QStringLiteral("twistTrunkWires"),
+                               std::clamp(static_cast<int>(std::lround(v)), 1, kTwistedMaxWires));
+                       });
+                // And how far apart they run where the bundle is gathered - a hook-up wires figure,
+                // for the same reason: under a cover there are no wires on the sheet to space.
+                addNum(QStringLiteral("Wire pitch"),
+                       mv(QStringLiteral("twistBodyPitch")).toDouble(drawn.packed),
+                       [this](double v) {
+                           editor_->setSelectionMetaNumber(QStringLiteral("twistBodyPitch"),
+                                                           std::max(0.0, v));
+                       });
+            }
+        }
+        // WHAT FINISHES A BODY END, which is there only when one end is body and the other fans.
+        // The same two the ribbon asks, and asked of the same sorts: a transition is a part fitted
+        // over the end of a CABLE, and recovered-or-square is what there is to say about the end of
+        // a SLEEVE.
+        const bool oneEnd = spread == QLatin1String("start") || spread == QLatin1String("finish") ||
+                            spread == QLatin1String("left") || spread == QLatin1String("right");
+        if (oneEnd && bodyKind == RunBody::Cable) {
+            addCombo(QStringLiteral("Body end"),
+                     {QStringLiteral("No transition"), QStringLiteral("With transition")},
+                     mv(QStringLiteral("twistEndBoot")).isVaries()
+                         ? QStringLiteral("#Value")
+                         : (e->meta.value(QStringLiteral("twistEndBoot")).toBool()
+                                ? QStringLiteral("With transition")
+                                : QStringLiteral("No transition")),
+                     false, [this](const QString& t) {
+                         editor_->setSelectionMetaBool(QStringLiteral("twistEndBoot"),
+                                                       t.startsWith(QLatin1String("With")));
+                     });
+        }
+        if (oneEnd && bodyKind == RunBody::Heatshrink) {
+            addCombo(QStringLiteral("Body end"),
+                     {QStringLiteral("Recovered"), QStringLiteral("Not recovered")},
+                     mv(QStringLiteral("twistEndBootRecovered")).isVaries()
+                         ? QStringLiteral("#Value")
+                         : (e->meta.value(QStringLiteral("twistEndBootRecovered")).toBool(true)
+                                ? QStringLiteral("Recovered")
+                                : QStringLiteral("Not recovered")),
+                     false, [this](const QString& t) {
+                         editor_->setSelectionMetaBool(QStringLiteral("twistEndBootRecovered"),
+                                                       t == QLatin1String("Recovered"));
+                     });
         }
         // AND EVERYTHING THE RIBBON OFFERS WHILE ONE IS BEING DRAWN, because the ribbon fields are
         // the settings the NEXT run is drawn with and these are the values on the run in front of
@@ -9422,17 +9551,18 @@ void MainWindow::refreshProperties() {
         // and one that says nothing still gets the bend it always got.
         const QString autoTip = QStringLiteral(
             "-1 leaves it to the drawing; 0 is a sharp corner; anything above is the radius.");
-        addNum(QStringLiteral("Fan length"), mv(QStringLiteral("twistEnds")).toDouble(0.0),
+        addNum(QStringLiteral("Fan length"), mv(QStringLiteral("twistEnds")).toDouble(drawn.fanLen),
                [this](double v) {
                    editor_->setSelectionMetaNumber(QStringLiteral("twistEnds"), std::max(0.0, v));
                });
         if (straight) {
             addNum(QStringLiteral("Wire width"),
-                   mv(QStringLiteral("twistWireWidth")).toDouble(0.0), [this](double v) {
+                   mv(QStringLiteral("twistWireWidth")).toDouble(drawn.wireWidth),
+                   [this](double v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("twistWireWidth"),
                                                        std::max(0.0, v));
                    });
-            addNum(QStringLiteral("Fan knee"), mv(QStringLiteral("twistFanKnee")).toDouble(-1.0),
+            addNum(QStringLiteral("Fan fillet"), mv(QStringLiteral("twistFanKnee")).toDouble(drawn.fanKnee),
                    [this](double v) {
                        editor_->setSelectionMetaNumber(QStringLiteral("twistFanKnee"),
                                                        std::max(-1.0, v));
@@ -9452,7 +9582,8 @@ void MainWindow::refreshProperties() {
                      });
             if (flushing)
                 addNum(QStringLiteral("Flush length"),
-                       mv(QStringLiteral("twistFlushLen")).toDouble(0.0), [this](double v) {
+                       mv(QStringLiteral("twistFlushLen")).toDouble(drawn.flushLen),
+                       [this](double v) {
                            editor_->setSelectionMetaNumber(QStringLiteral("twistFlushLen"),
                                                            std::max(0.0, v));
                        });
@@ -9477,26 +9608,29 @@ void MainWindow::refreshProperties() {
             // across its face is and over what length it comes down to that.
             if (covered) {
                 addNum(QStringLiteral("Body width"),
-                       mv(QStringLiteral("twistBodyWidth")).toDouble(0.0), [this](double v) {
+                       mv(QStringLiteral("twistBodyWidth")).toDouble(drawn.bodyWidth),
+                       [this](double v) {
                            editor_->setSelectionMetaNumber(QStringLiteral("twistBodyWidth"),
                                                            std::max(0.0, v));
                        });
                 // A cable is cut square and has a boot at each end; a sleeve is shrunk onto what it
                 // grips and has none. Each sort is offered its own figures and not the other's.
                 if (kind == RunBody::Cable)
-                    addNum(QStringLiteral("Boot length"),
-                           mv(QStringLiteral("twistBoot")).toDouble(0.0), [this](double v) {
+                    addNum(QStringLiteral("Heatshrink length"),
+                           mv(QStringLiteral("twistBoot")).toDouble(drawn.boot),
+                           [this](double v) {
                                editor_->setSelectionMetaNumber(QStringLiteral("twistBoot"),
                                                                std::max(0.0, v));
                            });
                 if (kind == RunBody::Heatshrink) {
-                addNum(QStringLiteral("End size"), mv(QStringLiteral("twistBodyFace")).toDouble(0.0),
+                addNum(QStringLiteral("Entry size"), mv(QStringLiteral("twistBodyFace")).toDouble(drawn.bodyFace),
                        [this](double v) {
                            editor_->setSelectionMetaNumber(QStringLiteral("twistBodyFace"),
                                                            std::max(0.0, v));
                        });
-                addNum(QStringLiteral("Shrink length"),
-                       mv(QStringLiteral("twistBodyShrink")).toDouble(-1.0), [this](double v) {
+                addNum(QStringLiteral("Heatshrink recover length"),
+                       mv(QStringLiteral("twistBodyShrink")).toDouble(drawn.bodyShrink),
+                       [this](double v) {
                            editor_->setSelectionMetaNumber(QStringLiteral("twistBodyShrink"),
                                                            std::max(-1.0, v));
                        }, autoTip);
@@ -9562,7 +9696,11 @@ void MainWindow::refreshProperties() {
                    }, autoTip);
         // AND THE FINISH END, when it is not simply repeating the start. The run leaves one thing
         // and arrives at another; the tick says whether that shows in how it fans.
-        if (straight) {
+        //
+        // ONLY WHERE THERE ARE TWO ENDS THAT FAN. A run that fans at one end - a fanout, or any run
+        // whose other end is body - has no second fan to be alike or unlike, and the three fields
+        // under this one describe a fan that is not there.
+        if (straight && !oneEnd) {
             const bool same = !e->meta.contains(QStringLiteral("twistSidesSame")) ||
                               e->meta.value(QStringLiteral("twistSidesSame")).toBool();
             addCombo(QStringLiteral("Both sides"),
@@ -9576,17 +9714,17 @@ void MainWindow::refreshProperties() {
                      });
             if (!same) {
                 addNum(QStringLiteral("Finish pitch"),
-                       mv(QStringLiteral("twistLaneFinish")).toDouble(0.0), [this](double v) {
+                       mv(QStringLiteral("twistLaneFinish")).toDouble(drawn.lane), [this](double v) {
                            editor_->setSelectionMetaNumber(QStringLiteral("twistLaneFinish"),
                                                            std::max(0.0, v));
                        });
                 addNum(QStringLiteral("Finish fan"),
-                       mv(QStringLiteral("twistEndsFinish")).toDouble(0.0), [this](double v) {
+                       mv(QStringLiteral("twistEndsFinish")).toDouble(drawn.fanLen), [this](double v) {
                            editor_->setSelectionMetaNumber(QStringLiteral("twistEndsFinish"),
                                                            std::max(0.0, v));
                        });
                 addNum(QStringLiteral("Finish knee"),
-                       mv(QStringLiteral("twistFanKneeFinish")).toDouble(-1.0), [this](double v) {
+                       mv(QStringLiteral("twistFanKneeFinish")).toDouble(drawn.fanKnee), [this](double v) {
                            editor_->setSelectionMetaNumber(QStringLiteral("twistFanKneeFinish"),
                                                            std::max(-1.0, v));
                        }, autoTip);

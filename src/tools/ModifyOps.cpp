@@ -108,8 +108,8 @@ void forEachCutSegment(const Entity& e, F&& f) {
         // middle of the bundle and is never drawn: a boundary nobody can see is a boundary nothing
         // appears to stop at. Its cut ends count too - they are drawn, and something extended to the
         // end of a harness stops at the line across it.
-        for (const auto& strand : twistedPairStrands(e))
-            for (size_t i = 1; i < strand.size(); ++i) f(strand[i - 1], strand[i]);
+        for (const auto& line : runDrawnLines(e))
+            for (size_t i = 1; i < line.size(); ++i) f(line[i - 1], line[i]);
         for (const auto& cap : twistedPairEndCaps(e))
             if (cap.size() == 2) f(cap.front(), cap.back());
         for (const auto& outline : twistedPairBody(e))

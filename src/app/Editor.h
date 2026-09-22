@@ -153,6 +153,23 @@ public:
     // terminal at the other is one run. Ticked, which is how it starts, the finish end repeats the
     // start and there is one set of figures; unticked, the finish end takes its own.
     bool twistSidesSame() const { return twistSidesSame_; }
+    // ONE END FANS AND THE OTHER IS BODY. Not a setting of its own: it is what the SPREAD says, and
+    // any of its one-ended answers says it. A tick beside a control already asking the same question
+    // was two ways to set one thing, and the two could disagree.
+    bool twistSingleEnd() const { return twistSpread_ != QLatin1String("both"); }
+    // WHICH WAY ROUND A FANOUT IS DRAWN: from the spread wires back to the bundle, or from the
+    // bundle out to the wires. Shift turns it round, at any point while it is being drawn, and the
+    // ghost shows which way it is going - it is a thing you look at rather than remember.
+    bool fanoutAtFinish() const { return fanoutAtFinish_; }
+    // HOW FAR APART THE WIRES RUN WHERE THE BUNDLE IS GATHERED. 0 = the drawing's own figure.
+    double twistBodyPitch() const { return twistBodyPitch_; }
+    void setTwistBodyPitch(double mm);
+    // A transition heatshrink on the body end, and whether its free end is recovered onto the cable
+    // or cut square across.
+    bool twistEndBoot() const { return twistEndBoot_; }
+    void setTwistEndBoot(bool on);
+    bool twistEndBootRecovered() const { return twistEndBootRecovered_; }
+    void setTwistEndBootRecovered(bool on);
     void setTwistSidesSame(bool same);
     // THE FLUSH END: the straight stretch at the very end of a fan, where every wire is parallel to
     // the run again and so every cut end lines up square across it. On unless it is turned off - a
@@ -244,7 +261,7 @@ public:
     static bool isTwistedTool(ToolId t) {
         return t == ToolId::TwistedPair || t == ToolId::TwistedRoute ||
                t == ToolId::TwistedHarness || t == ToolId::TwistedHarnessRoute ||
-               t == ToolId::WiresRun;
+               t == ToolId::WiresRun || t == ToolId::Fanout;
     }
 
     // Ask the user for a rectangle: two clicks, with everything a click normally gets - every running
@@ -1691,6 +1708,10 @@ private:
     double twistKnee_ = -1.0;                      // fillet at a knee; <0 = the drawing's own
     double twistFanKnee_ = -1.0;                   // fillet at a fan corner; <0 = eased across it
     bool twistSidesSame_ = true;                   // the finish end repeats the start
+    double twistBodyPitch_ = 0.0;                  // wires in the body; 0 = the drawing's own
+    bool fanoutAtFinish_ = false;                  // the fanout fans at the end it finishes at
+    bool twistEndBoot_ = false;                    // a transition on the body end
+    bool twistEndBootRecovered_ = true;            // ...recovered onto the cable, not cut square
     bool twistFlush_ = true;                       // the ends are cut square across the fan
     double twistFlushLen_ = 0.0;                   // how long that is; 0 = the drawing's own share
     bool twistStrip_ = false;                      // the insulation is off the last of each wire

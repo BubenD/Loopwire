@@ -1080,7 +1080,7 @@ int run_drawingspace_tests() {
             std::printf("  harness panel: a run selected, the panel offers %s\n",
                         qPrintable(rows.join(QStringLiteral(", "))));
             for (const QString& want : {QStringLiteral("Fan length"), QStringLiteral("Wire width"),
-                                        QStringLiteral("Fan knee"), QStringLiteral("Knee radius")})
+                                        QStringLiteral("Fan fillet"), QStringLiteral("Knee radius")})
                 check(rows.contains(want),
                       qPrintable(QStringLiteral("harness panel: %1 can be set on a placed run")
                                      .arg(want)));
@@ -1557,15 +1557,36 @@ int run_drawingspace_tests() {
                 }
                 return QPoint(-1, -1);
             };
-            const QPoint knee = cellOf(fg, QStringLiteral("Fan knee"));
-            const QPoint flushAt = cellOf(fg, QStringLiteral("Flush length"));
-            std::printf("  boxes: fan knee at row %d col %d, flush length at row %d col %d, %d "
-                        "row(s)\n", knee.y(), knee.x(), flushAt.y(), flushAt.x(),
-                        fg ? fg->rowCount() : 0);
-            check(knee.x() >= 0 && flushAt.x() == knee.x() && flushAt.y() == knee.y() + 1,
-                  "boxes: the flush length stands directly under the fan knee");
+            // THE FAN IS ASKED ONCE PER END, and the two ends stand in the same row as each other -
+            // start on the left, finish beside it - so a figure and its opposite number are read
+            // across rather than hunted for. They were briefly boxed apart instead; two frames
+            // inside a frame inside a ribbon group is three borders deep to read one number out of,
+            // and a column does the same work without drawing anything.
+            const QStringList startFields{QStringLiteral("Fan pitch"), QStringLiteral("Fan length"),
+                                          QStringLiteral("Fan fillet")};
+            // Each finish field is its start field with the word Finish in front of it, so the pair
+            // can be read as a pair.
+            const QStringList finishFields{QStringLiteral("Finish fan pitch"),
+                                           QStringLiteral("Finish fan length"),
+                                           QStringLiteral("Finish fan fillet")};
+            bool paired = true;
+            for (int i = 0; i < startFields.size(); ++i) {
+                const QPoint a = cellOf(fg, startFields[i]);
+                const QPoint b = cellOf(fg, finishFields[i]);
+                paired = paired && a.x() >= 0 && b.x() >= 0 && a.y() == b.y() && b.x() > a.x();
+            }
+            const QPoint fp = cellOf(fg, startFields[0]);
+            const QPoint ff = cellOf(fg, finishFields[0]);
+            std::printf("  boxes: fan pitch row %d col %d, finish pitch row %d col %d, %d rows\n",
+                        fp.y(), fp.x(), ff.y(), ff.x(), fg ? fg->rowCount() : 0);
+            check(paired,
+                  "boxes: every fan figure stands level with the finish end's own, in one grid");
+            // A fillet is a fillet and says so: a KNEE is where the run bends, which is the body's
+            // business, and this is the radius the fan's own corners turn on.
+            check(cellOf(fg, QStringLiteral("Fan knee")).x() < 0,
+                  "boxes: nothing in the fan box is called a knee any more");
             check(fg && fg->rowCount() == 4,
-                  "boxes: three lines of fields, and the name of the box under them");
+                  "boxes: three lines - what is general, what is done to the ends, and the two ends");
 
             // AND THE SIZE IS SETTLED BY THE SORT OF BODY, not by which ticks happen to be set. A
             // field a tick has taken away keeps its room - ticking Flush ends off must not take the
@@ -1598,17 +1619,23 @@ int run_drawingspace_tests() {
                 said << QStringLiteral("%1x%2/%3x%4")
                             .arg(s.fan.width()).arg(s.fan.height())
                             .arg(s.body.width()).arg(s.body.height());
-            const int asCable = bodyBox->sizeHint().width();
+            const QSize asCable = bodyBox->sizeHint();
             body->setCurrentIndex(body->findText(QStringLiteral("Hook-up wires")));
             QApplication::processEvents();
-            const int asWires = bodyBox->sizeHint().width();
-            std::printf("  boxes: a cable, ticks either way - %s; the body box is %d wide for a "
-                        "cable and %d for hook-up wires\n",
-                        qPrintable(said.join(QStringLiteral(", "))), asCable, asWires);
+            const QSize asWires = bodyBox->sizeHint();
+            std::printf("  boxes: a cable, ticks either way - %s; the body box is %dx%d for a "
+                        "cable and %dx%d for hook-up wires\n",
+                        qPrintable(said.join(QStringLiteral(", "))), asCable.width(),
+                        asCable.height(), asWires.width(), asWires.height());
             check(steady,
                   "boxes: a tick taking a field away does not change the size of either box");
-            check(asWires < asCable / 2,
-                  "boxes: and a sort with nothing to set takes no room for what it cannot show");
+            // A SORT TAKES THE ROOM ITS OWN FIELDS NEED AND NO MORE. What tells the two apart is
+            // HEIGHT now, not width: a cable has two ends to describe and each gets a frame of its
+            // own under the general row, while hook-up wires have no ends to describe - what is
+            // drawn is the wires, and they run on into the fan. The general row is the same either
+            // way, which is why the box no longer narrows.
+            check(asWires.height() < asCable.height(),
+                  "boxes: a sort with no ends to describe gives up the room those frames took");
         }
     }
 

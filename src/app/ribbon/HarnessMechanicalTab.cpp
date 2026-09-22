@@ -408,11 +408,20 @@ void MainWindow::buildHarnessMechanicalTab() {
                 QGridLayout* fg = nullptr;
                 QGridLayout* bg = nullptr;
                 QFrame* fanBox = boxed(&fg, QStringLiteral("Fan out"), 14);
-                QFrame* bodyBox = boxed(&bg, QStringLiteral("Body"), 11);
+                QFrame* bodyBox = boxed(&bg, QStringLiteral("Body"), 14);
+                // ONE BOX, ONE GRID. The figures for the two ends were briefly boxed apart, and two
+                // frames inside a frame inside a ribbon group is three borders deep to read one
+                // number out of. They are back in the box itself, ordered so that the start end and
+                // the finish end stand in the same column as each other - which is what the frames
+                // were for, and a column does it without drawing anything.
+
+                // Kept, because a fanout has no body to describe: it is the fan alone, and the box
+                // goes away rather than standing there offering settings it cannot use.
+                twistBodyBox_ = bodyBox;
                 og->addWidget(fanBox, 0, 6, 2, 1);
                 og->addWidget(bodyBox, 0, 8, 2, 1);
                 for (int gap : {2, 5, 8, 11}) fg->setColumnMinimumWidth(gap, 10);
-                for (int gap : {2, 5, 8}) bg->setColumnMinimumWidth(gap, 10);
+                for (int gap : {2, 5, 8, 11}) bg->setColumnMinimumWidth(gap, 10);
                 // THE SLACK GOES AT THE END, not into the first column. A grid with nothing told to
                 // take up the spare width hands it to whichever column will have it, which put a
                 // hand's breadth between the first label and its own box.
@@ -427,8 +436,8 @@ void MainWindow::buildHarnessMechanicalTab() {
                 twistWiresSpin_->setToolTip(QStringLiteral(
                     "How many wires the bundle fans out to, 2 to %1. Two wires is a twisted pair.")
                         .arg(kTwistedMaxWires));
-                og->addWidget(l, 0, 0);
-                og->addWidget(twistWiresSpin_, 0, 1);
+                fg->addWidget(l, 1, 0);
+                fg->addWidget(twistWiresSpin_, 1, 1);
                 connect(twistWiresSpin_, &QSpinBox::valueChanged, this, [this](int v) {
                     editor_->setTwistWires(v);
                     // Converge-to can never be more than there are, and past three the bundle is
@@ -438,16 +447,26 @@ void MainWindow::buildHarnessMechanicalTab() {
                     statusBar()->showMessage(
                         QStringLiteral("Wires harness: %1 wires").arg(v), 2000);
                 });
-                auto* sl = new QLabel(QStringLiteral("Spread"), optW);
-                sl->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
+                twistSpreadLabel_ = new QLabel(QStringLiteral("Fan out"), optW);
+                twistSpreadLabel_->setStyleSheet(
+                    QStringLiteral("color:#e6e9ef;background:transparent;"));
+                QLabel* sl = twistSpreadLabel_;
                 twistSpreadCombo_ = new QComboBox(optW);
-                twistSpreadCombo_->addItem(QStringLiteral("Left"), QStringLiteral("left"));
-                twistSpreadCombo_->addItem(QStringLiteral("Right"), QStringLiteral("right"));
+                // NAMED IN DRAW ORDER, and only so. Left and right are ends of the SHEET, which is
+                // an answer that changes when the run is turned round - and a run drawn up the page
+                // has no left end to speak of at all. Start and finish are the two clicks, which is
+                // what the person drawing it has in mind and what stays true whatever it points at.
+                // (A drawing made before this still reads: left and right are understood, they are
+                // simply not offered.)
+                twistSpreadCombo_->addItem(QStringLiteral("Start end"), QStringLiteral("start"));
+                twistSpreadCombo_->addItem(QStringLiteral("Finish end"), QStringLiteral("finish"));
                 twistSpreadCombo_->addItem(QStringLiteral("Both"), QStringLiteral("both"));
                 twistSpreadCombo_->setCurrentIndex(2);
-                twistSpreadCombo_->setMinimumWidth(64);
+                twistSpreadCombo_->setMinimumWidth(84);
                 twistSpreadCombo_->setToolTip(QStringLiteral(
-                    "Which end of the run the wires fan out at: the left end, the right end, or both."));
+                    "Which end of the run the wires fan out at, named by the order it was drawn in: "
+                    "the end you started from, the end you finished at, or both. Either single "
+                    "answer leaves the other end as body - the cable, sleeve or wires carrying on."));
                 // WHICH END FANS IS A FAN-OUT SETTING, so it is in that box with the rest of them.
                 // It also settles which end has wire ends to flush and to strip, which are the two
                 // fields beside it there.
@@ -482,15 +501,14 @@ void MainWindow::buildHarnessMechanicalTab() {
                 twistLaneSpin_->setToolTip(QStringLiteral(
                     "How far apart the wires sit where they are spread out, centre to centre. Auto "
                     "is half again the pitch they run at packed in the run."));
-                fg->addWidget(twistLaneLabel_, 1, 0);
-                fg->addWidget(autoBeside(twistLaneSpin_, [this] { editor_->setTwistLane(0.0); syncBreakOptions(); }), 1,
-                              1);
+                fg->addWidget(twistLaneLabel_, 0, 3);
+                fg->addWidget(autoBeside(twistLaneSpin_, [this] { editor_->setTwistLane(0.0); syncBreakOptions(); }), 0, 4);
                 connect(twistLaneSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
                     editor_->setTwistLane(v);
                     canvas_->update();   // a pinned run re-draws at the new spacing
                     statusBar()->showMessage(
-                        v > 1e-9 ? QStringLiteral("Wires run: spread wires %1 apart").arg(v)
-                                 : QStringLiteral("Wires run: spread wires at the drawing's own "
+                        v > 1e-9 ? QStringLiteral("Harness run: spread wires %1 apart").arg(v)
+                                 : QStringLiteral("Harness run: spread wires at the drawing's own "
                                                   "spacing"),
                         2000);
                 });
@@ -513,14 +531,14 @@ void MainWindow::buildHarnessMechanicalTab() {
                 // covered by a cable or a length of tubing draws none of them. It shares its cell
                 // with the cover width, which is the same question asked of the other two sorts -
                 // one of the two is on show at a time, never both.
-                bg->addWidget(twistTrunkLabel_, 1, 0);
-                bg->addWidget(autoBeside(twistTrunkSpin_), 1, 1);
+                bg->addWidget(twistTrunkLabel_, 1, 3);
+                bg->addWidget(autoBeside(twistTrunkSpin_), 1, 4);
                 connect(twistTrunkSpin_, &QSpinBox::valueChanged, this, [this](int v) {
                     editor_->setTwistTrunk(v);
                     canvas_->update();   // a pinned run re-draws with the new bundle
                     statusBar()->showMessage(
-                        v > 0 ? QStringLiteral("Wires run: %1 wire(s) carry on").arg(v)
-                              : QStringLiteral("Wires run: every wire carries on"),
+                        v > 0 ? QStringLiteral("Harness run: %1 wire(s) carry on").arg(v)
+                              : QStringLiteral("Harness run: every wire carries on"),
                         2000);
                 });
                 // HOW LONG THE FAN IS, and HOW THICK ONE WIRE IS. Both are figures the drawing
@@ -541,14 +559,14 @@ void MainWindow::buildHarnessMechanicalTab() {
                 twistFanSpin_->setToolTip(QStringLiteral(
                     "How long the fan is at each end - the stretch over which the wires open out of "
                     "the bundle and settle into their lanes. Auto is the drawing's own figure."));
-                fg->addWidget(twistFanLabel_, 2, 0);
-                fg->addWidget(autoBeside(twistFanSpin_, [this] { editor_->setTwistFan(0.0); syncBreakOptions(); }), 2, 1);
+                fg->addWidget(twistFanLabel_, 1, 3);
+                fg->addWidget(autoBeside(twistFanSpin_, [this] { editor_->setTwistFan(0.0); syncBreakOptions(); }), 1, 4);
                 connect(twistFanSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
                     editor_->setTwistFan(v);
                     canvas_->update();
                     statusBar()->showMessage(
-                        v > 1e-9 ? QStringLiteral("Wires run: the fan is %1 long").arg(v)
-                                 : QStringLiteral("Wires run: the drawing's own fan length"),
+                        v > 1e-9 ? QStringLiteral("Harness run: the fan is %1 long").arg(v)
+                                 : QStringLiteral("Harness run: the drawing's own fan length"),
                         2000);
                 });
                 twistWireLabel_ = new QLabel(QStringLiteral("Wire width"), optW);
@@ -564,15 +582,15 @@ void MainWindow::buildHarnessMechanicalTab() {
                 twistWireSpin_->setToolTip(QStringLiteral(
                     "How thick one wire is drawn. Six wires take up more room than three, so this is "
                     "also what settles how wide the bundle comes out. Auto is the drawing's own."));
-                og->addWidget(twistWireLabel_, 1, 0);
-                og->addWidget(
-                    autoBeside(twistWireSpin_, [this] { editor_->setTwistWireWidth(0.0); syncBreakOptions(); }), 1, 1);
+                fg->addWidget(twistWireLabel_, 0, 12);
+                fg->addWidget(
+                    autoBeside(twistWireSpin_, [this] { editor_->setTwistWireWidth(0.0); syncBreakOptions(); }), 0, 13);
                 connect(twistWireSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
                     editor_->setTwistWireWidth(v);
                     canvas_->update();
                     statusBar()->showMessage(
-                        v > 1e-9 ? QStringLiteral("Wires run: wires drawn %1 across").arg(v)
-                                 : QStringLiteral("Wires run: the drawing's own wire width"),
+                        v > 1e-9 ? QStringLiteral("Harness run: wires drawn %1 across").arg(v)
+                                 : QStringLiteral("Harness run: the drawing's own wire width"),
                         2000);
                 });
                 // AND HOW TIGHTLY IT TURNS at a knee, past the fan. Only the routed runs have knees
@@ -596,27 +614,27 @@ void MainWindow::buildHarnessMechanicalTab() {
                     "bends - and how far it may be bent is set by what is in it, not by how wide the "
                     "line is. It is the TIGHTEST radius in the bundle, so no wire bends inside it. "
                     "0 is a sharp corner; Auto is a share of the bundle width."));
-                og->addWidget(twistKneeLabel_, 0, 3);
-                og->addWidget(autoBeside(twistKneeSpin_, [this] { editor_->setTwistKnee(-1.0); syncBreakOptions(); }), 0,
+                bg->addWidget(twistKneeLabel_, 0, 3);
+                bg->addWidget(autoBeside(twistKneeSpin_, [this] { editor_->setTwistKnee(-1.0); syncBreakOptions(); }), 0,
                               4);
                 connect(twistKneeSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
                     editor_->setTwistKnee(v);
                     canvas_->update();
                     statusBar()->showMessage(
-                        v > 1e-9  ? QStringLiteral("Wires run: knees turn on a %1 radius").arg(v)
-                        : v < 0.0 ? QStringLiteral("Wires run: the drawing's own knee radius")
-                                  : QStringLiteral("Wires run: knees are sharp corners"),
+                        v > 1e-9  ? QStringLiteral("Harness run: knees turn on a %1 radius").arg(v)
+                        : v < 0.0 ? QStringLiteral("Harness run: the drawing's own knee radius")
+                                  : QStringLiteral("Harness run: knees are sharp corners"),
                         2000);
                 });
                 // AND THE FAN'S OWN CORNERS, which is a different radius from the one above. The
                 // knee is where the loom is routed round the shape of the car; this is where a wire
                 // leaves the bundle for its pin, over a few millimetres rather than tens of them.
                 // One field for both would be wrong for whichever of the two it was not set for.
-                twistFanKneeLabel_ = new QLabel(QStringLiteral("Fan knee"), optW);
+                twistFanKneeLabel_ = new QLabel(QStringLiteral("Fan fillet"), optW);
                 twistFanKneeLabel_->setStyleSheet(
                     QStringLiteral("color:#e6e9ef;background:transparent;"));
                 twistFanKneeSpin_ = new QDoubleSpinBox(optW);
-                twistFanKneeSpin_->setRange(-1.0, 500.0);
+                twistFanKneeSpin_->setRange(0.0, 500.0);
                 twistFanKneeSpin_->setDecimals(1);
                 twistFanKneeSpin_->setSingleStep(0.5);
                 twistFanKneeSpin_->setKeyboardTracking(false);
@@ -627,16 +645,16 @@ void MainWindow::buildHarnessMechanicalTab() {
                     "into its lane. Asked for, the slant runs straight between two corners of that "
                     "radius; more than the fan can hold rounds the whole of it. 0 is sharp corners, "
                     "Auto eases it all."));
-                fg->addWidget(twistFanKneeLabel_, 0, 3);
+                fg->addWidget(twistFanKneeLabel_, 2, 3);
                 fg->addWidget(
-                    autoBeside(twistFanKneeSpin_, [this] { editor_->setTwistFanKnee(-1.0); syncBreakOptions(); }), 0, 4);
+                    autoBeside(twistFanKneeSpin_, [this] { editor_->setTwistFanKnee(-1.0); syncBreakOptions(); }), 2, 4);
                 connect(twistFanKneeSpin_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
                     editor_->setTwistFanKnee(v);
                     canvas_->update();
                     statusBar()->showMessage(
-                        v > 1e-9  ? QStringLiteral("Wires run: the fan turns on a %1 radius").arg(v)
-                        : v < 0.0 ? QStringLiteral("Wires run: the fan is eased end to end")
-                                  : QStringLiteral("Wires run: the fan has sharp corners"),
+                        v > 1e-9  ? QStringLiteral("Harness run: the fan turns on a %1 radius").arg(v)
+                        : v < 0.0 ? QStringLiteral("Harness run: the fan is eased end to end")
+                                  : QStringLiteral("Harness run: the fan has sharp corners"),
                         2000);
                 });
                 // THE TWO ENDS OF THE RUN. It leaves one thing and arrives at another, and the two
@@ -645,7 +663,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                 // it starts, because nearly every run IS drawn alike at both ends - the finish end
                 // repeats the start and there is one set of figures to keep. Unticked, the three
                 // that describe a fan are asked again for the finish end.
-                twistSidesCheck_ = new QCheckBox(QStringLiteral("Both sides"), optW);
+                twistSidesCheck_ = new QCheckBox(QStringLiteral("Both sides same"), optW);
                 twistSidesCheck_->setChecked(editor_->twistSidesSame());
                 twistSidesCheck_->setStyleSheet(
                     QStringLiteral("color:#e6e9ef;background:transparent;"));
@@ -653,7 +671,51 @@ void MainWindow::buildHarnessMechanicalTab() {
                     "The finish end of the run repeats the start end. Untick it to give the finish "
                     "end its own pitch, fan length and fan knee - a run out of a header into a ring "
                     "terminal fans quite differently at the two ends."));
-                fg->addWidget(twistSidesCheck_, 0, 12, 1, 2);
+                fg->addWidget(twistSidesCheck_, 0, 9, 1, 2);
+                // WHAT FINISHES A BODY END. Which end is body is said by Spread, above - the one
+                // control for the one question. A transition is a part fitted over the end of a
+                // CABLE; whether a SLEEVE has recovered onto what comes out of it or been cut off
+                // square is the same question asked of the other sort of cover. Neither is anything
+                // to ask about bare wires, and neither arises while both ends fan.
+                twistEndBootCombo_ = new QComboBox(optW);
+                twistEndBootCombo_->addItem(QStringLiteral("No transition"), false);
+                twistEndBootCombo_->addItem(QStringLiteral("With transition"), true);
+                twistEndBootCombo_->setCurrentIndex(editor_->twistEndBoot() ? 1 : 0);
+                twistEndBootCombo_->setMinimumWidth(110);
+                twistEndBootCombo_->setToolTip(QStringLiteral(
+                    "A transition heatshrink over the body end of the run."));
+                bg->addWidget(twistEndBootCombo_, 2, 12, 1, 2);
+                twistEndBootFaceCombo_ = new QComboBox(optW);
+                twistEndBootFaceCombo_->addItem(QStringLiteral("Recovered end"), true);
+                twistEndBootFaceCombo_->addItem(QStringLiteral("Not recovered"), false);
+                twistEndBootFaceCombo_->setCurrentIndex(editor_->twistEndBootRecovered() ? 0 : 1);
+                twistEndBootFaceCombo_->setMinimumWidth(110);
+                twistEndBootFaceCombo_->setToolTip(QStringLiteral(
+                    "How the sleeve's own end is drawn where the run does not fan: recovered, "
+                    "shrunk down onto what comes out of it, or not recovered - cut off square at "
+                    "the body's own width."));
+                bg->addWidget(twistEndBootFaceCombo_, 2, 12, 1, 2);
+                connect(twistEndBootCombo_, &QComboBox::currentIndexChanged, this, [this](int i) {
+                    editor_->setTwistEndBoot(twistEndBootCombo_->itemData(i).toBool());
+                    canvas_->update();
+                });
+                connect(twistEndBootFaceCombo_, &QComboBox::currentIndexChanged, this,
+                        [this](int i) {
+                            editor_->setTwistEndBootRecovered(
+                                twistEndBootFaceCombo_->itemData(i).toBool());
+                            canvas_->update();
+                        });
+                connect(twistEndBootCombo_, &QComboBox::currentIndexChanged, this, [this](int i) {
+                    editor_->setTwistEndBoot(twistEndBootCombo_->itemData(i).toBool());
+                    syncBreakOptions();   // the recovered/square choice only means something with one
+                    canvas_->update();
+                });
+                connect(twistEndBootFaceCombo_, &QComboBox::currentIndexChanged, this,
+                        [this](int i) {
+                            editor_->setTwistEndBootRecovered(
+                                twistEndBootFaceCombo_->itemData(i).toBool());
+                            canvas_->update();
+                        });
                 auto addFinish = [&](QLabel*& label, QDoubleSpinBox*& spin, const QString& text,
                                      double lo, double value, int row, int col,
                                      const QString& tip) {
@@ -671,15 +733,15 @@ void MainWindow::buildHarnessMechanicalTab() {
                     fg->addWidget(autoBeside(spin, [this, spin, lo] { spin->setValue(lo); syncBreakOptions(); }), row,
                                   col + 1);
                 };
-                addFinish(twistLaneBLabel_, twistLaneBSpin_, QStringLiteral("Finish pitch"), 0.0,
-                          editor_->twistLaneFinish(), 0, 9,
+                addFinish(twistLaneBLabel_, twistLaneBSpin_, QStringLiteral("Finish fan pitch"), 0.0,
+                          editor_->twistLaneFinish(), 0, 6,
                           QStringLiteral("How far apart the wires sit where they are spread at the "
                                          "FINISH end of the run."));
-                addFinish(twistFanBLabel_, twistFanBSpin_, QStringLiteral("Finish fan"), 0.0,
-                          editor_->twistFanFinish(), 1, 9,
+                addFinish(twistFanBLabel_, twistFanBSpin_, QStringLiteral("Finish fan length"), 0.0,
+                          editor_->twistFanFinish(), 1, 6,
                           QStringLiteral("How long the fan is at the FINISH end of the run."));
-                addFinish(twistFanKneeBLabel_, twistFanKneeBSpin_, QStringLiteral("Finish knee"),
-                          -1.0, editor_->twistFanKneeFinish(), 2, 9,
+                addFinish(twistFanKneeBLabel_, twistFanKneeBSpin_, QStringLiteral("Finish fan fillet"),
+                          0.0, editor_->twistFanKneeFinish(), 2, 6,
                           QStringLiteral("How tightly the fan turns at the FINISH end. 0 is sharp "
                                          "corners, Auto eases it all."));
                 // THE FLUSH END: the straight stretch at the very end of the fan, where every wire is
@@ -695,7 +757,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                     "End the fan with a straight stretch, so every wire is parallel to the run where "
                     "it is cut and all the cut ends line up square across the fan. Unticked, the "
                     "wires are cut where they are still spreading."));
-                fg->addWidget(twistFlushCheck_, 1, 6, 1, 2);
+                fg->addWidget(twistFlushCheck_, 1, 9, 1, 2);
                 twistFlushLabel_ = new QLabel(QStringLiteral("Flush length"), optW);
                 twistFlushLabel_->setStyleSheet(
                     QStringLiteral("color:#e6e9ef;background:transparent;"));
@@ -709,16 +771,16 @@ void MainWindow::buildHarnessMechanicalTab() {
                 twistFlushSpin_->setToolTip(QStringLiteral(
                     "How long that straight stretch is - how much parallel wire there is to land. "
                     "Auto is the drawing's own share of the fan."));
-                fg->addWidget(twistFlushLabel_, 1, 3);
+                fg->addWidget(twistFlushLabel_, 2, 0);
                 fg->addWidget(
-                    autoBeside(twistFlushSpin_, [this] { editor_->setTwistFlushLen(0.0); syncBreakOptions(); }), 1, 4);
+                    autoBeside(twistFlushSpin_, [this] { editor_->setTwistFlushLen(0.0); syncBreakOptions(); }), 2, 1);
                 connect(twistFlushCheck_, &QCheckBox::toggled, this, [this](bool on) {
                     editor_->setTwistFlush(on);
                     syncBreakOptions();   // the length comes and goes with it
                     canvas_->update();
                     statusBar()->showMessage(
-                        on ? QStringLiteral("Wires run: the ends are cut square across the fan")
-                           : QStringLiteral("Wires run: the ends are cut where they are spreading"),
+                        on ? QStringLiteral("Harness run: the ends are cut square across the fan")
+                           : QStringLiteral("Harness run: the ends are cut where they are spreading"),
                         2000);
                 });
                 connect(twistFlushSpin_, &QDoubleSpinBox::valueChanged, this,
@@ -736,7 +798,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                     "Show the insulation stripped off the end of each wire, back to bare conductor - "
                     "which is how a wire is landed in a contact. A second line across each wire marks "
                     "where the insulation stops."));
-                fg->addWidget(twistStripCheck_, 2, 6, 1, 2);
+                fg->addWidget(twistStripCheck_, 2, 9, 1, 2);
                 twistStripLabel_ = new QLabel(QStringLiteral("Strip length"), optW);
                 twistStripLabel_->setStyleSheet(
                     QStringLiteral("color:#e6e9ef;background:transparent;"));
@@ -750,16 +812,16 @@ void MainWindow::buildHarnessMechanicalTab() {
                 twistStripSpin_->setToolTip(QStringLiteral(
                     "How much insulation comes off the end of each wire. Auto is five millimetres, or "
                     "whatever the end can spare."));
-                fg->addWidget(twistStripLabel_, 2, 3);
+                fg->addWidget(twistStripLabel_, 2, 12);
                 fg->addWidget(
-                    autoBeside(twistStripSpin_, [this] { editor_->setTwistStripLen(0.0); syncBreakOptions(); }), 2, 4);
+                    autoBeside(twistStripSpin_, [this] { editor_->setTwistStripLen(0.0); syncBreakOptions(); }), 2, 13);
                 connect(twistStripCheck_, &QCheckBox::toggled, this, [this](bool on) {
                     editor_->setTwistStrip(on);
                     syncBreakOptions();   // the length comes and goes with it
                     canvas_->update();
                     statusBar()->showMessage(
-                        on ? QStringLiteral("Wires run: the ends are drawn stripped")
-                           : QStringLiteral("Wires run: the ends are drawn cut, and nothing else"),
+                        on ? QStringLiteral("Harness run: the ends are drawn stripped")
+                           : QStringLiteral("Harness run: the ends are drawn cut, and nothing else"),
                         2000);
                 });
                 connect(twistStripSpin_, &QDoubleSpinBox::valueChanged, this,
@@ -794,7 +856,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                     syncBreakOptions();   // each sort brings its own figures
                     canvas_->update();
                     statusBar()->showMessage(
-                        QStringLiteral("Wires run: between the fans, %1")
+                        QStringLiteral("Harness run: between the fans, %1")
                             .arg(twistBodyCombo_->itemText(at).toLower()),
                         2000);
                 });
@@ -804,7 +866,11 @@ void MainWindow::buildHarnessMechanicalTab() {
                 // the shrunk length. A cover over a loom is shrunk onto a connector at one end and
                 // onto a breakout at the other, and those are not the same size, so the two ends can
                 // be described apart - though most of the time they are not, which is the tick.
-                auto bodyField = [&](QLabel*& label, QDoubleSpinBox*& spin, const QString& text,
+                // WHICH GRID a body field belongs to is said outright: the box for the whole body,
+                // or one of the two end boxes inside it. Guessing it from the column worked only
+                // while every field in a column belonged to the same end.
+                auto bodyField = [&](QGridLayout* into, QLabel*& label, QDoubleSpinBox*& spin,
+                                     const QString& text,
                                      double lo, double value, int row, int col, const QString& tip,
                                      std::function<void()> toAuto) {
                     label = new QLabel(text, optW);
@@ -817,45 +883,53 @@ void MainWindow::buildHarnessMechanicalTab() {
                     spin->setValue(value);
                     spin->setMinimumWidth(64);
                     spin->setToolTip(tip);
-                    bg->addWidget(label, row, col);
-                    bg->addWidget(autoBeside(spin, toAuto), row, col + 1);
+                    into->addWidget(label, row, col);
+                    into->addWidget(autoBeside(spin, toAuto), row, col + 1);
                 };
-                bodyField(twistBodyWidthLabel_, twistBodyWidthSpin_, QStringLiteral("Width"), 0.0,
-                          editor_->twistBodyWidth(), 1, 0,
+                // HOW FAR APART THE WIRES RUN IN THE BODY. Drawn as its wires, the body IS those
+                // wires and how tightly they are gathered is the whole look of it: loose in a loom,
+                // pulled up close in a harness. Auto is the pitch these drawings are drawn at.
+                bodyField(bg, twistBodyPitchLabel_, twistBodyPitchSpin_, QStringLiteral("Wire pitch"),
+                          0.0, editor_->twistBodyPitch(), 1, 0,
+                          QStringLiteral("How far apart the wires run where the bundle is gathered, "
+                                         "centre to centre. Auto is a wire and a half."),
+                          [this] { editor_->setTwistBodyPitch(0.0); syncBreakOptions(); });
+                bodyField(bg, twistBodyWidthLabel_, twistBodyWidthSpin_, QStringLiteral("Width"), 0.0,
+                          editor_->twistBodyWidth(), 2, 0,
                           QStringLiteral("How wide the cable over the converged stretch is drawn. "
                                          "Auto is the bundle it covers plus a wire's width."),
                           [this] { editor_->setTwistBodyWidth(0.0); syncBreakOptions(); });
-                bodyField(twistBodyShrinkLabel_, twistBodyShrinkSpin_,
-                          QStringLiteral("Shrink length"), -1.0, editor_->twistBodyShrink(), 2, 3,
+                bodyField(bg, twistBodyShrinkLabel_, twistBodyShrinkSpin_,
+                          QStringLiteral("Heatshrink recover length"), -1.0, editor_->twistBodyShrink(), 1, 6,
                           QStringLiteral("How far in from the end the cover takes to come down to "
                                          "its face. 0 is a square shoulder; Auto is the drawing's "
                                          "own."),
                           [this] { editor_->setTwistBodyShrink(-1.0); syncBreakOptions(); });
-                bodyField(twistBodyFaceLabel_, twistBodyFaceSpin_, QStringLiteral("End size"), 0.0,
-                          editor_->twistBodyFace(), 1, 3,
+                bodyField(bg, twistBodyFaceLabel_, twistBodyFaceSpin_, QStringLiteral("Entry size"), 0.0,
+                          editor_->twistBodyFace(), 0, 6,
                           QStringLiteral("How far across the end of the cover is - the size it has "
                                          "shrunk down to. Auto is the bundle underneath it."),
                           [this] { editor_->setTwistBodyFace(0.0); syncBreakOptions(); });
-                bodyField(twistBodyShrinkBLabel_, twistBodyShrinkBSpin_,
-                          QStringLiteral("Finish shrink"), -1.0, editor_->twistBodyShrinkFinish(), 2,
-                          6,
+                bodyField(bg, twistBodyShrinkBLabel_, twistBodyShrinkBSpin_,
+                          QStringLiteral("Finish heatshrink recover"), -1.0,
+                          editor_->twistBodyShrinkFinish(), 1, 9,
                           QStringLiteral("The shrunk length at the FINISH end of the cable."),
                           [this] { editor_->setTwistBodyShrinkFinish(-1.0); syncBreakOptions(); });
-                bodyField(twistBodyFaceBLabel_, twistBodyFaceBSpin_, QStringLiteral("Finish size"),
-                          0.0, editor_->twistBodyFaceFinish(), 1, 6,
+                bodyField(bg, twistBodyFaceBLabel_, twistBodyFaceBSpin_, QStringLiteral("Finish entry size"),
+                          0.0, editor_->twistBodyFaceFinish(), 0, 9,
                           QStringLiteral("How far across the FINISH end of the cover is."),
                           [this] { editor_->setTwistBodyFaceFinish(0.0); syncBreakOptions(); });
                 // THE BOOT AT EACH END OF A CABLE: the transition heatshrink that takes the bundle
                 // of wires down to the one cable. A cable's, not a sleeve's - a length of tubing
                 // over the run has no transition to cover.
-                bodyField(twistBootLabel_, twistBootSpin_, QStringLiteral("Boot length"), 0.0,
-                          editor_->twistBoot(), 0, 3,
+                bodyField(bg, twistBootLabel_, twistBootSpin_, QStringLiteral("Heatshrink length"), 0.0,
+                          editor_->twistBoot(), 2, 6,
                           QStringLiteral("How far the transition heatshrink at each end of the cable "
                                          "reaches back along the cable. The fan starts at its face. "
                                          "Auto is a third of the fan."),
                           [this] { editor_->setTwistBoot(0.0); syncBreakOptions(); });
-                bodyField(twistBootBLabel_, twistBootBSpin_, QStringLiteral("Finish boot"), 0.0,
-                          editor_->twistBootFinish(), 0, 6,
+                bodyField(bg, twistBootBLabel_, twistBootBSpin_, QStringLiteral("Finish heatshrink length"), 0.0,
+                          editor_->twistBootFinish(), 2, 9,
                           QStringLiteral("The boot at the FINISH end of the cable."),
                           [this] { editor_->setTwistBootFinish(0.0); syncBreakOptions(); });
                 connect(twistBootSpin_, &QDoubleSpinBox::valueChanged, this,
@@ -870,7 +944,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                     "Both ends of the cable shrink alike. Untick it to give the finish end its own "
                     "shrunk length and end size - a cover is shrunk onto a connector at one end and "
                     "onto a breakout at the other."));
-                bg->addWidget(twistBodySidesCheck_, 0, 9, 1, 2);
+                bg->addWidget(twistBodySidesCheck_, 0, 12, 1, 2);
                 // THE TRANSITION HEATSHRINK, which is a cable thing only: a length of tubing over
                 // the whole run is already the transition and cannot have a second one over its
                 // own end. Ticked, which is how a cable starts - the boot is what makes a cable
@@ -885,7 +959,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                     "A boot over each end of the cable: sat back along the cable, shrunk down onto "
                     "it where it grips, and cut square at the mouth the fan starts from. Untick it "
                     "and the cable runs straight out into its wires."));
-                bg->addWidget(twistBodyTransitionCheck_, 1, 9, 1, 2);
+                bg->addWidget(twistBodyTransitionCheck_, 1, 12, 1, 2);
                 twistBodyOverCableCheck_ = new QCheckBox(QStringLiteral("Over the cable"), optW);
                 twistBodyOverCableCheck_->setChecked(editor_->twistBodyOverCable());
                 twistBodyOverCableCheck_->setStyleSheet(
@@ -895,14 +969,14 @@ void MainWindow::buildHarnessMechanicalTab() {
                     "converged stretch and is the body itself. Ticked, the body is a cable and the "
                     "heatshrink is a piece fitted OVER each of its ends: standing proud of the "
                     "cable, stepping onto it at the body end and shrunk down toward the fan."));
-                bg->addWidget(twistBodyOverCableCheck_, 1, 9, 1, 2);
+                bg->addWidget(twistBodyOverCableCheck_, 1, 12, 1, 2);
                 connect(twistBodyOverCableCheck_, &QCheckBox::toggled, this, [this](bool on) {
                     editor_->setTwistBodyOverCable(on);
                     syncBreakOptions();
                     canvas_->update();
                     statusBar()->showMessage(
-                        on ? QStringLiteral("Wires run: heatshrink over the cable, at each end")
-                           : QStringLiteral("Wires run: heatshrink along the whole run"),
+                        on ? QStringLiteral("Harness run: heatshrink over the cable, at each end")
+                           : QStringLiteral("Harness run: heatshrink along the whole run"),
                         2000);
                 });
                 connect(twistBodyTransitionCheck_, &QCheckBox::toggled, this, [this](bool on) {
@@ -910,9 +984,9 @@ void MainWindow::buildHarnessMechanicalTab() {
                     syncBreakOptions();   // the boot lengths come and go with it
                     canvas_->update();
                     statusBar()->showMessage(
-                        on ? QStringLiteral("Wires run: a transition heatshrink at each end of the "
+                        on ? QStringLiteral("Harness run: a transition heatshrink at each end of the "
                                             "cable")
-                           : QStringLiteral("Wires run: the cable runs straight out into its fan"),
+                           : QStringLiteral("Harness run: the cable runs straight out into its fan"),
                         2000);
                 });
                 connect(twistBodySidesCheck_, &QCheckBox::toggled, this, [this](bool on) {
@@ -920,10 +994,16 @@ void MainWindow::buildHarnessMechanicalTab() {
                     syncBreakOptions();
                     canvas_->update();
                     statusBar()->showMessage(
-                        on ? QStringLiteral("Wires run: both ends of the cable shrink alike")
-                           : QStringLiteral("Wires run: each end of the cable shrinks its own way"),
+                        on ? QStringLiteral("Harness run: both ends of the cable shrink alike")
+                           : QStringLiteral("Harness run: each end of the cable shrinks its own way"),
                         2000);
                 });
+                connect(twistBodyPitchSpin_, &QDoubleSpinBox::valueChanged, this,
+                        [this](double v) {
+                            editor_->setTwistBodyPitch(v);
+                            syncBreakOptions();
+                            canvas_->update();
+                        });
                 connect(twistBodyWidthSpin_, &QDoubleSpinBox::valueChanged, this,
                         [this](double v) { editor_->setTwistBodyWidth(v); canvas_->update(); });
                 connect(twistBodyFaceSpin_, &QDoubleSpinBox::valueChanged, this,
@@ -944,8 +1024,8 @@ void MainWindow::buildHarnessMechanicalTab() {
                     syncBreakOptions();   // the finish end's fields come and go with it
                     canvas_->update();
                     statusBar()->showMessage(
-                        on ? QStringLiteral("Wires run: both ends fan alike")
-                           : QStringLiteral("Wires run: each end fans its own way"),
+                        on ? QStringLiteral("Harness run: both ends fan alike")
+                           : QStringLiteral("Harness run: each end fans its own way"),
                         2000);
                 });
                 connect(twistLaneBSpin_, &QDoubleSpinBox::valueChanged, this,
@@ -1007,11 +1087,28 @@ void MainWindow::buildHarnessMechanicalTab() {
             wrBtn->setAutoRaise(true);
             wrBtn->setFocusPolicy(Qt::NoFocus);
             wrBtn->setToolTip(QStringLiteral(
-                "Wires run: click each knee, Enter finishes. The wires run straight - side by side "
+                "Harness run: click each knee, Enter finishes. The wires run straight - side by side "
                 "the whole way rather than laid up - and spread out at whichever end the ribbon "
                 "says, at the spacing it says. Tab pins it so all of that can be set with the run "
                 "on screen."));
             lgAdd(wrBtn);
+        }
+        // AND THE FAN ON ITS OWN. A drawing often wants the break-out without the run: wires coming
+        // out of something drawn elsewhere, or out of nothing at all. Same object, same fan settings
+        // on the ribbon - what it leaves out is the second fan.
+        {
+            auto* foBtn = new QToolButton(lenW);
+            foBtn->setDefaultAction(makeToolAction(toolLabel(ToolId::Fanout), ToolId::Fanout));
+            foBtn->setText(QStringLiteral("Fanout"));
+            foBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+            foBtn->setIconSize(QSize(26, 26));
+            foBtn->setAutoRaise(true);
+            foBtn->setFocusPolicy(Qt::NoFocus);
+            foBtn->setToolTip(QStringLiteral(
+                "Fanout: click where the bundle is and again where the wires are landed. The wires "
+                "fan out at the first end and the bundle simply stops at the other - every fan "
+                "setting on the ribbon applies, and it is edited afterwards like any harness run."));
+            lgAdd(foBtn);
         }
         // The stock parts themselves, drawn at size: what a resistor across a pair or a ferrite over
         // the bundle actually takes up on the board. They belong here for the same reason the break

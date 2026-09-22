@@ -49,6 +49,10 @@ enum class ToolId {
     // same handles on it: what differs is the lay, so one can be made the other without being drawn
     // again. Routed, because a run that does not bend is the rare one.
     WiresRun,
+    // JUST THE FAN. A harness run is a fan, a body and a fan; often what a drawing wants is the one
+    // fan on its own - wires breaking out of something that is drawn elsewhere, or not drawn at all.
+    // The same object with the same fan settings: what it has not got is a second fan.
+    Fanout,
     // Heatshrink over a stretch of run, ROUTED like the twisted tools rather than stamped: a sleeve
     // covers a length of harness, and where that length bends the sleeve bends with it. A fixed-length
     // placement cannot say a sleeve round a corner at all.
@@ -136,6 +140,7 @@ inline bool isDrawTool(ToolId t) {
     case ToolId::TwistedHarness: // two clicks, and however many wires the ribbon says
     case ToolId::TwistedHarnessRoute: // both: as many knees as it needs, and however many wires
     case ToolId::WiresRun:            // as many knees as the run needs, and however many wires
+    case ToolId::Fanout:              // the same, and the fan is the whole of it
     case ToolId::HeatshrinkRoute: // as many knees as the stretch it covers needs
     case ToolId::VolumeArrow:     // two clicks: the tail, then the tip
     case ToolId::AxisAngle:       // two clicks: the axis, then where the sweep starts
@@ -188,7 +193,8 @@ inline QString toolLabel(ToolId t) {
     case ToolId::TwistedRoute: return QStringLiteral("Twisted route");
     case ToolId::TwistedHarness: return QStringLiteral("Wires harness");
     case ToolId::TwistedHarnessRoute: return QStringLiteral("Wires harness route");
-    case ToolId::WiresRun: return QStringLiteral("Wires run");
+    case ToolId::WiresRun: return QStringLiteral("Harness run");
+    case ToolId::Fanout: return QStringLiteral("Fanout");
     case ToolId::HeatshrinkRoute: return QStringLiteral("Heatshrink over the run");
     case ToolId::VolumeArrow: return QStringLiteral("Volume arrow");
     case ToolId::AxisAngle: return QStringLiteral("Axis angle");

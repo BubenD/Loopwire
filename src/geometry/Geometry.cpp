@@ -877,9 +877,22 @@ std::vector<Vec2> shrunkSleeveOutline(const std::vector<Vec2>& route, double bod
     const Vec2 nHead = (route[1] - route[0]).normalized().perp();
     const Vec2 nTail = (route[route.size() - 1] - route[route.size() - 2]).normalized().perp();
 
-    // The body runs between the two shoulders, through every knee in between.
+    // The body runs between the two shoulders, through every knee IN BETWEEN - and only those.
+    //
+    // Every interior point used to be kept, wherever it fell. A point past the tail shoulder then
+    // came after it in the list, so the last leg of the body ran BACKWARDS along the route, and a
+    // side offset from a leg that doubles back comes out on the other side: the two shoulder points
+    // at that end swapped places and the outline crossed itself. On the sheet that is a bow tie at
+    // the end of the part. It needs a route with points inside the shrunk length to show at all,
+    // which is why it kept: a sleeve drawn along a few clicked knees has none.
     std::vector<Vec2> body{headAt};
-    for (size_t i = 1; i + 1 < route.size(); ++i) body.push_back(route[i]);
+    {
+        double run = 0.0;
+        for (size_t i = 1; i + 1 < route.size(); ++i) {
+            run += distance(route[i - 1], route[i]);
+            if (run > head + 1e-9 && run < total - tail - 1e-9) body.push_back(route[i]);
+        }
+    }
     body.push_back(tailAt);
     const std::vector<Vec2> left = offsetPolyline(body, bodyHalf);
     const std::vector<Vec2> right = offsetPolyline(body, -bodyHalf);

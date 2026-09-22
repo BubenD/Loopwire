@@ -6425,6 +6425,29 @@ int run_editor_tests() {
         check(wiresAt(all, 100.0) == 5,
               "wires run: told nothing, every wire carries on as it did");
 
+        // HOW FAR APART THEY RUN IN THE BUNDLE is the drawing's to set. Wires bundled loosely and
+        // wires pulled up tight are both drawn, and this is the difference between them. It was
+        // written onto the run, carried through the file and shown in the panel - and read by
+        // nothing, so setting it moved no wire at all.
+        auto acrossAt = [](const Entity& x, double at) {
+            double lo = 1e9, hi = -1e9;
+            for (const auto& s : twistedPairStrands(x))
+                for (size_t i = 1; i < s.size(); ++i)
+                    if ((s[i - 1].x - at) * (s[i].x - at) <= 0.0) {
+                        lo = std::min(lo, s[i].y);
+                        hi = std::max(hi, s[i].y);
+                    }
+            return hi > lo ? hi - lo : 0.0;
+        };
+        Entity loose = makeRun(5, 0, QStringLiteral("both"));
+        loose.id = QStringLiteral("loose");
+        loose.meta.insert(QStringLiteral("twistBodyPitch"), 6.0);
+        Entity tight = makeRun(5, 0, QStringLiteral("both"));
+        tight.id = QStringLiteral("tight");
+        tight.meta.insert(QStringLiteral("twistBodyPitch"), 3.0);
+        check(acrossAt(loose, 100.0) > acrossAt(tight, 100.0) + 1e-6,
+              "wires run: the wire pitch set on the run is what the bundle is drawn at");
+
         // LEVEL AT THE ENDS. Each line arrives running ALONG the route rather than still spreading
         // across it, so a run drawn along the sheet starts and ends horizontal.
         const auto lines = twistedPairStrands(run);
@@ -11306,6 +11329,36 @@ int run_editor_tests() {
                     int(twistedPairBody(wires).size()));
         check(twistedPairBody(wires).empty(),
               "cable body: a run drawn as its wires has no body, which is what it always was");
+
+        // WHAT IS DRAWN IS WHAT IS PICKED. The wires of a run with a body stop at the fans - what
+        // lies between them is the body, and a wire drawn through it would be a wire drawn through a
+        // cable. The strands said so; the WEAVE, which is what the renderer actually draws, worked
+        // the ranges out for itself and knew nothing about the body, so a cable was picked as a
+        // cable and drawn as its bare wires - running the whole length and splaying out from the
+        // boot face to their full width in the middle. Both now read the one answer.
+        {
+            auto crossesMiddle = [](const Entity& e) {
+                double from = 1e300, to = -1e300;
+                for (const Vec2& p : e.points) { from = std::min(from, p.x); to = std::max(to, p.x); }
+                const double mid = (from + to) / 2.0;
+                int drawn = 0;
+                for (const auto& stretch : twistedPairWeave(e))
+                    for (const auto& wire : stretch.wires)
+                        for (size_t i = 1; i < wire.edgeA.size(); ++i)
+                            if ((wire.edgeA[i - 1].x - mid) * (wire.edgeA[i].x - mid) <= 0.0) ++drawn;
+                int picked = 0;
+                for (const auto& s : twistedPairStrands(e))
+                    for (size_t i = 1; i < s.size(); ++i)
+                        if ((s[i - 1].x - mid) * (s[i].x - mid) <= 0.0) ++picked;
+                return std::make_pair(drawn, picked);
+            };
+            const auto covered = crossesMiddle(cable);
+            check(covered.first == 0 && covered.second == 0,
+                  "cable body: no wire is drawn through the body, and none is picked there either");
+            const auto bare = crossesMiddle(wires);
+            check(bare.first > 0 && bare.second > 0,
+                  "cable body: with no body the wires do run the whole way, as they always have");
+        }
         check(body.size() == 1, "cable body: asked for, the converged stretch is one body");
         if (body.size() == 1) {
         const std::vector<Vec2>& shell = body.front();
