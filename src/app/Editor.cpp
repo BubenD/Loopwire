@@ -4168,6 +4168,26 @@ void Editor::relayLabelPreview() {
 // One at each end of the label and one on each side of it. Order matters: 0 and 1 are the ends, along the run;
 // 2 and 3 are the sides, across it. The middle is not one of them - the whole body is the handle for sliding, and
 // a joint there would sit on top of that.
+void Editor::refreshLiveLabelFit() {
+    if (labelLiveIds_.empty() || labelGroup_.isEmpty() || !doc_) return;
+    for (const Entity& e : doc_->entities()) {
+        if (e.meta.value(labelGroupKey()).toString() != labelGroup_) continue;
+        if (!e.meta.contains(labelMidXKey())) continue;
+        labelFit_.mid = Vec2{e.meta.value(labelMidXKey()).toDouble(),
+                             e.meta.value(labelMidYKey()).toDouble()};
+        Vec2 dir{e.meta.value(labelDirXKey()).toDouble(1.0),
+                 e.meta.value(labelDirYKey()).toDouble(0.0)};
+        if (dir.lengthSq() < 1e-12) dir = Vec2{1.0, 0.0};
+        labelFit_.runDir = dir.normalized();
+        labelFit_.acrossDir = labelFit_.runDir.perp();
+        labelFit_.path.clear();
+        const QJsonArray arr = e.meta.value(QStringLiteral("labelPath")).toArray();
+        for (int k = 0; k + 1 < arr.size(); k += 2)
+            labelFit_.path.push_back({arr[k].toDouble(), arr[k + 1].toDouble()});
+        return;
+    }
+}
+
 std::vector<Vec2> Editor::labelJoints() const {
     if (labelLiveIds_.empty() || !labelFit_.ok) return {};
     const Vec2 a = labelFit_.runDir * (labelFit_.alongMm / 2.0);
@@ -12298,6 +12318,10 @@ void Editor::handleModifyPress(const Vec2& p) {
 
     moveTurn_ = 0.0;   // the move ended: nothing is carrying a turn any more
 
+    // A LABEL THAT WAS IN HAND IS STILL IN HAND, somewhere else. Its objects carry the note of where
+    // it was laid and they took it with them; the copy of that note held here did not go, so the
+    // joints were still being drawn at the place the label was moved from.
+    refreshLiveLabelFit();
     shownCentres_.clear();
     doc_->setDirty(true);
     emit changed();

@@ -112,13 +112,67 @@ void mapPoints(Entity& e, F fn) {
 
 } // namespace
 
+// A LABEL CARRIES A NOTE OF WHERE IT WAS LAID, and the note has to go with it.
+//
+// The label's SHAPE is points and moves with any transform, because everything here maps points. Its
+// note is numbers in the meta - the middle of it, the run it was laid along - and those sat still: a
+// label moved by anything but a drag along its own run left its joints, and the run it is coupled
+// to, at the place it had been moved from. The joints are drawn off that middle, so they stayed
+// behind on the paper; and the next slide walked the label back onto the old run.
+//
+// A label under a clear sleeve is where it shows up first, because that model is several objects and
+// every one of them carries the note - but it is the note that is wrong, not the sleeve.
+void moveLabelNote(Entity& e, const Vec2& delta) {
+    if (!e.meta.contains(QLatin1String("labelMidX"))) return;
+    e.meta.insert(QLatin1String("labelMidX"),
+                  e.meta.value(QLatin1String("labelMidX")).toDouble() + delta.x);
+    e.meta.insert(QLatin1String("labelMidY"),
+                  e.meta.value(QLatin1String("labelMidY")).toDouble() + delta.y);
+    // AND THE RUN IT WAS LAID ALONG, point by point. Left where it was, a label slid after being
+    // moved would set off from the old cable: the middle it walks from is on the path, and the two
+    // have to stay one thing.
+    const QJsonArray was = e.meta.value(QLatin1String("labelPath")).toArray();
+    if (was.size() < 4) return;
+    QJsonArray now;
+    for (int i = 0; i + 1 < was.size(); i += 2) {
+        now.append(was[i].toDouble() + delta.x);
+        now.append(was[i + 1].toDouble() + delta.y);
+    }
+    e.meta.insert(QLatin1String("labelPath"), now);
+}
+
 void translateEntity(Entity& e, const Vec2& delta) {
     mapPoints(e, [&](const Vec2& p) { return p + delta; });
+    moveLabelNote(e, delta);
 }
 
 void rotateEntity(Entity& e, const Vec2& pivot, double angle) {
     const double c = std::cos(angle), s = std::sin(angle);
     mapPoints(e, [&](const Vec2& p) { return rotatePoint(p, pivot, c, s); });
+    // The label's note turns with it too - the middle, the run it was laid along, and which way that
+    // run goes, which is what says where the label's own length lies.
+    if (e.meta.contains(QLatin1String("labelMidX"))) {
+        const Vec2 mid = rotatePoint({e.meta.value(QLatin1String("labelMidX")).toDouble(),
+                                      e.meta.value(QLatin1String("labelMidY")).toDouble()},
+                                     pivot, c, s);
+        e.meta.insert(QLatin1String("labelMidX"), mid.x);
+        e.meta.insert(QLatin1String("labelMidY"), mid.y);
+        const Vec2 dir{e.meta.value(QLatin1String("labelDirX")).toDouble(1.0),
+                       e.meta.value(QLatin1String("labelDirY")).toDouble(0.0)};
+        e.meta.insert(QLatin1String("labelDirX"), dir.x * c - dir.y * s);
+        e.meta.insert(QLatin1String("labelDirY"), dir.x * s + dir.y * c);
+        const QJsonArray was = e.meta.value(QLatin1String("labelPath")).toArray();
+        if (was.size() >= 4) {
+            QJsonArray now;
+            for (int i = 0; i + 1 < was.size(); i += 2) {
+                const Vec2 q =
+                    rotatePoint({was[i].toDouble(), was[i + 1].toDouble()}, pivot, c, s);
+                now.append(q.x);
+                now.append(q.y);
+            }
+            e.meta.insert(QLatin1String("labelPath"), now);
+        }
+    }
     // A linear dimension measures along an axis of the sheet and remembers which; turning it a quarter
     // turn turns which axis that is, so the note of it turns with the object.
     if (e.type == EntityType::Dimension && e.meta.contains(QLatin1String("dimAcross")) &&

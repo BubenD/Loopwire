@@ -9868,6 +9868,9 @@ int run_editor_tests() {
         ed.setDocument(&d);
         noSnap(ed);
         ed.setShrinkRouteMode(ShrinkRouteMode::CableEnds);
+        // Six across, which is what these figures were measured on: this is about the SHAPE
+        // of the thing, and a default width changing under it would say nothing about that.
+        ed.setShrinkWidth(6.0);
         ed.setTool(ToolId::HeatshrinkRoute);
         ed.onPointerPress({0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
         ed.onPointerPress({100.0, 0.0}, Qt::LeftButton, Qt::NoModifier);

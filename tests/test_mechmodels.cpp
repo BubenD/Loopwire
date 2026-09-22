@@ -864,6 +864,73 @@ int run_mechmodels_tests() {
               "free alone: and the click puts down the stroke, on its own");
     }
 
+    // ---- a label moved anywhere takes its joints and its run with it ----------------------------
+    {
+        // A label's SHAPE is points and moves with any transform, because everything in
+        // EntityTransforms maps points. Its NOTE is numbers in the meta - the middle of it, the run
+        // it was laid along - and those sat still: a label moved by anything but a drag along its
+        // own run left its joints, and the run it is coupled to, at the place it was moved from.
+        // The joints are drawn off that middle, so they stayed behind on the paper.
+        //
+        // A label under a clear sleeve is where it shows up, because that model is several objects
+        // and every one of them carries the note - but it is the note that was wrong, not the
+        // sleeve.
+        for (const MechModelKind kind :
+             {MechModelKind::Label, MechModelKind::LabelUnderHeatshrink}) {
+            Document d;
+            for (int i = 0; i < 3; ++i) {
+                Entity w;
+                w.id = QStringLiteral("m%1").arg(i);
+                w.type = EntityType::Line;
+                w.a = {0.0, static_cast<double>(i) * 4.0};
+                w.b = {100.0, static_cast<double>(i) * 4.0};
+                d.entities().push_back(w);
+            }
+            Editor ed;
+            ed.setDocument(&d);
+            noSnap(ed);
+            const MechModel m = builtInMechModel(kind);
+            ed.beginLabelPlacement(partDrawingEntities(m.drawing), m.exceedMm);
+            ed.onPointerPress({50.0, -3.0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerMove({50.0, 11.0});
+            ed.onPointerPress({50.0, 11.0}, Qt::LeftButton, Qt::NoModifier);
+            // ITS OWN joints, the four drawn off the note it carries - not the points of the lines
+            // it is made of, which move with any transform and never showed the fault.
+            const std::vector<Vec2> before = ed.labelJoints();
+            check(before.size() == 4, "label move: a placed label has joints to take hold of");
+            // Moved the way anything is moved - not slid along its own run, which had its own
+            // answer and was the only path that worked.
+            const Vec2 step{0.0, 40.0};
+            ed.setTool(ToolId::Move);
+            ed.onPointerPress({50.0, 4.0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerPress({50.0 + step.x, 4.0 + step.y}, Qt::LeftButton, Qt::NoModifier);
+            const std::vector<Vec2> after = ed.labelJoints();
+            double worst = 0.0;
+            const size_t n = std::min(before.size(), after.size());
+            for (size_t i = 0; i < n; ++i)
+                worst = std::max(worst, distance(after[i], before[i] + step));
+            std::printf("  label move: %s - %d joint(s), furthest %.2f from where it should be\n",
+                        kind == MechModelKind::Label ? "plain" : "under a clear sleeve",
+                        int(after.size()), worst);
+            check(after.size() == before.size() && worst < 1e-6,
+                  "label move: the joints go with it, and land where the label landed");
+            // AND THE RUN IT IS COUPLED TO GOES TOO, so a slide afterwards sets off from where the
+            // label now is rather than walking it back onto the cable it was moved off.
+            for (const Entity& e : d.entities()) {
+                if (e.meta.value(QStringLiteral("labelGroup")).toString().isEmpty()) continue;
+                const QJsonArray path = e.meta.value(QStringLiteral("labelPath")).toArray();
+                if (path.size() < 4) continue;
+                const double mid = e.meta.value(QStringLiteral("labelMidY")).toDouble();
+                double nearest = 1e300;
+                for (int i = 1; i + 1 < path.size(); i += 2)
+                    nearest = std::min(nearest, std::abs(path[i].toDouble() - mid));
+                check(nearest < 12.0,
+                      "label move: and the run it was laid along moved with it, not left behind");
+                break;
+            }
+        }
+    }
+
     // ---- what the app scales BY, and how far past the wires it goes ------------------------------
     {
         // A model is scaled to fit what it is placed on, and "the whole drawing" is the wrong answer the

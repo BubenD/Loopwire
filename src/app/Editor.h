@@ -295,6 +295,10 @@ public:
     // compatibility spelling for callers and tests written before there was a third sort.
     void setShrinkRouteMode(ShrinkRouteMode mode) { shrinkMode_ = mode; }
     ShrinkRouteMode shrinkRouteMode() const { return shrinkMode_; }
+    // HOW WIDE A SLEEVE IS DRAWN, which the tool asks for as "Across" while one is being drawn.
+    // Readable and settable so a drawing can be set up without typing into the canvas.
+    double shrinkWidth() const { return shrinkWidth_; }
+    void setShrinkWidth(double mm) { shrinkWidth_ = std::max(0.1, mm); }
     void setShrinkSquareEnds(bool on) {
         shrinkMode_ = on ? ShrinkRouteMode::Cable : ShrinkRouteMode::Sleeve;
     }
@@ -864,6 +868,8 @@ public:
     // Four rather than eight: a label is symmetrical about the run it sits on, so pulling one end out lengthens it
     // both ways about its middle. Dragging one corner of a label to stretch it off-centre would take it off the
     // bundle, which is the one place it has to stay.
+    // The four joints a label shows: the two ends and the two sides, off the note it carries. They
+    // are its own - a label is grouped, so it has none of the joints its lines would have had.
     std::vector<Vec2> labelJoints() const;
 
     void setLabelWidth(double mm);
@@ -874,6 +880,11 @@ public:
     // A label already on the drawing, taken up so the ribbon and the properties act on it - read off the
     // label's own meta, so one placed last week resizes the same as one placed a second ago.
     bool adoptLabelFromSelection();
+    // THE NOTE READ BACK OFF THE DRAWING. The fit in hand is a copy of what the objects carry, and
+    // anything that moves them - the Move tool, a nudge, an array - moves the objects and the note
+    // they carry while leaving that copy behind. The joints are drawn off the copy, so they stayed
+    // on the paper where the label had been. Asked again afterwards, the copy is the note again.
+    void refreshLiveLabelFit();
     // Done fitting: the label stays where it is and the ribbon goes back to normal.
     void endLabelEdit();
     // Add a set of entities to the drawing: a paste, a block, a part's drawing, an imported file.
@@ -1954,7 +1965,10 @@ private:
     // half a sheet from the hand, and wrote an undo step for a move that had not happened. The turn is
     // kept here instead and applied with the move, when it is put down.
     double moveTurn_ = 0.0;
-    double shrinkWidth_ = 6.0;
+    // A SLEEVE OVER A HARNESS IS A HARNESS-SIZED THING. Six millimetres is a sleeve over one wire;
+    // what goes over a bundle is twenty, and a default nobody would keep is a default that is typed
+    // over every single time it is used.
+    double shrinkWidth_ = 20.0;
     // WHICH SORT OF SLEEVE THE TOOL DRAWS. Sleeve recovers onto what it grips; Cable is square for
     // the whole run; CableEnds leaves the cable bare in the middle and keeps an editable sleeve at
     // each end.
