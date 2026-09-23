@@ -205,6 +205,16 @@ public:
     // it. What is being drawn is MORE OF THAT RUN, not a second one beside it: the same object ends
     // up longer, with every setting it had.
     bool continuingRun() const { return !continueId_.isEmpty(); }
+
+    // ALIGN. Every object in the selection is brought into line with the others - their left
+    // edges, their right edges, their tops or their bottoms - or with a point clicked on the
+    // canvas, snapped the way any point is. An OBJECT is a group as much as a single line: a label,
+    // a block, a part moves as the one thing it is, so what is lined up is the object and not the
+    // pieces it is made of - lining up a label's pieces by their own left edges would take it apart.
+    enum class AlignMode { Left, Right, Top, Bottom, CursorX, CursorY };
+    // The four object ones act at once. The two cursor ones wait for the click that says where.
+    void alignSelection(AlignMode mode);
+    bool aligningToCursor() const { return alignPick_ != 0; }
     // HOW FAR APART THE WIRES RUN WHERE THE BUNDLE IS GATHERED. 0 = the drawing's own figure.
     double twistBodyPitch() const { return twistBodyPitch_; }
     void setTwistBodyPitch(double mm);
@@ -1791,6 +1801,13 @@ private:
     void autoRouteDragTo(const Vec2& at);
     QString continueId_;                           // the run being carried on by hand
     bool continueAtStart_ = false;                 // ...from its first end, not its last
+    // SHIFT AND PULL: the run was taken up by pressing on its end, and the button is still down.
+    // Let go somewhere else and that is the first new knee - which is what pulling a run out of
+    // its own end means.
+    bool continuePulling_ = false;
+    int alignPick_ = 0;   // waiting for the click an align lines things up on: 1 an X, 2 a Y
+    void alignSelectionTo(AlignMode mode, double at);
+    Vec2 continuePressAt_;
     // Lay the knees of a route onto the run it continues, at the end it was taken from. Shared by the
     // auto route and by carrying a run on by hand, which ask for the same thing in two ways.
     bool continueRunWith(const QString& id, bool atStart, const std::vector<Vec2>& more,

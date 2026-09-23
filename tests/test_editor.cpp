@@ -11952,6 +11952,220 @@ int run_editor_tests() {
         }
     }
 
+    // ---- Align: by the objects' own edges, or on a line clicked through the drawing -------------
+    {
+        // Three boxes at odd places, and a label-like GROUP of two lines that has to move as one:
+        // lining up a group's pieces by their own edges would take it apart.
+        auto box = [](const QString& id, double x, double y, double w, double h) {
+            Entity e;
+            e.id = id;
+            e.type = EntityType::Rect;
+            e.points = {{x, y}, {x + w, y}, {x + w, y + h}, {x, y + h}};
+            e.a = {x, y};
+            e.b = {x + w, y + h};
+            return e;
+        };
+        auto sheet = [&](Document& d) {
+            d.entities().push_back(box(QStringLiteral("A"), 10.0, 0.0, 20.0, 10.0));
+            d.entities().push_back(box(QStringLiteral("B"), 50.0, 30.0, 40.0, 15.0));
+            d.entities().push_back(box(QStringLiteral("C"), 25.0, 70.0, 10.0, 25.0));
+            // The group: two lines, one longer than the other, stamped as one object.
+            for (const auto& [id, a, b] :
+                 {std::tuple<QString, Vec2, Vec2>{QStringLiteral("G1"), {60.0, 100.0}, {90.0, 100.0}},
+                  std::tuple<QString, Vec2, Vec2>{QStringLiteral("G2"), {70.0, 105.0}, {80.0, 105.0}}}) {
+                Entity l;
+                l.id = id;
+                l.type = EntityType::Line;
+                l.a = a;
+                l.b = b;
+                stampEntityGroup(l, QStringLiteral("GROUP-1"));
+                d.entities().push_back(l);
+            }
+        };
+        auto edges = [](const Document& d, const QString& id) {
+            for (const Entity& e : d.entities())
+                if (e.id == id) return e.bounds();
+            return Bounds();
+        };
+        const QStringList all{QStringLiteral("A"), QStringLiteral("B"), QStringLiteral("C"),
+                              QStringLiteral("G1"), QStringLiteral("G2")};
+        struct Case { Editor::AlignMode mode; const char* name; };
+        for (const Case& k : {Case{Editor::AlignMode::Left, "left"},
+                              Case{Editor::AlignMode::Right, "right"},
+                              Case{Editor::AlignMode::Top, "top"},
+                              Case{Editor::AlignMode::Bottom, "bottom"}}) {
+            Document d;
+            sheet(d);
+            Editor ed;
+            ed.setDocument(&d);
+            noSnap(ed);
+            ed.setTool(ToolId::Select);
+            for (const QString& id : all) ed.selectById(id, /*add=*/true);
+            ed.alignSelection(k.mode);
+            // Each OBJECT'S edge: the group's is its two lines taken together.
+            auto objEdge = [&](const QString& id) {
+                Bounds b = edges(d, id);
+                if (id == QStringLiteral("G1")) {
+                    const Bounds g2 = edges(d, QStringLiteral("G2"));
+                    b.expand(g2.min);
+                    b.expand(g2.max);
+                }
+                switch (k.mode) {
+                case Editor::AlignMode::Left: return b.min.x;
+                case Editor::AlignMode::Right: return b.max.x;
+                case Editor::AlignMode::Top: return b.max.y;
+                default: return b.min.y;
+                }
+            };
+            const double a = objEdge(QStringLiteral("A")), b = objEdge(QStringLiteral("B")),
+                         c = objEdge(QStringLiteral("C")), g = objEdge(QStringLiteral("G1"));
+            std::printf("  align %s: A %.1f, B %.1f, C %.1f, group %.1f\n", k.name, a, b, c, g);
+            check(std::abs(a - b) < 1e-9 && std::abs(a - c) < 1e-9 && std::abs(a - g) < 1e-9,
+                  "align: every object's edge on the one line");
+            const double expect = k.mode == Editor::AlignMode::Left    ? 10.0
+                                  : k.mode == Editor::AlignMode::Right ? 90.0
+                                  : k.mode == Editor::AlignMode::Top   ? 105.0
+                                                                       : 0.0;
+            check(std::abs(a - expect) < 1e-9,
+                  "align: and that line is the selection's own furthest edge, which stays put");
+            // The group moved as one: its two lines are still 5 apart and still offset by 10.
+            const Bounds g1 = edges(d, QStringLiteral("G1")), g2 = edges(d, QStringLiteral("G2"));
+            check(std::abs((g2.min.x - g1.min.x) - 10.0) < 1e-9 &&
+                      std::abs((g2.min.y - g1.min.y) - 5.0) < 1e-9,
+                  "align: a group is one object - its pieces keep their places in it");
+            ed.undo();
+            check(std::abs(edges(d, QStringLiteral("B")).min.x - 50.0) < 1e-9 &&
+                      std::abs(edges(d, QStringLiteral("B")).min.y - 30.0) < 1e-9,
+                  "align: and one undo puts every object back");
+        }
+
+        // BY THE CURSOR: nothing moves until the click, the click is SNAPPED, and each object's
+        // middle goes on the line - a line to hang things on is where their middles hang.
+        {
+            Document d;
+            sheet(d);
+            // A point of the drawing to snap to, at an x nobody would click exactly.
+            Entity post;
+            post.id = QStringLiteral("POST");
+            post.type = EntityType::Line;
+            post.a = {213.4, -40.0};
+            post.b = {213.4, -20.0};
+            d.entities().push_back(post);
+            Editor ed;
+            ed.setDocument(&d);
+            ed.setTool(ToolId::Select);
+            for (const QString& id : {QStringLiteral("A"), QStringLiteral("B"), QStringLiteral("C")})
+                ed.selectById(id, /*add=*/true);
+            ed.alignSelection(Editor::AlignMode::CursorX);
+            check(ed.aligningToCursor(), "align by cursor: it waits for the click that says where");
+            check(std::abs(edges(d, QStringLiteral("B")).min.x - 50.0) < 1e-9,
+                  "align by cursor: and nothing has moved yet");
+            // Near the post's end, not on it: the snap is what puts the line exactly there.
+            ed.onPointerMove({213.1, -40.2});
+            ed.onPointerPress({213.1, -40.2}, Qt::LeftButton, Qt::NoModifier);
+            auto mid = [&](const QString& id) {
+                const Bounds b = edges(d, id);
+                return (b.min.x + b.max.x) / 2.0;
+            };
+            std::printf("  align by cursor: middles at %.2f, %.2f, %.2f\n", mid(QStringLiteral("A")),
+                        mid(QStringLiteral("B")), mid(QStringLiteral("C")));
+            check(!ed.aligningToCursor(), "align by cursor: the click is taken, and it is done");
+            check(std::abs(mid(QStringLiteral("A")) - 213.4) < 1e-6 &&
+                      std::abs(mid(QStringLiteral("B")) - 213.4) < 1e-6 &&
+                      std::abs(mid(QStringLiteral("C")) - 213.4) < 1e-6,
+                  "align by cursor: every middle on the line - snapped to the point, not near it");
+            // AND ESC GIVES IT UP with nothing moved.
+            ed.alignSelection(Editor::AlignMode::CursorY);
+            const double wasY = edges(d, QStringLiteral("B")).min.y;
+            ed.onKey(Qt::Key_Escape, Qt::NoModifier);
+            ed.onPointerPress({0.0, 500.0}, Qt::LeftButton, Qt::NoModifier);
+            check(!ed.aligningToCursor() &&
+                      std::abs(edges(d, QStringLiteral("B")).min.y - wasY) < 1e-9,
+                  "align by cursor: Esc gives it up, and the next click is just a click");
+        }
+
+        // AND WITH NOTHING PICKED THERE IS NOTHING TO LINE UP - said, not silently ignored.
+        {
+            Document d;
+            sheet(d);
+            Editor ed;
+            ed.setDocument(&d);
+            QString said;
+            QObject::connect(&ed, &Editor::message, [&said](const QString& m) { said = m; });
+            ed.alignSelection(Editor::AlignMode::Left);
+            check(said.contains(QStringLiteral("select")),
+                  "align: with nothing picked it says to pick the objects first");
+        }
+    }
+
+    // ---- Shift and pull on the end of a run carries it on ---------------------------------------
+    {
+        // Hold Shift, press on the end of a harness, a cable or a sleeve, and pull: the run carries
+        // on from there, the way it was drawn. It used to want the run PICKED first and then taken
+        // by the one point down the middle of its end - two gestures for one thought, and on a run
+        // that was not already picked, pressing its end with Shift did nothing at all.
+        auto harness = [](const QString& id) {
+            Entity w;
+            w.id = id;
+            w.type = EntityType::TwistedPair;
+            w.points = {{0.0, 0.0}, {100.0, 0.0}};
+            w.a = w.points.front();
+            w.b = w.points.back();
+            w.meta.insert(QStringLiteral("twistStraight"), true);
+            w.meta.insert(QStringLiteral("twistWires"), 4);
+            w.meta.insert(QStringLiteral("twistWidth"), 9.0);
+            w.meta.insert(QStringLiteral("twistPitch"), 18.0);
+            w.meta.insert(QStringLiteral("twistEnds"), 20.0);
+            w.meta.insert(QStringLiteral("twistLane"), 6.0);
+            return w;
+        };
+        Document d;
+        d.entities().push_back(harness(QStringLiteral("RUN")));
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.setTool(ToolId::Select);
+        check(ed.selection().empty(), "pull: nothing is picked beforehand");
+        // A WIRE TIP at the far end - what the hand goes for - not the route's own end point, which
+        // is in the middle of the fan where nothing is drawn.
+        const Vec2 tip{100.0, 9.0};
+        ed.onPointerPress(tip, Qt::LeftButton, Qt::ShiftModifier);
+        std::printf("  pull: Shift on an unpicked run's wire tip - carrying it on %d\n",
+                    ed.continuingRun() ? 1 : 0);
+        check(ed.continuingRun(), "pull: Shift on the visible end of a run takes it up, picked or not");
+        // PULLED and let go: that is the first new knee.
+        ed.onPointerMove({100.0, -60.0});
+        ed.onPointerRelease({100.0, -60.0}, Qt::LeftButton);
+        ed.onPointerMove({160.0, -60.0});
+        ed.onPointerPress({160.0, -60.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onKey(Qt::Key_Return, Qt::NoModifier);
+        const Entity* run = nullptr;
+        for (const Entity& e : d.entities())
+            if (e.id == QStringLiteral("RUN")) run = &e;
+        check(run != nullptr && d.entities().size() == 1,
+              "pull: it is the SAME run carried on, not a new one beside it");
+        if (run) {
+            std::printf("  pull: the run now has %d point(s), ending at %.1f,%.1f\n",
+                        int(run->points.size()), run->points.back().x, run->points.back().y);
+            check(run->points.size() == 4, "pull: the pull and the click each put down a knee");
+            const bool pulledKnee = run->points.size() >= 3 &&
+                                    distance(run->points[2], Vec2{100.0, -60.0}) < 1e-6;
+            check(pulledKnee, "pull: and the first of them is where the pull was let go");
+            check(distance(run->points.back(), Vec2{160.0, -60.0}) < 1e-6,
+                  "pull: and the run finishes where it was last clicked");
+        }
+        // AND SHIFT IN THE MIDDLE OF A RUN STILL MEANS SELECTION: only the end is taken up.
+        Document d2;
+        d2.entities().push_back(harness(QStringLiteral("MID")));
+        Editor e2;
+        e2.setDocument(&d2);
+        noSnap(e2);
+        e2.setTool(ToolId::Select);
+        e2.onPointerPress({50.0, 0.0}, Qt::LeftButton, Qt::ShiftModifier);
+        check(!e2.continuingRun(),
+              "pull: Shift in the middle of a run still adds it to the selection, as it always did");
+    }
+
     // ---- the gathered wires run straight, or laid up in pairs, or every other pair -------------
     {
         // Drawn as its wires, the body IS those wires, and a bundle of hook-up wire is not the only

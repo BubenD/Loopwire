@@ -1639,6 +1639,34 @@ int run_drawingspace_tests() {
         }
     }
 
+    // ---- Align is on the Home tab, and opens the six ways and nothing else -----------------------
+    {
+        MainWindow win;
+        win.resize(1500, 860);
+        win.show();
+        QApplication::processEvents();
+        QToolButton* align = nullptr;
+        for (QToolButton* b : win.findChildren<QToolButton*>())
+            if (b->objectName() == QStringLiteral("alignButton")) align = b;
+        check(align != nullptr, "align: there is an Align button among the operations");
+        if (align) {
+            QStringList ways;
+            if (align->menu())
+                for (QAction* a : align->menu()->actions()) ways << a->text();
+            std::printf("  align: the button offers [%s]\n",
+                        qPrintable(ways.join(QStringLiteral(", "))));
+            check(ways == QStringList({QStringLiteral("By object X-left"),
+                                       QStringLiteral("By object X-right"),
+                                       QStringLiteral("By object top"),
+                                       QStringLiteral("By object bottom"),
+                                       QStringLiteral("By X-cursor"),
+                                       QStringLiteral("By Y-cursor")}),
+                  "align: the six ways, in that order, and only those");
+            check(align->popupMode() == QToolButton::InstantPopup,
+                  "align: one click opens them - there is no other thing the button does");
+        }
+    }
+
     // ---- which ends wear the transition, and only a cable is asked ------------------------------
     {
         // A cable over the converged stretch has a boot at each end of it: the transition the wires

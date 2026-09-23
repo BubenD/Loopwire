@@ -256,6 +256,49 @@ QIcon makeOpIcon(const QString& op, const QColor& ink = QColor("#d6dae1")) {
         p.drawPolyline(head);
         p.drawLine(8, 14, 14, 14);          // bristle band
         for (int x = 7; x <= 15; x += 2) p.drawLine(x, 15, x - 1, 19); // bristles
+    } else if (op.startsWith(QLatin1String("align"))) {
+        // THREE BARS OF DIFFERENT LENGTHS AND THE LINE THEY ARE SQUARED UP TO - which way round
+        // says which edge. The plain button is the left edge, the commonest of them.
+        const QString how = op.mid(5);   // "", "left", "right", "top", "bottom", "x", "y"
+        QPen guide(ink);
+        guide.setWidthF(1.2);
+        guide.setStyle(how == QLatin1String("x") || how == QLatin1String("y") ? Qt::DashLine
+                                                                             : Qt::SolidLine);
+        const bool across = how == QLatin1String("top") || how == QLatin1String("bottom") ||
+                            how == QLatin1String("y");
+        const int lengths[3] = {12, 7, 10};
+        p.setBrush(ink);
+        for (int i = 0; i < 3; ++i) {
+            const int len = lengths[i];
+            const int band = 5 + i * 6;
+            QRectF bar;
+            if (!across) {
+                const bool fromRight = how == QLatin1String("right");
+                const bool centred = how == QLatin1String("x");
+                const double x0 = centred ? 12.0 - len / 2.0 : fromRight ? 19.0 - len : 5.0;
+                bar = QRectF(x0, band, len, 3.0);
+            } else {
+                const bool fromBottom = how == QLatin1String("bottom");
+                const bool centred = how == QLatin1String("y");
+                const double y0 = centred ? 12.0 - len / 2.0 : fromBottom ? 19.0 - len : 5.0;
+                bar = QRectF(band, y0, 3.0, len);
+            }
+            p.setPen(Qt::NoPen);
+            p.drawRect(bar);
+        }
+        p.setBrush(Qt::NoBrush);
+        p.setPen(guide);
+        if (!across) {
+            const double x = how == QLatin1String("right") ? 20.0
+                             : how == QLatin1String("x")   ? 12.0
+                                                           : 4.0;
+            p.drawLine(QPointF(x, 2.0), QPointF(x, 22.0));
+        } else {
+            const double y = how == QLatin1String("bottom") ? 20.0
+                             : how == QLatin1String("y")    ? 12.0
+                                                            : 4.0;
+            p.drawLine(QPointF(2.0, y), QPointF(22.0, y));
+        }
     } else if (op == QLatin1String("delete")) {
         // Trash can: lid + body + ribs.
         p.drawLine(4, 7, 20, 7);            // lid line
@@ -3684,8 +3727,47 @@ QWidget* MainWindow::operationsRow() {
     auto* grid = new QGridLayout(w);
     grid->setContentsMargins(0, 0, 0, 0);
     grid->setSpacing(1);
-    const int perRow = (ops.size() + 1) / 2;
+    const int perRow = (ops.size() + 2) / 2;   // one more cell than the ops: Align, below
     int i = 0;
+    // ALIGN: the objects picked brought into line - by their own edges, or on a line clicked through
+    // the drawing. A click on the button offers the ways of doing it and only those; each acts on
+    // what is picked, and the two cursor ones then wait for the click that says where.
+    {
+        auto* b = new QToolButton(w);
+        b->setIcon(makeOpIcon(QStringLiteral("align")));
+        b->setIconSize(QSize(28, 28));
+        b->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        b->setToolTip(QStringLiteral(
+            "Align — pick the objects, then choose how to line them up: by their left or right "
+            "edges, their tops or bottoms, or on a point you click (snapped)."));
+        b->setAutoRaise(true);
+        b->setFocusPolicy(Qt::NoFocus);
+        b->setFixedSize(kRibbonCell);
+        b->setObjectName(QStringLiteral("alignButton"));
+        struct Way { const char* icon; QString label; Editor::AlignMode mode; };
+        const QList<Way> ways = {
+            {"alignleft", QStringLiteral("By object X-left"), Editor::AlignMode::Left},
+            {"alignright", QStringLiteral("By object X-right"), Editor::AlignMode::Right},
+            {"aligntop", QStringLiteral("By object top"), Editor::AlignMode::Top},
+            {"alignbottom", QStringLiteral("By object bottom"), Editor::AlignMode::Bottom},
+            {"alignx", QStringLiteral("By X-cursor"), Editor::AlignMode::CursorX},
+            {"aligny", QStringLiteral("By Y-cursor"), Editor::AlignMode::CursorY},
+        };
+        auto* menu = new QMenu(b);
+        for (const Way& way : ways) {
+            const Editor::AlignMode mode = way.mode;
+            menu->addAction(makeOpIcon(QString::fromLatin1(way.icon)), way.label, this, [this, mode] {
+                editor_->alignSelection(mode);
+                canvas_->setFocus(Qt::OtherFocusReason);   // the click that says where goes there
+                canvas_->update();
+            });
+        }
+        b->setMenu(menu);
+        b->setPopupMode(QToolButton::InstantPopup);
+        grid->addWidget(b, i / perRow, i % perRow);
+        opButtons_.append({QStringLiteral("align"), b});   // so the theme re-tints it
+        ++i;
+    }
     for (const Op& op : ops) {
         auto* b = new QToolButton(w);
         const QString key = QString::fromLatin1(op.key);

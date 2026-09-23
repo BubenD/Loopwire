@@ -1585,6 +1585,7 @@ void Editor::setTool(ToolId t) {
     shiftMode_ = false;
     freeMarkPreview_ = Entity();
     freeLabelPreview_.clear();
+    alignPick_ = 0;   // a new tool is a new command: an align left waiting is given up
     cancelDraw();
     modifyPts_.clear();
     moveTurn_ = 0.0;   // the move ended: nothing is carrying a turn any more
@@ -2227,6 +2228,11 @@ void Editor::handleSelectPress(const Vec2& p, const Vec2& raw, Qt::KeyboardModif
                 return;
             }
     }
+    // SHIFT ON THE END OF A RUN - a harness, a cable, a sleeve - takes it up and carries it on. Asked
+    // first, before Shift's meaning on a selection, because the END is the one place on a run where
+    // carrying it on is what taking hold of it with Shift can mean; anywhere else on it, Shift still
+    // adds to the selection or takes away from it, as it always has.
+    if (shift && beginContinueRun(p)) return;
 
     // (a) A grabbed joint is following the cursor: this click places it.
     if (editing_ && gripGrab_) {
@@ -4570,6 +4576,7 @@ void Editor::onPointerMove(const Vec2& raw) {
         harnessPlacing_ ||       // the generated harness ghosts under the cursor
         transitionBandStarted() ||
         (tool_ == ToolId::LengthBreak && wireBandHasStart_) ||
+        alignPick_ != 0 ||   // the line an align will go to follows the cursor
         ((!twistArmType_.isEmpty() || screenArm_) && wireBandHasStart_))
         emit overlayChanged(); // armed connector ghost / twist-screen band preview tracks cursor
 }
@@ -4712,6 +4719,14 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
             endRectanglePick();
             if (done) done(first, p);
         }
+        return;
+    }
+    // THE CLICK AN ALIGN WAS WAITING FOR takes the snapped point, as a rectangle pick does: a line
+    // to hang things on belongs exactly on a point of the drawing when there is one to put it on.
+    if (alignPick_ != 0) {
+        const AlignMode m = alignPick_ == 1 ? AlignMode::CursorX : AlignMode::CursorY;
+        alignPick_ = 0;
+        alignSelectionTo(m, m == AlignMode::CursorX ? p.x : p.y);
         return;
     }
     pressMods_ = mods; // available to every press path (draw/modify), not just selection
@@ -5261,6 +5276,20 @@ void Editor::onPointerRelease(const Vec2& raw, Qt::MouseButton button) {
     // is over. Asked here rather than on the pick itself, because a pick clears the old selection before it
     // makes the new one - and a session ended on the clearing could never survive being clicked on.
     if (!editing_ && !labelPlacing_) dropLabelEditIfDeselected();
+    // A RUN PULLED OUT OF ITS OWN END: Shift was pressed on the end and the button held, so where it
+    // is let go is the first new knee. Only if it actually went somewhere - a press and release on
+    // the spot is taking the run up, and the knees come with the clicks after it.
+    if (continuePulling_) {
+        continuePulling_ = false;
+        if (!continueId_.isEmpty() && drafting_ &&
+            distance(cursor_, continuePressAt_) > worldTolerance() * 3.0) {
+            draftPts_.push_back(cursor_);
+            emit message(QStringLiteral(
+                "Run pulled out — click each further knee, Enter finishes, Esc leaves it as it was"));
+            emit overlayChanged();
+        }
+        return;
+    }
     // Trim's cut line is two clicks (handled in onPointerPress), so the release does
     // nothing for it.
     if (!selectionTool()) return;
@@ -11218,6 +11247,7 @@ void Editor::finishDraw() {
 
 void Editor::cancelDraw() {
     continueId_.clear();     // Esc while carrying a run on leaves it as it was
+    continuePulling_ = false;
     shownCentres_.clear();   // the marks belonged to the command that has just ended
     twistedFrozen_ = false;   // nothing pinned once the draft is gone
     twistedHeld_ = false;     // nor held back
@@ -13891,20 +13921,54 @@ void Editor::setAutoRouteShift(double deg) {
 // that follows is the tool the run was drawn with in the first place, so every knee is placed the
 // way the first ones were, and what Enter does with it is carry this run on rather than start another.
 bool Editor::beginContinueRun(const Vec2& at) {
-    if (!doc_ || selected_.size() != 1) return false;
-    Entity* e = entityById(selected_.front());
+    if (!doc_) return false;
+    // WHICH RUN, AND WHICH END OF IT. The run CLICKED, not only one picked beforehand: asking for a
+    // run to be selected first and then taken up by its end was two gestures for one thought, and
+    // the second of them did nothing at all on a run that was not already picked - which is what
+    // Shift and pull on a harness looked like it did.
+    //
+    // And its VISIBLE end, not the one point down the middle of it. A harness ends in a fan of wire
+    // tips, a sleeve in a face as wide as the sleeve: the hand goes for what it can see, which is
+    // any of those, and the route's own end point is somewhere in the middle of them where nothing
+    // is drawn at all. So the end is caught anywhere across the width the run has there.
+    auto isRun = [](const Entity& e) {
+        return e.meta.value(QStringLiteral("shrunkEnds")).toBool() ||
+               (e.type == EntityType::Polyline && e.meta.value(QStringLiteral("double")).toBool()) ||
+               e.type == EntityType::TwistedPair;
+    };
+    auto reachOf = [&](const Entity& e) {
+        double half = 0.0;
+        if (e.type == EntityType::TwistedPair) {
+            const TwistFigures f = twistedPairFigures(e);
+            const int wires = std::max(2, e.meta.value(QStringLiteral("twistWires")).toInt(2));
+            if (f.ok) half = f.lane * (wires - 1) / 2.0 + f.wireWidth;
+        } else {
+            half = e.meta.value(QStringLiteral("gap")).toDouble(0.0) / 2.0;
+        }
+        return std::max(worldTolerance() * 2.0, half);
+    };
+    Entity* e = nullptr;
+    bool atStart = false;
+    double best = 1e300;
+    auto consider = [&](Entity& cand) {
+        if (!isRun(cand)) return;
+        const std::vector<Vec2> r =
+            cand.points.size() >= 2 ? cand.points : std::vector<Vec2>{cand.a, cand.b};
+        if (r.size() < 2) return;
+        const double reach = reachOf(cand);
+        const double ds = distance(at, r.front()), de = distance(at, r.back());
+        if (ds <= reach && ds < best) { best = ds; e = &cand; atStart = true; }
+        if (de <= reach && de < best) { best = de; e = &cand; atStart = false; }
+    };
+    // The one already picked first, when there is one - it is what the hand is on - then anything.
+    if (selected_.size() == 1)
+        if (Entity* sel = entityById(selected_.front())) consider(*sel);
+    if (!e)
+        for (Entity& cand : doc_->entities()) consider(cand);
     if (!e) return false;
     const bool sleeve = e->meta.value(QStringLiteral("shrunkEnds")).toBool();
-    const bool dpoly = e->type == EntityType::Polyline && e->meta.value(QStringLiteral("double")).toBool();
     const bool harness = e->type == EntityType::TwistedPair;
-    if (!sleeve && !dpoly && !harness) return false;
     const std::vector<Vec2> route = e->points.size() >= 2 ? e->points : std::vector<Vec2>{e->a, e->b};
-    if (route.size() < 2) return false;
-    const double tol = std::max(worldTolerance() * 2.0, 1e-6);
-    const bool nearStart = distance(at, route.front()) <= tol;
-    const bool nearEnd = distance(at, route.back()) <= tol;
-    if (!nearStart && !nearEnd) return false;
-    const bool atStart = nearStart && (!nearEnd || distance(at, route.front()) < distance(at, route.back()));
     // The tool it was drawn with, so the knees are placed as its first ones were.
     const ToolId drawWith = sleeve    ? ToolId::HeatshrinkRoute
                             : harness ? (e->meta.value(QStringLiteral("twistStraight")).toBool()
@@ -13917,10 +13981,117 @@ bool Editor::beginContinueRun(const Vec2& at) {
     continueAtStart_ = atStart;
     draftPts_ = {atStart ? route.front() : route.back()};
     drafting_ = true;
+    continuePulling_ = true;   // the button is still down: a pull drops the first knee
+    continuePressAt_ = at;
     emit message(QStringLiteral(
         "Carrying the run on: click each knee — Enter finishes, Esc leaves it as it was"));
     emit overlayChanged();
     return true;
+}
+
+void Editor::alignSelection(AlignMode mode) {
+    if (!doc_) return;
+    if (selected_.empty()) {
+        emit message(QStringLiteral("Align: select the objects to line up first"));
+        return;
+    }
+    // BY THE CURSOR, the line is wherever the next click says - snapped, so it can be put exactly
+    // on a point of the drawing rather than near one. Nothing moves until then.
+    if (mode == AlignMode::CursorX || mode == AlignMode::CursorY) {
+        alignPick_ = mode == AlignMode::CursorX ? 1 : 2;
+        emit message(mode == AlignMode::CursorX
+                         ? QStringLiteral("Align: click where to line them up, left to right - "
+                                          "Esc cancels")
+                         : QStringLiteral("Align: click where to line them up, top to bottom - "
+                                          "Esc cancels"));
+        emit overlayChanged();
+        return;
+    }
+    alignSelectionTo(mode, 0.0);
+}
+
+void Editor::alignSelectionTo(AlignMode mode, double at) {
+    if (!doc_ || selected_.empty()) return;
+    // THE OBJECTS, not the pieces: everything in one group is one object, and anything in no group
+    // is an object on its own.
+    struct Obj {
+        std::vector<Entity*> parts;
+        Bounds box;
+    };
+    std::vector<Obj> objs;
+    QHash<QString, size_t> byGroup;
+    for (const QString& id : selected_) {
+        Entity* e = entityById(id);
+        if (!e) continue;
+        const QString group = entityBlockInstance(*e);
+        size_t k;
+        if (!group.isEmpty() && byGroup.contains(group)) {
+            k = byGroup.value(group);
+        } else {
+            k = objs.size();
+            objs.push_back({});
+            if (!group.isEmpty()) byGroup.insert(group, k);
+        }
+        objs[k].parts.push_back(e);
+        const Bounds b = e->bounds();
+        if (b.valid) {
+            objs[k].box.expand(b.min);
+            objs[k].box.expand(b.max);
+        }
+    }
+    objs.erase(std::remove_if(objs.begin(), objs.end(), [](const Obj& o) { return !o.box.valid; }),
+               objs.end());
+    if (objs.empty()) return;
+    // THE LINE THEY GO TO. By object it is the selection's own furthest edge - the leftmost left,
+    // the rightmost right, the highest top, the lowest bottom - so the one already furthest out
+    // stays where it is and the rest come to it. By the cursor it is the point that was clicked.
+    double line = at;
+    if (mode == AlignMode::Left || mode == AlignMode::Bottom) line = 1e300;
+    if (mode == AlignMode::Right || mode == AlignMode::Top) line = -1e300;
+    for (const Obj& o : objs) {
+        switch (mode) {
+        case AlignMode::Left: line = std::min(line, o.box.min.x); break;
+        case AlignMode::Right: line = std::max(line, o.box.max.x); break;
+        case AlignMode::Top: line = std::max(line, o.box.max.y); break;
+        case AlignMode::Bottom: line = std::min(line, o.box.min.y); break;
+        default: break;
+        }
+    }
+    pushUndo();
+    int moved = 0;
+    const std::vector<QString> movingIds = selected_;
+    for (Obj& o : objs) {
+        Vec2 d{0.0, 0.0};
+        switch (mode) {
+        case AlignMode::Left: d.x = line - o.box.min.x; break;
+        case AlignMode::Right: d.x = line - o.box.max.x; break;
+        case AlignMode::Top: d.y = line - o.box.max.y; break;
+        case AlignMode::Bottom: d.y = line - o.box.min.y; break;
+        // BY THE CURSOR, the middle of each object goes on the line: a line clicked through the
+        // drawing is a line to hang things on, and what hangs on a line is its middle.
+        case AlignMode::CursorX: d.x = line - (o.box.min.x + o.box.max.x) / 2.0; break;
+        case AlignMode::CursorY: d.y = line - (o.box.min.y + o.box.max.y) / 2.0; break;
+        }
+        if (std::abs(d.x) < 1e-9 && std::abs(d.y) < 1e-9) continue;
+        for (Entity* e : o.parts) {
+            // A connector takes the wires landed on it along, as it does on any move.
+            if (e->type == EntityType::Connector) dragAttachedWires(*e, d, movingIds);
+            translateEntity(*e, d);
+        }
+        ++moved;
+    }
+    refreshLiveLabelFit();   // a label in hand went with its objects - see refreshLiveLabelFit
+    doc_->setDirty(true);
+    emit changed();
+    emit overlayChanged();
+    const char* how = mode == AlignMode::Left      ? "by their left edges"
+                      : mode == AlignMode::Right   ? "by their right edges"
+                      : mode == AlignMode::Top     ? "by their tops"
+                      : mode == AlignMode::Bottom  ? "by their bottoms"
+                      : mode == AlignMode::CursorX ? "on the line clicked, left to right"
+                                                   : "on the line clicked, top to bottom";
+    emit message(QStringLiteral("Aligned %1 object(s) %2").arg(int(objs.size())).arg(QLatin1String(how)));
+    Q_UNUSED(moved);
 }
 
 void Editor::clearAutoRoute() {
@@ -18450,6 +18621,12 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
     const bool ctrl = mods & Qt::ControlModifier;
     // Esc gives up on a rectangle being picked, and tells whoever asked for it so that it can put itself
     // back together (the page setup reopens either way).
+    if (alignPick_ != 0 && key == Qt::Key_Escape) {
+        alignPick_ = 0;
+        emit message(QStringLiteral("Align cancelled"));
+        emit overlayChanged();
+        return true;
+    }
     if (rectPick_ && key == Qt::Key_Escape) {
         auto cancel = rectPickCancel_;
         endRectanglePick();
@@ -20442,6 +20619,22 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 p.drawLine(QPointF(c.x(), c.y() - arm), QPointF(c.x(), c.y() + arm));
             }
         }
+    }
+
+    // THE LINE AN ALIGN WILL GO TO, through the cursor, while it waits for the click: dashed right
+    // across the view, so what it will line up against can be seen before it is chosen.
+    if (alignPick_ != 0) {
+        p.save();
+        QPen guide(paperInk(QColor(120, 200, 255, 200)));
+        guide.setCosmetic(true);
+        guide.setWidthF(1.2);
+        guide.setStyle(Qt::DashLine);
+        p.setPen(guide);
+        const QPointF c = vt.toScreen(cursor_);
+        const QRect win = p.viewport();
+        if (alignPick_ == 1) p.drawLine(QPointF(c.x(), win.top()), QPointF(c.x(), win.bottom()));
+        else p.drawLine(QPointF(win.left(), c.y()), QPointF(win.right(), c.y()));
+        p.restore();
     }
 
     // Snap marker.
