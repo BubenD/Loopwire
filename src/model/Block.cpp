@@ -11,6 +11,9 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QUuid>
+#include <QHash>
+#include <cmath>
+#include <functional>
 
 namespace Edraw_Desktop {
 namespace {
@@ -168,11 +171,102 @@ std::vector<Entity> partBlockInstance(const LibraryPart& part, bool mechanical, 
     // lines that nothing can trace back to a part number - the bill of materials could not count it, and
     // counting what is on the drawing is most of what a bill of materials is for.
     for (Entity& e : out) e.meta.insert(QStringLiteral("libPart"), part.id);
+    // THE FACES THE WIRES ENTER BY go down with its body, where it was put down.
+    if (mechanical && !part.outputs.empty()) {
+        QJsonArray faces;
+        for (const MechOutputFace& f : part.outputs)
+            for (const Vec2& v : {f.a + at, f.b + at}) {
+                faces.append(v.x);
+                faces.append(v.y);
+            }
+        for (Entity& e : out) e.meta.insert(QLatin1String(kEntryFacesKey), faces);
+    }
     // And WHICH drawing of it: the same part put down as its body and as its symbol is one part to buy.
     for (Entity& e : out)
         e.meta.insert(QLatin1String(kLibPartViewKey),
                       mechanical ? QStringLiteral("mechanical") : QStringLiteral("schematic"));
     return out;
+}
+
+int recoverEntryFaces(std::vector<Entity>& ents, const PartsCatalog& catalog) {
+    // Each copy's entities, in the order they were put down - the order of the library's drawing.
+    QHash<QString, std::vector<size_t>> copies;
+    QStringList order;
+    for (size_t i = 0; i < ents.size(); ++i) {
+        const Entity& e = ents[i];
+        if (!e.meta.contains(QStringLiteral("libPart")) ||
+            e.meta.contains(QLatin1String(kEntryFacesKey)))
+            continue;
+        if (e.meta.value(QLatin1String(kLibPartViewKey)).toString() != QLatin1String("mechanical"))
+            continue;
+        const QString key = e.meta.value(QLatin1String(kInstanceKey)).toString();
+        if (key.isEmpty()) continue;
+        if (!copies.contains(key)) order << key;
+        copies[key].push_back(i);
+    }
+    int stamped = 0;
+    for (const QString& key : order) {
+        const std::vector<size_t>& idx = copies[key];
+        const LibraryPart* part =
+            catalog.byId(ents[idx.front()].meta.value(QStringLiteral("libPart")).toString());
+        if (!part || part->outputs.empty() || part->mechanical.size() != int(idx.size())) continue;
+        // The same points, in the library and on the sheet.
+        std::vector<Vec2> from, to;
+        bool same = true;
+        for (size_t j = 0; j < idx.size() && same; ++j) {
+            const Entity lib = Entity::fromJson(part->mechanical[int(j)].toObject());
+            const Entity& put = ents[idx[j]];
+            if (lib.type != put.type || lib.points.size() != put.points.size()) {
+                same = false;
+                break;
+            }
+            from.push_back(lib.a);
+            to.push_back(put.a);
+            from.push_back(lib.b);
+            to.push_back(put.b);
+            for (size_t m = 0; m < lib.points.size(); ++m) {
+                from.push_back(lib.points[m]);
+                to.push_back(put.points[m]);
+            }
+        }
+        if (!same || from.size() < 2) continue;
+        size_t far = 0;
+        for (size_t i = 1; i < from.size(); ++i)
+            if (distance(from[i], from[0]) > distance(from[far], from[0])) far = i;
+        if (distance(from[far], from[0]) < 1e-9) continue;
+        // HOW IT WAS PLACED: turned and scaled about its first point and moved, and perhaps mirrored
+        // first. Whichever of the two puts every point where it is on the sheet is the one.
+        std::function<Vec2(const Vec2&)> placed;
+        for (const bool mirror : {false, true}) {
+            auto m = [mirror](const Vec2& p) { return mirror ? Vec2{p.x, -p.y} : p; };
+            const Vec2 v = m(from[far]) - m(from[0]);
+            const Vec2 w = to[far] - to[0];
+            const double s = w.length() / v.length();
+            const double turn = std::atan2(w.y, w.x) - std::atan2(v.y, v.x);
+            const double c = std::cos(turn) * s, sn = std::sin(turn) * s;
+            const Vec2 p0 = m(from[0]), q0 = to[0];
+            auto t = [=](const Vec2& p) {
+                const Vec2 d = m(p) - p0;
+                return q0 + Vec2{d.x * c - d.y * sn, d.x * sn + d.y * c};
+            };
+            double err = 0.0;
+            for (size_t i = 0; i < from.size(); ++i) err = std::max(err, distance(t(from[i]), to[i]));
+            if (err < 1e-3 * std::max(1.0, w.length())) {
+                placed = t;
+                break;
+            }
+        }
+        if (!placed) continue;
+        QJsonArray faces;
+        for (const MechOutputFace& f : part->outputs)
+            for (const Vec2& v : {placed(f.a), placed(f.b)}) {
+                faces.append(v.x);
+                faces.append(v.y);
+            }
+        for (size_t i : idx) ents[i].meta.insert(QLatin1String(kEntryFacesKey), faces);
+        ++stamped;
+    }
+    return stamped;
 }
 
 std::vector<Entity> partDrawingBlockInstance(const LibraryPart& part, const QJsonArray& drawing,

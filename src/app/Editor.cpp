@@ -1586,6 +1586,7 @@ void Editor::setTool(ToolId t) {
     freeMarkPreview_ = Entity();
     freeLabelPreview_.clear();
     alignPick_ = 0;   // a new tool is a new command: an align left waiting is given up
+    fanoutShiftPresses_ = 0;
     cancelDraw();
     modifyPts_.clear();
     moveTurn_ = 0.0;   // the move ended: nothing is carrying a turn any more
@@ -3764,6 +3765,13 @@ void Editor::toggleShiftMode() {
     // so pressing it must not also flip a mode somewhere else.
     if (tool_ == ToolId::AutoRoute) return;
     if (tool_ == ToolId::Fanout) {
+        // THE FIRST SHIFT IS NOT A TURN: it is as often the start of Shift and a click on a part's
+        // entry face, which lands the fan there the way round it is. Pressed again, it turns it.
+        if (++fanoutShiftPresses_ < 2) {
+            emit message(QStringLiteral(
+                "Fanout: Shift on an entry face lands it there - Shift again turns it round"));
+            return;
+        }
         fanoutAtFinish_ = !fanoutAtFinish_;
         emit message(fanoutAtFinish_
                          ? QStringLiteral("Fanout: from the bundle out to the wires")
@@ -4708,6 +4716,7 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
                             Qt::KeyboardModifiers mods) {
     if (!doc_ || button != Qt::LeftButton) return;
     onPointerMove(raw);
+    lastRawPress_ = raw;
     const Vec2 p = cursor_;
     // A rectangle being picked takes the clicks before any tool sees them - and it takes the SNAPPED
     // point, because that is what `p` is: whatever the snaps caught, override menu included.
@@ -9825,20 +9834,47 @@ std::vector<Vec2> boundaryPointsOf(const Entity& e, bool manyJoints = true) {
 }
 } // namespace
 
+// EVERY ENTRY FACE AMONG SOME OBJECTS: a placed part's output faces (carried on each of its
+// entities - taken once per copy), and any line marked as a part's connection line.
+static std::vector<std::pair<Vec2, Vec2>> entryFacesOf(const std::vector<Entity>& ents,
+                                                       const Document* doc) {
+    std::vector<std::pair<Vec2, Vec2>> out;
+    QSet<QString> seen;
+    for (const Entity& e : ents) {
+        if (doc)
+            if (const Layer* layer = doc->findLayer(e.layer); layer && !layer->visible) continue;
+        if (e.meta.contains(QLatin1String(kEntryFacesKey))) {
+            const QString copy = entityBlockInstance(e);
+            if (copy.isEmpty() || !seen.contains(copy)) {
+                if (!copy.isEmpty()) seen.insert(copy);
+                const QJsonArray f = e.meta.value(QLatin1String(kEntryFacesKey)).toArray();
+                for (int i = 0; i + 3 < f.size(); i += 4) {
+                    const Vec2 a{f[i].toDouble(), f[i + 1].toDouble()};
+                    const Vec2 b{f[i + 2].toDouble(), f[i + 3].toDouble()};
+                    if (distance(a, b) > 1e-9) out.push_back({a, b});
+                }
+            }
+        }
+        if (e.meta.value(QLatin1String(kConnectionLineKey)).toBool())
+            for (const auto& seg : entitySelectSegments(e))
+                if (distance(seg.first, seg.second) > 1e-9) out.push_back(seg);
+    }
+    return out;
+}
+
+std::vector<std::pair<Vec2, Vec2>> Editor::entryFaces() const {
+    return doc_ ? entryFacesOf(doc_->entities(), doc_) : std::vector<std::pair<Vec2, Vec2>>{};
+}
+
 std::optional<std::pair<Vec2, Vec2>> Editor::entryFaceAt(const Vec2& p) const {
-    if (!doc_) return std::nullopt;
     const double tol = worldTolerance() * 1.5;
     std::optional<std::pair<Vec2, Vec2>> best;
     double bestD = tol;
-    for (const Entity& e : doc_->entities()) {
-        if (!e.meta.value(QLatin1String(kConnectionLineKey)).toBool()) continue;
-        if (const Layer* layer = doc_->findLayer(e.layer); layer && !layer->visible) continue;
-        for (const auto& seg : entitySelectSegments(e)) {
-            const double d = closestPointOnSegment(p, seg.first, seg.second).distance;
-            if (d <= bestD && distance(seg.first, seg.second) > 1e-9) {
-                bestD = d;
-                best = seg;
-            }
+    for (const auto& seg : entryFaces()) {
+        const double d = closestPointOnSegment(p, seg.first, seg.second).distance;
+        if (d <= bestD) {
+            bestD = d;
+            best = seg;
         }
     }
     return best;
@@ -9899,7 +9935,9 @@ void Editor::handleDrawPress(const Vec2& p) {
     // connected to that part without the spread being worked out by hand. The first click starts
     // the run there; any later one is where it arrives, and the run is laid.
     if (faceTool && (pressMods_ & Qt::ShiftModifier) && !twistedFrozen_) {
-        if (const auto face = entryFaceAt(p)) {
+        auto face = entryFaceAt(p);
+        if (!face) face = entryFaceAt(lastRawPress_);
+        if (face) {
             const Vec2 centre = (face->first + face->second) * 0.5;
             const double len = distance(face->first, face->second);
             const bool first = draftPts_.empty();
@@ -10027,12 +10065,6 @@ void Editor::handleDrawPress(const Vec2& p) {
             emit message(QStringLiteral("Harness run: back to the drawing - click the next knee"));
             break;
         }
-        // WHICH WAY ROUND A FANOUT IS DRAWN. Ordinarily the first click is at the spread wires and
-        // the run goes back to the bundle; with SHIFT it is the other way about - start at the
-        // bundle and draw out to the wires. Read at the FIRST click, because that is the one that
-        // says which end you began at, and held for the rest of the drawing.
-        if (tool_ == ToolId::Fanout && draftPts_.empty())
-            fanoutAtFinish_ = (pressMods_ & Qt::ShiftModifier) != 0;
         // AND A KNEE IS NOT PUT WHERE THE RUN IS NOT. Held back, the run is drawn at the last place
         // the bundle could be taken and the cursor is somewhere else: clicking means the place on
         // screen, which is the held one.
@@ -11138,7 +11170,8 @@ void Editor::finishDraw() {
         e.type = (tool_ == ToolId::Spline) ? EntityType::Spline : EntityType::Polyline;
         e.points = draftPts_;
         if (tool_ == ToolId::DoublePolyline) {
-            e.points = doubleRunCentre(draftPts_, draftCableGap(), doubleSecondBelow());
+            e.points = faceFitting() ? draftPts_
+                                     : doubleRunCentre(draftPts_, draftCableGap(), doubleSecondBelow());
             e.meta.insert("double", true);
             e.meta.insert("gap", draftCableGap());
             if (dpolyHasLsRef_) {
@@ -18595,13 +18628,10 @@ void Editor::placeEntities(const std::vector<Entity>& ents, const std::optional<
     std::optional<Vec2> grip = heldAt;
     if (!grip) {
         bool library = false;
-        for (const Entity& e : clipboard_) {
+        for (const Entity& e : clipboard_)
             if (e.meta.contains(QStringLiteral("libPart"))) library = true;
-            if (!grip && e.meta.value(QLatin1String(kConnectionLineKey)).toBool()) {
-                const auto segs = entitySelectSegments(e);
-                if (!segs.empty()) grip = (segs.front().first + segs.front().second) * 0.5;
-            }
-        }
+        const auto faces = entryFacesOf(clipboard_, nullptr);
+        if (!faces.empty()) grip = (faces.front().first + faces.front().second) * 0.5;
         if (!library) grip.reset();
         else if (!grip && b.valid) grip = (b.min + b.max) * 0.5;
     }
@@ -20240,7 +20270,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             for (size_t i = 0; i < previewRadii.size(); ++i)
                 if (previewRadii[i] > 0) centerRadii[i] = previewRadii[i] + h;
             const std::vector<Vec2> shifted =
-                doubleRunCentre(pts, draftCableGap(), doubleSecondBelow());
+                faceFitting() ? pts : doubleRunCentre(pts, draftCableGap(), doubleSecondBelow());
             const std::vector<Vec2> center =
                 previewAnyFillet ? roundedPolylinePerCorner(shifted, centerRadii) : shifted;
             std::vector<Vec2> r1 = offsetPolyline(center, h);
@@ -20828,17 +20858,13 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         face.setCosmetic(true);
         face.setWidthF(3.2);
         face.setCapStyle(Qt::RoundCap);
-        for (const Entity& e : doc_->entities()) {
-            if (!e.meta.value(QLatin1String(kConnectionLineKey)).toBool()) continue;
-            if (const Layer* layer = doc_->findLayer(e.layer); layer && !layer->visible) continue;
-            for (const auto& seg : entitySelectSegments(e)) {
-                p.setPen(face);
-                p.drawLine(vt.toScreen(seg.first), vt.toScreen(seg.second));
-                // and the middle of it, where a run landed on it arrives
-                const QPointF c = vt.toScreen((seg.first + seg.second) * 0.5);
-                p.setPen(QPen(paperInk(QColor(255, 120, 220)), 1.2));
-                p.drawEllipse(c, 3.5, 3.5);
-            }
+        for (const auto& seg : entryFaces()) {
+            p.setPen(face);
+            p.drawLine(vt.toScreen(seg.first), vt.toScreen(seg.second));
+            // and the middle of it, where a run landed on it arrives
+            const QPointF c = vt.toScreen((seg.first + seg.second) * 0.5);
+            p.setPen(QPen(paperInk(QColor(255, 120, 220)), 1.2));
+            p.drawEllipse(c, 3.5, 3.5);
         }
         p.restore();
     }

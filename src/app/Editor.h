@@ -369,6 +369,7 @@ public:
     void setAltHeld(bool held);
     // The entry face under a point, as its two ends, or nothing.
     std::optional<std::pair<Vec2, Vec2>> entryFaceAt(const Vec2& p) const;
+    std::vector<std::pair<Vec2, Vec2>> entryFaces() const;
     double shrinkWidth() const { return shrinkWidth_; }
     void setShrinkWidth(double mm) { shrinkWidth_ = std::max(0.1, mm); }
     void setShrinkSquareEnds(bool on) {
@@ -1821,6 +1822,8 @@ private:
     double faceFanScale_ = 95.0;                   // a fan landed on an entry face spans this much of it
     double faceCableScale_ = 60.0;                 // a cable or sleeve landed on one is this wide of it
     bool altHeld_ = false;
+    Vec2 lastRawPress_{0.0, 0.0};                  // where the last press was, before any snap
+    int fanoutShiftPresses_ = 0;                   // Shift pressed during this fanout
     // THE ENTRY FACES THE RUN BEING DRAWN LANDS ON: the length of the face at its start and at its
     // finish (0 = none), and the width that makes a cable or sleeve (0 = its own).
     double faceLenStart_ = 0.0;
@@ -1828,6 +1831,9 @@ private:
     double faceCableWidth_ = 0.0;
     void applyFaceFit(Entity& e) const;
     double draftCableGap() const { return faceCableWidth_ > 0.0 ? faceCableWidth_ : doubleLineGap_; }
+    // A cable landed on an entry face is CENTRED on what was clicked, not railed along it: it has to
+    // arrive on the middle of the face, and a rail through the click puts its middle half a width off.
+    bool faceFitting() const { return faceLenStart_ > 0.0 || faceLenFinish_ > 0.0; }
     double draftShrinkWidth() const { return faceCableWidth_ > 0.0 ? faceCableWidth_ : shrinkWidth_; }
     bool autoRouteDragEnd_ = false;                // that end is being slid along the wall
     void autoRouteDragEndTo(const Vec2& at);

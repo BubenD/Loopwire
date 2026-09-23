@@ -4,6 +4,8 @@
 #include "app/Editor.h"
 #include "geometry/Geometry.h"
 
+#include <QApplication>
+#include <QPointer>
 #include <QChildEvent>
 #include <QCompleter>
 #include <QContextMenuEvent>
@@ -53,6 +55,25 @@ private:
 };
 } // namespace
 
+namespace {
+// Alt, pressed or let go anywhere in the application, told to the canvas it belongs to.
+class AltWatcher : public QObject {
+public:
+    explicit AltWatcher(CanvasWidget* canvas) : QObject(canvas), canvas_(canvas) {}
+    bool eventFilter(QObject* obj, QEvent* e) override {
+        if (e->type() == QEvent::KeyPress || e->type() == QEvent::KeyRelease) {
+            auto* k = static_cast<QKeyEvent*>(e);
+            if (k->key() == Qt::Key_Alt && !k->isAutoRepeat() && canvas_)
+                canvas_->altKey(e->type() == QEvent::KeyPress, obj);
+        }
+        return false;
+    }
+
+private:
+    QPointer<CanvasWidget> canvas_;
+};
+} // namespace
+
 CanvasWidget::CanvasWidget(QWidget* parent) : QWidget(parent) {
     setMouseTracking(true);
     setFocusPolicy(Qt::StrongFocus);
@@ -60,6 +81,13 @@ CanvasWidget::CanvasWidget(QWidget* parent) : QWidget(parent) {
     // We drive the right-click menu (and right-drag move/copy) from the mouse
     // events, so suppress the OS/Qt context-menu event.
     setContextMenuPolicy(Qt::PreventContextMenu);
+    // Alt lights the entry faces whichever widget of the window has the keyboard - the ribbon
+    // after a click on it, a panel - not only while the canvas has it. See eventFilter.
+    //
+    // A WATCHER OF ITS OWN, not the canvas: the canvas's own filter serves its input box and
+    // completer, and handed every event of the application it asks the completer for its popup -
+    // which makes one - in the middle of whatever else is going on.
+    qApp->installEventFilter(new AltWatcher(this));
     setCursor(Qt::BlankCursor); // hide the OS cursor; we draw an AutoCAD crosshair
     QPalette pal = palette();
     pal.setColor(QPalette::Window, QColor("#10141b"));
@@ -122,6 +150,16 @@ void CanvasWidget::hideDynInput() {
     dynInput_->clear();
     dynInput_->hide();
     setFocus(Qt::OtherFocusReason);
+}
+
+void CanvasWidget::altKey(bool down, QObject* target) {
+    // Only for a key meant for this canvas's own window.
+    const bool ours = target && target->isWidgetType() &&
+                      static_cast<QWidget*>(target)->window() == window();
+    if (!editor_ || !ours || !isVisible() || !window()->isActiveWindow()) return;
+    if (editor_->altHeld() == down) return;
+    editor_->setAltHeld(down);
+    update();
 }
 
 bool CanvasWidget::eventFilter(QObject* obj, QEvent* e) {

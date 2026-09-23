@@ -98,7 +98,7 @@ void mapPoints(Entity& e, F fn) {
         e.meta.insert(QLatin1String("holes"), arr);
     }
     // Extend cut-cap edge sets (flat [ax,ay,bx,by,...]) follow the entity too - all four slots again.
-    for (const char* k : {"cutStartPoly", "cutStart2Poly", "cutEndPoly", "cutEnd2Poly"}) {
+    for (const char* k : {"cutStartPoly", "cutStart2Poly", "cutEndPoly", "cutEnd2Poly", "entryFaces"}) {
         if (!e.meta.contains(QLatin1String(k))) continue;
         QJsonArray arr = e.meta.value(QLatin1String(k)).toArray();
         for (int i = 0; i + 1 < arr.size(); i += 2) {

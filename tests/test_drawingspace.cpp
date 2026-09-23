@@ -1659,6 +1659,25 @@ int run_drawingspace_tests() {
             QKeyEvent up(QEvent::KeyRelease, Qt::Key_Alt, Qt::NoModifier);
             QApplication::sendEvent(canvas, &up);
             check(lit && !editor->altHeld(), "alt: held it lights the entry faces, let go it does not");
+            // AND WITH THE KEYBOARD SOMEWHERE ELSE IN THE WINDOW - on the ribbon after a click.
+            QWidget* other = nullptr;
+            for (QWidget* w : win.findChildren<QWidget*>())
+                if (w != canvas && w->isVisible() && !canvas->isAncestorOf(w)) {
+                    other = w;
+                    break;
+                }
+            win.activateWindow();
+            QApplication::setActiveWindow(&win);
+            if (other) {
+                QKeyEvent down2(QEvent::KeyPress, Qt::Key_Alt, Qt::AltModifier);
+                QApplication::sendEvent(other, &down2);
+                const bool lit2 = editor->altHeld();
+                QKeyEvent up2(QEvent::KeyRelease, Qt::Key_Alt, Qt::NoModifier);
+                QApplication::sendEvent(other, &up2);
+                std::printf("  alt: with the keys on another widget, lit %d\n", lit2 ? 1 : 0);
+                check(lit2 && !editor->altHeld(),
+                      "alt: it lights them wherever in the window the keyboard is");
+            }
         } else {
             check(false, "alt: found the canvas and its editor");
         }

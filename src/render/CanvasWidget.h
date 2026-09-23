@@ -253,6 +253,13 @@ protected:
     void keyReleaseEvent(QKeyEvent* e) override;
     void focusOutEvent(QFocusEvent* e) override;
     bool event(QEvent* e) override;
+
+public:
+    // Alt pressed or let go on `target`, anywhere in the application: lights the entry faces while
+    // held, when the key was meant for this canvas's window.
+    void altKey(bool down, QObject* target);
+
+protected:
     void enterEvent(QEnterEvent* e) override; // show the drawn crosshair
     void leaveEvent(QEvent* e) override;      // hide it
     bool eventFilter(QObject* obj, QEvent* e) override; // dynamic-input field keys

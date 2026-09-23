@@ -14741,6 +14741,22 @@ void MainWindow::activateIndex(int index) {
     doc_ = docs_[index].get();
     canvas_->setDocument(doc_);
     editor_->setDocument(doc_); // resets selection/undo for this drawing
+    // PARTS PUT DOWN BEFORE THEIR ENTRY FACES WERE CARRIED get them now, from the library - so Alt
+    // shows them and Shift lands a run on them on an old drawing as on a new one.
+    {
+        bool missing = false;
+        for (const Entity& e : doc_->entities())
+            if (e.meta.contains(QStringLiteral("libPart")) &&
+                !e.meta.contains(QLatin1String(kEntryFacesKey))) {
+                missing = true;
+                break;
+            }
+        if (missing) {
+            PartsCatalog catalog;
+            catalog.openRemembered();
+            recoverEntryFaces(doc_->entities(), catalog);
+        }
+    }
     syncDrawingSpaceTabs();
     // A block being edited is not a drawing: the canvas goes grey, so it is never in doubt which
     // one is which. Switching back to a drawing puts the ordinary background back.

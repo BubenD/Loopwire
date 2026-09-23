@@ -72,6 +72,17 @@ std::vector<Entity> blockInstanceEntities(const BlockDef& block, const Vec2& at,
 // than counting three drawings as three parts.
 inline constexpr char kLibPartViewKey[] = "libPartView";
 
+// THE FACES THE WIRES ENTER BY, carried on a placed part: the library part's output faces, in sheet
+// coordinates, as a flat [ax, ay, bx, by, ...] on every entity of the copy. They are geometry, so
+// they move, turn, mirror and scale with the part (EntityTransforms maps them like its points).
+inline constexpr char kEntryFacesKey[] = "entryFaces";
+
+// Put the entry faces on part copies already on a sheet from before they were carried: each copy of
+// a mechanical part drawing is matched against the library's drawing to find how it was placed
+// (moved, turned, mirrored, scaled), and the part's faces are put where that puts them. Returns how
+// many copies were given faces; a copy that no longer matches its drawing is left as it is.
+int recoverEntryFaces(std::vector<Entity>& ents, const PartsCatalog& catalog);
+
 // One copy of a library part's drawing, stamped as a block copy: what goes on the sheet when a part is
 // inserted, or when the harness builder puts one down. The block is the part - the same name
 // libraryBlocks() gives it - so editing the part's drawing rebuilds every copy already placed.

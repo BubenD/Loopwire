@@ -12134,9 +12134,10 @@ int run_editor_tests() {
             const double gap = run ? run->meta.value(QStringLiteral("gap")).toDouble() : 0.0;
             std::printf("  face fit: %s %.1f across\n", sleeve ? "sleeve" : "cable", gap);
             check(run && run->id != QStringLiteral("FACE") && std::abs(gap - 24.0) < 1e-6 &&
-                      !ed.isDrafting(),
-                  sleeve ? "face fit: a sleeve landed on a face is 60% of it across"
-                         : "face fit: a cable landed on a face is 60% of it across");
+                      !ed.isDrafting() && !run->points.empty() &&
+                      distance(run->points.back(), Vec2{200.0, 0.0}) < 1e-6,
+                  sleeve ? "face fit: a sleeve landed on a face is 60% of it across, centred on it"
+                         : "face fit: a cable landed on a face is 60% of it across, centred on it");
         }
         // A LIBRARY PART is held by its entry face, so the snap lands the face on a line.
         {
@@ -12175,6 +12176,115 @@ int run_editor_tests() {
             check(std::abs(faceMid.y - 100.0) < 1e-6 && std::abs(faceMid.x - 173.0) < 1e-6,
                   "part placement: held by its entry face, which Nearest lands on the line");
         }
+    }
+
+    // ---- A library part's OUTPUT FACES are its entry faces on the sheet ---------------------------
+    {
+        // A box 30 x 20 whose right-hand side is marked in the library as the face the wires leave by.
+        PartsCatalog cat;
+        cat.setRemembering(false);
+        QString partId;
+        {
+            LibraryPart& part = cat.active().add(PartKind::Connector);
+            partId = part.id;
+            QJsonArray drawing;
+            for (const auto& [a, b] : {std::pair<Vec2, Vec2>{{0, -10}, {30, -10}},
+                                       std::pair<Vec2, Vec2>{{30, -10}, {30, 10}},
+                                       std::pair<Vec2, Vec2>{{30, 10}, {0, 10}},
+                                       std::pair<Vec2, Vec2>{{0, 10}, {0, -10}}}) {
+                Entity l;
+                l.type = EntityType::Line;
+                l.a = a;
+                l.b = b;
+                drawing.append(l.toJson());
+            }
+            part.mechanical = drawing;
+            part.outputs.push_back({{30, -10}, {30, 10}});
+        }
+        const LibraryPart* part = cat.byId(partId);
+        const std::vector<Entity> placed = part ? partBlockInstance(*part, true, Vec2{0, 0})
+                                                : std::vector<Entity>{};
+        check(!placed.empty() && placed.front().meta.contains(QLatin1String(kEntryFacesKey)),
+              "output faces: a placed part carries the faces its wires enter by");
+
+        // Placed, TURNED a quarter round and moved: the face goes with it, and Alt / Shift find it.
+        Document d;
+        for (Entity e : placed) {
+            rotateEntity(e, Vec2{0, 0}, M_PI / 2.0);
+            translateEntity(e, Vec2{100, 50});
+            e.id = QStringLiteral("P%1").arg(d.entities().size());
+            d.entities().push_back(e);
+        }
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        const auto faces = ed.entryFaces();
+        const Vec2 mid = faces.empty() ? Vec2{} : (faces.front().first + faces.front().second) * 0.5;
+        std::printf("  output faces: %d on the sheet, the turned one's middle at %.1f,%.1f\n",
+                    int(faces.size()), mid.x, mid.y);
+        check(faces.size() == 1 && distance(mid, Vec2{100, 80}) < 1e-6,
+              "output faces: one per copy, and it turned and moved with the part");
+
+        // A CABLE landed on it with Shift: centred on the face, 60% of it across.
+        ed.setTool(ToolId::DoublePolyline);
+        ed.onPointerMove({100, 200});
+        ed.onPointerPress({100, 200}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({104, 80.4});
+        ed.onPointerPress({104, 80.4}, Qt::LeftButton, Qt::ShiftModifier);
+        const Entity& cable = d.entities().back();
+        check(cable.meta.value(QStringLiteral("double")).toBool() &&
+                  std::abs(cable.meta.value(QStringLiteral("gap")).toDouble() - 12.0) < 1e-6 &&
+                  distance(cable.points.back(), Vec2{100, 80}) < 1e-6,
+              "output faces: Shift lands a cable on the middle of one, 60% of it across");
+
+        // PUT DOWN BEFORE FACES WERE CARRIED: a copy mirrored and turned, with no faces on it, gets
+        // them from the library by matching its drawing.
+        std::vector<Entity> old;
+        for (Entity e : placed) {
+            e.meta.remove(QLatin1String(kEntryFacesKey));
+            mirrorEntity(e, Vec2{0, 0}, Vec2{1, 0});
+            rotateEntity(e, Vec2{0, 0}, M_PI);
+            translateEntity(e, Vec2{-40, 7});
+            old.push_back(e);
+        }
+        // what the face would be, the same way round
+        Entity probe;
+        probe.type = EntityType::Line;
+        probe.a = {30, -10};
+        probe.b = {30, 10};
+        mirrorEntity(probe, Vec2{0, 0}, Vec2{1, 0});
+        rotateEntity(probe, Vec2{0, 0}, M_PI);
+        translateEntity(probe, Vec2{-40, 7});
+        const int got = recoverEntryFaces(old, cat);
+        const QJsonArray f = old.front().meta.value(QLatin1String(kEntryFacesKey)).toArray();
+        const Vec2 fa = f.size() >= 4 ? Vec2{f[0].toDouble(), f[1].toDouble()} : Vec2{1e9, 1e9};
+        const Vec2 fb = f.size() >= 4 ? Vec2{f[2].toDouble(), f[3].toDouble()} : Vec2{1e9, 1e9};
+        check(got == 1 && distance(fa, probe.a) < 1e-6 && distance(fb, probe.b) < 1e-6,
+              "output faces: a copy placed before, mirrored and turned, gets them where they belong");
+    }
+
+    // ---- A fanout is not turned round by the first Shift, only by the next ----------------------
+    {
+        Document d;
+        Editor ed;
+        ed.setDocument(&d);
+        ed.setTool(ToolId::Fanout);
+        const bool was = ed.fanoutAtFinish();
+        ed.toggleShiftMode();
+        check(ed.fanoutAtFinish() == was, "fanout: the first Shift does not turn it round");
+        ed.toggleShiftMode();
+        check(ed.fanoutAtFinish() != was, "fanout: the second one does");
+        ed.toggleShiftMode();
+        check(ed.fanoutAtFinish() == was, "fanout: and each one after it");
+        ed.setTool(ToolId::Fanout);
+        ed.toggleShiftMode();
+        check(ed.fanoutAtFinish() == was, "fanout: a fresh fanout starts counting again");
+        // Nor does a Shift-click at the start - that is how a face is landed on.
+        noSnap(ed);
+        ed.setTool(ToolId::Fanout);
+        ed.onPointerMove({0, 0});
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::ShiftModifier);
+        check(ed.fanoutAtFinish() == was, "fanout: a Shift-click to start it does not turn it");
     }
 
     // ---- Align: by the objects' own edges, or on a line clicked through the drawing -------------
