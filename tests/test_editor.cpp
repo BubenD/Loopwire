@@ -12037,6 +12037,146 @@ int run_editor_tests() {
         }
     }
 
+    // ---- Entry faces: Shift lands a run on one, sized to it; Alt shows them; a part is held by it -
+    {
+        // A part's entry face: a vertical line 40 long at x = 200, marked as its connection line.
+        auto sheet = [](Document& d) {
+            Entity face;
+            face.id = QStringLiteral("FACE");
+            face.type = EntityType::Line;
+            face.a = {200.0, -20.0};
+            face.b = {200.0, 20.0};
+            face.meta.insert(QLatin1String(kConnectionLineKey), true);
+            d.entities().push_back(face);
+        };
+        auto last = [](const Document& d) -> const Entity* {
+            return d.entities().empty() ? nullptr : &d.entities().back();
+        };
+        {
+            Document d;
+            sheet(d);
+            Editor ed;
+            ed.setDocument(&d);
+            noSnap(ed);
+            check(ed.entryFaceAt({200.5, 7.0}).has_value() && !ed.entryFaceAt({150.0, 0.0}),
+                  "entry face: found under the cursor, and only there");
+            ed.setAltHeld(true);
+            check(ed.altHeld(), "entry face: Alt held says so");
+            ed.setAltHeld(false);
+        }
+        // A HARNESS finished with Shift on the face: arrives at its middle, the fan over 95% of it.
+        {
+            Document d;
+            sheet(d);
+            Editor ed;
+            ed.setDocument(&d);
+            noSnap(ed);
+            ed.setTool(ToolId::WiresRun);
+            ed.setTwistWires(4);
+            ed.onPointerMove({0.0, 0.0});
+            ed.onPointerPress({0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerMove({200.0, 7.0});
+            ed.onPointerPress({200.0, 7.0}, Qt::LeftButton, Qt::ShiftModifier);
+            const Entity* run = last(d);
+            check(run && run->type == EntityType::TwistedPair && !ed.isDrafting(),
+                  "face fit: Shift on the face lays the harness there");
+            if (run && run->type == EntityType::TwistedPair) {
+                const TwistFigures f = twistedPairFigures(*run);
+                const double laneB = run->meta.value(QStringLiteral("twistLaneFinish")).toDouble();
+                const double spread = laneB * 3.0 + f.wireWidth;
+                std::printf("  face fit: harness ends at %.1f,%.1f, finish fan %.2f of 40 (start lane %.2f)\n",
+                            run->points.back().x, run->points.back().y, spread, f.lane);
+                check(distance(run->points.back(), Vec2{200.0, 0.0}) < 1e-6,
+                      "face fit: it arrives at the middle of the face");
+                check(std::abs(spread - 38.0) < 1e-6, "face fit: its fan spans 95% of the face");
+                check(std::abs(f.lane - laneB) > 1e-3,
+                      "face fit: and the end it started at keeps its own spread");
+            }
+        }
+        // STARTED on the face, at the scale set in the options.
+        {
+            Document d;
+            sheet(d);
+            Editor ed;
+            ed.setDocument(&d);
+            noSnap(ed);
+            ed.setFaceFanScale(80.0);
+            ed.setTool(ToolId::WiresRun);
+            ed.setTwistWires(4);
+            ed.onPointerMove({200.0, -9.0});
+            ed.onPointerPress({200.0, -9.0}, Qt::LeftButton, Qt::ShiftModifier);
+            ed.onPointerMove({350.0, 0.0});
+            ed.onPointerPress({350.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onKey(Qt::Key_Return, Qt::NoModifier);
+            const Entity* run = last(d);
+            if (run && run->type == EntityType::TwistedPair) {
+                const TwistFigures f = twistedPairFigures(*run);
+                check(distance(run->points.front(), Vec2{200.0, 0.0}) < 1e-6 &&
+                          std::abs(f.lane * 3.0 + f.wireWidth - 32.0) < 1e-6,
+                      "face fit: started on a face, the start fan spans the share set (80%)");
+            } else {
+                check(false, "face fit: a run started on a face is laid");
+            }
+        }
+        // A CABLE and A SLEEVE: 60% of the face across.
+        for (const bool sleeve : {false, true}) {
+            Document d;
+            sheet(d);
+            Editor ed;
+            ed.setDocument(&d);
+            noSnap(ed);
+            ed.setTool(sleeve ? ToolId::HeatshrinkRoute : ToolId::DoublePolyline);
+            ed.onPointerMove({0.0, 0.0});
+            ed.onPointerPress({0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerMove({200.0, 12.0});
+            ed.onPointerPress({200.0, 12.0}, Qt::LeftButton, Qt::ShiftModifier);
+            const Entity* run = last(d);
+            const double gap = run ? run->meta.value(QStringLiteral("gap")).toDouble() : 0.0;
+            std::printf("  face fit: %s %.1f across\n", sleeve ? "sleeve" : "cable", gap);
+            check(run && run->id != QStringLiteral("FACE") && std::abs(gap - 24.0) < 1e-6 &&
+                      !ed.isDrafting(),
+                  sleeve ? "face fit: a sleeve landed on a face is 60% of it across"
+                         : "face fit: a cable landed on a face is 60% of it across");
+        }
+        // A LIBRARY PART is held by its entry face, so the snap lands the face on a line.
+        {
+            Document d;
+            Entity rail;
+            rail.id = QStringLiteral("RAIL");
+            rail.type = EntityType::Line;
+            rail.a = {0.0, 100.0};
+            rail.b = {400.0, 100.0};
+            d.entities().push_back(rail);
+            Editor ed;
+            ed.setDocument(&d);
+            ed.setPixelTolerance(6);
+            std::vector<Entity> part;
+            for (const auto& [a, b, conn] :
+                 {std::tuple<Vec2, Vec2, bool>{{0, 0}, {30, 0}, false},
+                  std::tuple<Vec2, Vec2, bool>{{30, 0}, {30, 20}, true},
+                  std::tuple<Vec2, Vec2, bool>{{30, 20}, {0, 20}, false}}) {
+                Entity l;
+                l.type = EntityType::Line;
+                l.a = a;
+                l.b = b;
+                l.meta.insert(QStringLiteral("libPart"), QStringLiteral("p1"));
+                if (conn) l.meta.insert(QLatin1String(kConnectionLineKey), true);
+                part.push_back(l);
+            }
+            ed.placeEntities(part);
+            // Near the rail, off any of its points: only Nearest can put it on the line.
+            ed.onPointerMove({173.0, 101.5});
+            ed.onPointerPress({173.0, 101.5}, Qt::LeftButton, Qt::NoModifier);
+            Vec2 faceMid{0, 0};
+            for (const Entity& e : d.entities())
+                if (e.meta.value(QLatin1String(kConnectionLineKey)).toBool())
+                    faceMid = (e.a + e.b) * 0.5;
+            std::printf("  part placed: entry face middle at %.2f,%.2f\n", faceMid.x, faceMid.y);
+            check(std::abs(faceMid.y - 100.0) < 1e-6 && std::abs(faceMid.x - 173.0) < 1e-6,
+                  "part placement: held by its entry face, which Nearest lands on the line");
+        }
+    }
+
     // ---- Align: by the objects' own edges, or on a line clicked through the drawing -------------
     {
         // Three boxes at odd places, and a label-like GROUP of two lines that has to move as one:

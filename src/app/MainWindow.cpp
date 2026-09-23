@@ -8584,6 +8584,31 @@ void MainWindow::showOptions(const QString& page) {
     sfm->addRow(QStringLiteral("Dimension decimals"), dimDec);
     tabs->addTab(sel, QStringLiteral("Selection"));
 
+    // ===== Drawing =====
+    auto* drw = new QWidget(tabs);
+    auto* dwf = new QFormLayout(drw);
+    auto* fanScale = new QDoubleSpinBox(drw);
+    fanScale->setObjectName(QStringLiteral("optFaceFanScale"));
+    fanScale->setRange(1.0, 100.0);
+    fanScale->setDecimals(0);
+    fanScale->setSuffix(QStringLiteral(" %"));
+    fanScale->setValue(editor_->faceFanScale());
+    fanScale->setToolTip(QStringLiteral(
+        "Shift+click on a part's entry face while drawing a harness spreads its fan over this "
+        "much of the face, centred on it."));
+    dwf->addRow(QStringLiteral("Auto scale fan"), fanScale);
+    auto* cableScale = new QDoubleSpinBox(drw);
+    cableScale->setObjectName(QStringLiteral("optFaceCableScale"));
+    cableScale->setRange(1.0, 100.0);
+    cableScale->setDecimals(0);
+    cableScale->setSuffix(QStringLiteral(" %"));
+    cableScale->setValue(editor_->faceCableScale());
+    cableScale->setToolTip(QStringLiteral(
+        "Shift+click on a part's entry face while drawing a cable or heatshrink makes it this "
+        "wide a share of the face, centred on it."));
+    dwf->addRow(QStringLiteral("Cable/heatshrink scale"), cableScale);
+    tabs->addTab(drw, QStringLiteral("Drawing"));
+
     // ===== Units =====
     auto* units = new QWidget(tabs);
     auto* ufm = new QFormLayout(units);
@@ -8739,6 +8764,8 @@ void MainWindow::showOptions(const QString& page) {
     s.snapTangent = snTan->isChecked();
     s.snapNearest = snNear->isChecked();
     editor_->setShowAngles(angles->isChecked());
+    editor_->setFaceFanScale(fanScale->value());
+    editor_->setFaceCableScale(cableScale->value());
     EntityRenderer::setDimensionDecimals(dimDec->value());
     EntityRenderer::setLengthUnitInch(lenUnit->currentIndex() == 1);
     EntityRenderer::setDualUnits(dualUnits->isChecked());
@@ -15896,6 +15923,9 @@ void MainWindow::loadSettings() {
     canvas_->setGridSize(sn.gridSize);
     canvas_->setGridVisible(s.value(QStringLiteral("draft/gridVisible"), canvas_->gridVisible()).toBool());
     editor_->setShowAngles(s.value(QStringLiteral("draft/showAngles"), editor_->showAngles()).toBool());
+    editor_->setFaceFanScale(s.value(QStringLiteral("draw/faceFanScale"), editor_->faceFanScale()).toDouble());
+    editor_->setFaceCableScale(
+        s.value(QStringLiteral("draw/faceCableScale"), editor_->faceCableScale()).toDouble());
     // Measurement / cross-section units.
     EntityRenderer::setLengthUnitInch(s.value(QStringLiteral("units/inch"), false).toBool());
     EntityRenderer::setDualUnits(s.value(QStringLiteral("units/dual"), false).toBool());
@@ -15933,6 +15963,8 @@ void MainWindow::saveSettings() {
     s.setValue(QStringLiteral("draft/gridSize"), canvas_->gridSize());
     s.setValue(QStringLiteral("draft/gridVisible"), canvas_->gridVisible());
     s.setValue(QStringLiteral("draft/showAngles"), editor_->showAngles());
+    s.setValue(QStringLiteral("draw/faceFanScale"), editor_->faceFanScale());
+    s.setValue(QStringLiteral("draw/faceCableScale"), editor_->faceCableScale());
     s.setValue(QStringLiteral("units/inch"), EntityRenderer::lengthUnitInch());
     s.setValue(QStringLiteral("units/dual"), EntityRenderer::dualUnits());
     s.setValue(QStringLiteral("units/awg"), crossSectionAwg_);

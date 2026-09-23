@@ -9825,7 +9825,97 @@ std::vector<Vec2> boundaryPointsOf(const Entity& e, bool manyJoints = true) {
 }
 } // namespace
 
+std::optional<std::pair<Vec2, Vec2>> Editor::entryFaceAt(const Vec2& p) const {
+    if (!doc_) return std::nullopt;
+    const double tol = worldTolerance() * 1.5;
+    std::optional<std::pair<Vec2, Vec2>> best;
+    double bestD = tol;
+    for (const Entity& e : doc_->entities()) {
+        if (!e.meta.value(QLatin1String(kConnectionLineKey)).toBool()) continue;
+        if (const Layer* layer = doc_->findLayer(e.layer); layer && !layer->visible) continue;
+        for (const auto& seg : entitySelectSegments(e)) {
+            const double d = closestPointOnSegment(p, seg.first, seg.second).distance;
+            if (d <= bestD && distance(seg.first, seg.second) > 1e-9) {
+                bestD = d;
+                best = seg;
+            }
+        }
+    }
+    return best;
+}
+
+void Editor::setAltHeld(bool held) {
+    if (altHeld_ == held) return;
+    altHeld_ = held;
+    emit overlayChanged();
+}
+
+// A HARNESS LANDED ON AN ENTRY FACE spreads its fan across faceFanScale percent of it: the outer
+// edges of the outer wires that far apart, so the spread between them is what is left over the
+// wires between. Each end takes its own face; an end not landed on one keeps the spread it had.
+void Editor::applyFaceFit(Entity& e) const {
+    if (e.type != EntityType::TwistedPair || (faceLenStart_ <= 0.0 && faceLenFinish_ <= 0.0))
+        return;
+    const double k = faceFanScale_ / 100.0;
+    if (!e.meta.value(QStringLiteral("twistStraight")).toBool()) {
+        // Laid up, the fan spans the pair's width - one figure for both ends.
+        e.meta.insert(QStringLiteral("twistWidth"), k * std::max(faceLenStart_, faceLenFinish_));
+        return;
+    }
+    const TwistFigures f = twistedPairFigures(e);
+    if (!f.ok) return;
+    const int wires = std::clamp(e.meta.value(QStringLiteral("twistWires")).toInt(2), 2,
+                                 kTwistedMaxWires);
+    auto laneFor = [&](double len) {
+        return std::max(f.wireWidth, (k * len - f.wireWidth) / double(wires - 1));
+    };
+    const bool same = !e.meta.contains(QStringLiteral("twistSidesSame")) ||
+                      e.meta.value(QStringLiteral("twistSidesSame")).toBool();
+    double laneA = f.lane;
+    double laneB = same ? f.lane
+                        : e.meta.value(QStringLiteral("twistLaneFinish")).toDouble(f.packed * 1.5);
+    if (faceLenStart_ > 0.0) laneA = laneFor(faceLenStart_);
+    if (faceLenFinish_ > 0.0) laneB = laneFor(faceLenFinish_);
+    e.meta.insert(QStringLiteral("twistLane"), laneA);
+    if (!same || std::abs(laneA - laneB) > 1e-9) {
+        // The ends parted: whatever else the finish end has not been given falls back to the
+        // start's, which is what it was showing while they were the same.
+        e.meta.insert(QStringLiteral("twistSidesSame"), false);
+        e.meta.insert(QStringLiteral("twistLaneFinish"), laneB);
+    }
+}
+
 void Editor::handleDrawPress(const Vec2& p) {
+    const bool faceTool = tool_ == ToolId::TwistedHarnessRoute || tool_ == ToolId::WiresRun ||
+                          tool_ == ToolId::Fanout || tool_ == ToolId::DoublePolyline ||
+                          tool_ == ToolId::HeatshrinkRoute;
+    // A new run starts with nothing landed on anything.
+    if (faceTool && draftPts_.empty()) {
+        faceLenStart_ = faceLenFinish_ = 0.0;
+        faceCableWidth_ = 0.0;
+    }
+    // SHIFT ON A PART'S ENTRY FACE: the run lands on the middle of it, sized to it - a harness's fan
+    // spread across most of the face, a cable or a sleeve a share of it across - so it reads as
+    // connected to that part without the spread being worked out by hand. The first click starts
+    // the run there; any later one is where it arrives, and the run is laid.
+    if (faceTool && (pressMods_ & Qt::ShiftModifier) && !twistedFrozen_) {
+        if (const auto face = entryFaceAt(p)) {
+            const Vec2 centre = (face->first + face->second) * 0.5;
+            const double len = distance(face->first, face->second);
+            const bool first = draftPts_.empty();
+            // Shift has been spent on the face: it is not also a flush cap or a turned fanout.
+            pressMods_.setFlag(Qt::ShiftModifier, false);
+            handleDrawPress(centre);
+            (first ? faceLenStart_ : faceLenFinish_) = len;
+            if (tool_ == ToolId::DoublePolyline || tool_ == ToolId::HeatshrinkRoute)
+                faceCableWidth_ = len * faceCableScale_ / 100.0;
+            if (!first && drafting_ && draftPts_.size() >= 2) finishDraw();
+            else
+                emit message(QStringLiteral("Landed on the entry face - click the next knee, "
+                                            "Shift on another face lands the run there"));
+            return;
+        }
+    }
     // Line-start ("ls"): this click picks the reference line whose start both runs
     // will reach. It does NOT place a vertex — the next click starts the run.
     if (dpolyLsArm_ && (tool_ == ToolId::DoubleLine || tool_ == ToolId::DoublePolyline)) {
@@ -10725,7 +10815,7 @@ void Editor::finishDraw() {
         // The sleeve, along the knees that were clicked - see heatshrinkFromRoute.
         if (draftPts_.size() < 2) { cancelDraw(); return; }
         const Entity sleeve =
-            heatshrinkFromRoute(draftPts_, shrinkWidth_, draftCornerRadii_, shrinkMode_);
+            heatshrinkFromRoute(draftPts_, draftShrinkWidth(), draftCornerRadii_, shrinkMode_);
         if (sleeve.points.empty()) { cancelDraw(); return; }
         e.type = sleeve.type;
         e.points = sleeve.points;
@@ -10745,6 +10835,7 @@ void Editor::finishDraw() {
         e.a = draftPts_.front();
         e.b = draftPts_.back();
         writeBundleMeta(e, /*straight=*/false);
+        applyFaceFit(e);
         break;
     case ToolId::WiresRun:
     case ToolId::Fanout:
@@ -10756,6 +10847,7 @@ void Editor::finishDraw() {
         e.a = draftPts_.front();
         e.b = draftPts_.back();
         writeBundleMeta(e, /*straight=*/true);
+        applyFaceFit(e);
         // A FANOUT IS THE FAN ALONE, drawn as its wires: there is no run to put a cable or a sleeve
         // on. It fans at the end it was STARTED from - or at the end it finishes at, when it was
         // begun with Shift at the bundle - and simply stops at the other.
@@ -11046,9 +11138,9 @@ void Editor::finishDraw() {
         e.type = (tool_ == ToolId::Spline) ? EntityType::Spline : EntityType::Polyline;
         e.points = draftPts_;
         if (tool_ == ToolId::DoublePolyline) {
-            e.points = doubleRunCentre(draftPts_, doubleLineGap_, doubleSecondBelow());
+            e.points = doubleRunCentre(draftPts_, draftCableGap(), doubleSecondBelow());
             e.meta.insert("double", true);
-            e.meta.insert("gap", doubleLineGap_);
+            e.meta.insert("gap", draftCableGap());
             if (dpolyHasLsRef_) {
                 e.meta.insert("lsRef", true);
                 e.meta.insert("lsRefAx", lsRefA_.x);
@@ -11065,7 +11157,7 @@ void Editor::finishDraw() {
             std::vector<double> radii = draftCornerRadii_;
             radii.resize(e.points.size(), 0.0);
             const double extra =
-                (tool_ == ToolId::DoublePolyline) ? doubleLineGap_ / 2.0 : 0.0;
+                (tool_ == ToolId::DoublePolyline) ? draftCableGap() / 2.0 : 0.0;
             bool anyFillet = false;
             for (size_t i = 1; i + 1 < e.points.size(); ++i) {
                 if (radii[i] <= 0.0) continue;
@@ -11256,6 +11348,8 @@ void Editor::cancelDraw() {
         emit selectionChanged();   // ...and the drawing has it back
     }
     continuePulling_ = false;
+    faceLenStart_ = faceLenFinish_ = 0.0;   // the faces belonged to the run that has just ended
+    faceCableWidth_ = 0.0;
     shownCentres_.clear();   // the marks belonged to the command that has just ended
     twistedFrozen_ = false;   // nothing pinned once the draft is gone
     twistedHeld_ = false;     // nor held back
@@ -18495,7 +18589,23 @@ void Editor::placeEntities(const std::vector<Entity>& ents, const std::optional<
         const Bounds eb = e.bounds();
         if (eb.valid) { b.expand(eb.min); b.expand(eb.max); }
     }
-    clipboardBase_ = heldAt ? *heldAt : (b.valid ? b.min : Vec2{0, 0});
+    // A LIBRARY PART IS HELD BY ITS ENTRY FACE - the middle of the line it connects by - or, with
+    // none marked, by its middle. That point is the one that snaps, so with Nearest on the part
+    // lands ON a line; held by the corner of its box it landed an empty corner there instead.
+    std::optional<Vec2> grip = heldAt;
+    if (!grip) {
+        bool library = false;
+        for (const Entity& e : clipboard_) {
+            if (e.meta.contains(QStringLiteral("libPart"))) library = true;
+            if (!grip && e.meta.value(QLatin1String(kConnectionLineKey)).toBool()) {
+                const auto segs = entitySelectSegments(e);
+                if (!segs.empty()) grip = (segs.front().first + segs.front().second) * 0.5;
+            }
+        }
+        if (!library) grip.reset();
+        else if (!grip && b.valid) grip = (b.min + b.max) * 0.5;
+    }
+    clipboardBase_ = grip ? *grip : (b.valid ? b.min : Vec2{0, 0});
     awaitClipBase_ = false;
     paste(); // the contents now follow the cursor until clicked into place
 }
@@ -20053,6 +20163,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             tp.b = tp.points.back();
             writeBundleMeta(tp, /*straight=*/tool_ == ToolId::WiresRun ||
                                 tool_ == ToolId::Fanout);
+            applyFaceFit(tp);
             if (tool_ == ToolId::Fanout) {
                 tp.meta.insert(QStringLiteral("twistSpread"),
                                fanoutAtFinish_ ? QStringLiteral("finish")
@@ -20066,7 +20177,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             // Previewed as the sleeve itself, by the same code that will place it - so what is on
             // screen while it is being drawn is what lands.
             const Entity sleeve =
-                heatshrinkFromRoute(pts, shrinkWidth_, draftCornerRadii_, shrinkMode_);
+                heatshrinkFromRoute(pts, draftShrinkWidth(), draftCornerRadii_, shrinkMode_);
             if (!sleeve.points.empty())
                 EntityRenderer::draw(p, sleeve, *doc_, vt, paperInk(QColor("#ffffff")));
         } else if (tool_ == ToolId::VolumeArrow && pts.size() >= 2) {
@@ -20124,12 +20235,12 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         } else if (tool_ == ToolId::DoublePolyline && pts.size() >= 2) {
             // Round each filleted corner of the centerline at radius + gap/2 so both
             // runs fillet, then offset.
-            const double h = doubleLineGap_ / 2.0;
+            const double h = draftCableGap() / 2.0;
             std::vector<double> centerRadii(previewRadii.size(), 0.0);
             for (size_t i = 0; i < previewRadii.size(); ++i)
                 if (previewRadii[i] > 0) centerRadii[i] = previewRadii[i] + h;
             const std::vector<Vec2> shifted =
-                doubleRunCentre(pts, doubleLineGap_, doubleSecondBelow());
+                doubleRunCentre(pts, draftCableGap(), doubleSecondBelow());
             const std::vector<Vec2> center =
                 previewAnyFillet ? roundedPolylinePerCorner(shifted, centerRadii) : shifted;
             std::vector<Vec2> r1 = offsetPolyline(center, h);
@@ -20708,6 +20819,28 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 p.drawLine(QPointF(c.x(), c.y() - arm), QPointF(c.x(), c.y() + arm));
             }
         }
+    }
+
+    // ALT HELD: every entry face on the sheet, lit - the lines a run can be landed on with Shift.
+    if (altHeld_ && doc_) {
+        p.save();
+        QPen face(paperInk(QColor(255, 120, 220)));
+        face.setCosmetic(true);
+        face.setWidthF(3.2);
+        face.setCapStyle(Qt::RoundCap);
+        for (const Entity& e : doc_->entities()) {
+            if (!e.meta.value(QLatin1String(kConnectionLineKey)).toBool()) continue;
+            if (const Layer* layer = doc_->findLayer(e.layer); layer && !layer->visible) continue;
+            for (const auto& seg : entitySelectSegments(e)) {
+                p.setPen(face);
+                p.drawLine(vt.toScreen(seg.first), vt.toScreen(seg.second));
+                // and the middle of it, where a run landed on it arrives
+                const QPointF c = vt.toScreen((seg.first + seg.second) * 0.5);
+                p.setPen(QPen(paperInk(QColor(255, 120, 220)), 1.2));
+                p.drawEllipse(c, 3.5, 3.5);
+            }
+        }
+        p.restore();
     }
 
     // THE LINE AN ALIGN WILL GO TO, through the cursor, while it waits for the click: dashed right

@@ -1639,6 +1639,31 @@ int run_drawingspace_tests() {
         }
     }
 
+    // ---- Alt on the canvas lights the entry faces, and does not hand the keys to the menus -------
+    {
+        MainWindow win;
+        win.resize(1200, 800);
+        win.show();
+        QApplication::processEvents();
+        CanvasWidget* canvas = win.findChild<CanvasWidget*>();
+        Editor* editor = canvas ? canvas->findChild<Editor*>() : nullptr;
+        if (!editor) editor = win.findChild<Editor*>();
+        if (canvas && editor) {
+            canvas->setFocus();
+            QKeyEvent over(QEvent::ShortcutOverride, Qt::Key_Alt, Qt::AltModifier);
+            QApplication::sendEvent(canvas, &over);
+            check(over.isAccepted(), "alt: the canvas claims a bare Alt, so the menu bar does not");
+            QKeyEvent down(QEvent::KeyPress, Qt::Key_Alt, Qt::AltModifier);
+            QApplication::sendEvent(canvas, &down);
+            const bool lit = editor->altHeld();
+            QKeyEvent up(QEvent::KeyRelease, Qt::Key_Alt, Qt::NoModifier);
+            QApplication::sendEvent(canvas, &up);
+            check(lit && !editor->altHeld(), "alt: held it lights the entry faces, let go it does not");
+        } else {
+            check(false, "alt: found the canvas and its editor");
+        }
+    }
+
     // ---- Align is on the Home tab, and opens the six ways and nothing else -----------------------
     {
         MainWindow win;

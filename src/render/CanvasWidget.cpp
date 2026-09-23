@@ -1436,8 +1436,47 @@ void CanvasWidget::mouseDoubleClickEvent(QMouseEvent* e) {
     }
 }
 
+// ALT ON ITS OWN IS THE CANVAS'S: held, it lights the entry faces. Taken here, before the menu bar
+// sees it - left to the menu bar, letting go of Alt would hand the keyboard to the menus.
+bool CanvasWidget::event(QEvent* e) {
+    if (e->type() == QEvent::ShortcutOverride) {
+        auto* k = static_cast<QKeyEvent*>(e);
+        if (k->key() == Qt::Key_Alt) {
+            e->accept();
+            return true;
+        }
+    }
+    return QWidget::event(e);
+}
+
+void CanvasWidget::keyReleaseEvent(QKeyEvent* e) {
+    if (e->key() == Qt::Key_Alt && !e->isAutoRepeat() && editor_) {
+        editor_->setAltHeld(false);
+        update();
+        e->accept();
+        return;
+    }
+    QWidget::keyReleaseEvent(e);
+}
+
+void CanvasWidget::focusOutEvent(QFocusEvent* e) {
+    if (editor_ && editor_->altHeld()) {   // the release will not come here now
+        editor_->setAltHeld(false);
+        update();
+    }
+    QWidget::focusOutEvent(e);
+}
+
 void CanvasWidget::keyPressEvent(QKeyEvent* e) {
     syncEditorScale();
+    if (e->key() == Qt::Key_Alt) {
+        if (!e->isAutoRepeat() && editor_) {
+            editor_->setAltHeld(true);
+            update();
+        }
+        e->accept();
+        return;
+    }
     // SHIFT SWITCHES THE OTHER WAY OF PLACING ON AND OFF - the thing under the cursor before a line
     // is drawn, the pair on the line once one is. A press flips it; letting go does nothing, so the
     // hand is free to aim and click. The previews are worked out as the cursor moves, which is the

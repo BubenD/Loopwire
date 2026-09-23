@@ -357,6 +357,18 @@ public:
     ShrinkRouteMode shrinkRouteMode() const { return shrinkMode_; }
     // HOW WIDE A SLEEVE IS DRAWN, which the tool asks for as "Across" while one is being drawn.
     // Readable and settable so a drawing can be set up without typing into the canvas.
+    // ENTRY FACES - the line a part is marked as connecting by (its connection line). Shift and a
+    // click on one while a harness, cable or sleeve is being drawn lands the run on the middle of it
+    // and sizes it to the face: a harness's fan spread over faceFanScale percent of it, a cable or
+    // a sleeve faceCableScale percent across. Alt held shows every entry face on the sheet.
+    double faceFanScale() const { return faceFanScale_; }
+    void setFaceFanScale(double pct) { faceFanScale_ = std::clamp(pct, 1.0, 100.0); }
+    double faceCableScale() const { return faceCableScale_; }
+    void setFaceCableScale(double pct) { faceCableScale_ = std::clamp(pct, 1.0, 100.0); }
+    bool altHeld() const { return altHeld_; }
+    void setAltHeld(bool held);
+    // The entry face under a point, as its two ends, or nothing.
+    std::optional<std::pair<Vec2, Vec2>> entryFaceAt(const Vec2& p) const;
     double shrinkWidth() const { return shrinkWidth_; }
     void setShrinkWidth(double mm) { shrinkWidth_ = std::max(0.1, mm); }
     void setShrinkSquareEnds(bool on) {
@@ -1806,6 +1818,17 @@ private:
     // The knees are the hand's, not worked out - even when the hand has taken every one of them away.
     bool autoRouteManual_ = false;
     double autoRouteEndT_ = 0.5;                   // where on the wall it lands, 0..1 along it
+    double faceFanScale_ = 95.0;                   // a fan landed on an entry face spans this much of it
+    double faceCableScale_ = 60.0;                 // a cable or sleeve landed on one is this wide of it
+    bool altHeld_ = false;
+    // THE ENTRY FACES THE RUN BEING DRAWN LANDS ON: the length of the face at its start and at its
+    // finish (0 = none), and the width that makes a cable or sleeve (0 = its own).
+    double faceLenStart_ = 0.0;
+    double faceLenFinish_ = 0.0;
+    double faceCableWidth_ = 0.0;
+    void applyFaceFit(Entity& e) const;
+    double draftCableGap() const { return faceCableWidth_ > 0.0 ? faceCableWidth_ : doubleLineGap_; }
+    double draftShrinkWidth() const { return faceCableWidth_ > 0.0 ? faceCableWidth_ : shrinkWidth_; }
     bool autoRouteDragEnd_ = false;                // that end is being slid along the wall
     void autoRouteDragEndTo(const Vec2& at);
     std::vector<Vec2> autoRouteComputedPath() const;
