@@ -181,7 +181,13 @@ public:
     std::vector<Vec2> autoRoutePath() const;
     // A knee of the route being moved by hand, and whether the route has been edited at all.
     bool autoRouteDragging() const { return autoRouteDragKnee_ >= 0; }
-    bool autoRouteEdited() const { return !autoRouteKnees_.empty(); }
+    bool autoRouteEdited() const { return autoRouteManual_; }
+    // THE END ON THE WALL is a handle too: it slides along the green wall and nowhere else, so the
+    // run can land anywhere on that face and still land square on it.
+    bool autoRouteDraggingEnd() const { return autoRouteDragEnd_; }
+    // A RUN BEING CARRIED ON is drawn by the overlay as the whole run, longer - so the drawing leaves
+    // it out while that is going on, or its old end would show through the ghost as a second one.
+    const QString& runBeingCarriedOn() const { return continueId_; }
     // THE TWO THINGS A ROUTE IS DRAWN WITH, each with its A. Below nought means the drawing's own:
     //   fillet - the radius every knee of the route is rounded on. Auto is what suits the object
     //            being routed: a harness keeps its own knee radius, a cable or sleeve is rounded in
@@ -1797,6 +1803,11 @@ private:
     // the screen is this - start, these, the middle of the wall.
     std::vector<Vec2> autoRouteKnees_;
     int autoRouteDragKnee_ = -1;                   // which of them is being moved, or none
+    // The knees are the hand's, not worked out - even when the hand has taken every one of them away.
+    bool autoRouteManual_ = false;
+    double autoRouteEndT_ = 0.5;                   // where on the wall it lands, 0..1 along it
+    bool autoRouteDragEnd_ = false;                // that end is being slid along the wall
+    void autoRouteDragEndTo(const Vec2& at);
     std::vector<Vec2> autoRouteComputedPath() const;
     void autoRouteDragTo(const Vec2& at);
     QString continueId_;                           // the run being carried on by hand

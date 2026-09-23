@@ -6725,6 +6725,91 @@ int run_editor_tests() {
         }
     }
 
+    // --- CTRL ON A KNEE TAKES IT AWAY, and THE END SLIDES ALONG THE GREEN WALL.
+    {
+        auto setUp = [](Document& d) {
+            Entity run;
+            run.id = QStringLiteral("run");
+            run.type = EntityType::Polyline;
+            run.points = {{10, 20}, {90, 20}};
+            Entity box;
+            box.id = QStringLiteral("box");
+            box.type = EntityType::Rect;
+            box.a = {150, 40};
+            box.b = {190, 80};
+            box.points = {{150, 40}, {190, 40}, {190, 80}, {150, 80}};
+            d.entities().push_back(run);
+            d.entities().push_back(box);
+        };
+        auto start = [](Editor& ed) {
+            ed.setPixelTolerance(6);
+            ed.setTool(ToolId::AutoRoute);
+            ed.onPointerPress({85, 20}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerPress({150, 60}, Qt::LeftButton, Qt::NoModifier);
+        };
+        {
+            Document d;
+            setUp(d);
+            Editor ed;
+            ed.setDocument(&d);
+            start(ed);
+            const std::vector<Vec2> route = ed.autoRoutePath();
+            check(route.size() == 4, "knee removal: a route with two knees");
+            if (route.size() == 4) {
+                ed.onPointerPress(route[1], Qt::LeftButton, Qt::ControlModifier);
+                const std::vector<Vec2> a = ed.autoRoutePath();
+                check(!ed.autoRouteDragging() && a.size() == 3 && near(a[1].x, route[2].x) &&
+                          near(a[1].y, route[2].y),
+                      "knee removal: Ctrl on a knee takes it away, and the other stays");
+                ed.onPointerRelease(route[1], Qt::LeftButton);
+                ed.onPointerPress(a[1], Qt::LeftButton, Qt::ControlModifier);
+                const std::vector<Vec2> b = ed.autoRoutePath();
+                std::printf("  knee removal: %d, then %d point(s)\n", int(a.size()), int(b.size()));
+                check(b.size() == 2 && near(b.back().x, 150.0) && near(b.back().y, 60.0),
+                      "knee removal: the last one too - it does not come back as the worked-out route");
+            }
+        }
+        {
+            Document d;
+            setUp(d);
+            Editor ed;
+            ed.setDocument(&d);
+            start(ed);
+            // THE END, taken hold of on the green wall, and slid along it.
+            ed.onPointerPress({150, 60}, Qt::LeftButton, Qt::NoModifier);
+            check(ed.autoRouteDraggingEnd(), "route end: a click on the end on the wall takes hold of it");
+            ed.onPointerMove({146, 71});
+            ed.onPointerRelease({146, 71}, Qt::LeftButton);
+            const std::vector<Vec2> a = ed.autoRoutePath();
+            const Vec2 lastA = a.size() >= 2 ? (a.back() - a[a.size() - 2]).normalized() : Vec2{};
+            std::printf("  route end: slid to %.1f,%.1f\n", a.empty() ? 0.0 : a.back().x,
+                        a.empty() ? 0.0 : a.back().y);
+            check(!ed.autoRouteDraggingEnd() && !a.empty() && near(a.back().x, 150.0) &&
+                      near(a.back().y, 71.0) && std::abs(lastA.y) < 1e-9,
+                  "route end: it stays on the wall where it was let go, and still lands square");
+            // Not past the end of the wall.
+            ed.onPointerPress(a.back(), Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerMove({150, 130});
+            ed.onPointerRelease({150, 130}, Qt::LeftButton);
+            check(near(ed.autoRoutePath().back().y, 80.0),
+                  "route end: it goes no further than the wall does");
+            // A ROUTE SHAPED BY HAND keeps landing square when its end is slid.
+            const std::vector<Vec2> b = ed.autoRoutePath();
+            if (b.size() >= 3) {
+                ed.onPointerPress(b[1], Qt::LeftButton, Qt::NoModifier);
+                ed.onPointerMove({b[1].x - 7, b[1].y + 3});
+                ed.onPointerRelease({b[1].x - 7, b[1].y + 3}, Qt::LeftButton);
+                ed.onPointerPress(ed.autoRoutePath().back(), Qt::LeftButton, Qt::NoModifier);
+                ed.onPointerMove({150, 50});
+                ed.onPointerRelease({150, 50}, Qt::LeftButton);
+                const std::vector<Vec2> c = ed.autoRoutePath();
+                const Vec2 lastC = (c.back() - c[c.size() - 2]).normalized();
+                check(ed.autoRouteEdited() && near(c.back().y, 50.0) && std::abs(lastC.y) < 1e-9,
+                      "route end: slid on a hand-shaped route, the last leg stays square");
+            }
+        }
+    }
+
     // --- FILLETS ON THE KNEES OF A LINE OR DOUBLE LINE ROUTE. A line is rounded with an arc at each
     //     knee, the legs taken back to where the arc touches them. A double line has no arc of its
     //     own, so a rounded one is laid as a double polyline - the same two lines at the same gap,
@@ -12133,6 +12218,8 @@ int run_editor_tests() {
         std::printf("  pull: Shift on an unpicked run's wire tip - carrying it on %d\n",
                     ed.continuingRun() ? 1 : 0);
         check(ed.continuingRun(), "pull: Shift on the visible end of a run takes it up, picked or not");
+        check(ed.runBeingCarriedOn() == QStringLiteral("RUN"),
+              "pull: the run itself is left out of the drawing - the ghost is the whole of it, longer");
         // PULLED and let go: that is the first new knee.
         ed.onPointerMove({100.0, -60.0});
         ed.onPointerRelease({100.0, -60.0}, Qt::LeftButton);
@@ -12144,6 +12231,7 @@ int run_editor_tests() {
             if (e.id == QStringLiteral("RUN")) run = &e;
         check(run != nullptr && d.entities().size() == 1,
               "pull: it is the SAME run carried on, not a new one beside it");
+        check(ed.runBeingCarriedOn().isEmpty(), "pull: and once laid, the drawing has it back");
         if (run) {
             std::printf("  pull: the run now has %d point(s), ending at %.1f,%.1f\n",
                         int(run->points.size()), run->points.back().x, run->points.back().y);

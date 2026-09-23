@@ -749,11 +749,14 @@ void CanvasWidget::drawSceneContent(QPainter& sp, const ViewTransform& vt, const
     // the selection changes, so the extra cost is one rebuild per change and every frame in between
     // is a blit. Editor::selectionIsBaked decides, and the overlay skips the same objects.
     const bool bakeSelection = editor_ && editor_->selectionIsBaked();
+    // A run being carried on is drawn by the overlay, whole and longer - see runBeingCarriedOn.
+    const QString carried = editor_ ? editor_->runBeingCarriedOn() : QString();
 
     for (const auto& e : doc_->entities()) {
         if (const Layer* layer = doc_->findLayer(e.layer); layer && !layer->visible) continue;
         const bool isSelected = selected.contains(e.id);
         if (isSelected && !bakeSelection) continue;   // the overlay will put it back
+        if (!carried.isEmpty() && e.id == carried) continue;
         const Bounds b = drawnBounds(e);
         if (b.valid && (b.max.x < vMinX || b.min.x > vMaxX || b.max.y < vMinY || b.min.y > vMaxY))
             continue;

@@ -1638,7 +1638,10 @@ void Editor::setTool(ToolId t) {
     clearAutoRoute();       // the two picks belong to the auto route and to nothing else
     // and a run being carried on belongs to the drawing in progress: picking up another tool
     // must not leave the next thing drawn to be merged into it.
-    continueId_.clear();
+    if (!continueId_.isEmpty()) {
+        continueId_.clear();
+        emit selectionChanged();   // the run left out of the drawing while it was carried on
+    }
     breakFrozen_ = false;   // a pinned break preview belongs to the break tool
     trimFenceActive_ = false;
     if (t == ToolId::Trim || t == ToolId::Extend) trimRefIds_ = selected_;
@@ -4444,6 +4447,7 @@ void Editor::onPointerMove(const Vec2& raw) {
     // A KNEE OF AN AUTO ROUTE BEING MOVED follows the cursor as it now stands - snapped, and through
     // the window - so the knee lands on what the cursor landed on.
     if (tool_ == ToolId::AutoRoute && autoRouteDragKnee_ >= 0) autoRouteDragTo(cursor_);
+    if (tool_ == ToolId::AutoRoute && autoRouteDragEnd_) autoRouteDragEndTo(cursor_);
 
     // A LOOM THAT CANNOT GO THERE STOPS WHERE IT CAN.
     //
@@ -5254,8 +5258,9 @@ void Editor::onPointerRelease(const Vec2& raw, Qt::MouseButton button) {
     Q_UNUSED(raw);
     if (!doc_ || button != Qt::LeftButton) return;
     // Letting go of a knee of an auto route leaves it where it is.
-    if (autoRouteDragKnee_ >= 0) {
+    if (autoRouteDragKnee_ >= 0 || autoRouteDragEnd_) {
         autoRouteDragKnee_ = -1;
+        autoRouteDragEnd_ = false;
         emit message(QStringLiteral("Auto route: Enter lays the run, Esc gives it up"));
         emit overlayChanged();
         return;
@@ -11246,7 +11251,10 @@ void Editor::finishDraw() {
 }
 
 void Editor::cancelDraw() {
-    continueId_.clear();     // Esc while carrying a run on leaves it as it was
+    if (!continueId_.isEmpty()) {
+        continueId_.clear();     // Esc while carrying a run on leaves it as it was
+        emit selectionChanged();   // ...and the drawing has it back
+    }
     continuePulling_ = false;
     shownCentres_.clear();   // the marks belonged to the command that has just ended
     twistedFrozen_ = false;   // nothing pinned once the draft is gone
@@ -13764,7 +13772,7 @@ bool Editor::extendOneRailOfDouble(Entity& ent, const Vec2& fa, const Vec2& fb,
 // point at the wall it is none.
 std::vector<Vec2> Editor::autoRoutePath() const {
     std::vector<Vec2> base = autoRouteComputedPath();
-    if (base.size() < 2 || autoRouteKnees_.empty()) return base;
+    if (base.size() < 2 || !autoRouteManual_) return base;
     // HAND-EDITED: the same two ends, and the knees where they have been put.
     std::vector<Vec2> out{base.front()};
     out.insert(out.end(), autoRouteKnees_.begin(), autoRouteKnees_.end());
@@ -13783,7 +13791,8 @@ std::vector<Vec2> Editor::autoRouteComputedPath() const {
     const std::pair<Vec2, Vec2> wall = walls[static_cast<size_t>(autoRouteWall_)];
     const Vec2 along = wall.second - wall.first;
     if (along.length() < 1e-9) return {};
-    const Vec2 centre{(wall.first.x + wall.second.x) / 2.0, (wall.first.y + wall.second.y) / 2.0};
+    // Where on it the run lands: the middle, until the end is slid along the wall by hand.
+    const Vec2 centre = wall.first + along * std::clamp(autoRouteEndT_, 0.0, 1.0);
 
     // WHICH END OF THE RUN IS BEING TAKEN THERE: the one nearer the click that picked it. A run is
     // continued from the end you pointed at, which is the end a hand reaches for.
@@ -13911,6 +13920,7 @@ void Editor::setAutoRouteShift(double deg) {
     if (std::abs(autoRouteShift_ - next) < 1e-9) return;
     autoRouteShift_ = next;
     autoRouteKnees_.clear();   // a new angle is a new route; any hand edit was made on the old one
+    autoRouteManual_ = false;
     emit overlayChanged();   // the ghosted route re-lays at the new angle
 }
 
@@ -13983,6 +13993,7 @@ bool Editor::beginContinueRun(const Vec2& at) {
     drafting_ = true;
     continuePulling_ = true;   // the button is still down: a pull drops the first knee
     continuePressAt_ = at;
+    emit selectionChanged();   // the drawing leaves the run out now: the ghost is all of it
     emit message(QStringLiteral(
         "Carrying the run on: click each knee — Enter finishes, Esc leaves it as it was"));
     emit overlayChanged();
@@ -14100,6 +14111,9 @@ void Editor::clearAutoRoute() {
     autoRouteWall_ = -1;
     autoRouteKnees_.clear();
     autoRouteDragKnee_ = -1;
+    autoRouteManual_ = false;
+    autoRouteEndT_ = 0.5;
+    autoRouteDragEnd_ = false;
 }
 
 // A KNEE OF THE ROUTE, PUT WHERE THE HAND PUTS IT - through the running snaps, since the cursor it
@@ -14143,6 +14157,27 @@ void Editor::autoRouteDragTo(const Vec2& at) {
     emit overlayChanged();
 }
 
+// THE END SLID ALONG THE WALL. It stays on the green wall - that is the face the run was asked to
+// land on - and a route the hand has already shaped keeps its last leg square to it: the last knee
+// moves across with the end, the rest stay where they were put.
+void Editor::autoRouteDragEndTo(const Vec2& at) {
+    const Entity* to = entityById(autoRouteToId_);
+    if (!to || autoRouteWall_ < 0) return;
+    const auto walls = entitySelectSegments(*to);
+    if (autoRouteWall_ >= static_cast<int>(walls.size())) return;
+    const auto& wall = walls[static_cast<size_t>(autoRouteWall_)];
+    const Vec2 along = wall.second - wall.first;
+    const double len2 = dot(along, along);
+    if (len2 < 1e-12) return;
+    const std::vector<Vec2> before = autoRoutePath();
+    autoRouteEndT_ = std::clamp(dot(at - wall.first, along) / len2, 0.0, 1.0);
+    if (autoRouteManual_ && !autoRouteKnees_.empty() && before.size() >= 2) {
+        const Vec2 moved = (wall.first + along * autoRouteEndT_) - before.back();
+        autoRouteKnees_.back() = autoRouteKnees_.back() + moved;
+    }
+    emit overlayChanged();
+}
+
 // FIRST CLICK: what is to be routed. SECOND: the wall it lands on. Each is shown as it is made -
 // the run in orange, that one wall in green - so what Enter will do is on the screen beforehand.
 void Editor::handleAutoRoutePress(const Vec2& p) {
@@ -14154,25 +14189,50 @@ void Editor::handleAutoRoutePress(const Vec2& p) {
     if (!autoRouteToId_.isEmpty() && autoRouteWall_ >= 0) {
         const std::vector<Vec2> path = autoRoutePath();
         const double tol = worldTolerance() * 1.5;
+        auto makeManual = [&] {
+            if (!autoRouteManual_) autoRouteKnees_.assign(path.begin() + 1, path.end() - 1);
+            autoRouteManual_ = true;
+        };
         auto takeHold = [&](size_t knee) {
-            if (autoRouteKnees_.empty())
-                autoRouteKnees_.assign(path.begin() + 1, path.end() - 1);
+            makeManual();
             autoRouteDragKnee_ = static_cast<int>(knee);
             emit message(QStringLiteral(
                 "Auto route: moving the knee - let go where it goes; Enter lays the run"));
             emit overlayChanged();
         };
+        // The NEAREST handle under the pointer - a knee close by the wall must not stand in front of
+        // the end on it, nor the end in front of the knee.
+        const double toEnd = path.size() >= 2 ? distance(p, path.back()) : 1e300;
+        size_t nearKnee = 0;
         for (size_t k = 1; k + 1 < path.size(); ++k)
-            if (distance(p, path[k]) <= tol) {
+            if (nearKnee == 0 || distance(p, path[k]) < distance(p, path[nearKnee])) nearKnee = k;
+        if (const size_t k = nearKnee;
+            k != 0 && distance(p, path[k]) <= tol && distance(p, path[k]) <= toEnd) {
+                // CTRL ON A KNEE TAKES IT AWAY: the legs either side of it become one.
+                if (pressMods_ & Qt::ControlModifier) {
+                    makeManual();
+                    autoRouteKnees_.erase(autoRouteKnees_.begin() + static_cast<long>(k - 1));
+                    emit message(QStringLiteral(
+                        "Auto route: knee removed - Enter lays the run"));
+                    emit overlayChanged();
+                    return;
+                }
                 takeHold(k - 1);
                 return;
             }
+        // THE END ON THE GREEN WALL, taken hold of to slide along it.
+        if (toEnd <= tol) {
+            autoRouteDragEnd_ = true;
+            emit message(QStringLiteral(
+                "Auto route: sliding the end along the wall - let go where it lands"));
+            emit overlayChanged();
+            return;
+        }
         if (pressMods_ & Qt::ShiftModifier) {
             for (size_t k = 1; k < path.size(); ++k) {
                 const auto c = closestPointOnSegment(p, path[k - 1], path[k]);
                 if (c.distance > tol) continue;
-                if (autoRouteKnees_.empty())
-                    autoRouteKnees_.assign(path.begin() + 1, path.end() - 1);
+                makeManual();
                 autoRouteKnees_.insert(autoRouteKnees_.begin() + static_cast<long>(k - 1), c.point);
                 autoRouteDragKnee_ = static_cast<int>(k - 1);
                 emit message(QStringLiteral(
@@ -14212,6 +14272,8 @@ void Editor::handleAutoRoutePress(const Vec2& p) {
     autoRouteToId_ = *hit;
     autoRouteWall_ = best;
     autoRouteKnees_.clear();   // a new wall is a new route; the hand edits were for the old one
+    autoRouteManual_ = false;
+    autoRouteEndT_ = 0.5;      // ...and lands in the middle of it, until it is slid
     emit message(QStringLiteral("Auto route: Enter lays the run, Esc gives it up"));
     emit overlayChanged();
 }
@@ -14234,9 +14296,16 @@ static bool ents_are_double_lines(const std::vector<Entity>& ents, int laid) {
 // The run gets LONGER - it is not joined to a second one. So it keeps its id, its settings, its
 // wire count, its body, everything; what changes is its route, and at the end it was taken from, the
 // cap that used to finish it there, which belonged to where it used to stop.
+// The run itself made longer - shared by laying it and by ghosting it while it is being drawn, so
+// what is on the screen while it is carried on is what it will be.
+static bool extendRun(Entity* e, bool atStart, const std::vector<Vec2>& more, double fillet);
+
 bool Editor::continueRunWith(const QString& id, bool atStart, const std::vector<Vec2>& more,
                              double fillet) {
-    Entity* e = entityById(id);
+    return extendRun(entityById(id), atStart, more, fillet);
+}
+
+static bool extendRun(Entity* e, bool atStart, const std::vector<Vec2>& more, double fillet) {
     if (!e || more.empty()) return false;
     std::vector<Vec2> route = e->points.size() >= 2 ? e->points : std::vector<Vec2>{e->a, e->b};
     if (route.size() < 2) return false;
@@ -19852,7 +19921,18 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                                           shiftStartSeg->second))
                 run[0] = *x;
         };
-        if ((tool_ == ToolId::Rect || tool_ == ToolId::MText || tool_ == ToolId::Note ||
+        // CARRYING A RUN ON: the ghost is THE RUN, longer - not a new one drawn from its end. A new
+        // one would fan out where it starts, which is exactly where the run it continues goes on
+        // without a break, and would show as two runs laid end to end. The drawing leaves the run
+        // itself out meanwhile (runBeingCarriedOn), so its old end does not show through.
+        const Entity* carried = continueId_.isEmpty() ? nullptr : entityById(continueId_);
+        if (carried) {
+            Entity ghost = *carried;
+            if (pts.size() >= 2)
+                extendRun(&ghost, continueAtStart_, std::vector<Vec2>(pts.begin() + 1, pts.end()),
+                          autoRouteFillet_);
+            EntityRenderer::draw(p, ghost, *doc_, vt, paperInk(QColor("#ffffff")));
+        } else if ((tool_ == ToolId::Rect || tool_ == ToolId::MText || tool_ == ToolId::Note ||
              tool_ == ToolId::Revision) &&
             pts.size() >= 2) {
             // Rectangle (and the MTEXT container box) rubber-band.
@@ -20492,6 +20572,15 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                     p.fillRect(grip, paperInk(QColor(120, 200, 255)));
                 else
                     p.drawRect(grip);
+            }
+            // THE END, ON THE GREEN WALL: a handle of its own, in the wall's green - it slides along
+            // that wall and nowhere else.
+            {
+                const QPointF at = vt.toScreen(path.back());
+                const QRectF grip(at.x() - 4.5, at.y() - 4.5, 9.0, 9.0);
+                p.setPen(QPen(paperInk(QColor(60, 220, 110)), 1.4));
+                if (autoRouteDragEnd_) p.fillRect(grip, paperInk(QColor(60, 220, 110)));
+                else p.drawRect(grip);
             }
         }
         p.restore();
