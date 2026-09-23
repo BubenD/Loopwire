@@ -1150,6 +1150,85 @@ void MainWindow::buildHarnessMechanicalTab() {
                 "setting on the ribbon applies, and it is edited afterwards like any harness run."));
             lgAdd(foBtn);
         }
+        // AND TAKING WHAT IS DRAWN TO WHERE IT HAS TO GO. Click the run, click the wall it lands
+        // on, press Enter: the same sort of object is laid between them, in as few bends as that
+        // takes, arriving square to that wall. It belongs in Special with the rest of the furniture
+        // of a mechanical drawing - it is a way of drawing a run, not a way of editing one.
+        {
+            // The button and its two settings side by side, the settings shown only while it is
+            // armed - the same shape as the break mark beside it.
+            auto* arW = new QWidget(lenW);
+            auto* arG = new QGridLayout(arW);
+            arG->setContentsMargins(0, 0, 0, 0);
+            arG->setSpacing(2);
+            auto* arBtn = new QToolButton(arW);
+            arBtn->setDefaultAction(
+                makeToolAction(toolLabel(ToolId::AutoRoute), ToolId::AutoRoute));
+            arBtn->setText(QStringLiteral("Auto\nroute"));
+            arBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+            arBtn->setIconSize(QSize(26, 26));
+            arBtn->setAutoRaise(true);
+            arBtn->setFocusPolicy(Qt::NoFocus);
+            arBtn->setToolTip(QStringLiteral(
+                "Auto route: click the run, cable, sleeve or wire to be routed - it lights orange - "
+                "then click the wall it is to arrive at, which lights green. Enter lays another of "
+                "the same sort of object between them, in as few bends as it takes, arriving square "
+                "to that wall. Esc takes the picks back."));
+            arG->addWidget(arBtn, 0, 0);
+            {
+                auto* optW = new QWidget(arW);
+                auto* og = new QGridLayout(optW);
+                og->setContentsMargins(6, 0, 0, 0);
+                og->setSpacing(2);
+                auto field = [&](const QString& text, double lo, double hi, double step,
+                                 QDoubleSpinBox** out, int row, std::function<void()> toAuto,
+                                 const QString& tip) {
+                    auto* l = new QLabel(text, optW);
+                    l->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
+                    auto* sp = new QDoubleSpinBox(optW);
+                    sp->setRange(lo, hi);
+                    sp->setDecimals(1);
+                    sp->setSingleStep(step);
+                    sp->setKeyboardTracking(false);
+                    sp->setMinimumWidth(64);
+                    sp->setToolTip(tip);
+                    og->addWidget(l, row, 0);
+                    og->addWidget(autoBeside(sp, std::move(toAuto)), row, 1);
+                    *out = sp;
+                };
+                // THE RADIUS EVERY KNEE OF THE ROUTE IS ROUNDED ON. Auto suits what is being
+                // routed: a harness keeps its own, a cable or sleeve is rounded to its width.
+                field(QStringLiteral("Fillet"), 0.0, 500.0, 1.0, &autoRouteFilletSpin_, 0,
+                      [this] { editor_->setAutoRouteFillet(-1.0); syncBreakOptions(); },
+                      QStringLiteral("The radius the route's knees are rounded on. Auto suits what "
+                                     "is being routed: a harness keeps its own knee radius, a cable or "
+                                     "sleeve is rounded in proportion to its width, a bare line keeps "
+                                     "a sharp corner."));
+                // AND THE ANGLE A RUN CHANGES LEVEL AT when it has to move across to meet the wall.
+                field(QStringLiteral("Level shift"), 1.0, 90.0, 5.0, &autoRouteShiftSpin_, 1,
+                      [this] { editor_->setAutoRouteShift(-1.0); syncBreakOptions(); },
+                      QStringLiteral("The angle, in degrees, a run crosses at when it has to move up "
+                                     "or down to meet the wall. Auto is 45 - never square where there "
+                                     "is room for a slant, because a run that steps sideways square "
+                                     "reads as two runs."));
+                connect(autoRouteFilletSpin_, &QDoubleSpinBox::valueChanged, this,
+                        [this](double v) {
+                            editor_->setAutoRouteFillet(v);
+                            syncBreakOptions();
+                            canvas_->update();
+                        });
+                connect(autoRouteShiftSpin_, &QDoubleSpinBox::valueChanged, this,
+                        [this](double v) {
+                            editor_->setAutoRouteShift(v);
+                            syncBreakOptions();
+                            canvas_->update();   // the ghosted route re-lays at the new angle
+                        });
+                optW->setVisible(false);
+                autoRouteOptionsGroup_ = optW;
+                arG->addWidget(optW, 0, 1);
+            }
+            lgAdd(arW);
+        }
         // The stock parts themselves, drawn at size: what a resistor across a pair or a ferrite over
         // the bundle actually takes up on the board. They belong here for the same reason the break
         // mark does - they are the furniture of this kind of drawing.

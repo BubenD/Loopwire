@@ -240,6 +240,13 @@ struct MechSegment {
 
 // How the drawing is laid out, and what is drawn on it.
 struct MechDrawOptions {
+    // DRAW EACH RUN AS A HARNESS RUN - the object the Special tab's Harness run draws - rather than as
+    // an outline and a fan of separate lines. The run is then the same kind of thing whichever way it
+    // was put on the sheet: picked, edited and carried on the same way, with its wires, its body and
+    // its fans as settings on it. Where three runs or more meet, a breakout part is put at the
+    // junction and each run ends on it, the way a harness is actually made up. The wizard turns this
+    // on for its preview and for what it places; everything else draws as it always has.
+    bool runsAsHarness = false;
     Vec2 origin{100.0, 300.0};
     double scale = 1.0;                     // drawing units per millimetre of harness
     // Random-lay bundle factor for four conductors or more:

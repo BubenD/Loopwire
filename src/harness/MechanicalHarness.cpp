@@ -1590,8 +1590,44 @@ std::vector<HousingSlot> housingSlotOffsets(const MechNode& n, const Vec2& at, c
 
 } // namespace
 
-std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const PartsCatalog* catalog) {
+namespace {
+
+// A BREAKOUT PART AT EVERY JUNCTION THAT HAS NONE. Where three runs or more meet, a harness is made up
+// round a part - a Y-split boot - and each run ends on it. A junction that already has one keeps it;
+// one that has nothing gets it here, as a fitting on the node, so it is drawn, named, ballooned and
+// counted in the bill exactly as one the user put there would be.
+MechHarnessDef withBreakoutParts(const MechHarnessDef& in) {
+    MechHarnessDef def = in;
+    for (MechNode& n : def.nodes) {
+        if (n.kind != MechNodeKind::Breakout && n.kind != MechNodeKind::FreeEnd) continue;
+        int meeting = 0;
+        for (const MechSegment& s : def.segments)
+            if (s.fromNode == n.id || s.toNode == n.id) ++meeting;
+        if (meeting < 3) continue;
+        // A RUN CARRIED ON FROM A RUN leaves a free end behind it with three runs on it - which is a
+        // breakout in everything but name. Called one, so it is drawn as one: nothing fans out there,
+        // and the part goes on.
+        n.kind = MechNodeKind::Breakout;
+        bool hasOne = false;
+        for (const MechFitting& f : n.fittings)
+            if (f.kind == PartKind::YSplit) hasOne = true;
+        if (hasOne) continue;
+        MechFitting y;
+        y.id = QStringLiteral("breakout-") + n.id;
+        y.kind = PartKind::YSplit;
+        y.name = QStringLiteral("Y-split breakout");
+        n.fittings.push_back(y);
+    }
+    return def;
+}
+
+} // namespace
+
+std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& defIn, const PartsCatalog* catalog) {
     std::vector<Entity> out;
+    MechHarnessDef withParts;
+    if (defIn.draw.runsAsHarness) withParts = withBreakoutParts(defIn);
+    const MechHarnessDef& def = defIn.draw.runsAsHarness ? withParts : defIn;
     const MechDrawOptions& opt = def.draw;
     MechLayout layout = layoutMechanicalHarness(def);
     if (layout.segments.empty() && layout.nodes.empty()) return out;
@@ -2030,8 +2066,126 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         }
         return false;
     };
+    // A COVERING OVER THE WHOLE RUN, if there is one: with runs drawn as harness runs it is the run's
+    // own body rather than a part drawn over it - see harnessRunFor.
+    auto fullCoverOf = [&](const MechSegment& sg) -> const MechFitting* {
+        if (!sg.bundled || sg.coverings.empty()) return nullptr;
+        const double covered =
+            std::max(0.0, sg.lengthMm - openAtNode(sg.fromNode, &sg) - openAtNode(sg.toNode, &sg));
+        if (covered <= 1e-9) return nullptr;
+        for (const MechFitting& f : sg.coverings) {
+            const double len = f.lengthMm > 0.0 ? f.lengthMm : covered;
+            if (f.atMm <= 1e-9 && len >= covered - 1e-6) return &f;
+        }
+        return nullptr;
+    };
+
+    // ONE RUN OF THE HARNESS, AS A HARNESS RUN.
+    //
+    // Every figure the generator used to draw the run by hand becomes a setting on the run, worked
+    // out the same way so the picture is the one it always drew:
+    //   the wires     - FIVE AT THE FACE, THREE INTO THE BUNDLE, the hand-drawn view's picture of a
+    //                   bundle forming; the full count is written beside the run and in the lists
+    //   their width   - the widest conductor in the run, as it was drawn
+    //   the fans      - only where the run ENDS on something the wires land on: a connector or a free
+    //                   end. At a breakout the body carries on to the part it ends on.
+    //   fan length    - the open length at that end, the bare wire the build calls for
+    //   fan pitch     - the connector face shared out as the fan did: each wire its share of whichever
+    //                   is wider, the face or the row of wires with a margin
+    //   the body      - the jacket where it is a cable, the covering where one runs its whole length,
+    //                   otherwise the wires themselves
+    // What is fitted along it - labels, boots, sleeves over part of it - is still drawn as the part
+    // it is, on top of the run.
+    auto harnessRunFor = [&](const MechSegment& sg, const MechPlacedSegment& ps) {
+        Entity r = baseEntity(opt, QStringLiteral("bundle"));
+        r.type = EntityType::TwistedPair;
+        r.points = ps.path.size() >= 2 ? ps.path : std::vector<Vec2>{ps.a, ps.b};
+        r.a = r.points.front();
+        r.b = r.points.back();
+        r.meta.insert(QStringLiteral("mechSeg"), ps.id);
+        r.meta.insert(QStringLiteral("twistStraight"), true);
+        const int count = static_cast<int>(sg.wireIds.size());
+        const int drawn = std::clamp(std::min(count, 5), 2, kTwistedMaxWires);
+        r.meta.insert(QStringLiteral("twistWires"), drawn);
+        double widest = 0.0, band = 0.0;
+        for (int i = 0; i < std::min(count, drawn); ++i) {
+            const MechWire* w = def.wire(sg.wireIds[i]);
+            const double od = w ? wireOuterDiameterMm(w->gauge) : 1.5;
+            widest = std::max(widest, od > 0.0 ? od : 1.5);
+            band += std::max(0.4, across(od > 0.0 ? od : 1.5));
+        }
+        if (widest <= 0.0) widest = 1.5;
+        r.meta.insert(QStringLiteral("twistWireWidth"), across(widest));
+        r.meta.insert(QStringLiteral("twistWidth"), across(std::max(ps.diameterMm, widest * 2.0)));
+
+        // The two ends: which fan, how long, and at what pitch.
+        auto pitchAt = [&](bool atToEnd) {
+            const MechNode* n = def.node(atToEnd ? sg.toNode : sg.fromNode);
+            const double endMm = segmentEndDiameterMm(def, sg, atToEnd);
+            const double faceHalf =
+                across(n && n->bodyHeightMm > 0.0 ? n->bodyHeightMm
+                                                  : std::max(endMm * 1.4, endMm + 2.0)) / 2.0;
+            const double span = std::max(faceHalf * 0.8 * 2.0, band * 1.1);
+            return span / drawn;
+        };
+        // Where the run meets ANOTHER RUN - a splice carried straight on - nothing is bare: the wires go
+        // on into the next run, and a fan there would draw them loose in the middle of the harness.
+        auto meetsRun = [&](const QString& nodeId) {
+            int n = 0;
+            for (const MechSegment& o : def.segments)
+                if (o.fromNode == nodeId || o.toNode == nodeId) ++n;
+            return n >= 2;
+        };
+        const double openStart = meetsRun(sg.fromNode) ? 0.0 : openAtNode(sg.fromNode, &sg);
+        const double openEnd = meetsRun(sg.toNode) ? 0.0 : openAtNode(sg.toNode, &sg);
+        const bool fanStart = openStart > 0.0;
+        const bool fanEnd = openEnd > 0.0;
+        r.meta.insert(QStringLiteral("twistSpread"),
+                      fanStart && !fanEnd   ? QStringLiteral("start")
+                      : fanEnd && !fanStart ? QStringLiteral("finish")
+                                            : QStringLiteral("both"));
+        // Each end said for itself - the two are rarely alike, a header at one end and a ring
+        // terminal at the other - and an end that does not fan is given a fan of no length, so the
+        // wires carry on straight to it.
+        r.meta.insert(QStringLiteral("twistSidesSame"), false);
+        r.meta.insert(QStringLiteral("twistEnds"), fanStart ? along(openStart) : 0.0);
+        r.meta.insert(QStringLiteral("twistEndsFinish"), fanEnd ? along(openEnd) : 0.0);
+        r.meta.insert(QStringLiteral("twistLane"), pitchAt(false));
+        r.meta.insert(QStringLiteral("twistLaneFinish"), pitchAt(true));
+
+        // The body.
+        if (sg.jacketOdMm > 0.0) {
+            r.meta.insert(QStringLiteral("twistBody"), QStringLiteral("cable"));
+            r.meta.insert(QStringLiteral("twistBodyWidth"), across(sg.jacketOdMm));
+            // No boots unless the build puts one there: a boot is a part at the node, drawn as one.
+            r.meta.insert(QStringLiteral("twistBodyTransition"), false);
+        } else if (const MechFitting* cover = fullCoverOf(sg)) {
+            const LibraryPart* part = catalog ? catalog->byId(cover->libPart) : nullptr;
+            double lengthMm = 0.0, odMm = 0.0;
+            fittingSize(*cover, part, ps.diameterMm, lengthMm, odMm);
+            r.meta.insert(QStringLiteral("twistBody"), QStringLiteral("heatshrink"));
+            r.meta.insert(QStringLiteral("twistBodyWidth"),
+                          across(odMm > 0.0 ? odMm : ps.diameterMm + 1.0));
+        } else {
+            // THE WIRES THEMSELVES, gathered to three where the run is bundled and side by side all
+            // the way where it is not.
+            r.meta.insert(QStringLiteral("twistTrunkWires"), sg.bundled ? std::min(drawn, 3) : drawn);
+        }
+        return r;
+    };
+
     for (const MechPlacedSegment& ps : layout.segments) {
         const Body& b = bodies.value(ps.id);
+        // DRAWN AS A HARNESS RUN, when the drawing asks for that and the run carries wires enough to
+        // be one. A run still being described - no wires on it yet - keeps the outline, so it can be
+        // seen while it is being filled in.
+        if (opt.runsAsHarness) {
+            const MechSegment* sg = def.segment(ps.id);
+            if (sg && sg->wireIds.size() >= 2) {
+                out.push_back(harnessRunFor(*sg, ps));
+                continue;
+            }
+        }
         if (sleevedAllTheWay(ps.id)) continue;   // the covering is the body here
         out.push_back(makeBundleEdge(opt, b.plus, ps.diameterMm, ps.id, +1));
         out.push_back(makeBundleEdge(opt, b.minus, ps.diameterMm, ps.id, -1));
@@ -2258,6 +2412,8 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         const double bareAtEnd = openAtNode(seg->toNode, seg);
         const double coveredMm = std::max(0.0, seg->lengthMm - bareAtStart - bareAtEnd);
         for (const MechFitting& f : seg->coverings) {
+            // DRAWN AS THE RUN'S OWN BODY, where the run is a harness run - see harnessRunFor.
+            if (opt.runsAsHarness && seg->wireIds.size() >= 2 && &f == fullCoverOf(*seg)) continue;
             const LibraryPart* part = catalog ? catalog->byId(f.libPart) : nullptr;
             double lengthMm = 0.0, odMm = 0.0;
             fittingSize(f, part, ps.diameterMm, lengthMm, odMm);
@@ -2386,6 +2542,16 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         for (const MechGaugeChange& g : mechGaugeChanges(def)) {
             const MechPlacedNode* pn = layout.node(g.nodeId);
             if (!pn) continue;
+            // Where the runs part at a breakout part, the part is what dresses the joint; a sleeve
+            // over it as well would be two things drawn in one place.
+            if (opt.runsAsHarness) {
+                const MechNode* at = def.node(g.nodeId);
+                bool dressed = false;
+                if (at)
+                    for (const MechFitting& f : at->fittings)
+                        if (f.kind == PartKind::YSplit) dressed = true;
+                if (dressed) continue;
+            }
             const double odMm = g.diameterMm + 2.0;
             const double lenMm = std::max(20.0, g.diameterMm * 3.0);
             const double dirRad = rad(pn->dirDeg);
@@ -2587,7 +2753,10 @@ std::vector<Entity> buildMechanicalHarness(const MechHarnessDef& def, const Part
         // to the contacts, and that is how a released drawing shows them: the body stops short and each
         // conductor is a line from the bundle to the connector. It is also the check a builder makes on
         // the drawing - that the wire count going into the connector is the wire count in the run.
-        if (openMm > 0.0 && seg && !seg->wireIds.isEmpty() &&
+        // A RUN DRAWN AS A HARNESS RUN has its own fan - the conductors below are what that fan is,
+        // and drawing them as well would draw every wire twice.
+        const bool fannedByRun = opt.runsAsHarness && seg && seg->wireIds.size() >= 2;
+        if (!fannedByRun && openMm > 0.0 && seg && !seg->wireIds.isEmpty() &&
             (n->kind == MechNodeKind::Connector || n->kind == MechNodeKind::FreeEnd)) {
             const int count = static_cast<int>(seg->wireIds.size());
             // FIVE AT THE FACE, THREE INTO THE BUNDLE - the hand-drawn view in mytest/mytest1.dwx.

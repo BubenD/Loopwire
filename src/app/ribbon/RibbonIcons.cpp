@@ -290,6 +290,21 @@ QIcon makeToolIcon(ToolId id, const QColor& ink, int variant) {
         }
         break;
     }
+    case ToolId::AutoRoute: {
+        // WHAT IT DOES, IN ONE PICTURE: something over here, something over there, and a run laid
+        // between them that turns once and arrives square. The two objects are drawn as the plain
+        // ends they usually are; the route between them is what the icon is about, so it is the one
+        // line that carries a corner.
+        p.drawLine(QPointF(2, 5), QPointF(2, 13));      // what is routed
+        p.drawLine(QPointF(15, 20), QPointF(23, 20));   // the wall it lands on
+        QPainterPath run;
+        run.moveTo(QPointF(2, 9));
+        run.lineTo(QPointF(15, 9));
+        run.lineTo(QPointF(19, 13));
+        run.lineTo(QPointF(19, 20));                    // square into it
+        p.drawPath(run);
+        break;
+    }
     case ToolId::Fanout: {
         // THE FAN, AND ONLY THE FAN: a bundle arriving at the left and the wires breaking out of it
         // to their own lanes, each running level to the end. What tells it from the harness run

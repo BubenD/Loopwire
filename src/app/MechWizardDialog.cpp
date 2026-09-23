@@ -2364,6 +2364,10 @@ namespace {
 void applyWizardDrawOptions(MechHarnessDef& def) {
     def.draw.diameterLabels = false;
     def.draw.wireCounts = false;
+    // EVERY RUN AS A HARNESS RUN, in the preview and in what is placed - the same object the Special
+    // tab's Harness run draws, so what the wizard puts down can be picked, edited and carried on
+    // like any run drawn by hand. Both use this one function, so the two cannot come apart.
+    def.draw.runsAsHarness = true;
 }
 
 } // namespace

@@ -6476,6 +6476,345 @@ int run_editor_tests() {
               "wires run: spread at one end only, the other end is just the bundle");
     }
 
+    // --- AUTO ROUTE: take what is drawn to where it has to go. Two picks and a key - the run, the
+    //     wall it lands on, Enter - and what is laid is another of WHATEVER was picked first,
+    //     arriving square to that wall in as few bends as that takes.
+    {
+        auto scene = [](Vec2 a, Vec2 b) {
+            Document d;
+            Entity cab;
+            cab.id = QStringLiteral("cab");
+            cab.type = EntityType::DoubleLine;
+            cab.a = a;
+            cab.b = b;
+            cab.meta.insert(QStringLiteral("gap"), 4.0);
+            Entity box;
+            box.id = QStringLiteral("box");
+            box.type = EntityType::Rect;
+            box.a = {150, 40};
+            box.b = {190, 80};
+            box.points = {{150, 40}, {190, 40}, {190, 80}, {150, 80}};
+            d.entities().push_back(cab);
+            d.entities().push_back(box);
+            return d;
+        };
+        // A cable pointing straight at the wall needs no bend at all.
+        {
+            Document d = scene({10, 60}, {90, 60});
+            Editor ed;
+            ed.setDocument(&d);
+            ed.setPixelTolerance(6);
+            ed.setTool(ToolId::AutoRoute);
+            ed.onPointerPress({80, 60}, Qt::LeftButton, Qt::NoModifier);
+            check(ed.autoRouteFrom() == QLatin1String("cab"),
+                  "auto route: the first click picks what is to be routed");
+            ed.onPointerPress({150, 60}, Qt::LeftButton, Qt::NoModifier);
+            check(ed.autoRouteTo() == QLatin1String("box") && ed.autoRouteWall() >= 0,
+                  "auto route: the second picks one wall of what it lands on");
+            const std::vector<Vec2> path = ed.autoRoutePath();
+            check(path.size() == 2 && near(path.back().x, 150.0) && near(path.back().y, 60.0),
+                  "auto route: pointing straight at the wall, it goes straight to the middle of it");
+            ed.onKey(Qt::Key_Return, Qt::NoModifier);
+            const Entity* laid = nullptr;
+            for (const Entity& e : d.entities())
+                if (e.id != QLatin1String("cab") && e.id != QLatin1String("box")) laid = &e;
+            check(laid && laid->type == EntityType::DoubleLine &&
+                      near(laid->meta.value(QStringLiteral("gap")).toDouble(), 4.0),
+                  "auto route: what is laid is another of the sort that was picked, settings and all");
+            check(ed.tool() == ToolId::Select, "auto route: laying it ends the function");
+        }
+        // Offset from the wall, or pointing the wrong way: one bend, and square in either case.
+        for (const auto& start : {std::make_pair(Vec2{10, 20}, Vec2{90, 20}),
+                                  std::make_pair(Vec2{10, 20}, Vec2{10, 90})}) {
+            Document d = scene(start.first, start.second);
+            Editor ed;
+            ed.setDocument(&d);
+            ed.setPixelTolerance(6);
+            ed.setTool(ToolId::AutoRoute);
+            ed.onPointerPress(start.second, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerPress({150, 60}, Qt::LeftButton, Qt::NoModifier);
+            const std::vector<Vec2> path = ed.autoRoutePath();
+            // NEVER BACK OVER ITSELF. The first route drawn for a run pointing away from the wall took
+            // it straight back down the cable it came out of, which on the sheet is a line drawn on top
+            // of the run. However many bends it takes, the first leg carries the run ON.
+            const Vec2 out = (start.second - start.first).normalized();
+            check(path.size() >= 3 && dot(path[1] - path[0], out) > -1e-9,
+                  "auto route: it bends where it has to, and never back along the run it came from");
+            if (path.size() >= 3) {
+                // THE LAST LEG IS SQUARE TO THE WALL, which is the whole point of the function: the
+                // wall here runs up the page, so the run must arrive across it.
+                const Vec2 last = (path.back() - path[path.size() - 2]).normalized();
+                check(std::abs(last.y) < 1e-9 && std::abs(std::abs(last.x) - 1.0) < 1e-9,
+                      "auto route: and it arrives square to the wall it lands on");
+                check(near(path.back().x, 150.0) && near(path.back().y, 60.0),
+                      "auto route: at the middle of that wall");
+            }
+        }
+    }
+
+    // --- AUTO ROUTE CARRIES A RUN ON rather than laying a second one beside it: a polyline, double
+    //     polyline, harness, cable or sleeve just gets longer, keeping every setting it had. A run
+    //     that has to change level does it on a SLANT - never square where there is room for one.
+    {
+        Document d;
+        Entity run;
+        run.id = QStringLiteral("run");
+        run.type = EntityType::Polyline;
+        run.points = {{10, 20}, {90, 20}};
+        run.meta.insert(QStringLiteral("double"), true);
+        run.meta.insert(QStringLiteral("gap"), 4.0);
+        Entity box;
+        box.id = QStringLiteral("box");
+        box.type = EntityType::Rect;
+        box.a = {150, 40};
+        box.b = {190, 80};
+        box.points = {{150, 40}, {190, 40}, {190, 80}, {150, 80}};
+        d.entities().push_back(run);
+        d.entities().push_back(box);
+        Editor ed;
+        ed.setDocument(&d);
+        ed.setPixelTolerance(6);
+        ed.setTool(ToolId::AutoRoute);
+        ed.onPointerPress({85, 22}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({150, 60}, Qt::LeftButton, Qt::NoModifier);
+        const std::vector<Vec2> path = ed.autoRoutePath();
+        bool slanted = path.size() == 4;
+        for (size_t k = 1; slanted && k + 1 < path.size(); ++k) {
+            const Vec2 a = (path[k] - path[k - 1]).normalized();
+            const Vec2 b = (path[k + 1] - path[k]).normalized();
+            const double deg = std::acos(std::clamp(dot(a, b), -1.0, 1.0)) * 180.0 / M_PI;
+            slanted = std::abs(deg - 45.0) < 1e-6;
+        }
+        check(slanted, "auto route: a level shift is two 45-degree bends, not a square step");
+        ed.onKey(Qt::Key_Return, Qt::NoModifier);
+        check(d.entities().size() == 2,
+              "auto route: a double polyline is carried on, not joined by a second one");
+        const Entity* r = nullptr;
+        for (const Entity& e : d.entities())
+            if (e.id == QLatin1String("run")) r = &e;
+        check(r && r->points.size() == 5 && near(r->points.back().x, 150.0),
+              "auto route: and the same run now reaches the wall");
+        if (r) {
+            const QJsonArray radii = r->meta.value(QStringLiteral("cornerRadii")).toArray();
+            check(radii.size() == 5 && near(radii[1].toDouble(), 6.0) &&
+                      near(radii[0].toDouble(), 0.0) && near(radii[4].toDouble(), 0.0),
+                  "auto route: its new knees are rounded, to its own width when left to it");
+        }
+    }
+
+    // --- A PLAIN DOUBLE LINE cannot hold a knee, so it is carried on AS MORE DOUBLE LINES, one per
+    //     leg, each mitred into the next so its two sides meet square across the bend.
+    {
+        Document d;
+        Entity dl;
+        dl.id = QStringLiteral("dl");
+        dl.type = EntityType::DoubleLine;
+        dl.a = {10, 20};
+        dl.b = {90, 20};
+        dl.meta.insert(QStringLiteral("gap"), 4.0);
+        Entity box;
+        box.id = QStringLiteral("box");
+        box.type = EntityType::Rect;
+        box.a = {150, 40};
+        box.b = {190, 80};
+        box.points = {{150, 40}, {190, 40}, {190, 80}, {150, 80}};
+        d.entities().push_back(dl);
+        d.entities().push_back(box);
+        Editor ed;
+        ed.setDocument(&d);
+        ed.setPixelTolerance(6);
+        // SQUARE KNEES ASKED FOR: a fillet of nought keeps it as double lines, mitred. Left to
+        // itself a double line is rounded, which is the fillet test below.
+        ed.setAutoRouteFillet(0.0);
+        ed.setTool(ToolId::AutoRoute);
+        ed.onPointerPress({85, 22}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({150, 60}, Qt::LeftButton, Qt::NoModifier);
+        ed.onKey(Qt::Key_Return, Qt::NoModifier);
+        int legs = 0, mitred = 0;
+        for (const Entity& e : d.entities()) {
+            if (e.type != EntityType::DoubleLine || e.id == QLatin1String("dl")) continue;
+            ++legs;
+            if (e.meta.value(QStringLiteral("cutStart")).toBool() ||
+                e.meta.value(QStringLiteral("cutEnd")).toBool())
+                ++mitred;
+        }
+        check(legs == 3, "auto route: a double line is carried on as one double line per leg");
+        check(mitred == legs, "auto route: and every one of them is mitred where it meets the next");
+    }
+
+    // --- THE ROUTE ON THE SCREEN CAN BE TAKEN HOLD OF before it is laid. A knee is picked up and
+    //     moved; a leg within 2 mm of level or plumb is made exactly so; the knee next to the wall
+    //     only slides along the wall's perpendicular, so the run still lands square; the cursor's
+    //     snaps apply to a knee as to anything placed with the mouse; and Shift on the route makes a
+    //     new knee there.
+    {
+        auto setUp = [](Document& d) {
+            Entity run;
+            run.id = QStringLiteral("run");
+            run.type = EntityType::Polyline;
+            run.points = {{10, 20}, {90, 20}};
+            Entity box;
+            box.id = QStringLiteral("box");
+            box.type = EntityType::Rect;
+            box.a = {150, 40};
+            box.b = {190, 80};
+            box.points = {{150, 40}, {190, 40}, {190, 80}, {150, 80}};
+            // something to snap to, off the route
+            Entity mark;
+            mark.id = QStringLiteral("mark");
+            mark.type = EntityType::Line;
+            mark.a = {120, 30};
+            mark.b = {120, 0};
+            d.entities().push_back(run);
+            d.entities().push_back(box);
+            d.entities().push_back(mark);
+        };
+        Document d;
+        setUp(d);
+        Editor ed;
+        ed.setDocument(&d);
+        ed.setPixelTolerance(6);
+        ed.setTool(ToolId::AutoRoute);
+        ed.onPointerPress({85, 20}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({150, 60}, Qt::LeftButton, Qt::NoModifier);
+        const std::vector<Vec2> route = ed.autoRoutePath();
+        check(route.size() == 4, "route edit: there is a route with two knees to take hold of");
+        if (route.size() == 4) {
+            // A LEG ALL BUT LEVEL IS MADE LEVEL.
+            ed.onPointerPress(route[1], Qt::LeftButton, Qt::NoModifier);
+            check(ed.autoRouteDragging(), "route edit: a click on a knee takes hold of it");
+            ed.onPointerMove({108, 21.2});
+            ed.onPointerRelease({108, 21.2}, Qt::LeftButton);
+            const std::vector<Vec2> a = ed.autoRoutePath();
+            check(!ed.autoRouteDragging() && a.size() == 4 && near(a[1].y, 20.0) && near(a[1].x, 108.0),
+                  "route edit: moved to within 2 mm of level, the leg is made exactly level");
+
+            // THE CURSOR'S SNAPS APPLY: moved to just off the end of the mark, the knee lands on it.
+            ed.onPointerPress(a[1], Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerMove({120.3, 30.4});
+            ed.onPointerRelease({120.3, 30.4}, Qt::LeftButton);
+            const std::vector<Vec2> b = ed.autoRoutePath();
+            check(b.size() == 4 && near(b[1].x, 120.0) && near(b[1].y, 30.0),
+                  "route edit: a knee lands on a point of the drawing the way anything placed does");
+
+            // THE KNEE NEXT TO THE WALL keeps the run arriving square.
+            ed.onPointerPress(b[2], Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerMove({135, 75});
+            ed.onPointerRelease({135, 75}, Qt::LeftButton);
+            const std::vector<Vec2> c = ed.autoRoutePath();
+            const Vec2 last = c.size() >= 2 ? (c.back() - c[c.size() - 2]).normalized() : Vec2{0, 0};
+            check(c.size() == 4 && near(c[2].y, 60.0) && std::abs(last.y) < 1e-9,
+                  "route edit: the knee by the wall slides only along its perpendicular");
+
+            // SHIFT ON THE ROUTE makes a new knee there.
+            const Vec2 onLeg = (c[1] + c[2]) * 0.5;
+            ed.onPointerPress(onLeg, Qt::LeftButton, Qt::ShiftModifier);
+            ed.onPointerMove({onLeg.x + 4, onLeg.y - 6});
+            ed.onPointerRelease({onLeg.x + 4, onLeg.y - 6}, Qt::LeftButton);
+            check(ed.autoRoutePath().size() == 5, "route edit: Shift on the route adds a knee there");
+
+            // AND WHAT IS LAID IS THE ROUTE AS EDITED, not the one first worked out.
+            const std::vector<Vec2> edited = ed.autoRoutePath();
+            ed.onKey(Qt::Key_Return, Qt::NoModifier);
+            const Entity* r = nullptr;
+            for (const Entity& e : d.entities())
+                if (e.id == QLatin1String("run")) r = &e;
+            check(r && r->points.size() == 1 + edited.size() && near(r->points[2].x, edited[1].x) &&
+                      near(r->points[2].y, edited[1].y),
+                  "route edit: Enter lays the route as it was edited");
+        }
+    }
+
+    // --- FILLETS ON THE KNEES OF A LINE OR DOUBLE LINE ROUTE. A line is rounded with an arc at each
+    //     knee, the legs taken back to where the arc touches them. A double line has no arc of its
+    //     own, so a rounded one is laid as a double polyline - the same two lines at the same gap,
+    //     rounded on the radius.
+    for (const bool dbl : {false, true}) {
+        Document d;
+        Entity l;
+        l.id = QStringLiteral("l");
+        l.type = dbl ? EntityType::DoubleLine : EntityType::Line;
+        l.a = {10, 20};
+        l.b = {90, 20};
+        if (dbl) l.meta.insert(QStringLiteral("gap"), 4.0);
+        Entity box;
+        box.id = QStringLiteral("box");
+        box.type = EntityType::Rect;
+        box.a = {150, 40};
+        box.b = {190, 80};
+        box.points = {{150, 40}, {190, 40}, {190, 80}, {150, 80}};
+        d.entities().push_back(l);
+        d.entities().push_back(box);
+        Editor ed;
+        ed.setDocument(&d);
+        ed.setPixelTolerance(6);
+        ed.setAutoRouteFillet(5.0);
+        ed.setTool(ToolId::AutoRoute);
+        ed.onPointerPress({85, dbl ? 22.0 : 20.0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({150, 60}, Qt::LeftButton, Qt::NoModifier);
+        ed.onKey(Qt::Key_Return, Qt::NoModifier);
+        int arcs = 0, rounded = 0;
+        for (const Entity& e : d.entities()) {
+            if (e.type == EntityType::Arc && near(e.radius, 5.0)) ++arcs;
+            if (e.type == EntityType::Polyline && e.meta.value(QStringLiteral("double")).toBool()) {
+                const QJsonArray radii = e.meta.value(QStringLiteral("cornerRadii")).toArray();
+                bool all = radii.size() >= 3;
+                for (int k = 1; all && k + 1 < radii.size(); ++k)
+                    all = near(radii[k].toDouble(), 5.0);
+                if (all) ++rounded;
+            }
+        }
+        if (dbl)
+            check(rounded == 1, "route fillet: a double line's knees are rounded on the radius asked for");
+        else
+            check(arcs == 2, "route fillet: each knee of a line route is an arc of the radius asked for");
+    }
+
+
+    // --- SHIFT ON AN END of a selected harness carries it on by hand, knee by knee, until Enter.
+    {
+        Document d;
+        Entity h;
+        h.id = QStringLiteral("h");
+        h.type = EntityType::TwistedPair;
+        h.points = {{10, 20}, {90, 20}};
+        h.a = h.points.front();
+        h.b = h.points.back();
+        h.meta.insert(QStringLiteral("twistWires"), 5);
+        h.meta.insert(QStringLiteral("twistStraight"), true);
+        h.meta.insert(QStringLiteral("twistWidth"), kTwistedPairWidth * 1.5);
+        d.entities().push_back(h);
+        Editor ed;
+        ed.setDocument(&d);
+        ed.setPixelTolerance(6);
+        ed.selectById(QStringLiteral("h"));
+        ed.onPointerPress({90, 20}, Qt::LeftButton, Qt::ShiftModifier);
+        check(ed.continuingRun(), "carry on: Shift on an end of a selected harness takes it up");
+        ed.onPointerMove({120, 20});
+        ed.onPointerPress({120, 20}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({120, 60});
+        ed.onPointerPress({120, 60}, Qt::LeftButton, Qt::NoModifier);
+        ed.onKey(Qt::Key_Return, Qt::NoModifier);
+        check(d.entities().size() == 1, "carry on: it is still one harness, not two");
+        if (d.entities().size() == 1) {
+            const Entity& e = d.entities().front();
+            check(e.points.size() == 4 && near(e.points.back().x, 120.0) &&
+                      near(e.points.back().y, 60.0),
+                  "carry on: longer by the knees that were clicked");
+            check(e.meta.value(QStringLiteral("twistWires")).toInt() == 5,
+                  "carry on: and it keeps every setting it had");
+        }
+        // Esc in the middle of it leaves the run as it was.
+        ed.selectById(QStringLiteral("h"));
+        ed.onPointerPress({120, 60}, Qt::LeftButton, Qt::ShiftModifier);
+        ed.onPointerMove({150, 60});
+        ed.onPointerPress({150, 60}, Qt::LeftButton, Qt::NoModifier);
+        ed.onKey(Qt::Key_Escape, Qt::NoModifier);
+        check(!ed.continuingRun() && d.entities().front().points.size() == 4,
+              "carry on: Esc leaves the run exactly as it was");
+    }
+
+
     // --- Tab pins a run part way through drawing it, so the ribbon can be used on the real thing.
     {
         Document d;

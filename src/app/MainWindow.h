@@ -841,6 +841,9 @@ private:
     QLabel* twistFanKneeLabel_ = nullptr;
     QCheckBox* twistSidesCheck_ = nullptr;
     QWidget* twistBodyBox_ = nullptr;              // the Body box, hidden for a fanout
+    QWidget* autoRouteOptionsGroup_ = nullptr;     // Auto route's two settings, while it is armed
+    QDoubleSpinBox* autoRouteFilletSpin_ = nullptr;
+    QDoubleSpinBox* autoRouteShiftSpin_ = nullptr;
     QLabel* twistSpreadLabel_ = nullptr;           // "Spread", beside the left/right/both combo
     QDoubleSpinBox* twistBodyPitchSpin_ = nullptr; // how far apart the wires run in the body
     QLabel* twistBodyPitchLabel_ = nullptr;

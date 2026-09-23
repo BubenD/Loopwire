@@ -1634,6 +1634,10 @@ void Editor::setTool(ToolId t) {
     // (cutting/boundary edges). The user then draws a fence line; objects it crosses
     // are trimmed back to / extended to the reference. (Reused for both tools.)
     trimRefIds_.clear();
+    clearAutoRoute();       // the two picks belong to the auto route and to nothing else
+    // and a run being carried on belongs to the drawing in progress: picking up another tool
+    // must not leave the next thing drawn to be merged into it.
+    continueId_.clear();
     breakFrozen_ = false;   // a pinned break preview belongs to the break tool
     trimFenceActive_ = false;
     if (t == ToolId::Trim || t == ToolId::Extend) trimRefIds_ = selected_;
@@ -1676,6 +1680,13 @@ QString Editor::uid() const {
 
 void Editor::pushUndo() {
     if (doc_) undo_.push(doc_->entities());
+}
+
+const Entity* Editor::entityById(const QString& id) const {
+    if (!doc_ || id.isEmpty()) return nullptr;
+    for (const Entity& e : doc_->entities())
+        if (e.id == id) return &e;
+    return nullptr;
 }
 
 void Editor::addEntity(Entity e) {
@@ -3740,6 +3751,9 @@ void Editor::toggleShiftMode() {
     // Read WHENEVER IT IS PRESSED, not only as a modifier on the first click. Latched at that click
     // it could not be changed once drawing had started, which is exactly when you can see that it is
     // the wrong way round - the ghost is in front of you.
+    // Auto route reads Shift as a MODIFIER on a click - a new knee where it is held on the route -
+    // so pressing it must not also flip a mode somewhere else.
+    if (tool_ == ToolId::AutoRoute) return;
     if (tool_ == ToolId::Fanout) {
         fanoutAtFinish_ = !fanoutAtFinish_;
         emit message(fanoutAtFinish_
@@ -4420,6 +4434,10 @@ void Editor::onPointerMove(const Vec2& raw) {
         detailThroughId_ = detailThrough_ ? detailWindowId(cursor_) : QString();
         cursor_ = mapped;
     }
+
+    // A KNEE OF AN AUTO ROUTE BEING MOVED follows the cursor as it now stands - snapped, and through
+    // the window - so the knee lands on what the cursor landed on.
+    if (tool_ == ToolId::AutoRoute && autoRouteDragKnee_ >= 0) autoRouteDragTo(cursor_);
 
     // A LOOM THAT CANNOT GO THERE STOPS WHERE IT CAN.
     //
@@ -5146,6 +5164,9 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         return;
     }
     if (isDrawTool(tool_)) { handleDrawPress(p); return; }
+    // AUTO ROUTE: the run to take, then the wall to take it to. Neither click draws anything - what
+    // they do is ANSWER, and both answers are on the screen while the third key is being reached for.
+    if (tool_ == ToolId::AutoRoute) { handleAutoRoutePress(p); return; }
     // TRIM / EXTEND (AutoCAD-style, persistent reference): first pick a REFERENCE
     // object — it stays selected/highlighted for the whole command. Then draw a LINE
     // (two clicks) across objects; every object the line crosses is trimmed to / (for
@@ -5217,6 +5238,13 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
 void Editor::onPointerRelease(const Vec2& raw, Qt::MouseButton button) {
     Q_UNUSED(raw);
     if (!doc_ || button != Qt::LeftButton) return;
+    // Letting go of a knee of an auto route leaves it where it is.
+    if (autoRouteDragKnee_ >= 0) {
+        autoRouteDragKnee_ = -1;
+        emit message(QStringLiteral("Auto route: Enter lays the run, Esc gives it up"));
+        emit overlayChanged();
+        return;
+    }
     // A detail view that was moved or resized has a copy of somewhere else: made again now the drag has finished,
     // rather than on every step of it.
     if (!detailCopyStale_.isEmpty()) {
@@ -6376,6 +6404,10 @@ bool Editor::beginGripGrab(const Vec2& at, bool shift) {
         Entity* e = entityById(bestId);
         return e && e->meta.value("balloon").toBool() && bestGrip.role == GripRole::Center;
     }();
+    // SHIFT ON AN END OF A SELECTED RUN carries the run on from there. Asked before Shift's other
+    // meaning on a grip below - leave it to the selection - because an END is the one place on a run
+    // where carrying it on is what taking hold of it with Shift can mean.
+    if (shift && beginContinueRun(at)) return true;
     if (found && shift && !balloonCenter) return false;
     if (found) {
         const QString& id = bestId;
@@ -10603,6 +10635,29 @@ double ellipseParamAngle(const Vec2& center, double rx, double ry, double rot, c
 
 void Editor::finishDraw() {
     if (!doc_ || draftPts_.empty()) { cancelDraw(); return; }
+    // CARRYING A RUN ON: the knees just drawn go onto the run they started from, and nothing new is
+    // made. The first draft point is that run's own end - it is where the drawing began - so only
+    // the points after it are new.
+    if (!continueId_.isEmpty()) {
+        const QString id = continueId_;
+        const bool atStart = continueAtStart_;
+        const std::vector<Vec2> more(draftPts_.begin() + 1, draftPts_.end());
+        continueId_.clear();
+        if (!more.empty()) {
+            pushUndo();
+            continueRunWith(id, atStart, more, autoRouteFillet_);
+            doc_->setDirty(true);
+        }
+        cancelDraw();
+        setTool(ToolId::Select);
+        selected_ = {id};
+        emit message(more.empty() ? QStringLiteral("Nothing added to the run")
+                                  : QStringLiteral("Run carried on by %1 knee(s)").arg(more.size()));
+        emit selectionChanged();
+        emit changed();
+        emit overlayChanged();
+        return;
+    }
     Entity e;
     e.layer = doc_->activeLayer();
     bool filletTooBig = false; // set if a polyline fillet radius won't fit (warn after)
@@ -11162,6 +11217,7 @@ void Editor::finishDraw() {
 }
 
 void Editor::cancelDraw() {
+    continueId_.clear();     // Esc while carrying a run on leaves it as it was
     shownCentres_.clear();   // the marks belonged to the command that has just ended
     twistedFrozen_ = false;   // nothing pinned once the draft is gone
     twistedHeld_ = false;     // nor held back
@@ -13664,6 +13720,526 @@ bool Editor::extendOneRailOfDouble(Entity& ent, const Vec2& fa, const Vec2& fb,
     CutRecord cut;
     if (!railRayToBoundary(fixed, moving, refs, ent.id, cut)) return false;
     writeSidedCut(ent, atStart ? QStringLiteral("cutStart") : QStringLiteral("cutEnd"), cut, side);
+    return true;
+}
+
+// ---- AUTO ROUTE ------------------------------------------------------------------------------
+//
+// THE ROUTE A DRAUGHTSMAN WOULD HAVE DRAWN. Out of the object being routed, across, and square into
+// the wall it lands on - in as few bends as that takes.
+//
+// The last leg is along the wall's own perpendicular, always: a run arriving at a face at a slant is
+// a run that does not look landed on it, and squaring it up afterwards is the fiddle this function
+// exists to save. Given that, the fewest bends is ONE, and where the run's own direction happens to
+// point at the wall it is none.
+std::vector<Vec2> Editor::autoRoutePath() const {
+    std::vector<Vec2> base = autoRouteComputedPath();
+    if (base.size() < 2 || autoRouteKnees_.empty()) return base;
+    // HAND-EDITED: the same two ends, and the knees where they have been put.
+    std::vector<Vec2> out{base.front()};
+    out.insert(out.end(), autoRouteKnees_.begin(), autoRouteKnees_.end());
+    out.push_back(base.back());
+    return out;
+}
+
+std::vector<Vec2> Editor::autoRouteComputedPath() const {
+    if (!doc_ || autoRouteFromId_.isEmpty() || autoRouteToId_.isEmpty() || autoRouteWall_ < 0)
+        return {};
+    const Entity* from = entityById(autoRouteFromId_);
+    const Entity* to = entityById(autoRouteToId_);
+    if (!from || !to) return {};
+    const auto walls = entitySelectSegments(*to);
+    if (autoRouteWall_ >= static_cast<int>(walls.size())) return {};
+    const std::pair<Vec2, Vec2> wall = walls[static_cast<size_t>(autoRouteWall_)];
+    const Vec2 along = wall.second - wall.first;
+    if (along.length() < 1e-9) return {};
+    const Vec2 centre{(wall.first.x + wall.second.x) / 2.0, (wall.first.y + wall.second.y) / 2.0};
+
+    // WHICH END OF THE RUN IS BEING TAKEN THERE: the one nearer the click that picked it. A run is
+    // continued from the end you pointed at, which is the end a hand reaches for.
+    std::vector<Vec2> route = runCenterline(*from);
+    if (route.size() < 2) {
+        if (from->type == EntityType::TwistedPair) route = {from->a, from->b};
+        else return {};
+    }
+    const bool atBack = distance(autoRouteFromAt_, route.back()) <=
+                        distance(autoRouteFromAt_, route.front());
+    const Vec2 start = atBack ? route.back() : route.front();
+    const Vec2 prev = atBack ? route[route.size() - 2] : route[1];
+    Vec2 out = start - prev;   // the way the run is already going, carried on
+    if (out.length() < 1e-9) return {};
+    out = out.normalized();
+
+    // Square to the wall, on the side the run is coming from.
+    Vec2 n = along.normalized().perp();
+    if (dot(start - centre, n) < 0.0) n = Vec2{-n.x, -n.y};
+    const Vec2 tan = along.normalized();
+    const Vec2 in{-n.x, -n.y};                        // the way the run travels as it arrives
+    const double across = dot(start - centre, tan);   // how far to one side of the middle it is
+    const double ahead = dot(start - centre, n);      // and how far off the wall
+
+    std::vector<Vec2> path{start};
+    // STRAIGHT ON, where carrying straight on arrives square: no bend at all.
+    if (std::abs(across) < 1e-6) {
+        path.push_back(centre);
+        return path;
+    }
+    const double heading = dot(out, in);
+
+    // HEADING FOR THE WALL, BUT NOT LEVEL WITH IT: a LEVEL SHIFT. The run has to move across, and
+    // it does it as one slanted leg between two straight ones - over, across on the slant, over
+    // again into the wall. The slant is at the angle asked for; left to itself it is 45, because
+    // a run that steps sideways square reads as two runs and one that crosses on a slant reads as
+    // one. Square only when there is no room for a slant at all.
+    if (heading > 0.7 && ahead > 1e-6) {
+        double deg = autoRouteShift_ > 1e-9 ? std::min(autoRouteShift_, 90.0) : 45.0;
+        const double sideways = std::abs(across);
+        const double minLeg = ahead * 0.1;             // straight enough either side to read
+        const double room = ahead - 2.0 * minLeg;
+        double forward = deg >= 89.999 ? 0.0 : sideways / std::tan(deg * M_PI / 180.0);
+        if (forward > room) forward = std::max(0.0, room);   // steeper, so that it fits
+        const double lead = (ahead - forward) / 2.0;
+        const Vec2 a = start + in * lead;
+        const Vec2 b = a + in * forward - tan * across;
+        path.push_back(a);
+        path.push_back(b);
+        path.push_back(centre);
+        return path;
+    }
+
+    // GOING ACROSS IT: one bend, leaving the way the run already points and turning once onto the
+    // perpendicular. The meeting only serves if it is ahead of the run and on the near side of the
+    // wall - behind either it would double back along what is already drawn.
+    const double slide = dot(out, tan);
+    if (std::abs(slide) > 1e-9 && heading > -0.7) {
+        const double s = -across / slide;
+        const Vec2 x = start + out * s;
+        if (s > 1e-9 && dot(x - centre, n) > 1e-9) {
+            path.push_back(x);
+            path.push_back(centre);
+            return path;
+        }
+    }
+    // ...and where it cannot - it points away from the wall - it goes on out a little, comes round
+    // square to the wall's line, and in. Two bends, and nothing doubling back over the run.
+    const double step = std::max(ahead * 0.25, 1.0);
+    const Vec2 a = start + out * step;
+    const double aAhead = std::max(dot(a - centre, n), step);
+    const Vec2 b = centre + n * aAhead;
+    if (distance(a, b) > 1e-6) path.push_back(a);
+    path.push_back(b);
+    path.push_back(centre);
+    return path;
+}
+
+namespace {
+
+// THE FILLET A ROUTE'S KNEES ARE ROUNDED ON, when nobody has said. A harness keeps its own knee
+// radius (-1: leave it). A cable or a sleeve is rounded in proportion to how wide it is - a knee
+// tighter than its own width folds the inside of the bend over itself. A bare line has no width to
+// be kind to, and keeps a sharp corner.
+double autoFilletFor(const Entity& e) {
+    if (e.type == EntityType::TwistedPair) return -1.0;
+    if (e.meta.value(QStringLiteral("shrunkEnds")).toBool())
+        return e.meta.value(QStringLiteral("shrinkWidth")).toDouble(6.0) * 1.5;
+    const bool dbl = e.type == EntityType::DoubleLine ||
+                     (e.type == EntityType::Polyline &&
+                      e.meta.value(QStringLiteral("double")).toBool());
+    if (dbl) return e.meta.value(QStringLiteral("gap")).toDouble(10.0) * 1.5;
+    return 0.0;
+}
+
+// The cap that finished one end of a run, in every slot it can be in.
+void dropEndCaps(Entity& e, bool atStart) {
+    const char* const keys[2] = {atStart ? "cutStart" : "cutEnd", atStart ? "cutStart2" : "cutEnd2"};
+    for (const char* k : keys)
+        for (const char* part : {"", "Kind", "Ax", "Ay", "Bx", "By", "Cx", "Cy", "R", "Poly", "Side"})
+            e.meta.remove(QLatin1String(k) + QLatin1String(part));
+}
+
+} // namespace
+
+double Editor::autoRouteFilletShown() const {
+    if (autoRouteFillet_ >= 0.0) return autoRouteFillet_;
+    const Entity* from = entityById(autoRouteFromId_);
+    if (!from) return 0.0;
+    // A harness keeps the knee radius it has; everything else is what the route will round it on.
+    if (from->type == EntityType::TwistedPair) return from->meta.value(QStringLiteral("twistKnee")).toDouble(0.0);
+    const double r = autoFilletFor(*from);
+    return r > 0.0 ? r : 0.0;
+}
+
+void Editor::setAutoRouteFillet(double r) {
+    const double next = r < 0.0 ? -1.0 : r;
+    if (std::abs(autoRouteFillet_ - next) < 1e-9) return;
+    autoRouteFillet_ = next;
+    emit overlayChanged();
+}
+
+void Editor::setAutoRouteShift(double deg) {
+    const double next = deg <= 0.0 ? -1.0 : std::min(deg, 90.0);
+    if (std::abs(autoRouteShift_ - next) < 1e-9) return;
+    autoRouteShift_ = next;
+    autoRouteKnees_.clear();   // a new angle is a new route; any hand edit was made on the old one
+    emit overlayChanged();   // the ghosted route re-lays at the new angle
+}
+
+// SHIFT ON AN END OF A SELECTED RUN: carry it on from there.
+//
+// Only the runs that ARE runs - a harness, a cable or double polyline, a sleeve - and only at one of
+// their two ends: anywhere else Shift keeps meaning what it always has on a selection. The drawing
+// that follows is the tool the run was drawn with in the first place, so every knee is placed the
+// way the first ones were, and what Enter does with it is carry this run on rather than start another.
+bool Editor::beginContinueRun(const Vec2& at) {
+    if (!doc_ || selected_.size() != 1) return false;
+    Entity* e = entityById(selected_.front());
+    if (!e) return false;
+    const bool sleeve = e->meta.value(QStringLiteral("shrunkEnds")).toBool();
+    const bool dpoly = e->type == EntityType::Polyline && e->meta.value(QStringLiteral("double")).toBool();
+    const bool harness = e->type == EntityType::TwistedPair;
+    if (!sleeve && !dpoly && !harness) return false;
+    const std::vector<Vec2> route = e->points.size() >= 2 ? e->points : std::vector<Vec2>{e->a, e->b};
+    if (route.size() < 2) return false;
+    const double tol = std::max(worldTolerance() * 2.0, 1e-6);
+    const bool nearStart = distance(at, route.front()) <= tol;
+    const bool nearEnd = distance(at, route.back()) <= tol;
+    if (!nearStart && !nearEnd) return false;
+    const bool atStart = nearStart && (!nearEnd || distance(at, route.front()) < distance(at, route.back()));
+    // The tool it was drawn with, so the knees are placed as its first ones were.
+    const ToolId drawWith = sleeve    ? ToolId::HeatshrinkRoute
+                            : harness ? (e->meta.value(QStringLiteral("twistStraight")).toBool()
+                                             ? ToolId::WiresRun
+                                             : ToolId::TwistedHarnessRoute)
+                                      : ToolId::DoublePolyline;
+    const QString id = e->id;
+    setTool(drawWith);
+    continueId_ = id;
+    continueAtStart_ = atStart;
+    draftPts_ = {atStart ? route.front() : route.back()};
+    drafting_ = true;
+    emit message(QStringLiteral(
+        "Carrying the run on: click each knee — Enter finishes, Esc leaves it as it was"));
+    emit overlayChanged();
+    return true;
+}
+
+void Editor::clearAutoRoute() {
+    autoRouteFromId_.clear();
+    autoRouteToId_.clear();
+    autoRouteWall_ = -1;
+    autoRouteKnees_.clear();
+    autoRouteDragKnee_ = -1;
+}
+
+// A KNEE OF THE ROUTE, PUT WHERE THE HAND PUTS IT - through the running snaps, since the cursor it
+// follows has already been snapped, so a knee lands on a point of the drawing as readily as anything
+// else placed with the mouse. Two things are kept true while it moves:
+//
+//   THE RUN STILL ARRIVES SQUARE. The knee next to the wall can only slide along the wall's
+//   perpendicular: the last leg is square to the wall because that is what the function is for, and
+//   letting that knee go anywhere would undo it with one drag.
+//
+//   A LEG ALL BUT LEVEL IS MADE LEVEL. Within 2 mm of level or plumb with the knee on either side,
+//   the knee is taken the rest of the way - a leg a millimetre out of true reads as a drawing mistake,
+//   and landing one exactly true by hand is not something a mouse can do.
+void Editor::autoRouteDragTo(const Vec2& at) {
+    if (autoRouteDragKnee_ < 0 || autoRouteDragKnee_ >= static_cast<int>(autoRouteKnees_.size()))
+        return;
+    const std::vector<Vec2> base = autoRouteComputedPath();
+    if (base.size() < 2) return;
+    const Vec2 start = base.front();
+    const Vec2 end = base.back();
+    const size_t idx = static_cast<size_t>(autoRouteDragKnee_);
+    const size_t last = autoRouteKnees_.size() - 1;
+    Vec2 k = at;
+    const Vec2 prev = idx == 0 ? start : autoRouteKnees_[idx - 1];
+    const Vec2 next = idx == last ? end : autoRouteKnees_[idx + 1];
+    constexpr double kFlatten = 2.0;
+    for (const Vec2& nb : {prev, next}) {
+        if (std::abs(k.x - nb.x) < kFlatten) k.x = nb.x;
+        if (std::abs(k.y - nb.y) < kFlatten) k.y = nb.y;
+    }
+    if (idx == last) {
+        // the wall's perpendicular, read off the worked-out route, whose last leg always lies on it
+        Vec2 n = base[base.size() - 2] - end;
+        if (n.length() < 1e-9) n = start - end;
+        if (n.length() > 1e-9) {
+            n = n.normalized();
+            k = end + n * std::max(dot(k - end, n), 1e-3);
+        }
+    }
+    autoRouteKnees_[idx] = k;
+    emit overlayChanged();
+}
+
+// FIRST CLICK: what is to be routed. SECOND: the wall it lands on. Each is shown as it is made -
+// the run in orange, that one wall in green - so what Enter will do is on the screen beforehand.
+void Editor::handleAutoRoutePress(const Vec2& p) {
+    if (!doc_) return;
+    // ONCE THERE IS A ROUTE ON THE SCREEN, IT CAN BE TAKEN HOLD OF. A knee under the pointer is picked
+    // up and moved; with Shift, a point anywhere on the route becomes a new knee, picked up at once -
+    // which is how a route that goes the right way but not by the right path is put right, without
+    // starting it again. Anywhere else, the click picks the wall again, as it always has.
+    if (!autoRouteToId_.isEmpty() && autoRouteWall_ >= 0) {
+        const std::vector<Vec2> path = autoRoutePath();
+        const double tol = worldTolerance() * 1.5;
+        auto takeHold = [&](size_t knee) {
+            if (autoRouteKnees_.empty())
+                autoRouteKnees_.assign(path.begin() + 1, path.end() - 1);
+            autoRouteDragKnee_ = static_cast<int>(knee);
+            emit message(QStringLiteral(
+                "Auto route: moving the knee - let go where it goes; Enter lays the run"));
+            emit overlayChanged();
+        };
+        for (size_t k = 1; k + 1 < path.size(); ++k)
+            if (distance(p, path[k]) <= tol) {
+                takeHold(k - 1);
+                return;
+            }
+        if (pressMods_ & Qt::ShiftModifier) {
+            for (size_t k = 1; k < path.size(); ++k) {
+                const auto c = closestPointOnSegment(p, path[k - 1], path[k]);
+                if (c.distance > tol) continue;
+                if (autoRouteKnees_.empty())
+                    autoRouteKnees_.assign(path.begin() + 1, path.end() - 1);
+                autoRouteKnees_.insert(autoRouteKnees_.begin() + static_cast<long>(k - 1), c.point);
+                autoRouteDragKnee_ = static_cast<int>(k - 1);
+                emit message(QStringLiteral(
+                    "Auto route: new knee - drag it where it goes; Enter lays the run"));
+                emit overlayChanged();
+                return;
+            }
+        }
+    }
+    const auto hit = hitTest(p);
+    if (!hit) {
+        emit message(autoRouteFromId_.isEmpty()
+                         ? QStringLiteral("Auto route: click the run, cable or wire to be routed")
+                         : QStringLiteral("Auto route: click the wall it is to arrive at, then "
+                                          "Enter"));
+        return;
+    }
+    if (autoRouteFromId_.isEmpty()) {
+        autoRouteFromId_ = *hit;
+        autoRouteFromAt_ = p;
+        emit message(QStringLiteral(
+            "Auto route: now click the wall it is to arrive at — Enter lays the run"));
+        emit overlayChanged();
+        return;
+    }
+    // The wall of THAT object nearest the click: one wall, not the whole of it.
+    const Entity* to = entityById(*hit);
+    if (!to) return;
+    const auto walls = entitySelectSegments(*to);
+    int best = -1;
+    double bestD = 1e300;
+    for (size_t i = 0; i < walls.size(); ++i) {
+        const double d = closestPointOnSegment(p, walls[i].first, walls[i].second).distance;
+        if (d < bestD) { bestD = d; best = static_cast<int>(i); }
+    }
+    if (best < 0) return;
+    autoRouteToId_ = *hit;
+    autoRouteWall_ = best;
+    autoRouteKnees_.clear();   // a new wall is a new route; the hand edits were for the old one
+    emit message(QStringLiteral("Auto route: Enter lays the run, Esc gives it up"));
+    emit overlayChanged();
+}
+
+// ENTER: lay it. WHAT IS LAID IS ANOTHER OF WHAT WAS PICKED - the same sort of object with the same
+// settings on it - because what is being asked for is more of that run and not a line between two
+// places. Its route is the path worked out above; everything else it keeps.
+
+// Whether the last `laid` objects are separate double lines - the mitre joins those, and has nothing
+// to do for a run that was laid as one rounded double polyline instead.
+static bool ents_are_double_lines(const std::vector<Entity>& ents, int laid) {
+    if (laid <= 0 || size_t(laid) > ents.size()) return false;
+    for (size_t i = ents.size() - size_t(laid); i < ents.size(); ++i)
+        if (ents[i].type != EntityType::DoubleLine) return false;
+    return true;
+}
+
+// CARRY A RUN ON, at one of its ends, through more knees.
+//
+// The run gets LONGER - it is not joined to a second one. So it keeps its id, its settings, its
+// wire count, its body, everything; what changes is its route, and at the end it was taken from, the
+// cap that used to finish it there, which belonged to where it used to stop.
+bool Editor::continueRunWith(const QString& id, bool atStart, const std::vector<Vec2>& more,
+                             double fillet) {
+    Entity* e = entityById(id);
+    if (!e || more.empty()) return false;
+    std::vector<Vec2> route = e->points.size() >= 2 ? e->points : std::vector<Vec2>{e->a, e->b};
+    if (route.size() < 2) return false;
+    const size_t was = route.size();
+    if (atStart) {
+        std::vector<Vec2> head(more.rbegin(), more.rend());
+        route.insert(route.begin(), head.begin(), head.end());
+    } else {
+        route.insert(route.end(), more.begin(), more.end());
+    }
+    e->points = route;
+    e->a = route.front();
+    e->b = route.back();
+    dropEndCaps(*e, atStart);
+
+    // THE KNEES ROUNDED. A harness has one knee radius for the whole run, so a fillet asked for is
+    // that; everything else carries a radius per knee, and the new ones - the old end, now a knee,
+    // and every knee the route added - get it. The knees it already had keep what they had.
+    const double r = fillet >= 0.0 ? fillet : autoFilletFor(*e);
+    if (e->type == EntityType::TwistedPair) {
+        if (fillet >= 0.0) e->meta.insert(QStringLiteral("twistKnee"), fillet);
+    } else if (r > 1e-9) {
+        const QJsonArray radii = e->meta.value(QStringLiteral("cornerRadii")).toArray();
+        const size_t added = route.size() - was;
+        std::vector<double> rr(route.size(), 0.0);
+        for (int i = 0; i < radii.size(); ++i) {
+            const size_t at = atStart ? size_t(i) + added : size_t(i);
+            if (at < rr.size()) rr[at] = radii[i].toDouble();
+        }
+        // every knee that is NEW: the old end, which is a knee now, and the ones the route added
+        const size_t firstNew = atStart ? 1 : was - 1;
+        const size_t lastNew = atStart ? added : route.size() - 2;
+        for (size_t k = firstNew; k <= lastNew; ++k)
+            if (k > 0 && k + 1 < route.size()) rr[k] = r;
+        QJsonArray outR;
+        for (double v : rr) outR.append(v);
+        e->meta.insert(QStringLiteral("cornerRadii"), outR);
+    }
+    return true;
+}
+
+// ENTER: lay it.
+//
+// A RUN IS CARRIED ON, not joined by a second one: a polyline, a double polyline, a harness, a
+// cable, a sleeve all get longer from the end that was picked, keeping every setting they had. A
+// plain line or double line cannot hold a knee - it is two points - so there the route is laid AS
+// MORE OF THEM, one per leg, meeting at the knee: a line joins a line, and a double line is mitred
+// into the next so its two sides meet square across the bend.
+bool Editor::finishAutoRoute() {
+    if (!doc_) return false;
+    const std::vector<Vec2> path = autoRoutePath();
+    Entity* from = entityById(autoRouteFromId_);
+    if (path.size() < 2 || !from) {
+        emit message(QStringLiteral(
+            "Auto route: pick the run to route and the wall it lands on first"));
+        return false;
+    }
+    const std::vector<Vec2> route =
+        from->points.size() >= 2 ? from->points : std::vector<Vec2>{from->a, from->b};
+    const bool atStart =
+        distance(path.front(), route.front()) < distance(path.front(), route.back());
+    const std::vector<Vec2> more(path.begin() + 1, path.end());
+    pushUndo();
+    const bool continuable =
+        from->type == EntityType::Polyline || from->type == EntityType::TwistedPair;
+    int laid = 0;
+    if (continuable) {
+        continueRunWith(from->id, atStart, more, autoRouteFillet_);
+    } else {
+        // ONE LEG PER STRAIGHT, of the same sort as the line picked.
+        const Entity proto = *from;
+        const QString fromId = proto.id;
+        const bool dbl = proto.type == EntityType::DoubleLine;
+        // AND THE KNEES ROUNDED, when a fillet is in force. A double line has no arc of its own to be
+        // rounded with, so a rounded one is laid as a DOUBLE POLYLINE - the same two lines at the
+        // same gap, which is the one object here that bends on a radius and keeps its gap round the
+        // bend. Square, it stays double lines, mitred.
+        const double r = autoRouteFillet_ >= 0.0 ? autoRouteFillet_ : autoFilletFor(proto);
+        if (dbl && r > 1e-9 && path.size() > 2) {
+            Entity run = proto;
+            run.id = QString();
+            run.type = EntityType::Polyline;
+            run.points = path;
+            run.a = path.front();
+            run.b = path.back();
+            run.meta.insert(QStringLiteral("double"), true);
+            dropEndCaps(run, true);
+            dropEndCaps(run, false);
+            run.meta.remove(QStringLiteral("holes"));
+            QJsonArray radii;
+            for (size_t i = 0; i < path.size(); ++i)
+                radii.append(i == 0 || i + 1 == path.size() ? 0.0 : r);
+            run.meta.insert(QStringLiteral("cornerRadii"), radii);
+            addEntity(run);
+            laid = 1;
+        }
+        for (size_t i = 1; laid == 0 && i < path.size(); ++i) {
+            Entity leg = proto;
+            leg.id = QString();
+            leg.points.clear();
+            leg.a = path[i - 1];
+            leg.b = path[i];
+            dropEndCaps(leg, true);
+            dropEndCaps(leg, false);
+            leg.meta.remove(QStringLiteral("holes"));
+            addEntity(leg);
+        }
+        if (laid == 0) laid = static_cast<int>(path.size()) - 1;
+        // A LINE'S KNEES, rounded with an arc each: the two legs either side are taken back to where
+        // the arc touches them, the way the Fillet tool does it, so each knee is a line, an arc and a
+        // line and not two lines overlapping at a corner.
+        if (!dbl && r > 1e-9 && laid >= 2 && proto.type == EntityType::Line) {
+            auto& ents = doc_->entities();
+            const size_t firstLeg = ents.size() - size_t(laid);
+            std::vector<Entity> arcs;   // added afterwards: adding them now would move the legs
+            for (size_t i = 0; i + 1 < size_t(laid); ++i) {
+                Entity& a = ents[firstLeg + i];
+                Entity& b = ents[firstLeg + i + 1];
+                const Vec2 keepA = (a.a + a.b) * 0.5;
+                const Vec2 keepB = (b.a + b.b) * 0.5;
+                const CornerResult cr = filletLines(a, b, r, keepA, keepB);
+                if (cr.ok && cr.hasConnector) arcs.push_back(cr.connector);
+            }
+            for (Entity& arc : arcs) {
+                arc.layer = proto.layer;
+                arc.color = proto.color;
+                addEntity(arc);
+            }
+        }
+        // AND A DOUBLE LINE'S KNEES MITRED: both legs cut on the bisector of the bend, so each side
+        // of one meets the same side of the next rather than crossing it or stopping short of it.
+        if (dbl && laid > 0 && ents_are_double_lines(doc_->entities(), laid)) {
+            auto& ents = doc_->entities();
+            const size_t firstLeg = ents.size() - size_t(laid);
+            auto mitre = [](const Vec2& k, const Vec2& d1, const Vec2& d2) {
+                Vec2 m{-d1.x + d2.x, -d1.y + d2.y};
+                if (m.length() < 1e-9) m = d1.perp();   // straight through: cut square
+                m = m.normalized();
+                CutRecord c;
+                c.a = k - m * 1e3;
+                c.b = k + m * 1e3;
+                return c;
+            };
+            // the picked line into the first leg, where the route turns off it
+            Entity* picked = entityById(fromId);
+            if (picked) {
+                const Vec2 dIn = (atStart ? route.front() - route.back()
+                                          : route.back() - route.front()).normalized();
+                const Vec2 dOut = (path[1] - path[0]).normalized();
+                if (std::abs(cross(dIn, dOut)) > 1e-6) {
+                    const CutRecord c = mitre(path[0], dIn, dOut);
+                    writeCutSlot(*picked, atStart ? QStringLiteral("cutStart")
+                                                  : QStringLiteral("cutEnd"), c, 0);
+                    writeCutSlot(ents[firstLeg], QStringLiteral("cutStart"), c, 0);
+                }
+            }
+            for (size_t i = 0; i + 1 < size_t(laid); ++i) {
+                Entity& a = ents[firstLeg + i];
+                Entity& b = ents[firstLeg + i + 1];
+                const CutRecord c =
+                    mitre(a.b, (a.b - a.a).normalized(), (b.b - b.a).normalized());
+                writeCutSlot(a, QStringLiteral("cutEnd"), c, 0);
+                writeCutSlot(b, QStringLiteral("cutStart"), c, 0);
+            }
+        }
+    }
+    doc_->setDirty(true);
+    clearAutoRoute();
+    setTool(ToolId::Select);      // one route per asking, like every other placement
+    emit message(continuable
+                     ? QStringLiteral("Auto route: carried on in %1 bend(s)").arg(path.size() - 2)
+                     : QStringLiteral("Auto route: %1 leg(s) laid").arg(laid));
+    emit changed();
+    emit overlayChanged();
     return true;
 }
 
@@ -17986,6 +18562,15 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
             cancelPastePlacement();
             return true;
         }
+        // AUTO ROUTE: the first Esc takes the picks back so another pair can be made, rather than
+        // dropping the function - picking the wrong wall is the ordinary mistake here, and starting
+        // the whole command again for it is a punishment.
+        if (tool_ == ToolId::AutoRoute && !autoRouteFromId_.isEmpty()) {
+            clearAutoRoute();
+            emit message(QStringLiteral("Auto route: click the run to be routed"));
+            emit overlayChanged();
+            return true;
+        }
         // Cancel any in-progress operation and clear the whole selection.
         // (Trim finishes here too: setTool(Select) below clears the reference/cut
         // line, so Esc ends the trim command.)
@@ -18088,6 +18673,13 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
         clearSelection();
         setTool(ToolId::Select);
         emit changed();
+        return true;
+    }
+    // AUTO ROUTE is finished by the key, not by a click: the two clicks are its two answers, and
+    // there is nothing to click a third time.
+    if ((key == Qt::Key_Return || key == Qt::Key_Enter || key == Qt::Key_Space) &&
+        tool_ == ToolId::AutoRoute) {
+        finishAutoRoute();
         return true;
     }
     if (key == Qt::Key_Return || key == Qt::Key_Enter || key == Qt::Key_Space) {
@@ -19672,6 +20264,58 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             pv.setStyle(Qt::DashLine);
             p.setPen(pv);
             p.drawLine(vt.toScreen(pickPts_.front()), vt.toScreen(cursor_));
+        }
+        p.restore();
+    }
+
+    // AUTO ROUTE: the two answers, on the screen while they are being given.
+    //
+    // The object to be routed in ORANGE and the one wall picked on the target in GREEN - the wall
+    // alone, because which wall it is settles which way the run arrives, and a whole object lit up
+    // would not say which of its sides was meant. The route itself is ghosted as soon as both are
+    // picked: what Enter is going to do, before it is done.
+    if (tool_ == ToolId::AutoRoute && doc_ && !autoRouteFromId_.isEmpty()) {
+        p.save();
+        if (const Entity* from = entityById(autoRouteFromId_)) {
+            QPen lit(paperInk(QColor(255, 150, 40)));
+            lit.setCosmetic(true);
+            lit.setWidthF(2.2);
+            p.setPen(lit);
+            for (const auto& seg : entitySelectSegments(*from))
+                p.drawLine(vt.toScreen(seg.first), vt.toScreen(seg.second));
+        }
+        if (const Entity* to = entityById(autoRouteToId_); to && autoRouteWall_ >= 0) {
+            const auto walls = entitySelectSegments(*to);
+            if (autoRouteWall_ < static_cast<int>(walls.size())) {
+                QPen lit(paperInk(QColor(60, 220, 110)));
+                lit.setCosmetic(true);
+                lit.setWidthF(2.6);
+                p.setPen(lit);
+                const auto& w = walls[static_cast<size_t>(autoRouteWall_)];
+                p.drawLine(vt.toScreen(w.first), vt.toScreen(w.second));
+            }
+        }
+        const std::vector<Vec2> path = autoRoutePath();
+        if (path.size() >= 2) {
+            QPen ghost(paperInk(QColor(120, 200, 255, 220)));
+            ghost.setCosmetic(true);
+            ghost.setWidthF(1.4);
+            ghost.setStyle(Qt::DashLine);
+            p.setPen(ghost);
+            for (size_t i = 1; i < path.size(); ++i)
+                p.drawLine(vt.toScreen(path[i - 1]), vt.toScreen(path[i]));
+            // THE KNEES, as handles. They can be taken hold of and moved, so they are drawn the way
+            // every other handle on the sheet is drawn - a square to aim at - and the one in hand is
+            // filled, so it is plain which is moving.
+            p.setPen(QPen(paperInk(QColor(120, 200, 255)), 1.0));
+            for (size_t k = 1; k + 1 < path.size(); ++k) {
+                const QPointF at = vt.toScreen(path[k]);
+                const QRectF grip(at.x() - 4.0, at.y() - 4.0, 8.0, 8.0);
+                if (static_cast<int>(k) - 1 == autoRouteDragKnee_)
+                    p.fillRect(grip, paperInk(QColor(120, 200, 255)));
+                else
+                    p.drawRect(grip);
+            }
         }
         p.restore();
     }

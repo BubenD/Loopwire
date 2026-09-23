@@ -161,6 +161,50 @@ public:
     // bundle out to the wires. Shift turns it round, at any point while it is being drawn, and the
     // ghost shows which way it is going - it is a thing you look at rather than remember.
     bool fanoutAtFinish() const { return fanoutAtFinish_; }
+
+    // ---- AUTO ROUTE --------------------------------------------------------------------------
+    //
+    // TAKE WHAT IS ALREADY DRAWN TO WHERE IT HAS TO GO. Two picks and a key: the object to be
+    // routed, the wall it is to arrive at, and Enter. What is laid between them is another of
+    // WHATEVER WAS PICKED FIRST - a cable routes as a cable, a harness as a harness, a sleeve as a
+    // sleeve - because the thing being asked for is more of that run, not a line that happens to
+    // join two places.
+    //
+    // The picks are shown while they are being made: the object to route in orange, and the one
+    // wall that was chosen on the target in green, so both answers are on the screen before the
+    // key is pressed rather than being remembered.
+    const QString& autoRouteFrom() const { return autoRouteFromId_; }
+    const QString& autoRouteTo() const { return autoRouteToId_; }
+    int autoRouteWall() const { return autoRouteWall_; }
+    // Where the run would go with the picks as they stand: empty until both have been made. Once a
+    // knee of it has been moved by hand, the route is the one on the screen and not the one worked out.
+    std::vector<Vec2> autoRoutePath() const;
+    // A knee of the route being moved by hand, and whether the route has been edited at all.
+    bool autoRouteDragging() const { return autoRouteDragKnee_ >= 0; }
+    bool autoRouteEdited() const { return !autoRouteKnees_.empty(); }
+    // THE TWO THINGS A ROUTE IS DRAWN WITH, each with its A. Below nought means the drawing's own:
+    //   fillet - the radius every knee of the route is rounded on. Auto is what suits the object
+    //            being routed: a harness keeps its own knee radius, a cable or sleeve is rounded in
+    //            proportion to how wide it is, a bare line keeps a sharp corner.
+    //   shift  - the angle a run changes level at, when it has to move across to meet the wall. Auto
+    //            is never a right angle where there is room for anything else: a run that steps
+    //            sideways square reads as two runs, and one that crosses at 45 reads as one.
+    double autoRouteFillet() const { return autoRouteFillet_; }
+    void setAutoRouteFillet(double r);
+    double autoRouteShift() const { return autoRouteShift_; }
+    void setAutoRouteShift(double deg);
+    // What Auto comes to for the run that is picked, so the field can show the figure rather than
+    // the word: the fillet the knees will actually be rounded on, and the angle a level shift takes.
+    double autoRouteFilletShown() const;
+    double autoRouteShiftShown() const { return autoRouteShift_ > 1e-9 ? autoRouteShift_ : 45.0; }
+
+    // ---- CONTINUING A RUN BY HAND ---------------------------------------------------------------
+    //
+    // Select a harness, cable or sleeve, hold SHIFT and take hold of an END of it: the run carries
+    // on from there, knee by knee, exactly as it was drawn in the first place - and Enter finishes
+    // it. What is being drawn is MORE OF THAT RUN, not a second one beside it: the same object ends
+    // up longer, with every setting it had.
+    bool continuingRun() const { return !continueId_.isEmpty(); }
     // HOW FAR APART THE WIRES RUN WHERE THE BUNDLE IS GATHERED. 0 = the drawing's own figure.
     double twistBodyPitch() const { return twistBodyPitch_; }
     void setTwistBodyPitch(double mm);
@@ -1477,6 +1521,9 @@ private:
                                    const std::vector<QString>& skip = {}) const;
     std::vector<Entity*> selectedEntities();
     Entity* entityById(const QString& id);
+    // The same, for the many things that only READ an object - painting an overlay, working out
+    // where a route would go. Without it every one of them writes the same little search again.
+    const Entity* entityById(const QString& id) const;
 
     // Hatch "Pick Points": the smallest closed entity that encloses `seed`, or
     // nullptr if none surrounds it.
@@ -1730,6 +1777,29 @@ private:
     bool twistSidesSame_ = true;                   // the finish end repeats the start
     double twistBodyPitch_ = 0.0;                  // wires in the body; 0 = the drawing's own
     bool fanoutAtFinish_ = false;                  // the fanout fans at the end it finishes at
+    QString autoRouteFromId_;                      // the object being routed
+    QString autoRouteToId_;                        // ...and the one it is being routed to
+    int autoRouteWall_ = -1;                       // which of that one's walls was picked
+    double autoRouteFillet_ = -1.0;                // knee radius; <0 = the object's own
+    double autoRouteShift_ = -1.0;                 // level-shift angle in degrees; <0 = auto
+    // THE KNEES OF THE ROUTE AS MOVED BY HAND. Empty while the route is the one the drawing worked
+    // out; taking hold of a knee copies the worked-out ones in here, and from then on the route on
+    // the screen is this - start, these, the middle of the wall.
+    std::vector<Vec2> autoRouteKnees_;
+    int autoRouteDragKnee_ = -1;                   // which of them is being moved, or none
+    std::vector<Vec2> autoRouteComputedPath() const;
+    void autoRouteDragTo(const Vec2& at);
+    QString continueId_;                           // the run being carried on by hand
+    bool continueAtStart_ = false;                 // ...from its first end, not its last
+    // Lay the knees of a route onto the run it continues, at the end it was taken from. Shared by the
+    // auto route and by carrying a run on by hand, which ask for the same thing in two ways.
+    bool continueRunWith(const QString& id, bool atStart, const std::vector<Vec2>& more,
+                         double fillet);
+    bool beginContinueRun(const Vec2& at);
+    Vec2 autoRouteFromAt_{0.0, 0.0};               // where it was picked, which end is nearer
+    void handleAutoRoutePress(const Vec2& p);
+    bool finishAutoRoute();                        // Enter / space: lay the run, end the function
+    void clearAutoRoute();
     bool twistEndBoot_ = false;                    // a transition on the body end
     bool twistEndBootRecovered_ = true;            // ...recovered onto the cable, not cut square
     bool twistFlush_ = true;                       // the ends are cut square across the fan

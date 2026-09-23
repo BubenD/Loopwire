@@ -26,6 +26,7 @@
 #include <QJsonObject>
 
 #include <algorithm>
+#include <map>
 #include <cstdio>
 
 using namespace Edraw_Desktop;
@@ -1655,6 +1656,95 @@ void testRunsEnterTheJunctionPartAtItsOwnFaces() {
         if (e.meta.value(QStringLiteral("entryFace")).toBool()) ++strays;
     check(strays == 0,
           "faces: a part that declares none keeps the behaviour it had - everything meets the junction");
+}
+
+// ---- The wizard draws its runs as harness runs ------------------------------------------------
+//
+// What the wizard shows and places is the same object the Special tab's Harness run draws: one run per
+// segment, fanned out only where it lands on a connector, a cable as a cable body and a covering over
+// the whole run as heatshrink - and where three runs meet, a breakout part with each run ending on it.
+void testWizardRunsAreHarnessRuns() {
+    auto step = [](const char* id, const char* parent, PartKind kind) {
+        MechStep s;
+        s.id = QString::fromLatin1(id);
+        s.name = s.id;
+        s.kind = kind;
+        s.parentStep = QString::fromLatin1(parent);
+        return s;
+    };
+    MechBuildScript sc;
+    MechStep p1 = step("P1", "", PartKind::Connector);
+    p1.pinCount = 6;
+    sc.steps.push_back(p1);
+    MechStep w1 = step("W1", "P1", PartKind::Wire);
+    w1.lengthMm = 150;
+    w1.wireCount = 6;
+    w1.gauge = QStringLiteral("22 AWG");
+    w1.openStartMm = 20;
+    MechStepCovering hs;
+    hs.kind = PartKind::Heatshrink;
+    w1.coverings.push_back(hs);
+    sc.steps.push_back(w1);
+    MechStep w2 = step("W2", "W1", PartKind::Wire);
+    w2.lengthMm = 100;
+    w2.wireCount = 3;
+    w2.gauge = QStringLiteral("22 AWG");
+    w2.turnDeg = 45;
+    w2.openEndMm = 15;
+    sc.steps.push_back(w2);
+    MechStep w3 = step("W3", "W1", PartKind::Cable);
+    w3.lengthMm = 120;
+    w3.wireCount = 3;
+    w3.gauge = QStringLiteral("22 AWG");
+    w3.odMm = 5.0;
+    w3.turnDeg = -45;
+    w3.openEndMm = 25;
+    sc.steps.push_back(w3);
+    MechStep p2 = step("P2", "W2", PartKind::Connector);
+    p2.pinCount = 3;
+    sc.steps.push_back(p2);
+    MechStep p3 = step("P3", "W3", PartKind::Connector);
+    p3.pinCount = 3;
+    sc.steps.push_back(p3);
+
+    MechHarnessDef def = compileMechScript(sc).def;
+    def.draw.runsAsHarness = true;
+    const std::vector<Entity> ents = buildMechanicalHarness(def, nullptr);
+    std::map<QString, const Entity*> runs;
+    int looseWires = 0, ysplit = 0, spliceSleeves = 0;
+    for (const Entity& e : ents) {
+        const QString role = e.meta.value(QStringLiteral("mechRole")).toString();
+        if (e.type == EntityType::TwistedPair)
+            runs[e.meta.value(QStringLiteral("mechSeg")).toString()] = &e;
+        if (role == QLatin1String("wires")) ++looseWires;
+        if (e.meta.value(QStringLiteral("ysplit")).toBool()) ++ysplit;
+        if (role == QLatin1String("splice")) ++spliceSleeves;
+    }
+    check(runs.size() == 3, "wizard runs: each segment is one harness run");
+    check(looseWires == 0, "wizard runs: no conductors drawn loose beside the runs");
+    check(ysplit == 1 && spliceSleeves == 0,
+          "wizard runs: where three runs meet, a breakout part - and not a sleeve over it as well");
+    auto meta = [&](const char* seg, const char* key) {
+        const auto it = runs.find(QString::fromLatin1(seg));
+        return it == runs.end() ? QJsonValue() : it->second->meta.value(QString::fromLatin1(key));
+    };
+    check(meta("s1", "twistSpread").toString() == QLatin1String("start") &&
+              meta("s1", "twistEndsFinish").toDouble() == 0.0,
+          "wizard runs: the trunk fans out at its connector and goes into the breakout bundled");
+    check(meta("s1", "twistBody").toString() == QLatin1String("heatshrink"),
+          "wizard runs: heatshrink over the whole run is the run's heatshrink body");
+    check(meta("s2", "twistSpread").toString() == QLatin1String("finish") &&
+              meta("s2", "twistEnds").toDouble() == 0.0,
+          "wizard runs: a leg leaves the breakout bundled and fans out at its own connector");
+    check(meta("s3", "twistBody").toString() == QLatin1String("cable"),
+          "wizard runs: a cable is drawn as a cable body");
+
+    // AND THE BUILDER, which does not ask for it, draws what it always drew.
+    def.draw.runsAsHarness = false;
+    int twisted = 0;
+    for (const Entity& e : buildMechanicalHarness(def, nullptr))
+        if (e.type == EntityType::TwistedPair) ++twisted;
+    check(twisted == 0, "wizard runs: only the wizard asks for harness runs");
 }
 
 // ---- Next carries on from whatever you are standing on -------------------------------------------
@@ -3695,6 +3785,7 @@ int run_mechwizard_tests() {
     testADescribedStepIsGhostedUntilApplied();
     testSeveralHousingsAtOneStationAreStackedWithGaps();
     testRunsEnterTheJunctionPartAtItsOwnFaces();
+    testWizardRunsAreHarnessRuns();
     testNextCarriesOnFromWhereYouAreStanding();
     testDeletingAStationDoesNotOrphanItsParts();
     testAStationCanBeRolledUpAndStaysThatWay();

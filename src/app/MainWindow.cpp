@@ -4502,8 +4502,11 @@ void MainWindow::updateMechanicalRibbonGroups() {
         if (mechModelSessionGroup_) mechModelSessionGroup_->setVisible(!schematicDrawing);
         return;
     }
-    const bool armed =
-        editor_->tool() == ToolId::LengthBreak || Editor::isTwistedTool(editor_->tool());
+    // AUTO ROUTE IS A FUNCTION LIKE THE REST OF THEM: armed, it has the ribbon to itself - its own two
+    // fields, and none of the tools that cannot be used until it is finished.
+    const bool armed = editor_->tool() == ToolId::LengthBreak ||
+                       Editor::isTwistedTool(editor_->tool()) ||
+                       editor_->tool() == ToolId::AutoRoute;
     for (QWidget* g : mechGroups_)
         if (g && g != mechBreakGroup_) g->setVisible(!armed);
     // Special is the one group an armed tool does NOT put away - the tool being used is on it. But the
@@ -4529,7 +4532,11 @@ void MainWindow::updateMechanicalRibbonGroups() {
             (twistOptionsGroup_ && twistOptionsGroup_->isVisible() &&
              cell->isAncestorOf(twistOptionsGroup_)) ||
             (breakOptionsGroup_ && breakOptionsGroup_->isVisible() &&
-             cell->isAncestorOf(breakOptionsGroup_));
+             cell->isAncestorOf(breakOptionsGroup_)) ||
+            // Asked of the group's OWN flag, not isVisible(): the cell around it may be hidden from
+            // the last function, and isVisible() then says no for a group that is about to be shown.
+            (autoRouteOptionsGroup_ && !autoRouteOptionsGroup_->isHidden() &&
+             cell->isAncestorOf(autoRouteOptionsGroup_));
         cell->setVisible(!armed || carriesSettings);
         // The cell that carries the settings has to stay, but its BUTTON does not: that is the one
         // icon that was still on the ribbon beside the fields, kept alive by the cell around it.
@@ -4580,6 +4587,17 @@ void MainWindow::syncLabelOptions() {
 
 void MainWindow::syncBreakOptions() {
     if (!editor_) return;
+    // AUTO ROUTE's two settings, while it is armed, each showing the figure Auto comes to.
+    if (autoRouteOptionsGroup_) {
+        const bool routing = editor_->tool() == ToolId::AutoRoute;
+        autoRouteOptionsGroup_->setVisible(routing);
+        if (routing) {
+            showAutoField(autoRouteFilletSpin_, nullptr, true, editor_->autoRouteFillet() < 0.0,
+                          editor_->autoRouteFilletShown());
+            showAutoField(autoRouteShiftSpin_, nullptr, true, editor_->autoRouteShift() < 0.0,
+                          editor_->autoRouteShiftShown());
+        }
+    }
     // Each function on this tab shows its own settings and only while it is armed.
     if (twistOptionsGroup_) {
         // A FANOUT IS A STRAIGHT RUN - the fan of one, drawn on its own - so every field a straight

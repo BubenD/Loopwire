@@ -53,6 +53,10 @@ enum class ToolId {
     // fan on its own - wires breaking out of something that is drawn elsewhere, or not drawn at all.
     // The same object with the same fan settings: what it has not got is a second fan.
     Fanout,
+    // AUTO ROUTE: take what is already drawn to where it has to go. Click the thing to be routed,
+    // click the wall it is to arrive at, and the run is laid between them - as the same sort of
+    // object that was clicked, in as few bends as it takes, arriving square to that wall.
+    AutoRoute,
     // Heatshrink over a stretch of run, ROUTED like the twisted tools rather than stamped: a sleeve
     // covers a length of harness, and where that length bends the sleeve bends with it. A fixed-length
     // placement cannot say a sleeve round a corner at all.
@@ -195,6 +199,7 @@ inline QString toolLabel(ToolId t) {
     case ToolId::TwistedHarnessRoute: return QStringLiteral("Wires harness route");
     case ToolId::WiresRun: return QStringLiteral("Harness run");
     case ToolId::Fanout: return QStringLiteral("Fanout");
+    case ToolId::AutoRoute: return QStringLiteral("Auto route");
     case ToolId::HeatshrinkRoute: return QStringLiteral("Heatshrink over the run");
     case ToolId::VolumeArrow: return QStringLiteral("Volume arrow");
     case ToolId::AxisAngle: return QStringLiteral("Axis angle");
