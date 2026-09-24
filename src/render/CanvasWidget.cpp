@@ -173,7 +173,11 @@ bool CanvasWidget::eventFilter(QObject* obj, QEvent* e) {
             }
             // Submit on Enter and CONSUME it (return true) so the key never bubbles
             // to the canvas, where it would be read as "finish the draft".
-            if (ke->key() == Qt::Key_Return || ke->key() == Qt::Key_Enter) {
+            // SPACE IS ENTER while a run is being drawn, the way it is for the drawing itself: a length
+            // typed for the next knee is put down by either key.
+            const bool spaceSubmits = ke->key() == Qt::Key_Space && editor_ &&
+                                      editor_->isDrafting() && !dynInput_->text().trimmed().isEmpty();
+            if (ke->key() == Qt::Key_Return || ke->key() == Qt::Key_Enter || spaceSubmits) {
                 const QString t = dynInput_->text();
                 hideDynInput();
                 if (!t.isEmpty()) emit commandSubmitted(t);

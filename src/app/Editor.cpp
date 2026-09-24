@@ -9889,6 +9889,24 @@ void Editor::setAltHeld(bool held) {
 // A HARNESS LANDED ON AN ENTRY FACE spreads its fan across faceFanScale percent of it: the outer
 // edges of the outer wires that far apart, so the spread between them is what is left over the
 // wires between. Each end takes its own face; an end not landed on one keeps the spread it had.
+//
+// AND A PITCH SET SINCE WINS. The face gives the fan the spread to start from; pinned with Tab, the
+// fan pitch on the ribbon can be changed with the run on screen, and what is typed there is what is
+// drawn - it used to be put straight back to the face's figure, so the field did nothing at all.
+static double faceLaneFor(double len, double k, double wireWidth, int wires) {
+    return std::max(wireWidth, (k * len - wireWidth) / double(wires - 1));
+}
+
+double Editor::faceFitLane(bool finish) const {
+    const double len = finish ? faceLenFinish_ : faceLenStart_;
+    const bool set = finish ? (twistSidesSame_ ? facePitchSetStart_ : facePitchSetFinish_)
+                            : facePitchSetStart_;
+    if (len <= 0.0 || set) return 0.0;
+    const TwistFigures f = twistPreviewFigures();
+    if (!f.ok) return 0.0;
+    return faceLaneFor(len, faceFanScale_ / 100.0, f.wireWidth, std::clamp(twistWires_, 2, kTwistedMaxWires));
+}
+
 void Editor::applyFaceFit(Entity& e) const {
     if (e.type != EntityType::TwistedPair || (faceLenStart_ <= 0.0 && faceLenFinish_ <= 0.0))
         return;
@@ -9902,16 +9920,16 @@ void Editor::applyFaceFit(Entity& e) const {
     if (!f.ok) return;
     const int wires = std::clamp(e.meta.value(QStringLiteral("twistWires")).toInt(2), 2,
                                  kTwistedMaxWires);
-    auto laneFor = [&](double len) {
-        return std::max(f.wireWidth, (k * len - f.wireWidth) / double(wires - 1));
-    };
     const bool same = !e.meta.contains(QStringLiteral("twistSidesSame")) ||
                       e.meta.value(QStringLiteral("twistSidesSame")).toBool();
+    // The one pitch field stands for both ends while they are alike.
+    const bool setA = facePitchSetStart_;
+    const bool setB = same ? facePitchSetStart_ : facePitchSetFinish_;
     double laneA = f.lane;
     double laneB = same ? f.lane
                         : e.meta.value(QStringLiteral("twistLaneFinish")).toDouble(f.packed * 1.5);
-    if (faceLenStart_ > 0.0) laneA = laneFor(faceLenStart_);
-    if (faceLenFinish_ > 0.0) laneB = laneFor(faceLenFinish_);
+    if (faceLenStart_ > 0.0 && !setA) laneA = faceLaneFor(faceLenStart_, k, f.wireWidth, wires);
+    if (faceLenFinish_ > 0.0 && !setB) laneB = faceLaneFor(faceLenFinish_, k, f.wireWidth, wires);
     e.meta.insert(QStringLiteral("twistLane"), laneA);
     if (!same || std::abs(laneA - laneB) > 1e-9) {
         // The ends parted: whatever else the finish end has not been given falls back to the
@@ -9929,6 +9947,7 @@ void Editor::handleDrawPress(const Vec2& p) {
     if (faceTool && draftPts_.empty()) {
         faceLenStart_ = faceLenFinish_ = 0.0;
         faceCableWidth_ = 0.0;
+        facePitchSetStart_ = facePitchSetFinish_ = false;
     }
     // SHIFT ON A PART'S ENTRY FACE: the run lands on the middle of it, sized to it - a harness's fan
     // spread across most of the face, a cable or a sleeve a share of it across - so it reads as
@@ -9947,10 +9966,13 @@ void Editor::handleDrawPress(const Vec2& p) {
             (first ? faceLenStart_ : faceLenFinish_) = len;
             if (tool_ == ToolId::DoublePolyline || tool_ == ToolId::HeatshrinkRoute)
                 faceCableWidth_ = len * faceCableScale_ / 100.0;
-            if (!first && drafting_ && draftPts_.size() >= 2) finishDraw();
-            else
+            if (!first && drafting_ && draftPts_.size() >= 2) {
+                finishDraw();
+            } else {
+                emit faceFitChanged();   // the pitch field shows the spread the face gave it
                 emit message(QStringLiteral("Landed on the entry face - click the next knee, "
                                             "Shift on another face lands the run there"));
+            }
             return;
         }
     }
@@ -10045,7 +10067,7 @@ void Editor::handleDrawPress(const Vec2& p) {
         draftPts_.push_back(p);
         drafting_ = true;
         emit message(QStringLiteral(
-            "Twisted harness route: click the next knee — Enter finishes the run, Esc exits"));
+            "Twisted bundle run: click the next knee — Enter finishes the run, Esc exits"));
         break;
     case ToolId::Fanout:
     case ToolId::WiresRun:
@@ -11381,8 +11403,11 @@ void Editor::cancelDraw() {
         emit selectionChanged();   // ...and the drawing has it back
     }
     continuePulling_ = false;
+    const bool landed = faceFitting();
     faceLenStart_ = faceLenFinish_ = 0.0;   // the faces belonged to the run that has just ended
     faceCableWidth_ = 0.0;
+    facePitchSetStart_ = facePitchSetFinish_ = false;
+    if (landed) emit faceFitChanged();
     shownCentres_.clear();   // the marks belonged to the command that has just ended
     twistedFrozen_ = false;   // nothing pinned once the draft is gone
     twistedHeld_ = false;     // nor held back
@@ -11439,11 +11464,12 @@ bool Editor::applyDrawInput(const QString& text) {
         if (!okx || !oky) return false;
         target = rel ? Vec2{last.x + a, last.y + b} : Vec2{a, b};
     } else {
-        // Direct distance entry: length along the current cursor direction.
+        // Direct distance entry: length along the current cursor direction - or along the run as it
+        // stands on screen, when it is pinned or held back and the cursor is somewhere else.
         bool ok = false;
         const double dist = t.toDouble(&ok);
         if (!ok) return false;
-        Vec2 dir = cursor_ - last;
+        Vec2 dir = draftAim() - last;
         const double len = dir.length();
         if (len < 1e-9) {
             emit message(QStringLiteral("Move the cursor to set a direction, then type the distance"));
@@ -11453,8 +11479,33 @@ bool Editor::applyDrawInput(const QString& text) {
         target = last + dir * dist;
     }
 
+    typedKneeFollows();
     handleDrawPress(target); // advance the in-progress draw exactly like a click
     return true;
+}
+
+// A KNEE SAID WITH NUMBERS IS PUT WHERE THEY SAY, measured from the knee before it - from the run's
+// own end for the first, then knee to knee.
+//
+// Two things stood in the way on a harness, a cable or a sleeve. Pulled out of its end with the
+// button still down, the number put a knee and then letting go put another one wherever the mouse
+// was, so the next number was measured from there. And a harness HELD BACK where the cursor could
+// not be reached put its knee at the held place instead of the one typed. The number is the
+// engineer saying exactly where: it is the pull's knee, and the run goes there.
+//
+// PINNED (Tab) or held, the run on the screen is what the number is about: it goes the way the run
+// is pointing (see draftAim), and the knee is put down - the pin let go of, which on its own was all
+// a typed number used to do. The run then carries on from that knee; Enter or Space ends it there.
+void Editor::typedKneeFollows() {
+    continuePulling_ = false;
+    twistedHeld_ = false;
+    twistedFrozen_ = false;
+}
+
+Vec2 Editor::draftAim() const {
+    if (isTwistedTool(tool_) && twistedFrozen_) return twistedFrozenAt_;
+    if (isTwistedTool(tool_) && twistedHeld_) return twistedHeldAt_;
+    return cursor_;
 }
 
 // The arc of an axis angle, held and being slid in or out. Asked before a move is, because while
@@ -11712,7 +11763,7 @@ bool Editor::commitDrawFields() {
     case ToolId::Spline:
     case ToolId::Wire: {
         const Vec2 base = draftPts_.back();
-        const Vec2 d = cursor_ - base;
+        const Vec2 d = draftAim() - base;
         const double len = drawFieldVals_[0].value_or(d.length());
         const double angDeg = drawFieldVals_[1].value_or(std::atan2(d.y, d.x) * 180.0 / M_PI);
         const double a = angDeg * M_PI / 180.0;
@@ -11788,6 +11839,7 @@ bool Editor::commitDrawFields() {
     default:
         return false;
     }
+    typedKneeFollows();
     handleDrawPress(target); // places the point/finishes; also resets the fields
     return true;
 }
@@ -17492,6 +17544,11 @@ void Editor::setTwistStripLen(double mm) {
 
 void Editor::setTwistLaneFinish(double mm) {
     const double next = std::max(0.0, mm);
+    // A run landed on a face takes this pitch at its finish from now on; Auto gives it the face's.
+    if (faceFitting() && facePitchSetFinish_ != (next > 1e-9)) {
+        facePitchSetFinish_ = next > 1e-9;
+        emit overlayChanged();
+    }
     if (std::abs(twistLaneFinish_ - next) < 1e-9) return;
     twistLaneFinish_ = next;
     emit overlayChanged();
@@ -17540,6 +17597,12 @@ void Editor::setTwistEndBootRecovered(bool on) {
 
 void Editor::setTwistLane(double mm) {
     const double next = std::max(0.0, mm);
+    // A run landed on a face takes this pitch from now on, even the figure the field already held;
+    // Auto gives it back the face's.
+    if (faceFitting() && facePitchSetStart_ != (next > 1e-9)) {
+        facePitchSetStart_ = next > 1e-9;
+        emit overlayChanged();
+    }
     if (std::abs(twistLane_ - next) < 1e-9) return;
     twistLane_ = next;
     // A pinned preview is the object being set up: changing the spread pitch redraws it where it is.

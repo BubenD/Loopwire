@@ -195,8 +195,8 @@ inline QString toolLabel(ToolId t) {
     case ToolId::LengthBreak: return QStringLiteral("Length break");
     case ToolId::TwistedPair: return QStringLiteral("Twisted pair");
     case ToolId::TwistedRoute: return QStringLiteral("Twisted route");
-    case ToolId::TwistedHarness: return QStringLiteral("Wires harness");
-    case ToolId::TwistedHarnessRoute: return QStringLiteral("Wires harness route");
+    case ToolId::TwistedHarness: return QStringLiteral("Twisted bundle");
+    case ToolId::TwistedHarnessRoute: return QStringLiteral("Twisted bundle run");
     case ToolId::WiresRun: return QStringLiteral("Harness run");
     case ToolId::Fanout: return QStringLiteral("Fanout");
     case ToolId::AutoRoute: return QStringLiteral("Auto route");

@@ -365,6 +365,9 @@ public:
     void setFaceFanScale(double pct) { faceFanScale_ = std::clamp(pct, 1.0, 100.0); }
     double faceCableScale() const { return faceCableScale_; }
     void setFaceCableScale(double pct) { faceCableScale_ = std::clamp(pct, 1.0, 100.0); }
+    // The fan pitch an end of the run being drawn has from the entry face it landed on, or 0 when it
+    // has none - not landed, or given a pitch on the ribbon since, which is then the one it takes.
+    double faceFitLane(bool finish) const;
     bool altHeld() const { return altHeld_; }
     void setAltHeld(bool held);
     // The entry face under a point, as its two ends, or nothing.
@@ -1497,6 +1500,7 @@ signals:
     void markerSizeChanged(); // splice/X default size changed (ribbon field re-syncs)
     void screenArmedChanged(); // screen placement armed/disarmed/frozen (ribbon group re-syncs)
     void twistArmChanged();    // twist type armed/cleared (ribbon shows crossed params when crossed)
+    void faceFitChanged();     // a run landed on an entry face, or ended (its pitch field re-syncs)
     // An array session started/ended, changed kind, or had its centre/path picked —
     // the host opens, syncs or closes the contextual "Array Creation" tab.
     void arrayChanged();
@@ -1829,7 +1833,14 @@ private:
     double faceLenStart_ = 0.0;
     double faceLenFinish_ = 0.0;
     double faceCableWidth_ = 0.0;
+    // A PITCH SET ON THE RIBBON after the run landed (Tab pins it to do so) is the one it takes: the
+    // face gives the spread to start from, not the last word on it. One for each end.
+    bool facePitchSetStart_ = false;
+    bool facePitchSetFinish_ = false;
     void applyFaceFit(Entity& e) const;
+    void typedKneeFollows();   // a typed length/angle is the next knee, exactly (see applyDrawInput)
+    // Where a typed length points: the cursor, or the run's shown end when pinned or held back.
+    Vec2 draftAim() const;
     double draftCableGap() const { return faceCableWidth_ > 0.0 ? faceCableWidth_ : doubleLineGap_; }
     // A cable landed on an entry face is CENTRED on what was clicked, not railed along it: it has to
     // arrive on the middle of the face, and a rail through the click puts its middle half a width off.

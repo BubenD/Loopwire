@@ -305,6 +305,7 @@ void MainWindow::buildHarnessMechanicalTab() {
             bg->addWidget(optW, 0, 1);
         }
         connect(editor_, &Editor::toolChanged, this, [this](ToolId) { syncBreakOptions(); });
+        connect(editor_, &Editor::faceFitChanged, this, [this] { syncBreakOptions(); });
         lgAdd(breakW);
         // The twisted pair, beside it: two wires laid up round each other, drawn between the two points
         // it runs between. Straight at both ends, because that is where a pair is worked on - stripped,
@@ -350,13 +351,13 @@ void MainWindow::buildHarnessMechanicalTab() {
             auto* thBtn = new QToolButton(thW);
             QAction* act = makeToolAction(toolLabel(ToolId::TwistedHarness), ToolId::TwistedHarness);
             thBtn->setDefaultAction(act);
-            thBtn->setText(QStringLiteral("Wires\nharness"));
+            thBtn->setText(QStringLiteral("Twisted\nbundle"));
             thBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
             thBtn->setIconSize(QSize(26, 26));
             thBtn->setAutoRaise(true);
             thBtn->setFocusPolicy(Qt::NoFocus);
             thBtn->setToolTip(QStringLiteral(
-                "Wires harness: click the two ends and every wire of the bundle is laid up together, "
+                "Twisted bundle: click the two ends and every wire of the bundle is laid up together, "
                 "fanning out to straight ends. Tab pins it so the number of wires can be set with it "
                 "on screen."));
             tg->addWidget(thBtn);
@@ -445,7 +446,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                     syncBreakOptions();
                     canvas_->update();   // a pinned bundle re-draws with the new count
                     statusBar()->showMessage(
-                        QStringLiteral("Wires harness: %1 wires").arg(v), 2000);
+                        QStringLiteral("Twisted bundle: %1 wires").arg(v), 2000);
                 });
                 twistSpreadLabel_ = new QLabel(QStringLiteral("Fan out"), optW);
                 twistSpreadLabel_->setStyleSheet(
@@ -479,7 +480,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                             editor_->setTwistSpread(spread);
                             canvas_->update();   // a pinned bundle re-draws with the new spread
                             statusBar()->showMessage(
-                                QStringLiteral("Wires harness: spread %1")
+                                QStringLiteral("Twisted bundle: spread %1")
                                     .arg(twistSpreadCombo_->itemText(index).toLower()),
                                 2000);
                         });
@@ -1102,13 +1103,13 @@ void MainWindow::buildHarnessMechanicalTab() {
             QAction* act =
                 makeToolAction(toolLabel(ToolId::TwistedHarnessRoute), ToolId::TwistedHarnessRoute);
             thrBtn->setDefaultAction(act);
-            thrBtn->setText(QStringLiteral("Wires\nharness route"));
+            thrBtn->setText(QStringLiteral("Twisted\nbundle run"));
             thrBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
             thrBtn->setIconSize(QSize(26, 26));
             thrBtn->setAutoRaise(true);
             thrBtn->setFocusPolicy(Qt::NoFocus);
             thrBtn->setToolTip(QStringLiteral(
-                "Wires harness route: click each knee, Enter finishes. The whole bundle is laid up "
+                "Twisted bundle run: click each knee, Enter finishes. The whole bundle is laid up "
                 "together, fanning out to straight ends. Tab pins it so the number of wires can be "
                 "set with it on screen."));
             lgAdd(thrBtn);

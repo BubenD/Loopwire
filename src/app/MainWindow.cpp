@@ -44,6 +44,7 @@
 #include <QDialogButtonBox>
 #include <QClipboard>
 #include <QGuiApplication>
+#include <QDrag>
 #include <QMimeData>
 #include <QDateTime>
 #include <QFileDialog>
@@ -1066,69 +1067,153 @@ public:
         emptyBar_->setFixedHeight(0);
         setTitleBarWidget(titleBar_);
         setWidget(content_);
+        // Rolled up the last time the program was used, rolled up now.
+        sectionFolded_ = QSettings().value(QStringLiteral("ui/foldedPanels")).toStringList().contains(objectName());
+        applySectionFold();
+    }
+
+    // ---- a panel rolled up to its title -----------------------------------------------------------------
+    //
+    // A SIDE HOLDS SEVERAL PANELS, and not all of them are wanted open at once: Properties is read all day,
+    // the bill of materials now and then, the calculator for a sum. The arrow on a panel's title bar rolls
+    // it up to that bar alone, and the panels beside it on the side take the room it gave up; the arrow
+    // again opens it. Remembered between sessions, like the side's width and pin.
+    bool sectionFolded() const { return sectionFolded_; }
+    void setFoldButton(QToolButton* b) { foldBtn_ = b; applySectionFold(); }
+    void setSectionFolded(bool folded) {
+        if (sectionFolded_ == folded) return;
+        // How tall it was - and every panel beside it - so opening it again gives the side back as it
+        // stood, rather than this one the least the others can spare.
+        if (folded && !collapsed_ && !isFloating() && height() > 60 && mw_) {
+            sectionHeight_ = height();
+            sideDocks_.clear();
+            sideHeights_.clear();
+            for (AutoHideDock* d : allDocks_)
+                if (d && d->mw_ == mw_ && !d->isFloating() && d->isVisible() && d->areaKey() == areaKey()) {
+                    sideDocks_ << QPointer<QDockWidget>(d);
+                    sideHeights_ << d->height();
+                }
+        }
+        sectionFolded_ = folded;
+        QSettings st;
+        QStringList rolled = st.value(QStringLiteral("ui/foldedPanels")).toStringList();
+        rolled.removeAll(objectName());
+        if (folded) rolled << objectName();
+        st.setValue(QStringLiteral("ui/foldedPanels"), rolled);
+        applySectionFold();
+        if (!folded && sectionHeight_ > 60 && mw_ && !collapsed_ && !isFloating()) {
+            const int want = sectionHeight_;
+            QTimer::singleShot(0, this, [this, want] {
+                if (!mw_ || sectionFolded_ || isFloating()) return;
+                QList<QDockWidget*> docks;
+                QList<int> sizes;
+                for (int i = 0; i < sideDocks_.size(); ++i)
+                    if (sideDocks_[i] && !sideDocks_[i]->isFloating() && sideDocks_[i]->isVisible()) {
+                        docks << sideDocks_[i].data();
+                        sizes << sideHeights_[i];
+                    }
+                if (!docks.contains(this)) {
+                    docks = {this};
+                    sizes = {want};
+                }
+                mw_->resizeDocks(docks, sizes, Qt::Vertical);
+            });
+        }
+    }
+    // What the fold means to the panel as it stands. Folded away as a strip on an unpinned side it
+    // means nothing yet - the strip is the strip - and it is put right when the panel opens out again.
+    void applySectionFold() {
+        if (foldBtn_) {
+            foldBtn_->setText(sectionFolded_ ? QString(QChar(0x25B8)) : QString(QChar(0x25BE)));   // > or v
+            foldBtn_->setToolTip(sectionFolded_ ? QStringLiteral("Rolled up - click to open this panel")
+                                                : QStringLiteral("Roll this panel up to its title"));
+        }
+        if (collapsed_ || !content_ || !titleBar_ || content_->parentWidget() != this) return;
+        content_->setVisible(!sectionFolded_);
+        if (sectionFolded_)
+            setMaximumHeight(titleBar_->sizeHint().height() + 2);
+        else
+            setMaximumHeight(QWIDGETSIZE_MAX);
     }
 
     // Register the title bar's pin button, so the side can keep it in sync and show
     // it on the top panel only.
     void setPinButton(QToolButton* b) { pinBtn_ = b; }
 
-    // Where a drag would land. The test is deliberately generous: ANY overlap between
-    // the dragged panel's own rectangle and a docked panel — or the edge band of a
-    // side — attaches it there, so the panel never has to be dropped precisely. When
-    // it touches more than one target the largest overlap wins.
+    // Where a drag would land: decided by WHERE THE POINTER IS, not by what the panel's rectangle
+    // happens to overlap. Over a docked panel, it stacks into that panel's column (above it in its
+    // upper half, below in its lower); over the edge band of a side, it goes on that side; anywhere
+    // else it stays floating.
+    //
+    // It used to be the panel's whole rectangle, the largest overlap winning - generous, and wrong
+    // for a tall panel: the calculator let go of in the middle of the drawing reached down into the
+    // bottom band and was docked along the bottom of the window, which nobody had aimed at.
     struct DropTarget {
         Qt::DockWidgetArea area = Qt::NoDockWidgetArea;
         QDockWidget* onto = nullptr; // existing panel to stack with (null = the bare side)
         bool above = false;          // stack above `onto`, else below it
         QRect indicator;             // where it lands, in global coordinates
     };
-    DropTarget dropTarget() const {
+    DropTarget dropTargetAt(const QPoint& at) const {
         DropTarget best;
         if (!mw_) return best;
-        const QRect panel(mapToGlobal(QPoint(0, 0)), size());
         const QRect win(mw_->mapToGlobal(QPoint(0, 0)), mw_->size());
-        if (!panel.intersects(win)) return best; // clear of the window: stay floating
-        int bestOverlap = 0;
-        auto consider = [&](const QRect& target, Qt::DockWidgetArea area, QDockWidget* onto) {
-            const QRect hit = target.intersected(panel);
-            const int overlap = hit.width() * hit.height();
-            if (overlap <= bestOverlap) return;
-            bestOverlap = overlap;
-            best.area = area;
-            best.onto = onto;
-            best.above = onto && panel.center().y() < target.center().y();
-            best.indicator = target;
-        };
+        if (!win.contains(at)) return best; // outside the window: stay floating
 
-        // 1) Touching a docked panel stacks into its column (above it if the dragged
-        //    panel sits higher, else below).
+        // 1) Over a docked panel: into its column, above or below it.
         for (QDockWidget* d : mw_->findChildren<QDockWidget*>()) {
             if (d == this || d->isFloating() || !d->isVisible()) continue;
             const Qt::DockWidgetArea da = mw_->dockWidgetArea(d);
             if (da == Qt::NoDockWidgetArea) continue;
-            consider(QRect(d->mapToGlobal(QPoint(0, 0)), d->size()), da, d);
+            const QRect r(d->mapToGlobal(QPoint(0, 0)), d->size());
+            if (!r.contains(at)) continue;
+            best.area = da;
+            best.onto = d;
+            best.above = at.y() < r.center().y();
+            best.indicator = r;
+            return best;
         }
-        if (bestOverlap > 0) return best;
 
-        // 2) Otherwise the edge band of whichever side it is touching. The bands are
-        //    wide enough that nudging the panel toward a side is enough to catch it.
-        const int bandW = std::max(90, win.width() / 6);
-        const int bandH = std::max(70, win.height() / 6);
-        consider(QRect(win.left(), win.top(), bandW, win.height()), Qt::LeftDockWidgetArea, nullptr);
-        consider(QRect(win.right() - bandW, win.top(), bandW, win.height()),
-                 Qt::RightDockWidgetArea, nullptr);
-        consider(QRect(win.left(), win.top(), win.width(), bandH), Qt::TopDockWidgetArea, nullptr);
-        consider(QRect(win.left(), win.bottom() - bandH, win.width(), bandH),
-                 Qt::BottomDockWidgetArea, nullptr);
+        // 2) Over the edge band of a side - the left and right first, as those are the side menus
+        //    and what a panel is nearly always being taken to.
+        const int bandW = std::max(90, win.width() / 8);
+        const int bandH = std::max(50, win.height() / 10);
+        const QRect left(win.left(), win.top(), bandW, win.height());
+        const QRect right(win.right() - bandW + 1, win.top(), bandW, win.height());
+        const QRect top(win.left(), win.top(), win.width(), bandH);
+        const QRect bottom(win.left(), win.bottom() - bandH + 1, win.width(), bandH);
+        if (left.contains(at)) best = {Qt::LeftDockWidgetArea, nullptr, false, left};
+        else if (right.contains(at)) best = {Qt::RightDockWidgetArea, nullptr, false, right};
+        else if (top.contains(at)) best = {Qt::TopDockWidgetArea, nullptr, false, top};
+        else if (bottom.contains(at)) best = {Qt::BottomDockWidgetArea, nullptr, false, bottom};
         return best;
     }
 
     // Attach the panel wherever it is currently touching (nothing = stay floating).
-    void redockHere() {
+    void redockHere(const QPoint& at) {
         if (!mw_) return;
         hideDropHint();
-        const DropTarget t = dropTarget();
+        const DropTarget t = dropTargetAt(at);
         if (t.area == Qt::NoDockWidgetArea) return;
+        // A SIDE SOMETHING IS PUT ON IS OPENED. Dropped onto a folded side, the panel folded with it
+        // - a strip as thin as the others, when it had just been put there to be used. Putting a
+        // panel on a side is asking to see it there, so the side is pinned open with it.
+        //
+        // AND THE SIDE KEEPS ITS WIDTH. Opening a side and adding a panel to it both lay the side out
+        // afresh, and the passes in between squeeze every panel on it to its narrowest - which each of
+        // them took for the user dragging the side narrow, and wrote down: the side came back 150 wide.
+        // So the width it had is taken now and given back once the window has settled.
+        const int side = static_cast<int>(t.area);
+        const int keep = areaExtent_.value(mw_).value(side, 0);
+        settingExtents_ = true;
+        if (!areaPinnedState(side)) {
+            areaPinned_[side] = true;
+            for (AutoHideDock* d : allDocks_) {
+                if (!d || d == this || d->mw_ != mw_ || d->isFloating() || d->areaKey() != side) continue;
+                d->applyPinned(true);
+                d->syncPinButton(true);
+            }
+        }
         setFloating(false);
         mw_->addDockWidget(t.area, this);
         // splitDockWidget(first, second, Vertical): first on top, second below.
@@ -1136,13 +1221,45 @@ public:
             if (t.above) mw_->splitDockWidget(this, t.onto, Qt::Vertical);
             else mw_->splitDockWidget(t.onto, this, Qt::Vertical);
         }
+        if (collapsed_) expand();
+        QPointer<AutoHideDock> self(this);
+        QTimer::singleShot(250, this, [self, side, keep] {
+            if (!self || !self->mw_) return;
+            if (keep > kSmallestExtent) self->areaExtent_[self->mw_].insert(side, keep);
+            for (AutoHideDock* d : allDocks_)
+                if (d && d->mw_ == self->mw_ && !d->isFloating() && d->areaKey() == side) {
+                    if (keep > kSmallestExtent) d->expandedExtent_ = keep;
+                    d->applyRememberedExtent();
+                }
+            settingExtents_ = true;   // what applying it shakes loose is not the user either
+            QTimer::singleShot(300, [] { settingExtents_ = false; });
+            refreshPinButtons();
+        });
+    }
+
+    // FOLDED, A PANEL IS A STRIP with no title bar - fine against the side of the window, and useless
+    // on its own: taken off the side like that it floated as a sliver that could be neither moved nor
+    // opened. So it is opened out first, whatever takes it off the side.
+    void unfoldToFloat() {
+        if (collapsed_) expand();
+    }
+    // FLOATING, AT A SIZE THAT HOLDS IT - the size it has on the side, not the strip's. A folded panel
+    // taken off the side kept the strip's size and came out as a sliver too small for its own title
+    // bar. Only a panel that small is touched: one floated at a size somebody chose keeps it.
+    void fitFloating() {
+        if (!isFloating() || (width() >= kNarrowestPanel && height() >= 120)) return;
+        const int w = std::max(rememberedExtent() > kSmallestExtent ? rememberedExtent() : 0,
+                               std::max(kNarrowestPanel * 2, content_ ? content_->sizeHint().width() : 0));
+        const int h = std::max(240, (content_ ? content_->sizeHint().height() : 0) +
+                                        (titleBar_ ? titleBar_->sizeHint().height() : 0));
+        resize(w, h);
     }
 
     // Translucent highlight of where the drag will land, so it is obvious that the
     // panel is already touching a side and will jump there when released.
-    void showDropHint() {
+    void showDropHint(const QPoint& at) {
         if (!mw_) return;
-        const DropTarget t = dropTarget();
+        const DropTarget t = dropTargetAt(at);
         if (t.area == Qt::NoDockWidgetArea) { hideDropHint(); return; }
         if (!hint_) {
             hint_ = new QWidget(mw_);
@@ -1162,11 +1279,21 @@ public:
     // Pin / unpin THIS SIDE. The other sides are left exactly as they are — the left
     // and right columns are independent.
     void setPinned(bool v) {
+        // THE SIDE'S WIDTH, TAKEN ONCE, BEFORE ANY OF IT FOLDS. The panels fold one after another, and
+        // each one folded narrows the column the rest are measured in: the second panel on a side was
+        // measured squeezed to its narrowest and wrote that down, so every side of two or more panels
+        // came back 150 wide the next time it was opened.
+        if (!v && !collapsed_ && !isFloating() && isVisible()) {
+            const int px = horizontalArea() ? width() : height();
+            if (px > kSmallestExtent) setRememberedExtent(px, horizontalArea());
+        }
+        settingExtents_ = true;
         areaPinned_[areaKey()] = v;
         for (auto* d : group()) {
             d->applyPinned(v);
             d->syncPinButton(v);
         }
+        QTimer::singleShot(300, [] { settingExtents_ = false; });
         refreshPinButtons();
     }
 
@@ -1233,8 +1360,13 @@ public:
         const int side = areaKey();
         flyout_->hide();
         // The pieces go back to the dock, out of sight, so pinning the side can put them straight back in.
-        if (titleBar_) { titleBar_->setParent(this); titleBar_->hide(); }
-        if (content_) { content_->setParent(this); content_->hide(); }
+        //
+        // ONLY THE PIECES THAT ARE IN THE FLY-OUT. This runs on every hide of the panel - and floating
+        // one hides it for a moment - so it used to reach into a panel that had long since been opened
+        // out, take its title bar and its content away and hide them: the panel floated as its bare
+        // frame, locked at the size of a title bar with nothing in it.
+        if (titleBar_ && titleBar_->parentWidget() == body_) { titleBar_->setParent(this); titleBar_->hide(); }
+        if (content_ && content_->parentWidget() == body_) { content_->setParent(this); content_->hide(); }
         layoutSide(mw_, side);   // the side's own edge goes with the last panel on it
     }
 
@@ -1249,9 +1381,29 @@ public:
         const bool vertical = area == Qt::LeftDockWidgetArea || area == Qt::RightDockWidgetArea;
         const int grip = 8;
         QRect together;
+        std::vector<AutoHideDock*> open;
         for (AutoHideDock* d : allDocks_) {
             if (!d || d->mw_ != mw || d->isFloating() || d->areaKey() != side || !d->flyoutOpen()) continue;
-            const QRect r = d->placeFlyout(area, grip);
+            d->placeFlyout(area, grip);
+            open.push_back(d);
+        }
+        // ONE ABOVE THE OTHER, NOT ON TOP OF EACH OTHER. The whole side flies out together, each panel
+        // level with its strip - and a fly-out is at least 200 tall where a strip may be 120, so each one
+        // reached down over the next and hid its title bar: the panel underneath could be neither read
+        // nor taken hold of. Each now ends where the next one along the side begins.
+        std::sort(open.begin(), open.end(), [vertical](AutoHideDock* a, AutoHideDock* b) {
+            return vertical ? a->flyout_->y() < b->flyout_->y() : a->flyout_->x() < b->flyout_->x();
+        });
+        for (size_t i = 0; i + 1 < open.size(); ++i) {
+            QRect r = open[i]->flyout_->geometry();
+            const QRect next = open[i + 1]->flyout_->geometry();
+            if (vertical && r.bottom() >= next.top()) r.setBottom(next.top() - 1);
+            if (!vertical && r.right() >= next.left()) r.setRight(next.left() - 1);
+            open[i]->flyout_->setGeometry(r);
+            open[i]->body_->setGeometry(0, 0, r.width(), r.height());
+        }
+        for (AutoHideDock* d : open) {
+            const QRect r = d->flyout_->geometry();
             together = together.isNull() ? r : together.united(r);
         }
         QPointer<FlyGrip>& edge = sideGrip_[mw][side];
@@ -1492,6 +1644,8 @@ private:
     void adoptArea() {
         if (!titleBar_ || !strip_) return; // still being built
         if (isFloating()) {
+            unfoldToFloat();   // and never a strip
+            QTimer::singleShot(0, this, [this] { fitFloating(); });
             pinned_ = true; // a floating palette is always shown in full
             poll_->stop();
             resizeTimer_->stop();
@@ -1614,6 +1768,7 @@ private:
         setMinimumSize(0, 0);
         setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
         applyRememberedExtent();   // the width it was left at, made to stick
+        applySectionFold();        // and rolled up, if it was
         outside_.invalidate();
         QTimer::singleShot(150, this, [this] { suppressResize_ = false; });
     }
@@ -1626,13 +1781,16 @@ private:
         // yet - which is what happens when a side starts unpinned - used to overwrite the width the user
         // had chosen with whatever the panel measured before it was ever on screen.
         const int px = horizontalExtent_ ? width() : height();
-        if (px > kSmallestExtent) setRememberedExtent(px, horizontalExtent_);
+        // Not while a side is being folded or laid out as a whole (settingExtents_): its width was
+        // taken before any of it moved, and what the panels measure part-way through is not it.
+        if (px > kSmallestExtent && !settingExtents_) setRememberedExtent(px, horizontalExtent_);
         collapsed_ = true;
         suppressResize_ = true;
         resizeTimer_->stop();
         setTitleBarWidget(emptyBar_);
         setWidget(strip_);
         strip_->show();
+        setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);   // a rolled-up panel's strip is still a strip
         if (horizontalExtent_)
             setFixedWidth(24);
         else
@@ -1711,6 +1869,11 @@ private:
     QElapsedTimer outside_;
     bool pinned_ = true;
     bool collapsed_ = false;
+    bool sectionFolded_ = false;       // rolled up to its title bar (the arrow on it)
+    int sectionHeight_ = 0;            // how tall it was before it was rolled up
+    QList<QPointer<QDockWidget>> sideDocks_;   // and the side as it stood then
+    QList<int> sideHeights_;
+    QToolButton* foldBtn_ = nullptr;
     bool horizontalExtent_ = true;
     bool suppressResize_ = false;      // ignore our own (programmatic) resizes
     bool awaitExit_ = false;           // just unpinned: hold hover-expand until the cursor leaves
@@ -1778,6 +1941,17 @@ public:
         grip_->setAttribute(Qt::WA_TransparentForMouseEvents, true);
         lay->addWidget(grip_);
 
+        // The arrow that rolls the panel up to this bar, and opens it again.
+        auto* fold = new QToolButton(this);
+        fold->setAutoRaise(true);
+        fold->setFocusPolicy(Qt::NoFocus);
+        fold->setFixedWidth(18);
+        fold->setStyleSheet(QStringLiteral("QToolButton{border:none;background:transparent;}"));
+        QObject::connect(fold, &QToolButton::clicked, dock,
+                         [dock] { dock->setSectionFolded(!dock->sectionFolded()); });
+        lay->addWidget(fold);
+        dock->setFoldButton(fold);
+
         lbl_ = new QLabel(title, this);
         // THE NAME MUST NOT DECIDE HOW NARROW THE PANEL MAY BE PULLED.
         //
@@ -1821,51 +1995,88 @@ public:
     }
 
 protected:
-    // The grip is the only drag handle. Dragging is handled explicitly (Qt's
-    // native dock drag does not work reliably through a custom title bar): a drag
-    // floats the panel and moves it; dropping near a main-window edge re-docks it.
+    // THE WHOLE BAR IS THE HANDLE, the dots and the name alike - only the pin and the close button,
+    // which take their own clicks, are not. Dragging is handled explicitly (Qt's native dock drag
+    // does not work reliably through a custom title bar): a drag floats the panel and moves it, and
+    // letting go over a side of the window docks it there.
+    //
+    // It used to be the dots alone. Taken by the rest of the bar a floating panel still went where
+    // it was pulled, but by a path that never asked where it was over - so it could be moved about
+    // and never put back into the left or right menu, and only the dots could do that.
     void mousePressEvent(QMouseEvent* e) override {
-        if (e->button() == Qt::LeftButton && grip_->geometry().contains(e->pos())) {
+        if (e->button() == Qt::LeftButton) {
+            // THE WHOLE DRAG IS THIS BAR'S, by an explicit grab. Pulled off its side, the panel
+            // becomes a window of its own under the button - and the press's own implicit hold
+            // stayed with the main window, so the release went to the drawing: the panel was left
+            // floating where it was, the side lit up as though it were about to land, and nothing
+            // landed. Grabbed, every move and the release come here, whichever window it is in.
+            grabMouse();
             dragging_ = true;
             pressGlobal_ = e->globalPosition().toPoint();
+            lastGlobal_ = pressGlobal_;
+            grabOffset_ = mapTo(dock_, e->pos());   // docked or floating, a place on the panel
         }
-        e->accept(); // consume so the panel never drags from anywhere but the grip
+        e->accept(); // consumed: the drag is this bar's, start to finish
     }
     void mouseMoveEvent(QMouseEvent* e) override {
-        if (dragging_ && (e->buttons() & Qt::LeftButton)) {
-            const QPoint g = e->globalPosition().toPoint();
-            if (!dock_->isFloating()) {
-                if ((g - pressGlobal_).manhattanLength() < QApplication::startDragDistance()) {
-                    e->accept();
-                    return;
-                }
-                dock_->setFloating(true); // detach once the drag really starts
-            }
-            // Keep the grip roughly under the cursor (fixed offset is predictable
-            // across the dock->float transition).
-            dock_->move(g - QPoint(14, 12));
-            // Highlight the side the panel is now touching — releasing lands it there.
-            dock_->showDropHint();
+        if (dragging_) lastGlobal_ = e->globalPosition().toPoint();
+        // The button came up somewhere this bar never heard about: finish the drag as a release
+        // would have, rather than leaving the side lit and the panel hanging.
+        if (dragging_ && !(e->buttons() & Qt::LeftButton)) {
+            endDrag();
             e->accept();
             return;
         }
-        // Show the move cursor while hovering the grip.
-        setCursor(grip_->geometry().contains(e->pos()) ? Qt::SizeAllCursor : Qt::ArrowCursor);
+        if (dragging_ && (e->buttons() & Qt::LeftButton)) {
+            const QPoint g = e->globalPosition().toPoint();
+            if ((g - pressGlobal_).manhattanLength() < QApplication::startDragDistance() &&
+                !moved_) {
+                e->accept();
+                return;
+            }
+            moved_ = true;
+            if (!dock_->isFloating()) {
+                // Taken from a folded side's fly-out, the panel is a strip underneath: opened out
+                // first, or it floats as one.
+                dock_->unfoldToFloat();
+                dock_->setFloating(true); // detach once the drag really starts
+                dock_->fitFloating();
+                grabMouse();              // and keep the drag through the panel becoming a window
+                // Where it was taken hold of stays under the cursor - within the bar's height, so a
+                // panel much shorter floating than docked is not left hanging off the pointer.
+                grabOffset_.setY(std::clamp(grabOffset_.y(), 4, std::max(4, height() - 4)));
+                grabOffset_.setX(std::clamp(grabOffset_.x(), 4, std::max(4, dock_->width() - 4)));
+            }
+            dock_->move(g - grabOffset_);
+            // Highlight the side the panel is now touching — releasing lands it there.
+            dock_->showDropHint(g);
+            e->accept();
+            return;
+        }
+        // The move cursor anywhere on the bar: all of it is the handle.
+        setCursor(Qt::SizeAllCursor);
         e->accept();
     }
     void mouseReleaseEvent(QMouseEvent* e) override {
-        if (dragging_) {
-            dragging_ = false;
-            dock_->hideDropHint();
-            // Attach wherever the panel is touching — anywhere along a side will do.
-            if (dock_->isFloating()) dock_->redockHere();
-        }
+        if (dragging_) lastGlobal_ = e->globalPosition().toPoint();
+        endDrag();
         e->accept();
     }
+    void endDrag() {
+        if (QWidget::mouseGrabber() == this) releaseMouse();
+        if (!dragging_) return;
+        dragging_ = false;
+        dock_->hideDropHint();
+        // Attach wherever the pointer is - over a side or a docked panel. A click that never became
+        // a drag leaves a floating panel where it is.
+        if (moved_ && dock_->isFloating()) dock_->redockHere(lastGlobal_);
+        moved_ = false;
+    }
     void mouseDoubleClickEvent(QMouseEvent* e) override {
-        // Double-click the grip toggles floating (like AutoCAD palettes).
-        if (grip_->geometry().contains(e->pos()))
-            dock_->setFloating(!dock_->isFloating());
+        // Double-click the bar toggles floating (like AutoCAD palettes).
+        if (!dock_->isFloating()) dock_->unfoldToFloat();
+        dock_->setFloating(!dock_->isFloating());
+        dock_->fitFloating();
         e->accept();
     }
 
@@ -1893,7 +2104,10 @@ private:
     QLabel* lbl_ = nullptr;
     QLabel* grip_ = nullptr;   // both start empty: restyle() runs before either is built
     bool dragging_ = false;
+    bool moved_ = false;       // the press has become a drag
     QPoint pressGlobal_;
+    QPoint grabOffset_;        // where on the panel it was taken hold of
+    QPoint lastGlobal_;        // where the pointer last was in the drag: where it lands
     static QVector<DockTitleBar*> allBars_;
 
 public:
@@ -4786,8 +5000,14 @@ void MainWindow::syncBreakOptions() {
         room(twistSpreadCombo_, straightRun);
         // The spacing is the straight run's own: a laid-up bundle spreads its wires across its width,
         // so the row would be a setting that does nothing while its tool is armed.
-        showAutoField(twistLaneSpin_, twistLaneLabel_, straightRun, editor_->twistLane() <= 1e-9,
-                      editor_->twistLane() > 1e-9 ? editor_->twistLane() : fig.lane);
+        // LANDED ON AN ENTRY FACE, the fan's spread is the face's until a pitch is typed here - so
+        // that is the figure shown, lit as worked out, and a number typed over it is the one drawn.
+        const double faceLane = editor_->faceFitLane(false);
+        showAutoField(twistLaneSpin_, twistLaneLabel_, straightRun,
+                      faceLane > 0.0 || editor_->twistLane() <= 1e-9,
+                      faceLane > 0.0                ? faceLane
+                      : editor_->twistLane() > 1e-9 ? editor_->twistLane()
+                                                    : fig.lane);
         // The fan is on every wires tool; the wire width is the straight run's, because a laid-up
         // bundle takes its thickness from the bundle and not from one wire in it. The knee radius
         // belongs to the ROUTED tools: a run drawn between two points has no knee to turn at.
@@ -4949,8 +5169,12 @@ void MainWindow::syncBreakOptions() {
         const bool apart = straightRun && !editor_->twistSidesSame();
         // The finish end's three, shown the same way: its own figure where it has one, and the
         // start's - which is what it falls back to - where it has not.
-        showAutoField(twistLaneBSpin_, twistLaneBLabel_, apart, editor_->twistLaneFinish() <= 1e-9,
-                      editor_->twistLaneFinish() > 1e-9 ? editor_->twistLaneFinish() : fig.lane);
+        const double faceLaneB = editor_->faceFitLane(true);
+        showAutoField(twistLaneBSpin_, twistLaneBLabel_, apart,
+                      faceLaneB > 0.0 || editor_->twistLaneFinish() <= 1e-9,
+                      faceLaneB > 0.0                     ? faceLaneB
+                      : editor_->twistLaneFinish() > 1e-9 ? editor_->twistLaneFinish()
+                                                          : fig.lane);
         showAutoField(twistFanBSpin_, twistFanBLabel_, apart, editor_->twistFanFinish() <= 1e-9,
                       editor_->twistFanFinish() > 1e-9 ? editor_->twistFanFinish() : fig.fanLen);
         showAutoField(twistFanKneeBSpin_, twistFanKneeBLabel_, apart,
@@ -7824,8 +8048,7 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* e) {
     // A SECTION OF THE SHELF DROPPED IN A NEW PLACE. The tree does the moving; what has to happen after it is
     // writing the order down and redrawing from it, so the tree and the setting cannot drift apart. Queued,
     // because at this moment the move has not happened yet - the order is read once it has.
-    if (partsPanelTree_ && obj == partsPanelTree_->viewport() && e->type() == QEvent::Drop)
-        QTimer::singleShot(0, this, [this] { rememberPartsPanelKindOrder(); });
+    if (partsPanelTree_ && obj == partsPanelTree_->viewport() && partsPanelDragEvent(e)) return true;
     // The strip along the bottom of the canvas. A right press on a tab opens that sheet's own menu; a
     // right press anywhere else on the strip does nothing at all. Either way it stops here rather than
     // falling through to the canvas, which would answer with the menu for the drawing.
@@ -14908,12 +15131,20 @@ QDockWidget* MainWindow::makePartsPanel() {
     //
     // Only the HEADINGS move. A part belongs to its kind - dragging one out of its section would say it was
     // something it is not - so a part row is neither dragged nor dropped on.
-    partsPanelTree_->setDragDropMode(QAbstractItemView::InternalMove);
-    partsPanelTree_->setDragEnabled(true);
+    //
+    // THE DRAG IS THE PANEL'S OWN (partsPanelDragEvent), not the tree's. The tree's InternalMove drags
+    // what is SELECTED, and a heading is not selectable - so pressing one and pulling did nothing - and
+    // where it would have dropped it it could as easily have put one section INSIDE another. Here a
+    // heading is taken up by pulling it, a line is drawn in the gap between two sections where it will
+    // land, and letting go puts it there.
+    partsPanelTree_->setDragDropMode(QAbstractItemView::NoDragDrop);
     partsPanelTree_->viewport()->setAcceptDrops(true);
-    partsPanelTree_->setDropIndicatorShown(true);
-    partsPanelTree_->setDefaultDropAction(Qt::MoveAction);
     partsPanelTree_->viewport()->installEventFilter(this);
+    partsDropGuide_ = new QWidget(partsPanelTree_->viewport());
+    partsDropGuide_->setAttribute(Qt::WA_TransparentForMouseEvents);
+    partsDropGuide_->setAttribute(Qt::WA_StyledBackground);
+    partsDropGuide_->setStyleSheet(QStringLiteral("background:#3fa9f5;border-radius:1px;"));
+    partsDropGuide_->hide();
     partsPanelTree_->setUniformRowHeights(true);
     partsPanelTree_->setAllColumnsShowFocus(true);
     // The part takes what is left, and the three tick columns stay narrow. Left to itself a header stretches
@@ -14936,6 +15167,11 @@ QDockWidget* MainWindow::makePartsPanel() {
     //
     // Remembered between sessions: it is a habit that follows the kind of sheet somebody works on.
     // Double-click places it. One gesture, no dialog: which is the whole reason for the panel.
+    // A HEADING ROLLED UP OR OPENED is remembered, so the shelf comes back the way it was left.
+    connect(partsPanelTree_, &QTreeWidget::itemCollapsed, this,
+            [this](QTreeWidgetItem* it) { rememberPartsPanelHeading(it, true); });
+    connect(partsPanelTree_, &QTreeWidget::itemExpanded, this,
+            [this](QTreeWidgetItem* it) { rememberPartsPanelHeading(it, false); });
     connect(partsPanelTree_, &QTreeWidget::itemDoubleClicked, this,
             [this](QTreeWidgetItem* item, int column) {
                 if (!item) return;
@@ -15407,8 +15643,166 @@ void MainWindow::rememberPartsPanelKindOrder() {
     refreshPartsPanel();   // redrawn from the order, so the tree and the setting cannot disagree
 }
 
+void MainWindow::movePartsPanelKind(int kind, int beforeKind, bool after) {
+    if (kind == beforeKind) return;
+    std::vector<PartKind> order = partsPanelKindOrder();
+    auto at = [&](int k) {
+        return std::find_if(order.begin(), order.end(),
+                            [k](PartKind p) { return static_cast<int>(p) == k; });
+    };
+    const auto moving = at(kind);
+    if (moving == order.end()) return;
+    const PartKind k = *moving;
+    order.erase(moving);
+    auto where = at(beforeKind);
+    if (where != order.end() && after) ++where;
+    order.insert(where, k);
+    QStringList said;
+    for (PartKind p : order) said << QString::number(static_cast<int>(p));
+    QSettings s;
+    s.setValue(QStringLiteral("ui/partsPanelKindOrder"), said);
+    s.sync();
+    refreshPartsPanel();
+}
+
+// THE SHELF'S SECTIONS, DRAGGED BY THEIR HEADINGS. Pressed on a heading and pulled, the heading is taken
+// up; over the shelf, the gap it would go into - above or below the section under the cursor, whichever
+// half of that section it is over - is marked with a line across the panel; let go, and it goes there.
+// A part row counts as its section, so the whole of a section is somewhere to aim at, not only its title.
+bool MainWindow::partsPanelDragEvent(QEvent* e) {
+    static const QString kMime = QStringLiteral("application/x-edraw-partkind");
+    QTreeWidget* tree = partsPanelTree_;
+    auto kindOf = [](QTreeWidgetItem* it) {
+        const QVariant v = it ? it->data(0, Qt::UserRole + 4) : QVariant();
+        return v.isValid() ? v.toInt() : -1;
+    };
+    auto hideGuide = [this] {
+        if (partsDropGuide_) partsDropGuide_->hide();
+        partsDropKind_ = -1;
+    };
+    switch (e->type()) {
+    case QEvent::MouseButtonPress: {
+        auto* me = static_cast<QMouseEvent*>(e);
+        partsDragKind_ = -1;
+        if (me->button() == Qt::LeftButton) {
+            partsDragKind_ = kindOf(tree->itemAt(me->position().toPoint()));
+            partsDragPress_ = me->position().toPoint();
+        }
+        return false;   // the tree still opens and closes the heading as it always did
+    }
+    case QEvent::MouseMove: {
+        auto* me = static_cast<QMouseEvent*>(e);
+        if (partsDragKind_ < 0 || !(me->buttons() & Qt::LeftButton)) return false;
+        if ((me->position().toPoint() - partsDragPress_).manhattanLength() <
+            QApplication::startDragDistance())
+            return false;
+        const int kind = partsDragKind_;
+        partsDragKind_ = -1;
+        auto* drag = new QDrag(tree->viewport());
+        auto* mime = new QMimeData;
+        mime->setData(kMime, QByteArray::number(kind));
+        drag->setMimeData(mime);
+        if (QTreeWidgetItem* head = tree->itemAt(partsDragPress_)) {
+            // What is being carried: the heading itself, as it looks on the shelf.
+            const QRect r = tree->visualItemRect(head);
+            drag->setPixmap(
+                tree->viewport()->grab(QRect(0, r.top(), tree->viewport()->width(), r.height())));
+            drag->setHotSpot(QPoint(partsDragPress_.x(), partsDragPress_.y() - r.top()));
+        }
+        drag->exec(Qt::MoveAction);
+        hideGuide();
+        return true;
+    }
+    case QEvent::MouseButtonRelease:
+        partsDragKind_ = -1;
+        return false;
+    case QEvent::DragEnter:
+    case QEvent::DragMove: {
+        auto* de = static_cast<QDropEvent*>(e);
+        if (!de->mimeData()->hasFormat(kMime)) return false;
+        const QPoint pos = de->position().toPoint();
+        QTreeWidgetItem* it = tree->itemAt(pos);
+        // A part row aims at its section.
+        if (it && kindOf(it) < 0 && kindOf(it->parent()) >= 0) it = it->parent();
+        if (kindOf(it) < 0) {
+            hideGuide();
+            de->acceptProposedAction();   // still over the shelf: let go here and nothing moves
+            return true;
+        }
+        // The section's whole height: its heading and, opened, every row under it.
+        QRect block = tree->visualItemRect(it);
+        if (it->isExpanded() && it->childCount() > 0)
+            block = block.united(tree->visualItemRect(it->child(it->childCount() - 1)));
+        partsDropAfter_ = pos.y() > block.center().y();
+        partsDropKind_ = kindOf(it);
+        const int y = partsDropAfter_ ? block.bottom() + 1 : block.top();
+        partsDropGuide_->setGeometry(2, std::max(0, y - 1), tree->viewport()->width() - 4, 3);
+        partsDropGuide_->show();
+        partsDropGuide_->raise();
+        de->acceptProposedAction();
+        return true;
+    }
+    case QEvent::DragLeave:
+        hideGuide();
+        return false;
+    case QEvent::Drop: {
+        auto* de = static_cast<QDropEvent*>(e);
+        if (!de->mimeData()->hasFormat(kMime)) return false;
+        const int kind = de->mimeData()->data(kMime).toInt();
+        const int target = partsDropKind_;
+        const bool after = partsDropAfter_;
+        hideGuide();
+        de->acceptProposedAction();
+        // Queued: the shelf is rebuilt by the move, and the tree is still in the middle of this drop.
+        if (target >= 0 && target != kind)
+            QTimer::singleShot(0, this, [this, kind, target, after] {
+                movePartsPanelKind(kind, target, after);
+            });
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+QString MainWindow::partsPanelHeadingKey(const QTreeWidgetItem* heading) {
+    if (!heading) return QString();
+    const QVariant kind = heading->data(0, Qt::UserRole + 4);
+    const QVariant lib = heading->data(0, Qt::UserRole + 5);
+    if (kind.isValid()) {
+        const QString under =
+            heading->parent() ? heading->parent()->data(0, Qt::UserRole + 5).toString() : QString();
+        return under + QStringLiteral("#") + QString::number(kind.toInt());
+    }
+    if (lib.isValid()) return QStringLiteral("lib:") + lib.toString();
+    return QString();   // a part row: not a heading
+}
+
+bool MainWindow::partsPanelHeadingCollapsed(const QString& key) const {
+    return QSettings().value(QStringLiteral("ui/partsPanelCollapsed")).toStringList().contains(key);
+}
+
+void MainWindow::rememberPartsPanelHeading(QTreeWidgetItem* heading, bool collapsed) {
+    if (partsPanelFilling_) return;
+    const QString key = partsPanelHeadingKey(heading);
+    if (key.isEmpty()) return;
+    QSettings s;
+    QStringList rolled = s.value(QStringLiteral("ui/partsPanelCollapsed")).toStringList();
+    rolled.removeAll(key);
+    if (collapsed) rolled << key;
+    s.setValue(QStringLiteral("ui/partsPanelCollapsed"), rolled);
+}
+
 void MainWindow::refreshPartsPanel() {
     if (!partsPanelTree_) return;
+    // Rebuilding opens every heading as it is made; none of that is somebody rolling one up or down.
+    struct Filling {
+        bool& flag;
+        explicit Filling(bool& f) : flag(f) { flag = true; }
+        ~Filling() { flag = false; }
+    } filling(partsPanelFilling_);
+    const QStringList rolledUp =
+        QSettings().value(QStringLiteral("ui/partsPanelCollapsed")).toStringList();
     partsPanelTree_->clear();
     syncBomRuleBoxes();
     PartsCatalog catalog;
@@ -15524,8 +15918,8 @@ void MainWindow::refreshPartsPanel() {
     // The parts of one shelf, under a heading per KIND: "Connector", "Heatshrink", each with its own
     // parts beneath it and collapsible, so the two connectors in a library of a hundred and twenty are
     // found by opening one heading rather than by scrolling past the sleeves.
-    auto addByKind = [this, &addPart, &wanted, &matches](const std::vector<LibraryPart>& parts,
-                                                        QTreeWidgetItem* under) {
+    auto addByKind = [this, &addPart, &wanted, &matches, &rolledUp](const std::vector<LibraryPart>& parts,
+                                                                   QTreeWidgetItem* under) {
         for (PartKind k : partsPanelKindOrder()) {
             std::vector<const LibraryPart*> ofKind;
             for (const LibraryPart& part : parts)
@@ -15543,8 +15937,8 @@ void MainWindow::refreshPartsPanel() {
             head->setFont(0, f);
             head->setForeground(0, Chrome::subInk());
             head->setFirstColumnSpanned(false);
-            head->setExpanded(true);
             for (const LibraryPart* part : ofKind) addPart(*part, head);
+            head->setExpanded(!rolledUp.contains(partsPanelHeadingKey(head)));
         }
     };
 
@@ -15564,13 +15958,14 @@ void MainWindow::refreshPartsPanel() {
                 // Which shelf this is, with its parts under it. It is a heading, not a part: it carries no
                 // part id, and everything that acts on a part asks for one.
                 head = new QTreeWidgetItem(partsPanelTree_);
+                head->setData(0, Qt::UserRole + 5, path);   // which library, for remembering it rolled up
                 head->setText(0, QFileInfo(path).completeBaseName().toUpper());
                 QFont f = head->font(0);
                 f.setBold(true);
                 head->setFont(0, f);
                 head->setForeground(0, Chrome::subInk());
                 head->setFirstColumnSpanned(false);
-                head->setExpanded(true);
+                head->setExpanded(!rolledUp.contains(partsPanelHeadingKey(head)));
             }
             addByKind(lib->parts, head);
         }

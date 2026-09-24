@@ -12118,6 +12118,46 @@ int run_editor_tests() {
                 check(false, "face fit: a run started on a face is laid");
             }
         }
+        // AND THE PITCH SET ON THE RIBBON AFTERWARDS IS THE ONE DRAWN. Landed on the face the fan
+        // starts at 95% of it; pinned with Tab, a pitch typed into the field used to be put straight
+        // back to the face's, so the field did nothing.
+        {
+            Document d;
+            sheet(d);
+            Editor ed;
+            ed.setDocument(&d);
+            noSnap(ed);
+            ed.setTool(ToolId::Fanout);
+            ed.setTwistWires(4);
+            ed.onPointerMove({200.0, -9.0});
+            ed.onPointerPress({200.0, -9.0}, Qt::LeftButton, Qt::ShiftModifier);
+            ed.onPointerMove({350.0, 0.0});
+            const double faceLane = ed.faceFitLane(false);
+            const TwistFigures pf = ed.twistPreviewFigures();
+            std::printf("  face pitch: landed, the field shows %.2f\n", faceLane);
+            check(std::abs(faceLane * 3.0 + pf.wireWidth - 38.0) < 1e-6,
+                  "face pitch: landed, the field shows the pitch that spans 95% of the face");
+            ed.freezeTwistedPreview();
+            ed.setTwistLane(7.0);
+            check(ed.faceFitLane(false) == 0.0, "face pitch: a pitch typed after landing is the one");
+            ed.setTwistLane(0.0);
+            check(std::abs(ed.faceFitLane(false) - faceLane) < 1e-9,
+                  "face pitch: and Auto gives it back the face's");
+            ed.setTwistLane(7.0);
+            ed.onPointerPress({350.0, 0.0}, Qt::LeftButton, Qt::NoModifier);   // unpins
+            ed.onPointerPress({350.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+            ed.onKey(Qt::Key_Return, Qt::NoModifier);
+            const Entity* run = last(d);
+            if (run && run->type == EntityType::TwistedPair) {
+                const TwistFigures f = twistedPairFigures(*run);
+                std::printf("  face pitch: laid with lane %.2f\n", f.lane);
+                check(distance(run->points.front(), Vec2{200.0, 0.0}) < 1e-6 &&
+                          std::abs(f.lane - 7.0) < 1e-6,
+                      "face pitch: the fanout is laid on the face at the pitch typed on the ribbon");
+            } else {
+                check(false, "face pitch: the fanout is laid");
+            }
+        }
         // A CABLE and A SLEEVE: 60% of the face across.
         for (const bool sleeve : {false, true}) {
             Document d;
@@ -12502,6 +12542,90 @@ int run_editor_tests() {
         e2.onPointerPress({50.0, 0.0}, Qt::LeftButton, Qt::ShiftModifier);
         check(!e2.continuingRun(),
               "pull: Shift in the middle of a run still adds it to the selection, as it always did");
+    }
+
+    // ---- A pulled run takes typed lengths knee to knee ------------------------------------------
+    {
+        // Pulled out of its end and a length typed with the button still down: that is the pull's
+        // knee, that far from the end - and letting go does not put another one where the mouse is.
+        // The next length is from that knee, and so on.
+        Document d;
+        Entity w;
+        w.id = QStringLiteral("RUN");
+        w.type = EntityType::TwistedPair;
+        w.points = {{0.0, 0.0}, {100.0, 0.0}};
+        w.a = w.points.front();
+        w.b = w.points.back();
+        w.meta.insert(QStringLiteral("twistStraight"), true);
+        w.meta.insert(QStringLiteral("twistWires"), 4);
+        w.meta.insert(QStringLiteral("twistEnds"), 20.0);
+        w.meta.insert(QStringLiteral("twistLane"), 6.0);
+        d.entities().push_back(w);
+        Editor ed;
+        ed.setDocument(&d);
+        noSnap(ed);
+        ed.setTool(ToolId::Select);
+        ed.onPointerPress({100.0, 9.0}, Qt::LeftButton, Qt::ShiftModifier);
+        check(ed.continuingRun(), "typed pull: Shift on the end takes the run up");
+        ed.onPointerMove({100.0, -60.0});
+        ed.acceptCommandInput(QStringLiteral("80"));
+        ed.onPointerRelease({100.0, -60.0}, Qt::LeftButton);
+        ed.onPointerMove({300.0, -80.0});
+        ed.acceptCommandInput(QStringLiteral("120"));
+        ed.onKey(Qt::Key_Return, Qt::NoModifier);
+        const Entity* run = d.entities().empty() ? nullptr : &d.entities().front();
+        if (run) {
+            for (const Vec2& v : run->points) std::printf("  typed pull: knee %.1f,%.1f\n", v.x, v.y);
+            check(run->points.size() == 4 &&
+                      distance(run->points[2], Vec2{100.0, -80.0}) < 1e-6 &&
+                      distance(run->points[3], Vec2{220.0, -80.0}) < 1e-6,
+                  "typed pull: each length is from the knee before it - end to knee, knee to knee");
+        } else {
+            check(false, "typed pull: the run is still there");
+        }
+        // AND A FRESH FANOUT, drawn with lengths alone.
+        Document d2;
+        Editor e2;
+        e2.setDocument(&d2);
+        noSnap(e2);
+        e2.setTool(ToolId::Fanout);
+        e2.setTwistWires(4);
+        e2.onPointerMove({0.0, 0.0});
+        e2.onPointerPress({0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+        e2.onPointerMove({500.0, 0.0});
+        e2.acceptCommandInput(QStringLiteral("150"));
+        e2.onPointerMove({150.0, 500.0});
+        e2.acceptCommandInput(QStringLiteral("90"));
+        e2.onKey(Qt::Key_Return, Qt::NoModifier);
+        const Entity* fan = d2.entities().empty() ? nullptr : &d2.entities().back();
+        check(fan && fan->points.size() == 3 &&
+                  distance(fan->points[1], Vec2{150.0, 0.0}) < 1e-6 &&
+                  distance(fan->points[2], Vec2{150.0, 90.0}) < 1e-6,
+              "typed fanout: start to knee, then knee to knee");
+        // PINNED (Tab) and the cursor gone off somewhere else: the length goes the way the run on the
+        // screen points, and puts its knee down - it used to do nothing but let go of the pin. Enter
+        // then ends the run at that knee.
+        Document d3;
+        Editor e3;
+        e3.setDocument(&d3);
+        noSnap(e3);
+        e3.setTool(ToolId::Fanout);
+        e3.setTwistWires(4);
+        e3.onPointerMove({0.0, 0.0});
+        e3.onPointerPress({0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+        e3.onPointerMove({200.0, 0.0});
+        e3.freezeTwistedPreview();
+        e3.onPointerMove({-150.0, 80.0});
+        e3.acceptCommandInput(QStringLiteral("60"));
+        check(!e3.twistedFrozen(), "typed pinned: the number lets go of the pin");
+        e3.onKey(Qt::Key_Return, Qt::NoModifier);
+        const Entity* pinned = d3.entities().empty() ? nullptr : &d3.entities().back();
+        if (pinned)
+            std::printf("  typed pinned: %d point(s), ending at %.1f,%.1f\n", int(pinned->points.size()),
+                        pinned->points.back().x, pinned->points.back().y);
+        check(pinned && pinned->points.size() == 2 &&
+                  distance(pinned->points.back(), Vec2{60.0, 0.0}) < 1e-6,
+              "typed pinned: the knee goes along the pinned run, and Enter ends it there");
     }
 
     // ---- the gathered wires run straight, or laid up in pairs, or every other pair -------------

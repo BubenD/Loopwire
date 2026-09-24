@@ -121,6 +121,13 @@ public:
     // The order the shelf's sections are in, as somebody has dragged them - and that order, written down.
     std::vector<PartKind> partsPanelKindOrder() const;
     void rememberPartsPanelKindOrder();
+    // A section dragged to a new place: put before the section `beforeKind`, or after it when `after`
+    // is set. Written down and the shelf redrawn from it. Public so a test can make the move.
+    void movePartsPanelKind(int kind, int beforeKind, bool after);
+    // Which of the shelf's headings are rolled up - kept between sessions, so the shelf opens the way
+    // it was left. A heading's key names its library (when there are several) and its kind.
+    static QString partsPanelHeadingKey(const QTreeWidgetItem* heading);
+    bool partsPanelHeadingCollapsed(const QString& key) const;
     // Whether a schematic connector is placed with its fanout beside it (the parts panel's own switch,
     // remembered between sessions). Public so a test can read what the switch says without reaching into
     // the panel to find the box.
@@ -970,6 +977,16 @@ private:
     // and the fanout. A tree rather than a list because several libraries in view are shown under their own
     // names, and because the three drawings want columns of their own to be read down.
     QTreeWidget* partsPanelTree_ = nullptr;
+    // A SECTION HEADING BEING DRAGGED: which kind, where it was pressed, and the line shown in the gap
+    // it will land in (see MainWindow::partsPanelDragEvent).
+    int partsDragKind_ = -1;
+    QPoint partsDragPress_;
+    QWidget* partsDropGuide_ = nullptr;
+    int partsDropKind_ = -1;
+    bool partsDropAfter_ = false;
+    bool partsPanelDragEvent(QEvent* e);
+    bool partsPanelFilling_ = false;   // the shelf is being rebuilt: its opening and closing is not the user's
+    void rememberPartsPanelHeading(QTreeWidgetItem* heading, bool collapsed);
     QLineEdit* partsPanelFilter_ = nullptr;
     // Which kind of part the shelf shows ("all" first), and what a double-click on a part's NAME puts down -
     // one tick per drawing, remembered between sessions. See refreshPartsPanel() and placeFromPartsPanel().

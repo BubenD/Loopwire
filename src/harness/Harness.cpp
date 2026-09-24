@@ -823,7 +823,15 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
     // 24 places per crossing draws a smooth cosine (15 degrees a step) at any zoom this is read at;
     // a long route with a tight weave is measured more coarsely rather than without bound, because
     // everything that asks about the shape walks these places.
-    const int perTurn = std::clamp(2400 / std::max(1, f.turns), 8, 24);
+    int perTurn = std::clamp(2400 / std::max(1, f.turns), 8, 24);
+    // A ROPE IS CUT EVERY 1/2N OF A TURN (see twistedPairWeave) - where each wire goes round the side
+    // of it - so every one of those places has to be a measured one, with some between them, or a
+    // strand's front half is drawn from whichever places happen to fall inside it, and most of them
+    // are drawn as nothing.
+    if (!f.straight && f.wires >= 3) {
+        const int q = 2 * f.wires;
+        perTurn = q * std::max(2, (perTurn + q - 1) / q);
+    }
     const int grid = f.turns * perTurn;
     std::vector<double> us{0.0, f.len};
     if (f.straight) {
@@ -1754,12 +1762,27 @@ std::vector<TwistedPairStretch> twistedPairWeave(const Entity& pair) {
     // stretch from end to end: nothing crosses, so there is no place along it where the answer to
     // which wire is in front changes, and cutting it up anyway would only draw the same wires in the
     // same order several times over.
+    //
+    // A TWISTED BUNDLE IS A ROPE. Every wire in it goes round the same way, so what is seen of it is
+    // the half of each turn that is at the FRONT - a row of strands all leaning the same way - and the
+    // half at the back is behind the bundle and not seen at all. Drawn with the back halves as well,
+    // three or more wires read as a braid: the back halves lean the other way, and show wherever no
+    // front strand happens to cover them. So the stretches are cut wherever ANY wire goes round the
+    // side (every 1/2N of a turn: the wires are spread evenly round it), and within one a wire is
+    // either at the front, and drawn, or at the back, and left out.
+    //
+    // A PAIR KEEPS ITS CROSSINGS. Two wires round each other is drawn the way a twisted pair is always
+    // drawn - both of them, crossing - and that is the symbol a drawing of one is read by.
+    const bool rope = !f.straight && f.wires >= 3;
     std::vector<double> cuts{0.0};
     if (!f.straight || f.lay != RunLay::Straight) {
         cuts.push_back(f.lead);
-        for (int k = 1; k < 2 * f.turns; ++k) cuts.push_back(f.lead + f.turn * k / 2.0);
+        const int perTurn = rope ? 2 * f.wires : 2;
+        for (int k = 1; k < perTurn * f.turns; ++k)
+            cuts.push_back(f.lead + f.turn * k / double(perTurn));
         cuts.push_back(f.len - f.lead);
     }
+    std::sort(cuts.begin(), cuts.end());
     cuts.push_back(f.len);
     cuts.erase(std::unique(cuts.begin(), cuts.end(),
                            [&](double a, double b) { return std::abs(a - b) < f.len * 1e-9; }),
@@ -1781,7 +1804,10 @@ std::vector<TwistedPairStretch> twistedPairWeave(const Entity& pair) {
         });
         TwistedPairStretch s;
         s.wires.reserve(order.size());
+        const bool woven = mid > f.lead && mid < f.len - f.leadB;
         for (const int k : order) {   // back to front, so the near ones are laid over the far ones
+            // Round the back of a rope: behind the bundle, and not seen.
+            if (rope && woven && twistDepth(f, k, mid) < 0.0) continue;
             // ONLY OVER THE PART OF THE RUN THIS WIRE IS DRAWN ON - the same answer the strands are
             // made from, kept once (see TwistCached::spans). Taking the whole stretch instead drew
             // every wire from one end of the run to the other, body or no body.
@@ -1806,6 +1832,24 @@ std::vector<TwistedPairStretch> twistedPairWeave(const Entity& pair) {
         }
         out.push_back(std::move(s));
         idx = to;
+    }
+    // AND THE ROPE'S TWO SIDES. Where a strand goes round the side of the bundle it turns from the
+    // front to the back, and what is seen there is the side of the bundle: a line along each edge of
+    // it, which is what closes each strand off rather than leaving its two edges ending in the air.
+    // Laid last, over the strands, and not filled - there is nothing behind a side to hide.
+    if (rope && !f.cableBody) {
+        TwistedPairStretch side;
+        TwistedPairStretch::Wire edges;
+        const double half = f.reach + f.thick;
+        for (size_t i = 0; i < f.u.size() && i < f.pos.size() && i < f.n.size(); ++i) {
+            if (f.u[i] < f.lead - 1e-9 || f.u[i] > f.len - f.leadB + 1e-9) continue;
+            edges.edgeA.push_back(f.pos[i] + f.n[i] * half);
+            edges.edgeB.push_back(f.pos[i] - f.n[i] * half);
+        }
+        if (edges.edgeA.size() >= 2) {
+            side.wires.push_back(std::move(edges));
+            out.push_back(std::move(side));
+        }
     }
     return out;
 }

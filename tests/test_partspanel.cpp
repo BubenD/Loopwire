@@ -33,6 +33,7 @@
 #include "harness/PartsLibrary.h"
 
 #include <QAction>
+#include <QSettings>
 #include <QApplication>
 #include <QDir>
 #include <QDockWidget>
@@ -222,6 +223,65 @@ int run_partspanel_tests() {
     for (const QString& r : rows)
         if (r.contains(QStringLiteral("PANELTEST-HOUSE-1"))) sleeveThere = true;
     check(sleeveThere, "panel: a heat-shrink size, which has no drawing at all, is on the shelf");
+
+    // A SECTION DRAGGED BY ITS HEADING goes where it was let go: the last one put before the first.
+    {
+        auto kindsShown = [&] {
+            QList<int> out;
+            for (QTreeWidgetItem* it : everyRow(list)) {
+                const QVariant k = it->data(0, Qt::UserRole + 4);
+                if (k.isValid() && !out.contains(k.toInt())) out << k.toInt();
+            }
+            return out;
+        };
+        const QList<int> before = kindsShown();
+        if (before.size() >= 2) {
+            win.movePartsPanelKind(before.last(), before.first(), false);
+            const QList<int> after = kindsShown();
+            std::printf("  panel: sections %lld, first now %d (was %d)\n",
+                        static_cast<long long>(after.size()), after.value(0), before.first());
+            check(after.value(0) == before.last() && after.value(1) == before.first(),
+                  "panel: a section dropped above the first is first, and the rest follow in order");
+            win.movePartsPanelKind(before.last(), before.value(before.size() - 2), true);
+            check(kindsShown() == before, "panel: and dropped below where it was, it is back");
+        } else {
+            check(false, "panel: the shelf has at least two sections to reorder");
+        }
+        QSettings().remove(QStringLiteral("ui/partsPanelKindOrder"));
+    }
+
+    // A HEADING ROLLED UP STAYS ROLLED UP: remembered, and the shelf comes back that way - the next
+    // session builds it the same way this refresh does.
+    {
+        QTreeWidgetItem* head = nullptr;
+        for (QTreeWidgetItem* it : everyRow(list))
+            if (it->data(0, Qt::UserRole + 4).isValid()) { head = it; break; }
+        if (head) {
+            const QString key = MainWindow::partsPanelHeadingKey(head);
+            head->setExpanded(false);   // the user rolls it up
+            check(win.partsPanelHeadingCollapsed(key), "panel: a heading rolled up is remembered");
+            // Rebuilt: a heading "moved" to where it already is redraws the shelf and changes nothing else.
+            const int k = head->data(0, Qt::UserRole + 4).toInt();
+            int next = -1;
+            bool seen = false;
+            for (QTreeWidgetItem* it : everyRow(list)) {
+                const QVariant v = it->data(0, Qt::UserRole + 4);
+                if (!v.isValid()) continue;
+                if (seen && v.toInt() != k) { next = v.toInt(); break; }
+                if (v.toInt() == k) seen = true;
+            }
+            win.movePartsPanelKind(k, next, false);
+            QTreeWidgetItem* again = nullptr;
+            for (QTreeWidgetItem* it : everyRow(list))
+                if (MainWindow::partsPanelHeadingKey(it) == key) again = it;
+            check(again && !again->isExpanded(), "panel: and the shelf is rebuilt with it rolled up");
+            if (again) again->setExpanded(true);   // opened again
+            check(!win.partsPanelHeadingCollapsed(key), "panel: opened again, it is remembered open");
+        } else {
+            check(false, "panel: there is a heading to roll up");
+        }
+        QSettings().remove(QStringLiteral("ui/partsPanelCollapsed"));
+    }
 
     // A part with nothing to place says so, rather than being left out: the flag the double-click reads.
     bool anyWithoutADrawing = false;
