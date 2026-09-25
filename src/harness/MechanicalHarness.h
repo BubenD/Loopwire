@@ -770,6 +770,9 @@ std::vector<Entity> placedPartDrawingForTest(const LibraryPart& part, const Vec2
 struct PlacedLibraryPart {
     std::vector<Entity> entities;
     double faceLengthMm = 0.0;   // the face it was set down by, across; 0 when none is marked
+    // Every output face the part has, end to end, where it landed - the first is the one it was
+    // set down by. A joint has one each side.
+    std::vector<std::pair<Vec2, Vec2>> faces;
     bool haveEnds = false;
     Vec2 nearAt{0.0, 0.0};
     Vec2 farAt{0.0, 0.0};

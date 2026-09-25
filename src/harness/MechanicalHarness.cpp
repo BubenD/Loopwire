@@ -1305,9 +1305,17 @@ std::vector<Entity> placedPartDrawing(const LibraryPart& part, const Vec2& at, d
                                       const MechDrawOptions& opt, const QString& role,
                                       const Vec2& outward = Vec2{0.0, 0.0},
                                       std::vector<Vec2>* placedFaces = nullptr,
-                                      PlacedEnds* placedEnds = nullptr) {
+                                      PlacedEnds* placedEnds = nullptr,
+                                      std::vector<std::pair<Vec2, Vec2>>* placedFaceEnds = nullptr) {
     std::vector<Entity> out;
     if (placedFaces) placedFaces->clear();
+    if (placedFaceEnds) placedFaceEnds->clear();
+    // Every face the conductors leave by, end to end, where the drawing put it.
+    auto faceEnds = [&](const Vec2& pivot, double turn) {
+        if (!placedFaceEnds) return;
+        for (const MechOutputFace& f : part.outputs)
+            placedFaceEnds->push_back({at + turnedAbout(f.a - pivot, turn), at + turnedAbout(f.b - pivot, turn)});
+    };
     if (!part.hasMechanical()) return out;
     out = partDrawingEntities(part.mechanical);
     if (out.empty()) return out;
@@ -1379,6 +1387,7 @@ std::vector<Entity> placedPartDrawing(const LibraryPart& part, const Vec2& at, d
         if (placedFaces)
             for (const MechOutputFace& f : part.outputs)
                 placedFaces->push_back(at + turnedAbout(lerp(f.a, f.b, 0.5) - centre, turn));
+        faceEnds(centre, turn);
         if (placedEnds && part.hasNearPoint && part.hasFarPoint) {
             placedEnds->have = true;
             placedEnds->nearAt = at + turnedAbout(part.nearPoint - centre, turn);
@@ -1402,6 +1411,7 @@ std::vector<Entity> placedPartDrawing(const LibraryPart& part, const Vec2& at, d
             for (const MechOutputFace& f : part.outputs)
                 placedFaces->push_back(
                     at + turnedAbout(lerp(f.a, f.b, 0.5) - part.connectPoint, turn));
+        faceEnds(part.connectPoint, turn);
         if (placedEnds && part.hasNearPoint && part.hasFarPoint) {
             placedEnds->have = true;
             placedEnds->nearAt = at + turnedAbout(part.nearPoint - part.connectPoint, turn);
@@ -1421,6 +1431,10 @@ std::vector<Entity> placedPartDrawing(const LibraryPart& part, const Vec2& at, d
     if (placedFaces)
         for (const MechOutputFace& f : part.outputs)
             placedFaces->push_back(at + turnedAbout(lerp(f.a, f.b, 0.5) - mid, dirRad));
+    // (translated to the point first, then turned about it)
+    if (placedFaceEnds)
+        for (const MechOutputFace& f : part.outputs)
+            placedFaceEnds->push_back({at + turnedAbout(f.a - mid, dirRad), at + turnedAbout(f.b - mid, dirRad)});
     if (placedEnds && part.hasNearPoint && part.hasFarPoint) {
         placedEnds->have = true;
         placedEnds->nearAt = at + turnedAbout(part.nearPoint - mid, dirRad);
@@ -3753,7 +3767,7 @@ PlacedLibraryPart placeLibraryPartAtFace(const LibraryPart& part, const Vec2& at
                                          const QString& role) {
     PlacedLibraryPart r;
     PlacedEnds ends;
-    r.entities = placedPartDrawing(part, at, dirRad, opt, role, bodySide, nullptr, &ends);
+    r.entities = placedPartDrawing(part, at, dirRad, opt, role, bodySide, nullptr, &ends, &r.faces);
     r.haveEnds = ends.have;
     r.nearAt = ends.nearAt;
     r.farAt = ends.farAt;

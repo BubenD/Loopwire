@@ -2,26 +2,35 @@
 
 #include "app/DrawingPreview.h"
 #include "app/Editor.h"
+#include "harness/Bom.h"
+#include "model/Document.h"
 
+#include <QAbstractItemView>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFormLayout>
+#include <QGroupBox>
 #include <QHBoxLayout>
+#include <QHeaderView>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMessageBox>
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
-#include <QPainterPath>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QSplitter>
 #include <QStackedWidget>
+#include <QTabWidget>
+#include <QTableWidget>
+#include <QTreeWidget>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -45,6 +54,19 @@ double segDistance(const QPointF& p, const QPointF& a, const QPointF& b) {
 QString brickTitle(const Brick& b) {
     if (!b.name.isEmpty()) return b.name;
     return b.type == BrickType::End ? partKindName(b.kind) : brickTypeName(b.type);
+}
+
+// A brick's size as it sits unturned: along its two ports, and across them.
+QSizeF brickSize(const Brick& b) {
+    if (b.type != BrickType::End) return {82.0, 30.0};
+    return brickKindIsJoint(b.kind) ? QSizeF(90.0, 34.0) : QSizeF(96.0, 38.0);
+}
+
+QString layerName(const QString& key) {
+    if (key == QLatin1String("cable")) return QStringLiteral("Cable");
+    if (key == QLatin1String("braid")) return QStringLiteral("Braided shield");
+    if (key == QLatin1String("heatshrink")) return QStringLiteral("Heatshrink");
+    return QStringLiteral("Wires");
 }
 
 } // namespace
@@ -71,31 +93,54 @@ void BrickCanvas::toGrid(const QPointF& at, double& col, double& row) const {
 
 QRectF BrickCanvas::brickRect(const Brick& b) const {
     const QPointF c = toScreen(b.col, b.row);
-    const QSizeF sz = b.type == BrickType::End ? QSizeF(96.0, 38.0) : QSizeF(80.0, 30.0);
+    QSizeF sz = brickSize(b);
+    if (b.rot % 2 != 0) sz.transpose();
     return QRectF(c.x() - sz.width() / 2.0, c.y() - sz.height() / 2.0, sz.width(), sz.height());
 }
 
-QPointF BrickCanvas::portOf(const Brick& b) const {
-    const QRectF r = brickRect(b);
-    return QPointF(r.right(), r.center().y());
+QPointF BrickCanvas::portPoint(const Brick& b, int port) const {
+    const Vec2 d = brickPortPaneDir(b, port);
+    const double half = brickSize(b).width() / 2.0;
+    return brickRect(b).center() + QPointF(d.x * half, d.y * half);
+}
+
+std::pair<QString, int> BrickCanvas::portAt(const QPointF& at) const {
+    std::pair<QString, int> best{QString(), -1};
+    double bestD = 7.0;
+    for (const Brick& b : d_->bricks)
+        for (int p : {kPortLeft, kPortRight}) {
+            const QPointF q = portPoint(b, p);
+            const double dd = std::hypot(at.x() - q.x(), at.y() - q.y());
+            if (dd <= bestD) {
+                bestD = dd;
+                best = {b.id, p};
+            }
+        }
+    return best;
 }
 
 QString BrickCanvas::brickAt(const QPointF& at) const {
-    // The topmost - the last drawn.
     for (auto it = d_->bricks.rbegin(); it != d_->bricks.rend(); ++it)
-        if (brickRect(*it).adjusted(-7, 0, 7, 0).contains(at)) return it->id;
+        if (brickRect(*it).contains(at)) return it->id;
     return QString();
 }
 
 void BrickCanvas::setSelected(const QString& id) {
-    sel_ = id;
+    sel_.clear();
+    if (!id.isEmpty()) sel_ << id;
+    selLink_ = {};
+    update();
+}
+
+void BrickCanvas::setSelection(const QStringList& ids) {
+    sel_ = ids;
     selLink_ = {};
     update();
 }
 
 void BrickCanvas::fit() {
     if (d_->bricks.empty()) {
-        origin_ = QPointF(70.0, 60.0);
+        origin_ = QPointF(80.0, 70.0);
         update();
         return;
     }
@@ -113,15 +158,35 @@ void BrickCanvas::fit() {
 
 void BrickCanvas::deleteSelected() {
     if (!sel_.isEmpty()) {
-        d_->removeBrick(sel_);
+        for (const QString& id : sel_) d_->removeBrick(id);
         sel_.clear();
         emit selectionChanged(QString());
         emit designChanged();
     } else if (!selLink_.first.isEmpty()) {
         d_->disconnect(selLink_.first, selLink_.second);
         selLink_ = {};
+        emit selectionChanged(QString());
         emit designChanged();
     }
+    update();
+}
+
+void BrickCanvas::moveSelection(double dCol, double dRow) {
+    if (sel_.isEmpty()) return;
+    for (const QString& id : sel_)
+        if (Brick* b = d_->brick(id)) {
+            b->col += dCol;
+            b->row += dRow;
+        }
+    emit designChanged();
+    update();
+}
+
+void BrickCanvas::rotateSelection() {
+    if (sel_.isEmpty()) return;
+    for (const QString& id : sel_)
+        if (Brick* b = d_->brick(id)) b->rot = (b->rot + 1) % 4;
+    emit designChanged();
     update();
 }
 
@@ -129,7 +194,6 @@ void BrickCanvas::paintEvent(QPaintEvent*) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
     p.fillRect(rect(), QColor(0x23, 0x2a, 0x33));
-    // The grid, as dots at every step.
     p.setPen(QPen(QColor(0x3c, 0x46, 0x52), 1.6));
     double c0, r0, c1, r1;
     toGrid(QPointF(0, 0), c0, r0);
@@ -140,27 +204,38 @@ void BrickCanvas::paintEvent(QPaintEvent*) {
     if (d_->bricks.empty()) {
         p.setPen(QColor(0x8a, 0x93, 0xa0));
         p.drawText(rect(), Qt::AlignCenter,
-                   QStringLiteral("Drag end parts and specials here from the list on the left.\n"
-                                  "Link them by dragging from the dot on a brick's edge to another."));
+                   QStringLiteral("Drag end parts, joints and specials here from the list on the left.\n"
+                                  "Link them by dragging from a port - the dot on a brick's side - to "
+                                  "another brick."));
     }
 
-    // The links, under the bricks.
+    // The links, port to port, under the bricks.
+    QFont small = font();
+    small.setPointSizeF(7.5);
     for (const BrickLink& l : d_->links) {
         const Brick* a = d_->brick(l.a);
         const Brick* b = d_->brick(l.b);
         if (!a || !b) continue;
         const bool picked = (selLink_.first == l.a && selLink_.second == l.b) ||
                             (selLink_.first == l.b && selLink_.second == l.a);
+        const QPointF pa = portPoint(*a, d_->portOn(l.a, l.b));
+        const QPointF pb = portPoint(*b, d_->portOn(l.b, l.a));
         p.setPen(QPen(picked ? QColor(0x2b, 0xd0, 0xff) : QColor(0xc9, 0xcc, 0xd1), picked ? 3.0 : 2.0));
-        p.drawLine(brickRect(*a).center(), brickRect(*b).center());
+        p.drawLine(pa, pb);
+        // A fanout says how many wires each part it finishes on takes.
+        const Brick* sp = brickIsSpecial(a->type) ? a : b;
+        if (sp->type == BrickType::Fanout && l.wires > 0) {
+            p.setFont(small);
+            p.setPen(QColor(0x7e, 0xe0, 0xa0));
+            p.drawText((pa + pb) / 2.0 + QPointF(3, -3), QStringLiteral("%1w").arg(l.wires));
+        }
     }
-    // A link being dragged out.
     if (drag_ == Drag::Link) {
         if (const Brick* a = d_->brick(dragId_)) {
             QPen pen(QColor(0x7e, 0xe0, 0xa0), 2.0);
             pen.setStyle(Qt::DashLine);
             p.setPen(pen);
-            p.drawLine(portOf(*a), cursor_);
+            p.drawLine(dragPort_ >= 0 ? portPoint(*a, dragPort_) : brickRect(*a).center(), cursor_);
         }
     }
 
@@ -168,35 +243,58 @@ void BrickCanvas::paintEvent(QPaintEvent*) {
     for (const Brick& b : d_->bricks) {
         const QRectF r = brickRect(b);
         const bool end = b.type == BrickType::End;
-        const bool picked = b.id == sel_;
-        QColor fill = end ? QColor(0x2f, 0x4f, 0x74) : QColor(0x5a, 0x43, 0x78);
-        if (end && b.libPart.isEmpty()) fill = QColor(0x3a, 0x44, 0x52);
+        const bool joint = end && brickKindIsJoint(b.kind);
+        const bool picked = sel_.contains(b.id);
+        QColor fill = end ? (joint ? QColor(0x2f, 0x62, 0x5a) : QColor(0x2f, 0x4f, 0x74))
+                          : QColor(0x5a, 0x43, 0x78);
+        if (end && b.libPart.isEmpty()) fill = fill.darker(135);
         p.setPen(QPen(picked ? QColor(0x2b, 0xd0, 0xff) : QColor(0x9a, 0xa7, 0xb8), picked ? 2.4 : 1.2));
         p.setBrush(fill);
         if (end) p.drawRect(r);
-        else p.drawRoundedRect(r, r.height() / 2.0, r.height() / 2.0);
+        else {
+            const double rr = std::min(r.width(), r.height()) / 2.0;
+            p.drawRoundedRect(r, rr, rr);
+        }
         p.setPen(QColor(0xe8, 0xea, 0xee));
         QFont f = font();
         f.setPointSizeF(8.5);
         f.setBold(true);
         p.setFont(f);
-        const QRectF top(r.left() + 4, r.top() + 2, r.width() - 8, r.height() / 2.0);
-        p.drawText(top, Qt::AlignCenter, p.fontMetrics().elidedText(brickTitle(b), Qt::ElideRight,
-                                                                    int(top.width())));
+        const QRectF top(r.left() + 3, r.top() + 2, r.width() - 6, r.height() / 2.0);
+        p.drawText(top, Qt::AlignCenter,
+                   p.fontMetrics().elidedText(brickTitle(b), Qt::ElideRight, int(top.width())));
         f.setBold(false);
         f.setPointSizeF(7.5);
         p.setFont(f);
         QString sub;
         if (end) sub = b.libPart.isEmpty() ? QStringLiteral("no part yet") : b.libPart;
         else sub = QStringLiteral("%1 w · %2").arg(b.run.wires).arg(b.run.lengthMm, 0, 'f', 0);
-        const QRectF bottom(r.left() + 4, r.center().y(), r.width() - 8, r.height() / 2.0 - 2);
+        const QRectF bottom(r.left() + 3, r.center().y(), r.width() - 6, r.height() / 2.0 - 2);
         p.setPen(QColor(0xb8, 0xc0, 0xcc));
         p.drawText(bottom, Qt::AlignCenter,
                    p.fontMetrics().elidedText(sub, Qt::ElideRight, int(bottom.width())));
-        // The port a link is dragged from.
-        p.setPen(QPen(QColor(0x7e, 0xe0, 0xa0), 1.2));
-        p.setBrush(QColor(0x23, 0x2a, 0x33));
-        p.drawEllipse(portOf(b), 4.0, 4.0);
+        // THE TWO PORTS: filled where something is linked.
+        for (int port : {kPortLeft, kPortRight}) {
+            bool used = false;
+            for (const QString& o : d_->linksOf(b.id))
+                if (d_->portOn(b.id, o) == port) used = true;
+            p.setPen(QPen(QColor(0x7e, 0xe0, 0xa0), 1.2));
+            p.setBrush(used ? QColor(0x7e, 0xe0, 0xa0) : QColor(0x23, 0x2a, 0x33));
+            p.drawEllipse(portPoint(b, port), 4.0, 4.0);
+        }
+    }
+
+    // A ZONE being dragged out: blue left to right (wholly inside), green right to left (touching).
+    if (drag_ == Drag::Zone) {
+        const QRectF z = QRectF(pressAt_, cursor_).normalized();
+        const bool window = cursor_.x() >= pressAt_.x();
+        QColor c = window ? QColor(60, 130, 255) : QColor(60, 200, 110);
+        QPen pen(c, 1.2);
+        if (!window) pen.setStyle(Qt::DashLine);
+        p.setPen(pen);
+        c.setAlpha(45);
+        p.setBrush(c);
+        p.drawRect(z);
     }
 }
 
@@ -209,48 +307,67 @@ void BrickCanvas::mousePressEvent(QMouseEvent* e) {
         return;
     }
     if (e->button() != Qt::LeftButton) return;
-    // A PORT UNDER THE POINTER WINS over any brick's body: it is the small target, aimed at on purpose.
-    QString hit;
-    for (const Brick& b : d_->bricks) {
-        const QPointF port = portOf(b);
-        if (std::hypot(e->position().x() - port.x(), e->position().y() - port.y()) <= 7.0) hit = b.id;
-    }
-    if (hit.isEmpty()) hit = brickAt(e->position());
-    if (!hit.isEmpty()) {
-        const Brick* b = d_->brick(hit);
-        const QPointF port = portOf(*b);
-        const bool onPort = std::hypot(e->position().x() - port.x(), e->position().y() - port.y()) <= 7.0;
-        dragId_ = hit;
-        drag_ = (onPort || (e->modifiers() & Qt::ControlModifier)) ? Drag::Link : Drag::Move;
-        startCol_ = b->col;
-        startRow_ = b->row;
-        if (sel_ != hit) {
-            setSelected(hit);
-            emit selectionChanged(hit);
-        }
+    const bool shift = e->modifiers() & Qt::ShiftModifier;
+    // A PORT, aimed at on purpose, wins over any brick's body: a link starts there.
+    const auto port = portAt(e->position());
+    if (!port.first.isEmpty()) {
+        dragId_ = port.first;
+        dragPort_ = port.second;
+        drag_ = Drag::Link;
         update();
         return;
     }
-    // A link, then nothing.
+    const QString hit = brickAt(e->position());
+    if (!hit.isEmpty()) {
+        if (e->modifiers() & Qt::ControlModifier) {
+            // With Ctrl, a link from whichever port faces what it is let go on.
+            dragId_ = hit;
+            dragPort_ = -1;
+            drag_ = Drag::Link;
+            update();
+            return;
+        }
+        if (shift) {
+            if (sel_.contains(hit)) sel_.removeAll(hit);
+            else sel_ << hit;
+            selLink_ = {};
+            emit selectionChanged(selected());
+            update();
+            return;
+        }
+        if (!sel_.contains(hit)) {
+            sel_ = {hit};
+            selLink_ = {};
+        } else {
+            // The brick pressed becomes the one the panel shows, the rest still picked.
+            sel_.removeAll(hit);
+            sel_ << hit;
+        }
+        emit selectionChanged(hit);
+        drag_ = Drag::Move;
+        startAt_.clear();
+        for (const QString& id : sel_)
+            if (const Brick* b = d_->brick(id)) startAt_.insert(id, QPointF(b->col, b->row));
+        update();
+        return;
+    }
     for (const BrickLink& l : d_->links) {
         const Brick* a = d_->brick(l.a);
         const Brick* b = d_->brick(l.b);
         if (!a || !b) continue;
-        if (segDistance(e->position(), brickRect(*a).center(), brickRect(*b).center()) <= 5.0) {
+        if (segDistance(e->position(), portPoint(*a, d_->portOn(l.a, l.b)),
+                        portPoint(*b, d_->portOn(l.b, l.a))) <= 5.0) {
             sel_.clear();
             selLink_ = {l.a, l.b};
             emit selectionChanged(QString());
+            emit linkPicked(l.a, l.b);
             emit message(QStringLiteral("Link picked - Delete removes it"));
             update();
             return;
         }
     }
-    const bool had = !sel_.isEmpty() || !selLink_.first.isEmpty();
-    sel_.clear();
-    selLink_ = {};
-    drag_ = Drag::Pan;
-    panFrom_ = origin_;
-    if (had) emit selectionChanged(QString());
+    drag_ = Drag::Zone;
+    zoneAdd_ = shift;
     update();
 }
 
@@ -260,17 +377,21 @@ void BrickCanvas::mouseMoveEvent(QMouseEvent* e) {
         origin_ = panFrom_ + (e->position() - pressAt_);
         update();
     } else if (drag_ == Drag::Move) {
-        if (Brick* b = d_->brick(dragId_)) {
-            const double col = snapHalf(startCol_ + (e->position().x() - pressAt_.x()) / stepX_);
-            const double row = snapHalf(startRow_ + (e->position().y() - pressAt_.y()) / stepY_);
-            if (col != b->col || row != b->row) {
-                b->col = col;
-                b->row = row;
-                emit designChanged();
+        const double dc = snapHalf((e->position().x() - pressAt_.x()) / stepX_);
+        const double dr = snapHalf((e->position().y() - pressAt_.y()) / stepY_);
+        bool moved = false;
+        for (auto it = startAt_.begin(); it != startAt_.end(); ++it)
+            if (Brick* b = d_->brick(it.key())) {
+                const double col = it.value().x() + dc, row = it.value().y() + dr;
+                if (col != b->col || row != b->row) {
+                    b->col = col;
+                    b->row = row;
+                    moved = true;
+                }
             }
-        }
+        if (moved) emit designChanged();
         update();
-    } else if (drag_ == Drag::Link) {
+    } else if (drag_ == Drag::Link || drag_ == Drag::Zone) {
         update();
     }
 }
@@ -278,14 +399,40 @@ void BrickCanvas::mouseMoveEvent(QMouseEvent* e) {
 void BrickCanvas::mouseReleaseEvent(QMouseEvent* e) {
     if (drag_ == Drag::Link) {
         const QString target = brickAt(e->position());
-        if (!target.isEmpty() && target != dragId_) {
+        const auto tport = portAt(e->position());
+        const QString to = !tport.first.isEmpty() ? tport.first : target;
+        if (!to.isEmpty() && to != dragId_) {
+            // Let go ON a port, that port; anywhere else on the brick, the one facing the other.
+            const int toPort = tport.first == to ? tport.second : -1;
             QString why;
-            if (d_->connect(dragId_, target, &why)) {
+            if (d_->connect(dragId_, to, &why, dragPort_, toPort)) {
                 emit message(QStringLiteral("Linked"));
                 emit designChanged();
             } else {
                 emit message(why);
             }
+        }
+    } else if (drag_ == Drag::Zone) {
+        const QRectF z = QRectF(pressAt_, e->position()).normalized();
+        if (z.width() < 3.0 && z.height() < 3.0) {
+            // A click on nothing lets go of what was picked.
+            if (!zoneAdd_ && (!sel_.isEmpty() || !selLink_.first.isEmpty())) {
+                sel_.clear();
+                selLink_ = {};
+                emit selectionChanged(QString());
+            }
+        } else {
+            const bool window = e->position().x() >= pressAt_.x();
+            QStringList got = zoneAdd_ ? sel_ : QStringList();
+            for (const Brick& b : d_->bricks) {
+                const QRectF r = brickRect(b);
+                const bool in = window ? z.contains(r) : z.intersects(r);
+                if (in && !got.contains(b.id)) got << b.id;
+            }
+            sel_ = got;
+            selLink_ = {};
+            emit selectionChanged(selected());
+            emit message(QStringLiteral("%1 brick(s) picked").arg(sel_.size()));
         }
     }
     drag_ = Drag::None;
@@ -298,21 +445,19 @@ void BrickCanvas::keyPressEvent(QKeyEvent* e) {
         deleteSelected();
         return;
     }
-    Brick* b = d_->brick(sel_);
-    if (b) {
-        double dc = 0.0, dr = 0.0;
-        if (e->key() == Qt::Key_Left) dc = -1.0;
-        else if (e->key() == Qt::Key_Right) dc = 1.0;
-        else if (e->key() == Qt::Key_Up) dr = -1.0;
-        else if (e->key() == Qt::Key_Down) dr = 1.0;
-        if (dc != 0.0 || dr != 0.0) {
-            const double step = (e->modifiers() & Qt::ShiftModifier) ? 0.5 : 1.0;
-            b->col += dc * step;
-            b->row += dr * step;
-            emit designChanged();
-            update();
-            return;
-        }
+    if (e->key() == Qt::Key_R) {
+        rotateSelection();
+        return;
+    }
+    double dc = 0.0, dr = 0.0;
+    if (e->key() == Qt::Key_Left) dc = -1.0;
+    else if (e->key() == Qt::Key_Right) dc = 1.0;
+    else if (e->key() == Qt::Key_Up) dr = -1.0;
+    else if (e->key() == Qt::Key_Down) dr = 1.0;
+    if ((dc != 0.0 || dr != 0.0) && !sel_.isEmpty()) {
+        const double step = (e->modifiers() & Qt::ShiftModifier) ? 0.5 : 1.0;
+        moveSelection(dc * step, dr * step);
+        return;
     }
     QWidget::keyPressEvent(e);
 }
@@ -362,6 +507,9 @@ BrickPalette::BrickPalette(QWidget* parent) : QListWidget(parent) {
     header(QStringLiteral("End parts"));
     for (PartKind k : brickEndKinds())
         brick(partKindName(k), brickTypeKey(BrickType::End) + QLatin1Char('|') + partKindKey(k));
+    header(QStringLiteral("Joints"));
+    for (PartKind k : brickJointKinds())
+        brick(partKindName(k), brickTypeKey(BrickType::End) + QLatin1Char('|') + partKindKey(k));
     header(QStringLiteral("Specials"));
     for (BrickType t : {BrickType::Fanout, BrickType::Run, BrickType::TwistedPair,
                         BrickType::TwistedBundle})
@@ -384,30 +532,104 @@ QMimeData* BrickPalette::mimeData(const QList<QListWidgetItem*>& items) const {
 BrickWizardDialog::BrickWizardDialog(Editor* editor, QWidget* parent)
     : QDialog(parent), editor_(editor) {
     setWindowTitle(QStringLiteral("Mechanical harness wizard"));
-    resize(1320, 820);
+    resize(1500, 880);
     catalog_.openRemembered();
     buildUi();
     loadPanel();
     refreshPreview();
 }
 
+Document* BrickWizardDialog::document() const { return editor_ ? editor_->document() : nullptr; }
+
 void BrickWizardDialog::buildUi() {
     auto* root = new QVBoxLayout(this);
+
+    // THE BAR: turning and moving what is picked, arranging the whole, and where dimensions go from.
+    auto* bar = new QHBoxLayout;
+    auto button = [&](const char* name, const QString& text, const QString& tip, auto fn) {
+        auto* b = new QPushButton(text, this);
+        b->setObjectName(QLatin1String(name));
+        b->setToolTip(tip);
+        connect(b, &QPushButton::clicked, this, fn);
+        bar->addWidget(b);
+        return b;
+    };
+    button("brickRotate", QStringLiteral("⟳ Rotate"), QStringLiteral("Turn what is picked a quarter (R)"),
+           [this] { rotateSelected(); });
+    for (auto [name, text, dc, dr] : {std::tuple<const char*, const char*, double, double>{"brickLeft", "←", -1, 0},
+                                      {"brickRight", "→", 1, 0},
+                                      {"brickUp", "↑", 0, -1},
+                                      {"brickDown", "↓", 0, 1}}) {
+        auto* b = button(name, QString::fromUtf8(text), QStringLiteral("Move what is picked a grid step"),
+                         [this, dc = dc, dr = dr] { moveSelected(dc, dr); });
+        b->setFixedWidth(34);
+    }
+    button("brickDelete", QStringLiteral("Delete"), QStringLiteral("Delete what is picked"),
+           [this] { canvas_->deleteSelected(); });
+    button("brickArrange", QStringLiteral("Arrange"),
+           QStringLiteral("Lay the end parts out symmetrically: the most connected on the axis, the "
+                          "rest either side, every brick turned to face what it is linked to"),
+           [this] { arrange(); });
+    bar->addSpacing(18);
+    bar->addWidget(new QLabel(QStringLiteral("Dimensions from"), this));
+    dimFrom_ = new QComboBox(this);
+    dimFrom_->setObjectName(QStringLiteral("brickDimFrom"));
+    dimFrom_->addItems({QStringLiteral("Near point"), QStringLiteral("Far point")});
+    bar->addWidget(dimFrom_);
+    bar->addWidget(new QLabel(QStringLiteral("to"), this));
+    dimTo_ = new QComboBox(this);
+    dimTo_->setObjectName(QStringLiteral("brickDimTo"));
+    dimTo_->addItems({QStringLiteral("Near point"), QStringLiteral("Far point")});
+    bar->addWidget(dimTo_);
+    for (QComboBox* c : {dimFrom_, dimTo_})
+        connect(c, &QComboBox::currentIndexChanged, this, [this](int) {
+            design_.dimFromFar = dimFrom_->currentIndex() == 1;
+            design_.dimToFar = dimTo_->currentIndex() == 1;
+            refreshPreview();
+        });
+    bar->addStretch(1);
+    root->addLayout(bar);
+
     auto* split = new QSplitter(Qt::Horizontal, this);
     root->addWidget(split, 1);
 
-    // THE BRICKS TO CHOOSE FROM.
-    auto* left = new QWidget(split);
-    auto* ll = new QVBoxLayout(left);
-    ll->setContentsMargins(0, 0, 0, 0);
-    ll->addWidget(new QLabel(QStringLiteral("Bricks — drag onto the pane"), left));
-    palette_ = new BrickPalette(left);
+    // THE BRICKS, AND THE PARTS LIST.
+    auto* leftTabs = new QTabWidget(split);
+    palette_ = new BrickPalette(leftTabs);
     palette_->setObjectName(QStringLiteral("brickPalette"));
-    ll->addWidget(palette_, 1);
+    leftTabs->addTab(palette_, QStringLiteral("Bricks"));
     connect(palette_, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem* it) {
         const QString what = it->data(Qt::UserRole).toString();
         if (!what.isEmpty()) addFromPalette(what);
     });
+    auto* partsPage = new QWidget(leftTabs);
+    auto* pl = new QVBoxLayout(partsPage);
+    partsFilter_ = new QLineEdit(partsPage);
+    partsFilter_->setPlaceholderText(QStringLiteral("Filter by P/N, description, kind…"));
+    pl->addWidget(partsFilter_);
+    parts_ = new QTreeWidget(partsPage);
+    parts_->setObjectName(QStringLiteral("brickParts"));
+    parts_->setHeaderLabels({QStringLiteral("P/N"), QStringLiteral("Description"), QStringLiteral("Kind"),
+                             QStringLiteral("Manufacturer")});
+    parts_->setRootIsDecorated(false);
+    parts_->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    parts_->header()->setStretchLastSection(false);
+    parts_->header()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    pl->addWidget(parts_, 1);
+    auto* addParts = new QPushButton(QStringLiteral("Add to BOM"), partsPage);
+    addParts->setObjectName(QStringLiteral("brickPartsToBom"));
+    pl->addWidget(addParts);
+    leftTabs->addTab(partsPage, QStringLiteral("Parts list"));
+    connect(partsFilter_, &QLineEdit::textChanged, this, [this](const QString&) { fillPartsList(); });
+    connect(addParts, &QPushButton::clicked, this, [this] {
+        int added = 0;
+        for (QTreeWidgetItem* it : parts_->selectedItems())
+            if (addPartToBom(it->data(0, Qt::UserRole).toString())) ++added;
+        status_->setText(QStringLiteral("%1 part(s) added to the BOM").arg(added));
+        loadPanel();
+        refreshPreview();
+    });
+    fillPartsList();
 
     // THE LOW-DETAIL PANE ABOVE THE PREVIEW.
     auto* middle = new QSplitter(Qt::Vertical, split);
@@ -421,127 +643,36 @@ void BrickWizardDialog::buildUi() {
         loadPanel();
         refreshPreview();
     });
+    connect(canvas_, &BrickCanvas::linkPicked, this, [this](const QString&, const QString&) { loadPanel(); });
     connect(canvas_, &BrickCanvas::designChanged, this, &BrickWizardDialog::designChanged);
     connect(canvas_, &BrickCanvas::message, this, [this](const QString& t) { status_->setText(t); });
 
     // WHAT THE PICKED BRICK IS.
-    auto* right = new QWidget(split);
-    auto* rl = new QVBoxLayout(right);
-    rl->setContentsMargins(0, 0, 0, 0);
-    panel_ = new QStackedWidget(right);
-    rl->addWidget(panel_, 1);
+    auto* rightScroll = new QScrollArea(split);
+    rightScroll->setWidgetResizable(true);
+    panel_ = new QStackedWidget(rightScroll);
+    panel_->setObjectName(QStringLiteral("brickPanel"));
+    rightScroll->setWidget(panel_);
+    noneText_ = new QLabel(QStringLiteral("Pick a brick to set what it is."), panel_);
+    noneText_->setWordWrap(true);
+    noneText_->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+    panel_->addWidget(noneText_);
+    panel_->addWidget(buildEndPage());
+    panel_->addWidget(buildRunPage());
+    panel_->addWidget(buildLinkPage());
 
-    auto* none = new QLabel(QStringLiteral("Pick a brick to set what it is."), panel_);
-    none->setWordWrap(true);
-    none->setAlignment(Qt::AlignTop | Qt::AlignLeft);
-    panel_->addWidget(none);
-
-    auto* endPage = new QWidget(panel_);
-    auto* ef = new QFormLayout(endPage);
-    endKind_ = new QLabel(endPage);
-    ef->addRow(QStringLiteral("End part"), endKind_);
-    part_ = new QComboBox(endPage);
-    part_->setObjectName(QStringLiteral("brickPart"));
-    ef->addRow(QStringLiteral("Library part"), part_);
-    name_ = new QLineEdit(endPage);
-    name_->setObjectName(QStringLiteral("brickName"));
-    name_->setPlaceholderText(QStringLiteral("X1"));
-    ef->addRow(QStringLiteral("Designator"), name_);
-    balloon_ = new QCheckBox(QStringLiteral("Balloon"), endPage);
-    balloon_->setObjectName(QStringLiteral("brickBalloon"));
-    ef->addRow(QString(), balloon_);
-    panel_->addWidget(endPage);
-    connect(part_, &QComboBox::currentIndexChanged, this, [this](int) { writeEnd(); });
-    connect(name_, &QLineEdit::textEdited, this, [this](const QString&) { writeEnd(); });
-    connect(balloon_, &QCheckBox::toggled, this, [this](bool) { writeEnd(); });
-
-    auto* runPage = new QWidget(panel_);
-    auto* rf = new QFormLayout(runPage);
-    runKind_ = new QLabel(runPage);
-    rf->addRow(QStringLiteral("Special"), runKind_);
-    auto spin = [runPage](const char* name, double lo, double hi, double step, const QString& suffix,
-                          const QString& special = QString()) {
-        auto* s = new QDoubleSpinBox(runPage);
-        s->setObjectName(QLatin1String(name));
-        s->setRange(lo, hi);
-        s->setSingleStep(step);
-        s->setDecimals(1);
-        s->setSuffix(suffix);
-        if (!special.isEmpty()) s->setSpecialValueText(special);
-        return s;
-    };
-    wires_ = new QSpinBox(runPage);
-    wires_->setObjectName(QStringLiteral("brickWires"));
-    wires_->setRange(2, kTwistedMaxWires);
-    rf->addRow(QStringLiteral("Wires"), wires_);
-    length_ = spin("brickLength", 10.0, 100000.0, 10.0, QStringLiteral(" mm"));
-    rf->addRow(QStringLiteral("Length"), length_);
-    wireWidth_ = spin("brickWireWidth", 0.2, 20.0, 0.1, QStringLiteral(" mm"));
-    rf->addRow(QStringLiteral("Wire width"), wireWidth_);
-    fanStart_ = spin("brickFanStart", -1.0, 1000.0, 1.0, QStringLiteral(" mm"), QStringLiteral("Auto"));
-    rf->addRow(QStringLiteral("Fan length, start"), fanStart_);
-    fanFinish_ = spin("brickFanFinish", -1.0, 1000.0, 1.0, QStringLiteral(" mm"), QStringLiteral("Auto"));
-    rf->addRow(QStringLiteral("Fan length, finish"), fanFinish_);
-    knee_ = spin("brickKnee", -1.0, 1000.0, 1.0, QStringLiteral(" mm"), QStringLiteral("Auto"));
-    rf->addRow(QStringLiteral("Bend radius, body"), knee_);
-    fanKnee_ = spin("brickFanKnee", -1.0, 1000.0, 0.5, QStringLiteral(" mm"), QStringLiteral("Auto"));
-    rf->addRow(QStringLiteral("Bend radius, fans"), fanKnee_);
-    fanScale_ = spin("brickFanScale", 5.0, 100.0, 5.0, QStringLiteral(" %"));
-    rf->addRow(QStringLiteral("Fan across the face"), fanScale_);
-    body_ = new QComboBox(runPage);
-    body_->setObjectName(QStringLiteral("brickBody"));
-    body_->addItems({QStringLiteral("Wires"), QStringLiteral("Cable"), QStringLiteral("Heatshrink")});
-    rf->addRow(QStringLiteral("Over the run"), body_);
-    bodyScale_ = spin("brickBodyScale", 5.0, 100.0, 5.0, QStringLiteral(" %"));
-    rf->addRow(QStringLiteral("Body across the face"), bodyScale_);
-    bodyWidth_ = spin("brickBodyWidth", 0.0, 1000.0, 0.5, QStringLiteral(" mm"), QStringLiteral("From the face"));
-    rf->addRow(QStringLiteral("Body width"), bodyWidth_);
-    panel_->addWidget(runPage);
-    for (QDoubleSpinBox* s : {length_, wireWidth_, fanStart_, fanFinish_, knee_, fanKnee_, fanScale_,
-                              bodyScale_, bodyWidth_})
-        connect(s, &QDoubleSpinBox::valueChanged, this, [this](double) { writeRun(); });
-    connect(wires_, &QSpinBox::valueChanged, this, [this](int) { writeRun(); });
-    connect(body_, &QComboBox::currentIndexChanged, this, [this](int) { writeRun(); });
-
-    // MOVING THE PICKED BRICK, and the harness as a whole.
-    auto* moves = new QHBoxLayout;
-    auto moveBtn = [&](const char* name, const QString& text, double dc, double dr) {
-        auto* b = new QPushButton(text, right);
-        b->setObjectName(QLatin1String(name));
-        b->setFixedWidth(34);
-        connect(b, &QPushButton::clicked, this, [this, dc, dr] { moveSelected(dc, dr); });
-        moves->addWidget(b);
-    };
-    moveBtn("brickLeft", QStringLiteral("←"), -1.0, 0.0);
-    moveBtn("brickRight", QStringLiteral("→"), 1.0, 0.0);
-    moveBtn("brickUp", QStringLiteral("↑"), 0.0, -1.0);
-    moveBtn("brickDown", QStringLiteral("↓"), 0.0, 1.0);
-    moves->addStretch(1);
-    auto* del = new QPushButton(QStringLiteral("Delete"), right);
-    del->setObjectName(QStringLiteral("brickDelete"));
-    connect(del, &QPushButton::clicked, this, [this] { canvas_->deleteSelected(); });
-    moves->addWidget(del);
-    rl->addLayout(moves);
-
-    split->addWidget(left);
+    split->addWidget(leftTabs);
     split->addWidget(middle);
-    split->addWidget(right);
+    split->addWidget(rightScroll);
     split->setStretchFactor(0, 0);
     split->setStretchFactor(1, 1);
     split->setStretchFactor(2, 0);
-    split->setSizes({200, 820, 300});
+    split->setSizes({400, 700, 420});
 
-    // THE BOTTOM ROW.
     auto* bottom = new QHBoxLayout;
     status_ = new QLabel(this);
     status_->setObjectName(QStringLiteral("brickStatus"));
     bottom->addWidget(status_, 1);
-    auto* arrangeBtn = new QPushButton(QStringLiteral("Arrange"), this);
-    arrangeBtn->setObjectName(QStringLiteral("brickArrange"));
-    arrangeBtn->setToolTip(QStringLiteral(
-        "Lay the end parts out symmetrically: the most connected on the axis, the rest either side"));
-    connect(arrangeBtn, &QPushButton::clicked, this, [this] { arrange(); });
-    bottom->addWidget(arrangeBtn);
     auto* placeBtn = new QPushButton(QStringLiteral("Place the drawing"), this);
     placeBtn->setObjectName(QStringLiteral("brickPlace"));
     connect(placeBtn, &QPushButton::clicked, this, [this] { place(); });
@@ -552,10 +683,277 @@ void BrickWizardDialog::buildUi() {
     root->addLayout(bottom);
 }
 
+QWidget* BrickWizardDialog::buildEndPage() {
+    auto* page = new QWidget(panel_);
+    auto* f = new QFormLayout(page);
+    endKind_ = new QLabel(page);
+    f->addRow(QStringLiteral("Part"), endKind_);
+    part_ = new QComboBox(page);
+    part_->setObjectName(QStringLiteral("brickPart"));
+    // Wide enough to read the whole P/N and description, in the field and in the list it opens.
+    part_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    part_->setMinimumContentsLength(34);
+    part_->view()->setMinimumWidth(640);
+    f->addRow(QStringLiteral("Library part"), part_);
+    name_ = new QLineEdit(page);
+    name_->setObjectName(QStringLiteral("brickName"));
+    name_->setPlaceholderText(QStringLiteral("X1"));
+    f->addRow(QStringLiteral("Designator"), name_);
+    balloon_ = new QCheckBox(QStringLiteral("Balloon"), page);
+    balloon_->setObjectName(QStringLiteral("brickBalloon"));
+    f->addRow(QString(), balloon_);
+    bomState_ = new QLabel(page);
+    bomState_->setObjectName(QStringLiteral("brickBomState"));
+    bomState_->setWordWrap(true);
+    bomAdd_ = new QPushButton(QStringLiteral("Add to BOM"), page);
+    bomAdd_->setObjectName(QStringLiteral("brickBomAdd"));
+    auto* bomRow = new QHBoxLayout;
+    bomRow->addWidget(bomState_, 1);
+    bomRow->addWidget(bomAdd_);
+    f->addRow(QStringLiteral("BOM"), bomRow);
+    params_ = new QTableWidget(0, 2, page);
+    params_->setObjectName(QStringLiteral("brickParams"));
+    params_->setHorizontalHeaderLabels({QStringLiteral("Parameter"), QStringLiteral("Value")});
+    params_->horizontalHeader()->setStretchLastSection(true);
+    params_->verticalHeader()->setVisible(false);
+    params_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    params_->setMinimumHeight(220);
+    f->addRow(params_);
+    connect(part_, &QComboBox::currentIndexChanged, this, [this](int) {
+        writeEnd();
+        loadPanel();
+    });
+    connect(name_, &QLineEdit::textEdited, this, [this](const QString&) { writeEnd(); });
+    connect(balloon_, &QCheckBox::toggled, this, [this](bool) { writeEnd(); });
+    connect(bomAdd_, &QPushButton::clicked, this, [this] {
+        const Brick* b = design_.brick(canvas_->selected());
+        if (!b || b->libPart.isEmpty()) return;
+        if (addPartToBom(b->libPart)) status_->setText(QStringLiteral("Added to the BOM"));
+        loadPanel();
+        refreshPreview();
+    });
+    return page;
+}
+
+QWidget* BrickWizardDialog::buildRunPage() {
+    auto* page = new QWidget(panel_);
+    auto* v = new QVBoxLayout(page);
+    auto* form = new QFormLayout;
+    v->addLayout(form);
+    runKind_ = new QLabel(page);
+    form->addRow(QStringLiteral("Special"), runKind_);
+    auto spin = [page](const char* name, double lo, double hi, double step, const QString& suffix,
+                       const QString& special = QString()) {
+        auto* s = new QDoubleSpinBox(page);
+        s->setObjectName(QLatin1String(name));
+        s->setRange(lo, hi);
+        s->setSingleStep(step);
+        s->setDecimals(1);
+        s->setSuffix(suffix);
+        if (!special.isEmpty()) s->setSpecialValueText(special);
+        return s;
+    };
+    wires_ = new QSpinBox(page);
+    wires_->setObjectName(QStringLiteral("brickWires"));
+    wires_->setRange(1, 64);
+    form->addRow(QStringLiteral("Wires"), wires_);
+    length_ = spin("brickLength", 10.0, 100000.0, 10.0, QStringLiteral(" mm"));
+    form->addRow(QStringLiteral("Length"), length_);
+    wireWidth_ = spin("brickWireWidth", 0.2, 20.0, 0.1, QStringLiteral(" mm"));
+    form->addRow(QStringLiteral("Wire width"), wireWidth_);
+    fanStart_ = spin("brickFanStart", -1.0, 1000.0, 1.0, QStringLiteral(" mm"), QStringLiteral("Auto"));
+    form->addRow(QStringLiteral("Fan length, start"), fanStart_);
+    fanFinish_ = spin("brickFanFinish", -1.0, 1000.0, 1.0, QStringLiteral(" mm"), QStringLiteral("Auto"));
+    form->addRow(QStringLiteral("Fan length, finish"), fanFinish_);
+    knee_ = spin("brickKnee", -1.0, 1000.0, 1.0, QStringLiteral(" mm"), QStringLiteral("Auto"));
+    form->addRow(QStringLiteral("Bend radius, body"), knee_);
+    fanKnee_ = spin("brickFanKnee", -1.0, 1000.0, 0.5, QStringLiteral(" mm"), QStringLiteral("Auto"));
+    form->addRow(QStringLiteral("Bend radius, fans"), fanKnee_);
+    fanScale_ = spin("brickFanScale", 5.0, 100.0, 5.0, QStringLiteral(" %"));
+    form->addRow(QStringLiteral("Fans across the face"), fanScale_);
+    bodyScale_ = spin("brickBodyScale", 5.0, 100.0, 5.0, QStringLiteral(" %"));
+    form->addRow(QStringLiteral("Body across the face"), bodyScale_);
+    bodyWidth_ = spin("brickBodyWidth", 0.0, 1000.0, 0.5, QStringLiteral(" mm"), QStringLiteral("From the face"));
+    form->addRow(QStringLiteral("Body width"), bodyWidth_);
+    transitions_ = new QComboBox(page);
+    transitions_->setObjectName(QStringLiteral("brickTransitions"));
+    transitions_->addItems({QStringLiteral("None"), QStringLiteral("Start"), QStringLiteral("Finish"),
+                            QStringLiteral("Both")});
+    form->addRow(QStringLiteral("Transition heatshrink"), transitions_);
+    for (QDoubleSpinBox* s : {length_, wireWidth_, fanStart_, fanFinish_, knee_, fanKnee_, fanScale_,
+                              bodyScale_, bodyWidth_})
+        connect(s, &QDoubleSpinBox::valueChanged, this, [this](double) { writeRun(); });
+    connect(wires_, &QSpinBox::valueChanged, this, [this](int) {
+        writeRun();
+        loadLabels();   // the wires a label can go on
+    });
+    connect(transitions_, &QComboBox::currentIndexChanged, this, [this](int) { writeRun(); });
+
+    // THE STACK, from the middle out; the top of the list is the outermost, and only it is seen.
+    auto* stackBox = new QGroupBox(QStringLiteral("Stack — from the outside in"), page);
+    auto* sv = new QVBoxLayout(stackBox);
+    stack_ = new QListWidget(stackBox);
+    stack_->setObjectName(QStringLiteral("brickStack"));
+    stack_->setMaximumHeight(110);
+    sv->addWidget(stack_);
+    auto* sb = new QHBoxLayout;
+    auto* addLayer = new QComboBox(stackBox);
+    addLayer->setObjectName(QStringLiteral("brickStackAdd"));
+    addLayer->addItem(QStringLiteral("Add…"), QString());
+    addLayer->addItem(QStringLiteral("Cable"), QStringLiteral("cable"));
+    addLayer->addItem(QStringLiteral("Braided shield"), QStringLiteral("braid"));
+    addLayer->addItem(QStringLiteral("Heatshrink"), QStringLiteral("heatshrink"));
+    sb->addWidget(addLayer);
+    auto layerBtn = [&](const char* name, const QString& text) {
+        auto* b = new QPushButton(text, stackBox);
+        b->setObjectName(QLatin1String(name));
+        sb->addWidget(b);
+        return b;
+    };
+    auto* outBtn = layerBtn("brickStackOut", QStringLiteral("Outward"));
+    auto* inBtn = layerBtn("brickStackIn", QStringLiteral("Inward"));
+    auto* rmBtn = layerBtn("brickStackRemove", QStringLiteral("Remove"));
+    sv->addLayout(sb);
+    v->addWidget(stackBox);
+    auto editStack = [this](auto fn) {
+        Brick* b = design_.brick(canvas_->selected());
+        if (!b || !brickIsSpecial(b->type)) return;
+        fn(b->run.stack);
+        if (b->run.stack.isEmpty() || b->run.stack.front() != QLatin1String("wires")) {
+            b->run.stack.removeAll(QStringLiteral("wires"));
+            b->run.stack.prepend(QStringLiteral("wires"));
+        }
+        loadPanel();
+        refreshPreview();
+    };
+    connect(addLayer, &QComboBox::activated, this, [this, addLayer, editStack](int i) {
+        const QString key = addLayer->itemData(i).toString();
+        addLayer->setCurrentIndex(0);
+        if (key.isEmpty()) return;
+        editStack([&](QStringList& s) {
+            if (!s.contains(key)) s << key;
+        });
+    });
+    // The list shows the outermost first: list row r is stack index size-1-r.
+    connect(outBtn, &QPushButton::clicked, this, [this, editStack] {
+        const int r = stack_->currentRow();
+        editStack([&](QStringList& s) {
+            const int i = s.size() - 1 - r;
+            if (r > 0 && i >= 1 && i + 1 < s.size()) s.swapItemsAt(i, i + 1);
+        });
+        stack_->setCurrentRow(std::max(0, r - 1));
+    });
+    connect(inBtn, &QPushButton::clicked, this, [this, editStack] {
+        const int r = stack_->currentRow();
+        editStack([&](QStringList& s) {
+            const int i = s.size() - 1 - r;
+            if (i >= 2) s.swapItemsAt(i, i - 1);
+        });
+        stack_->setCurrentRow(r + 1);
+    });
+    connect(rmBtn, &QPushButton::clicked, this, [this, editStack] {
+        const int r = stack_->currentRow();
+        editStack([&](QStringList& s) {
+            const int i = s.size() - 1 - r;
+            if (i >= 1 && i < s.size()) s.removeAt(i);
+        });
+    });
+
+    // DIMENSIONS.
+    auto* dims = new QGroupBox(QStringLiteral("Dimensions"), page);
+    auto* dv = new QHBoxLayout(dims);
+    dimTotal_ = new QCheckBox(QStringLiteral("Whole length"), dims);
+    dimTotal_->setObjectName(QStringLiteral("brickDimTotal"));
+    dimFans_ = new QCheckBox(QStringLiteral("Fans only"), dims);
+    dimFans_->setObjectName(QStringLiteral("brickDimFans"));
+    dimBetween_ = new QCheckBox(QStringLiteral("Between fans"), dims);
+    dimBetween_->setObjectName(QStringLiteral("brickDimBetween"));
+    for (QCheckBox* c : {dimTotal_, dimFans_, dimBetween_}) {
+        dv->addWidget(c);
+        connect(c, &QCheckBox::toggled, this, [this](bool) { writeRun(); });
+    }
+    v->addWidget(dims);
+
+    // LABELS.
+    auto* labBox = new QGroupBox(QStringLiteral("Labels"), page);
+    auto* lv = new QVBoxLayout(labBox);
+    labels_ = new QTableWidget(0, 4, labBox);
+    labels_->setObjectName(QStringLiteral("brickLabels"));
+    labels_->setHorizontalHeaderLabels({QStringLiteral("On"), QStringLiteral("From"),
+                                        QStringLiteral("Distance"), QStringLiteral("Text")});
+    labels_->horizontalHeader()->setStretchLastSection(true);
+    labels_->verticalHeader()->setVisible(false);
+    labels_->setMinimumHeight(140);
+    lv->addWidget(labels_);
+    auto* lb = new QHBoxLayout;
+    auto* addLab = new QPushButton(QStringLiteral("Add label"), labBox);
+    addLab->setObjectName(QStringLiteral("brickLabelAdd"));
+    auto* rmLab = new QPushButton(QStringLiteral("Remove"), labBox);
+    rmLab->setObjectName(QStringLiteral("brickLabelRemove"));
+    lb->addWidget(addLab);
+    lb->addWidget(rmLab);
+    lb->addStretch(1);
+    lv->addLayout(lb);
+    v->addWidget(labBox);
+    v->addStretch(1);
+    connect(addLab, &QPushButton::clicked, this, [this] {
+        Brick* b = design_.brick(canvas_->selected());
+        if (!b || !brickIsSpecial(b->type)) return;
+        b->run.labels.push_back(BrickLabel{});
+        loadLabels();
+        refreshPreview();
+    });
+    connect(rmLab, &QPushButton::clicked, this, [this] {
+        Brick* b = design_.brick(canvas_->selected());
+        const int r = labels_->currentRow();
+        if (!b || r < 0 || r >= static_cast<int>(b->run.labels.size())) return;
+        b->run.labels.erase(b->run.labels.begin() + r);
+        loadLabels();
+        refreshPreview();
+    });
+    return page;
+}
+
+QWidget* BrickWizardDialog::buildLinkPage() {
+    auto* page = new QWidget(panel_);
+    auto* f = new QFormLayout(page);
+    linkText_ = new QLabel(page);
+    linkText_->setWordWrap(true);
+    f->addRow(linkText_);
+    linkWires_ = new QSpinBox(page);
+    linkWires_->setObjectName(QStringLiteral("brickLinkWires"));
+    linkWires_->setRange(0, 64);
+    linkWires_->setSpecialValueText(QStringLiteral("An even share"));
+    f->addRow(QStringLiteral("Wires to this part"), linkWires_);
+    connect(linkWires_, &QSpinBox::valueChanged, this, [this](int n) {
+        const auto l = canvas_->selectedLink();
+        if (BrickLink* link = design_.link(l.first, l.second)) {
+            link->wires = n;
+            canvas_->update();
+            refreshPreview();
+        }
+    });
+    return page;
+}
+
+void BrickWizardDialog::fillPartsList() {
+    parts_->clear();
+    const QString filter = partsFilter_->text().trimmed();
+    const PartsLibrary all = catalog_.merged();
+    for (PartKind k : allPartKinds())
+        for (const LibraryPart* p : all.ofKind(k)) {
+            const QStringList cols{p->mfrPn, p->description, partKindName(p->kind), p->mfrName};
+            if (!filter.isEmpty() && !cols.join(QLatin1Char(' ')).contains(filter, Qt::CaseInsensitive))
+                continue;
+            auto* it = new QTreeWidgetItem(parts_, cols);
+            it->setData(0, Qt::UserRole, p->id);
+            it->setToolTip(1, p->description);
+        }
+}
+
 QString BrickWizardDialog::addFromPalette(const QString& what) {
     const QStringList parts = what.split(QLatin1Char('|'));
     if (parts.size() != 2) return QString();
-    // The next free place: to the right of everything there is.
     double col = 0.0;
     for (const Brick& b : design_.bricks) col = std::max(col, b.col + 1.0);
     const QString id = design_.addBrick(brickTypeFromKey(parts[0]), partKindFromKey(parts[1]),
@@ -572,15 +970,19 @@ void BrickWizardDialog::selectBrick(const QString& id) {
 }
 
 void BrickWizardDialog::moveSelected(double dCol, double dRow) {
-    Brick* b = design_.brick(canvas_->selected());
-    if (!b) {
+    if (canvas_->selection().isEmpty()) {
         status_->setText(QStringLiteral("Pick a brick to move"));
         return;
     }
-    b->col += dCol;
-    b->row += dRow;
-    canvas_->update();
-    designChanged();
+    canvas_->moveSelection(dCol, dRow);
+}
+
+void BrickWizardDialog::rotateSelected() {
+    if (canvas_->selection().isEmpty()) {
+        status_->setText(QStringLiteral("Pick a brick to turn"));
+        return;
+    }
+    canvas_->rotateSelection();
 }
 
 void BrickWizardDialog::arrange() {
@@ -591,7 +993,9 @@ void BrickWizardDialog::arrange() {
 }
 
 std::vector<Entity> BrickWizardDialog::drawing() const {
-    return buildBrickHarness(design_, &catalog_).entities;
+    return buildBrickHarness(design_, &catalog_,
+                             [this](const QString& id) { return bomItemOf(id); })
+        .entities;
 }
 
 void BrickWizardDialog::designChanged() {
@@ -601,28 +1005,86 @@ void BrickWizardDialog::designChanged() {
 }
 
 void BrickWizardDialog::loadPanel() {
+    const auto link = canvas_->selectedLink();
+    if (!link.first.isEmpty()) {
+        const Brick* a = design_.brick(link.first);
+        const Brick* b = design_.brick(link.second);
+        const Brick* sp = a && brickIsSpecial(a->type) ? a : b;
+        const Brick* en = sp == a ? b : a;
+        if (sp && en && sp->type == BrickType::Fanout && design_.portOn(sp->id, en->id) == kPortRight) {
+            panel_->setCurrentIndex(3);
+            const QSignalBlocker block(linkWires_);
+            linkText_->setText(QStringLiteral("The fanout %1 to %2.")
+                                   .arg(brickTitle(*sp), brickTitle(*en)));
+            linkWires_->setMaximum(sp->run.wires);
+            linkWires_->setValue(design_.link(link.first, link.second)->wires);
+            return;
+        }
+        noneText_->setText(QStringLiteral("A link. Delete removes it."));
+        panel_->setCurrentIndex(0);
+        return;
+    }
+    const QStringList sel = canvas_->selection();
+    if (sel.size() > 1) {
+        noneText_->setText(QStringLiteral("%1 bricks picked. Move them with the arrows, drag them, or "
+                                          "turn them with Rotate. %2 is shown in the preview.")
+                               .arg(sel.size())
+                               .arg(design_.brick(sel.back()) ? brickTitle(*design_.brick(sel.back()))
+                                                              : QString()));
+        panel_->setCurrentIndex(0);
+        return;
+    }
     const Brick* b = design_.brick(canvas_->selected());
     if (!b) {
+        noneText_->setText(QStringLiteral("Pick a brick to set what it is."));
         panel_->setCurrentIndex(0);
         return;
     }
     if (b->type == BrickType::End) {
         panel_->setCurrentIndex(1);
         const QSignalBlocker b1(part_), b2(name_), b3(balloon_);
-        endKind_->setText(partKindName(b->kind));
+        endKind_->setText(partKindName(b->kind) +
+                          (brickKindIsJoint(b->kind) ? QStringLiteral(" (a joint: a face each side)")
+                                                     : QString()));
         part_->clear();
         part_->addItem(QStringLiteral("(none yet)"), QString());
-        for (const LibraryPart* p : catalog_.ofKind(b->kind))
+        for (const LibraryPart* p : catalog_.ofKind(b->kind)) {
             part_->addItem(p->title(), p->id);
+            part_->setItemData(part_->count() - 1, p->title(), Qt::ToolTipRole);
+        }
         const int at = part_->findData(b->libPart);
         part_->setCurrentIndex(at >= 0 ? at : 0);
         if (name_->text() != b->name) name_->setText(b->name);
         balloon_->setChecked(b->balloon);
+        // THE PART'S OWN FIGURES, straight out of the library.
+        params_->setRowCount(0);
+        const LibraryPart* p = b->libPart.isEmpty() ? nullptr : catalog_.byId(b->libPart);
+        auto row = [this](const QString& k, const QString& v) {
+            if (v.isEmpty()) return;
+            const int r = params_->rowCount();
+            params_->insertRow(r);
+            params_->setItem(r, 0, new QTableWidgetItem(k));
+            params_->setItem(r, 1, new QTableWidgetItem(v));
+        };
+        if (p) {
+            row(QStringLiteral("Mfr P/N"), p->mfrPn);
+            row(QStringLiteral("Manufacturer"), p->mfrName);
+            row(QStringLiteral("Internal P/N"), p->internalPn);
+            row(QStringLiteral("Description"), p->description);
+            for (auto it = p->params.begin(); it != p->params.end(); ++it) row(it.key(), it.value());
+        }
+        // THE BILL: marked when it is already on it.
+        const int item = p ? bomItemOf(p->id) : 0;
+        bomAdd_->setEnabled(p != nullptr && document() != nullptr);
+        bomState_->setText(!p      ? QStringLiteral("Choose a library part first")
+                           : item  ? QStringLiteral("✔ In the BOM as item %1").arg(item)
+                                   : QStringLiteral("Not in the BOM"));
         return;
     }
     panel_->setCurrentIndex(2);
     const QSignalBlocker s1(wires_), s2(length_), s3(wireWidth_), s4(fanStart_), s5(fanFinish_),
-        s6(knee_), s7(fanKnee_), s8(fanScale_), s9(body_), s10(bodyScale_), s11(bodyWidth_);
+        s6(knee_), s7(fanKnee_), s8(fanScale_), s9(transitions_), s10(bodyScale_), s11(bodyWidth_),
+        s12(dimTotal_), s13(dimFans_), s14(dimBetween_);
     const BrickRunSpec& r = b->run;
     runKind_->setText(brickTypeName(b->type));
     wires_->setValue(r.wires);
@@ -634,10 +1096,71 @@ void BrickWizardDialog::loadPanel() {
     knee_->setValue(r.kneeRadiusMm);
     fanKnee_->setValue(r.fanKneeMm);
     fanScale_->setValue(r.fanScalePct);
-    body_->setCurrentIndex(r.body == RunBody::Cable ? 1 : r.body == RunBody::Heatshrink ? 2 : 0);
-    body_->setEnabled(b->type == BrickType::Run);
     bodyScale_->setValue(r.bodyScalePct);
     bodyWidth_->setValue(r.bodyWidthMm);
+    transitions_->setCurrentIndex(r.transitions == RunEnds::Start    ? 1
+                                  : r.transitions == RunEnds::Finish ? 2
+                                  : r.transitions == RunEnds::Both   ? 3
+                                                                     : 0);
+    dimTotal_->setChecked(r.dimTotal);
+    dimFans_->setChecked(r.dimFans);
+    dimBetween_->setChecked(r.dimBetween);
+    const int keep = stack_->currentRow();
+    stack_->clear();
+    for (int i = r.stack.size() - 1; i >= 0; --i) {
+        auto* it = new QListWidgetItem(layerName(r.stack[i]), stack_);
+        if (i == r.stack.size() - 1) {
+            QFont f = it->font();
+            f.setBold(true);
+            it->setFont(f);
+            it->setText(it->text() + QStringLiteral("   (seen)"));
+        }
+    }
+    stack_->setCurrentRow(std::clamp(keep, 0, stack_->count() - 1));
+    loadLabels();
+}
+
+void BrickWizardDialog::loadLabels() {
+    const Brick* b = design_.brick(canvas_->selected());
+    const QSignalBlocker block(labels_);
+    labels_->setRowCount(0);
+    if (!b || !brickIsSpecial(b->type)) return;
+    const QString id = b->id;
+    for (int i = 0; i < static_cast<int>(b->run.labels.size()); ++i) {
+        const BrickLabel& l = b->run.labels[i];
+        labels_->insertRow(i);
+        auto* on = new QComboBox(labels_);
+        on->addItem(QStringLiteral("Whole harness"), -1);
+        for (int w = 0; w < b->run.wires; ++w) on->addItem(QStringLiteral("Wire %1").arg(w + 1), w);
+        on->setCurrentIndex(std::max(0, on->findData(l.wire)));
+        auto* from = new QComboBox(labels_);
+        from->addItems({QStringLiteral("Start"), QStringLiteral("Finish")});
+        from->setCurrentIndex(l.fromFinish ? 1 : 0);
+        auto* dist = new QDoubleSpinBox(labels_);
+        dist->setRange(0.0, 100000.0);
+        dist->setDecimals(1);
+        dist->setSuffix(QStringLiteral(" mm"));
+        dist->setValue(l.distanceMm);
+        auto* text = new QLineEdit(l.text, labels_);
+        labels_->setCellWidget(i, 0, on);
+        labels_->setCellWidget(i, 1, from);
+        labels_->setCellWidget(i, 2, dist);
+        labels_->setCellWidget(i, 3, text);
+        auto write = [this, id, i, on, from, dist, text] {
+            Brick* br = design_.brick(id);
+            if (!br || i >= static_cast<int>(br->run.labels.size())) return;
+            BrickLabel& lab = br->run.labels[i];
+            lab.wire = on->currentData().toInt();
+            lab.fromFinish = from->currentIndex() == 1;
+            lab.distanceMm = dist->value();
+            lab.text = text->text();
+            refreshPreview();
+        };
+        connect(on, &QComboBox::currentIndexChanged, this, write);
+        connect(from, &QComboBox::currentIndexChanged, this, write);
+        connect(dist, &QDoubleSpinBox::valueChanged, this, write);
+        connect(text, &QLineEdit::textEdited, this, write);
+    }
 }
 
 void BrickWizardDialog::writeEnd() {
@@ -662,22 +1185,64 @@ void BrickWizardDialog::writeRun() {
     r.kneeRadiusMm = knee_->value();
     r.fanKneeMm = fanKnee_->value();
     r.fanScalePct = fanScale_->value();
-    r.body = body_->currentIndex() == 1   ? RunBody::Cable
-             : body_->currentIndex() == 2 ? RunBody::Heatshrink
-                                          : RunBody::Wires;
     r.bodyScalePct = bodyScale_->value();
     r.bodyWidthMm = bodyWidth_->value();
+    r.transitions = transitions_->currentIndex() == 1   ? RunEnds::Start
+                    : transitions_->currentIndex() == 2 ? RunEnds::Finish
+                    : transitions_->currentIndex() == 3 ? RunEnds::Both
+                                                        : RunEnds::None;
+    r.dimTotal = dimTotal_->isChecked();
+    r.dimFans = dimFans_->isChecked();
+    r.dimBetween = dimBetween_->isChecked();
     canvas_->update();
     refreshPreview();
 }
 
 void BrickWizardDialog::refreshPreview() {
     std::vector<Entity> ents = drawing();
-    const QString sel = canvas_->selected();
+    const QStringList sel = canvas_->selection();
     for (Entity& e : ents)
-        if (!sel.isEmpty() && e.meta.value(QStringLiteral("brickId")).toString() == sel)
+        if (sel.contains(e.meta.value(QStringLiteral("brickId")).toString()))
             e.meta.insert(QLatin1String(kPreviewSelectedKey), true);
     preview_->setEntities(ents);
+}
+
+int BrickWizardDialog::bomItemOf(const QString& partId) const {
+    const Document* doc = document();
+    const LibraryPart* p = catalog_.byId(partId);
+    if (!doc || !p) return 0;
+    return bomItemLookup(*doc, catalog_.merged())(partId, p->kind, p->description);
+}
+
+bool BrickWizardDialog::addPartToBom(const QString& partId, double qty) {
+    Document* doc = document();
+    const LibraryPart* p = catalog_.byId(partId);
+    if (!doc || !p) return false;
+    BomTable table;
+    table.fromJson(doc->bom());
+    std::vector<BomRow> have = table.rows;
+    if (table.config.includeDrawing) {
+        const std::vector<BomRow> drawn = bomFromDrawing(*doc, catalog_.merged());
+        have.insert(have.end(), drawn.begin(), drawn.end());
+    }
+    have = bomUnify(have);
+    BomRow row = bomRowFromPart(*p, qty);
+    const std::vector<int> already = bomAlreadyListed(have, {row});
+    if (!already.empty() && already.front() >= 0) {
+        const QString q = QStringLiteral("%1 is already in the BOM as item %2.\n\nAdd it again?")
+                              .arg(p->title())
+                              .arg(already.front() + 1);
+        const bool yes = ask_ ? ask_(q)
+                              : QMessageBox::question(this, QStringLiteral("Already in the BOM"), q) ==
+                                    QMessageBox::Yes;
+        if (!yes) return false;
+    }
+    row.rowId = bomNextRowId(table.rows);
+    table.rows.push_back(row);
+    doc->bom() = table.toJson();
+    doc->setDirty(true);
+    emit bomChanged();
+    return true;
 }
 
 void BrickWizardDialog::place() {
@@ -686,12 +1251,13 @@ void BrickWizardDialog::place() {
         status_->setText(QStringLiteral("Nothing to place yet"));
         return;
     }
-    for (Entity& e : ents) e.meta.remove(QStringLiteral("brickId"));
+    for (Entity& e : ents) {
+        e.meta.remove(QStringLiteral("brickId"));
+        e.meta.remove(QStringLiteral("brickBranch"));
+    }
     editor_->placeEntities(ents);
     status_->setText(QStringLiteral("%1 object(s) ready — click on the sheet to put them down")
                          .arg(ents.size()));
-    // The window steps aside while the drawing is put down, and comes back once it is - or once the
-    // placement is abandoned with Esc.
     hide();
     auto* placing = new QObject(this);
     const auto back = [this, placing] {

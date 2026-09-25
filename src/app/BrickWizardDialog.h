@@ -4,9 +4,12 @@
 #include "harness/PartsLibrary.h"
 
 #include <QDialog>
+#include <QHash>
 #include <QListWidget>
 #include <QPointF>
 #include <QWidget>
+
+#include <functional>
 
 class QCheckBox;
 class QComboBox;
@@ -16,9 +19,12 @@ class QLineEdit;
 class QPushButton;
 class QSpinBox;
 class QStackedWidget;
+class QTableWidget;
+class QTreeWidget;
 
 namespace Edraw_Desktop {
 
+class Document;
 class DrawingPreview;
 class Editor;
 
@@ -26,36 +32,42 @@ class Editor;
 inline constexpr char kBrickMime[] = "application/x-edraw-brick";
 
 // ==================================================================================================
-// THE LOW-DETAIL PANE: the bricks of a harness on a coarse grid, the links between them as lines.
+// THE LOW-DETAIL PANE: the bricks of a harness on a coarse grid, each with a port on its left and its
+// right, and the links between ports as lines.
 //
-// A brick is dropped here from the palette, dragged to move it (half a grid step at a time), and
-// LINKED by dragging from the port on its edge - or with Ctrl held - onto another brick. A link is
-// picked by clicking on it. Delete removes what is picked; the arrow keys move the picked brick.
+// A brick is dropped here from the palette. A click picks it, Shift+click adds it to what is picked,
+// and a drag on the empty pane picks with a zone - left to right (blue) takes what is wholly inside,
+// right to left (green) whatever it touches. What is picked is dragged, moved with the arrow keys and
+// turned with R, together. A LINK is made by dragging from a port onto another brick - or with Ctrl
+// held, from anywhere on the brick - and lands on the port of that brick nearest where it is let go.
 // ==================================================================================================
 class BrickCanvas : public QWidget {
     Q_OBJECT
 public:
     explicit BrickCanvas(BrickDesign* design, QWidget* parent = nullptr);
 
-    QString selected() const { return sel_; }
+    // The brick picked last - the one the panel shows - and everything picked.
+    QString selected() const { return sel_.isEmpty() ? QString() : sel_.back(); }
+    QStringList selection() const { return sel_; }
     void setSelected(const QString& id);
-    // The picked link, as its two ends, or two empty strings.
+    void setSelection(const QStringList& ids);
     std::pair<QString, QString> selectedLink() const { return selLink_; }
 
-    // Where a grid place is on the pane, and back.
     QPointF toScreen(double col, double row) const;
     void toGrid(const QPointF& at, double& col, double& row) const;
     QString brickAt(const QPointF& at) const;
     QRectF brickRect(const Brick& b) const;
-    // The port a link is dragged from: the middle of the brick's right-hand edge.
-    QPointF portOf(const Brick& b) const;
-    // Everything in view, in the middle of the pane.
+    QPointF portPoint(const Brick& b, int port) const;
+    // The port under a point, as its brick and side, or an empty id.
+    std::pair<QString, int> portAt(const QPointF& at) const;
     void fit();
-    // Delete what is picked: a brick (and its links), or a link.
     void deleteSelected();
+    void moveSelection(double dCol, double dRow);
+    void rotateSelection();
 
 signals:
-    void selectionChanged(const QString& id);
+    void selectionChanged(const QString& current);
+    void linkPicked(const QString& a, const QString& b);
     void designChanged();
     void message(const QString& text);
 
@@ -71,23 +83,24 @@ protected:
 
 private:
     BrickDesign* d_;
-    QString sel_;
+    QStringList sel_;
     std::pair<QString, QString> selLink_;
-    QPointF origin_{70.0, 60.0};
+    QPointF origin_{80.0, 70.0};
     double stepX_ = 116.0;
-    double stepY_ = 58.0;
-    enum class Drag { None, Move, Link, Pan };
+    double stepY_ = 62.0;
+    enum class Drag { None, Move, Link, Pan, Zone };
     Drag drag_ = Drag::None;
     QString dragId_;
+    int dragPort_ = kPortRight;
     QPointF pressAt_;
     QPointF cursor_;
-    double startCol_ = 0.0;
-    double startRow_ = 0.0;
+    QHash<QString, QPointF> startAt_;   // where each picked brick was when the drag began
     QPointF panFrom_;
+    bool zoneAdd_ = false;
 };
 
-// The bricks to choose from: the end parts, then the specials. Dragged onto the pane; double-click
-// puts one in the next free place.
+// The bricks to choose from: the end parts, the joints, then the specials. Dragged onto the pane;
+// double-click puts one in the next free place.
 class BrickPalette : public QListWidget {
     Q_OBJECT
 public:
@@ -99,8 +112,8 @@ protected:
 };
 
 // ==================================================================================================
-// THE MECHANICAL HARNESS WIZARD: bricks on the left, the low-detail pane above the preview of the
-// real drawing, and what the picked brick is on the right.
+// THE MECHANICAL HARNESS WIZARD: the bricks and the parts list on the left, the low-detail pane above
+// the preview of the real drawing, and what the picked brick is on the right.
 // ==================================================================================================
 class BrickWizardDialog : public QDialog {
     Q_OBJECT
@@ -110,41 +123,66 @@ public:
     BrickDesign& design() { return design_; }
     BrickCanvas* canvas() const { return canvas_; }
     DrawingPreview* preview() const { return preview_; }
+    const PartsCatalog& catalog() const { return catalog_; }
 
-    // Add a brick of a palette item's "<type>|<kind>" at the next free place, pick it.
     QString addFromPalette(const QString& what);
     void selectBrick(const QString& id);
-    // Move the picked brick by grid steps.
     void moveSelected(double dCol, double dRow);
+    void rotateSelected();
     void arrange();
-    // The drawing as it stands.
     std::vector<Entity> drawing() const;
-    // Put it on the sheet: the window steps aside until it is down.
     void place();
+
+    // THE BILL. Puts one of a part on the drawing's bill of materials. A part the bill already lists
+    // is not added without asking; `ask` answers the question (the window asks the user when none is
+    // set - a test sets one). Returns whether a line was added.
+    bool addPartToBom(const QString& partId, double qty = 1.0);
+    // The line of the bill a part is on, 1-based, or 0.
+    int bomItemOf(const QString& partId) const;
+    void setAsk(std::function<bool(const QString& question)> ask) { ask_ = std::move(ask); }
+
+signals:
+    // The bill was changed from here, so the window showing it can catch up.
+    void bomChanged();
 
 private:
     void buildUi();
+    QWidget* buildEndPage();
+    QWidget* buildRunPage();
+    QWidget* buildLinkPage();
     void loadPanel();
+    void loadLabels();
     void refreshPreview();
     void designChanged();
     void writeEnd();
     void writeRun();
+    void fillPartsList();
+    Document* document() const;
 
     Editor* editor_;
     PartsCatalog catalog_;
     BrickDesign design_;
+    std::function<bool(const QString&)> ask_;
 
     BrickPalette* palette_ = nullptr;
+    QTreeWidget* parts_ = nullptr;
+    QLineEdit* partsFilter_ = nullptr;
     BrickCanvas* canvas_ = nullptr;
     DrawingPreview* preview_ = nullptr;
     QLabel* status_ = nullptr;
+    QComboBox* dimFrom_ = nullptr;
+    QComboBox* dimTo_ = nullptr;
 
     QStackedWidget* panel_ = nullptr;
+    QLabel* noneText_ = nullptr;
     // an end
     QLabel* endKind_ = nullptr;
     QComboBox* part_ = nullptr;
     QLineEdit* name_ = nullptr;
     QCheckBox* balloon_ = nullptr;
+    QLabel* bomState_ = nullptr;
+    QPushButton* bomAdd_ = nullptr;
+    QTableWidget* params_ = nullptr;
     // a special
     QLabel* runKind_ = nullptr;
     QSpinBox* wires_ = nullptr;
@@ -155,9 +193,17 @@ private:
     QDoubleSpinBox* knee_ = nullptr;
     QDoubleSpinBox* fanKnee_ = nullptr;
     QDoubleSpinBox* fanScale_ = nullptr;
-    QComboBox* body_ = nullptr;
     QDoubleSpinBox* bodyScale_ = nullptr;
     QDoubleSpinBox* bodyWidth_ = nullptr;
+    QListWidget* stack_ = nullptr;
+    QComboBox* transitions_ = nullptr;
+    QCheckBox* dimTotal_ = nullptr;
+    QCheckBox* dimFans_ = nullptr;
+    QCheckBox* dimBetween_ = nullptr;
+    QTableWidget* labels_ = nullptr;
+    // a link
+    QLabel* linkText_ = nullptr;
+    QSpinBox* linkWires_ = nullptr;
 };
 
 } // namespace Edraw_Desktop

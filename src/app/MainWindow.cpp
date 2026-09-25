@@ -14914,7 +14914,14 @@ void MainWindow::showMechWizard() {
     // THE BRICK WIZARD: end parts and the runs between them as bricks on a pane, the real drawing
     // previewed under it. Modeless and kept alive, like the others: a harness is described over
     // several sittings, and closing the window to look at the sheet must not throw the answers away.
-    if (!brickWizard_) brickWizard_ = new BrickWizardDialog(editor_, this);
+    if (!brickWizard_) {
+        brickWizard_ = new BrickWizardDialog(editor_, this);
+        // It writes the drawing's bill; the panel and the bill's own window show that same bill.
+        connect(brickWizard_, &BrickWizardDialog::bomChanged, this, [this] {
+            refreshBomPanel();
+            if (bomDlg_) bomDlg_->reload();
+        });
+    }
     brickWizard_->show();
     brickWizard_->raise();
     brickWizard_->activateWindow();
