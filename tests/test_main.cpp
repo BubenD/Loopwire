@@ -37,6 +37,7 @@ int run_licenses_tests();
 int run_odaexport_tests();
 int run_mechscript_tests();
 int run_mechwizard_tests();
+int run_brickharness_tests();
 
 int main(int argc, char** argv) {
     // A window can only be built with an application object behind it, and the step builder is a
@@ -92,6 +93,7 @@ int main(int argc, char** argv) {
     failures += run_odaexport_tests();
     failures += run_mechscript_tests();
     failures += run_mechwizard_tests();
+    failures += run_brickharness_tests();
     if (failures == 0) std::printf("ALL TESTS PASSED\n");
     else std::printf("%d TEST(S) FAILED\n", failures);
     return failures == 0 ? 0 : 1;

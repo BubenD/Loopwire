@@ -3748,4 +3748,26 @@ std::vector<Entity> placedPartDrawingForTest(const LibraryPart& part, const Vec2
     return placedPartDrawing(part, at, dirRad, opt, QStringLiteral("fitting"));
 }
 
+PlacedLibraryPart placeLibraryPartAtFace(const LibraryPart& part, const Vec2& at, double dirRad,
+                                         const Vec2& bodySide, const MechDrawOptions& opt,
+                                         const QString& role) {
+    PlacedLibraryPart r;
+    PlacedEnds ends;
+    r.entities = placedPartDrawing(part, at, dirRad, opt, role, bodySide, nullptr, &ends);
+    r.haveEnds = ends.have;
+    r.nearAt = ends.nearAt;
+    r.farAt = ends.farAt;
+    // The face it was set down by, in the order placedPartDrawing takes them: a flagged connection
+    // line first, then the first output face.
+    for (const Entity& e : partDrawingEntities(part.mechanical))
+        if (e.meta.value(QLatin1String(kConnectionLineKey)).toBool()) {
+            r.faceLengthMm = e.points.size() >= 2 ? distance(e.points.front(), e.points.back())
+                                                  : distance(e.a, e.b);
+            return r;
+        }
+    if (!part.outputs.empty())
+        r.faceLengthMm = distance(part.outputs.front().a, part.outputs.front().b);
+    return r;
+}
+
 } // namespace Edraw_Desktop

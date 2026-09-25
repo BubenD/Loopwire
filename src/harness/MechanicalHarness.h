@@ -763,4 +763,19 @@ MechHarnessDef mechFromDrawing(const Document& doc, const PartsCatalog* catalog 
 std::vector<Entity> placedPartDrawingForTest(const LibraryPart& part, const Vec2& at, double dirRad,
                                              const MechDrawOptions& opt);
 
+// A LIBRARY PART SET DOWN BY WHERE THE HARNESS MEETS IT, the way the generator sets one down: its
+// entry face centred on `at` and square to `dirRad` (the way the run leaves it), the body on the
+// `bodySide` of the face. Says how long that face is, and where the part's own near and far points
+// landed, so a caller can size a run to the face and measure from the part's ends.
+struct PlacedLibraryPart {
+    std::vector<Entity> entities;
+    double faceLengthMm = 0.0;   // the face it was set down by, across; 0 when none is marked
+    bool haveEnds = false;
+    Vec2 nearAt{0.0, 0.0};
+    Vec2 farAt{0.0, 0.0};
+};
+PlacedLibraryPart placeLibraryPartAtFace(const LibraryPart& part, const Vec2& at, double dirRad,
+                                         const Vec2& bodySide, const MechDrawOptions& opt,
+                                         const QString& role = QStringLiteral("fitting"));
+
 } // namespace Edraw_Desktop

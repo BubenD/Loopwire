@@ -77,6 +77,8 @@ add_library(edraw_core STATIC
     src/harness/MechModels.h
     src/harness/MechModels.cpp
     src/harness/MechanicalHarness.cpp
+    src/harness/BrickHarness.h
+    src/harness/BrickHarness.cpp
     src/harness/Bom.h
     src/harness/Bom.cpp
     src/harness/CableSpec.h
@@ -127,6 +129,8 @@ add_library(edraw_core STATIC
     src/app/ScientificCalculatorDialog.cpp
     src/app/MechWizardDialog.h
     src/app/MechWizardDialog.cpp
+    src/app/BrickWizardDialog.h
+    src/app/BrickWizardDialog.cpp
     src/app/OdaSetupDialog.h
     src/app/OdaSetupDialog.cpp
     src/app/PageSetupDialog.h

@@ -554,6 +554,7 @@ private:
     MechanicalBuilderDialog* mechDlg_ = nullptr;
     HarnessStepsDialog* stepsDlg_ = nullptr;
     class MechWizardDialog* mechWizard_ = nullptr;
+    class BrickWizardDialog* brickWizard_ = nullptr;
     MechModelsDialog* modelsDlg_ = nullptr;
     // Which open documents are template-edit sessions, and the template each is drawing. A template
     // edit is a document like a block edit is: its own tab, its own undo, its own canvas colour.
@@ -640,6 +641,8 @@ private:
     // The rebuilt wizard: an open sequence rather than a fixed script. Opened beside the old one
     // while it is being proven; see MechWizardDialog.
     void showMechWizard();
+    // The step-script wizard the brick wizard replaced, kept on the command palette.
+    void showStepWizard();
     // The default mechanical models: the house style, drawn once.
     void showMechModels();
     // Mark (or unmark) the selection as the part's connection line.

@@ -3,6 +3,7 @@
 #include "app/Chrome.h"
 #include "app/OutputDialog.h"
 #include "app/MechWizardDialog.h"
+#include "app/BrickWizardDialog.h"
 #include "app/OdaSetupDialog.h"
 #include "io/OdaConverter.h"
 #include "app/PageSetupManagerDialog.h"
@@ -11356,8 +11357,11 @@ void MainWindow::buildCommands() {
          "Mark the selection as this part's connection line (where the harness attaches)",
          [this] { markConnectionLine(); }},
         {{"buildwizard", "wizard", "harnesswizard"}, "Harness",
-         "Harness build wizard: place one thing at a time, in any order, with the neighbours checked",
+         "Mechanical harness wizard: end parts and the runs between them as bricks, previewed live",
          [this] { showMechWizard(); }},
+        {{"stepwizard", "oldwizard"}, "Harness",
+         "Step wizard: place one thing at a time, in any order, with the neighbours checked",
+         [this] { showStepWizard(); }},
         {{"buildsteps", "guided", "harnesssteps"}, "Harness",
          "Harness build steps (the older fixed eleven-step wizard)",
          [this] { showHarnessSteps(); }},
@@ -13517,8 +13521,8 @@ QToolButton* MainWindow::makeHarnessStepsButton(QWidget* parent) {
     btn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
     btn->setIconSize(QSize(26, 26));
     btn->setToolTip(QStringLiteral(
-        "Describe a harness one step at a time, from the end in your hand to the ends the branches "
-        "finish at — the order the build sheet numbers them in"));
+        "Lay a harness out as bricks - end parts and the runs between them - with the real drawing "
+        "previewed as you go"));
     {
         // Three numbered steps with an arrow through them: a sequence, not a form.
         QPixmap pm(28, 28);
@@ -14907,8 +14911,16 @@ void MainWindow::markConnectionLine() {
 }
 
 void MainWindow::showMechWizard() {
-    // Modeless and kept alive for the same reason as the others: a harness is described over several
-    // sittings, and closing the window to look at the sheet must not throw the answers away.
+    // THE BRICK WIZARD: end parts and the runs between them as bricks on a pane, the real drawing
+    // previewed under it. Modeless and kept alive, like the others: a harness is described over
+    // several sittings, and closing the window to look at the sheet must not throw the answers away.
+    if (!brickWizard_) brickWizard_ = new BrickWizardDialog(editor_, this);
+    brickWizard_->show();
+    brickWizard_->raise();
+    brickWizard_->activateWindow();
+}
+
+void MainWindow::showStepWizard() {
     if (!mechWizard_) mechWizard_ = new MechWizardDialog(editor_, this);
     mechWizard_->show();
     mechWizard_->raise();
