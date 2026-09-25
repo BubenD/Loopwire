@@ -20705,10 +20705,30 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 // Clip the marked wall to the DRAWN outline (past fillets/chamfers) so a
                 // re-edit never shows the old sharp-corner stub of a modified corner.
                 const auto [a, b] = visibleWall(*e, seg);
-                if (e->meta.value("double").toBool()) { // mark both physical runs of the wall
-                    const Vec2 off = (b - a).normalized().perp() * (e->meta.value("gap").toDouble(10.0) / 2.0);
-                    p.drawLine(vt.toScreen(a + off), vt.toScreen(b + off));
-                    p.drawLine(vt.toScreen(a - off), vt.toScreen(b - off));
+                if (e->meta.value("double").toBool() && distance(a, b) > 1e-9) {
+                    // MARK BOTH PHYSICAL RUNS OF THE WALL AS THEY ARE DRAWN. The centreline wall
+                    // pushed out by half the gap overshoots the corner on the outside rail and
+                    // stops short of it on the inside one - at a mitre the rails do not end where
+                    // the centreline does. So the drawn rails are taken, and of them the stretch
+                    // lying along this wall: parallel to it, half the gap off it, beside it.
+                    const double h = e->meta.value("gap").toDouble(10.0) / 2.0;
+                    const Vec2 dir = (b - a).normalized();
+                    const double len = distance(a, b);
+                    for (double s : {h, -h}) {
+                        const std::vector<Vec2> rail = doubleRunRail(*e, s);
+                        for (size_t i = 1; i < rail.size(); ++i) {
+                            const Vec2 r0 = rail[i - 1], r1 = rail[i];
+                            if (distance(r0, r1) < 1e-9) continue;
+                            const Vec2 rd = (r1 - r0).normalized();
+                            if (std::abs(rd.x * dir.y - rd.y * dir.x) > 1e-3) continue;
+                            const Vec2 m = (r0 + r1) * 0.5;
+                            const double along = dot(m - a, dir);
+                            const double off = std::abs((m - a).x * dir.y - (m - a).y * dir.x);
+                            if (along < -1e-6 || along > len + 1e-6) continue;
+                            if (std::abs(off - h) > std::max(1e-6, h * 0.01)) continue;
+                            p.drawLine(vt.toScreen(r0), vt.toScreen(r1));
+                        }
+                    }
                 } else {
                     p.drawLine(vt.toScreen(a), vt.toScreen(b));
                 }
