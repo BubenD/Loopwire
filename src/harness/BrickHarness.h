@@ -24,11 +24,12 @@ namespace Edraw_Desktop {
 // run, a twisted pair, a twisted bundle. Two ends are never linked to each other directly, because
 // what is between them is exactly what the harness is.
 //
-// EVERY BRICK HAS TWO PORTS, left and right, and can be turned a quarter at a time. A link joins a
-// port of one brick to a port of another. On an end, the port is the side its entry face is on - a
-// connector has one face and a joint has one each side. On a special, the left port is where the run
-// STARTS and the right where it FINISHES. A fanout may finish on several ends, each taking so many of
-// its wires.
+// AN END HAS A PORT FOR EVERY CONNECTION FACE ITS PART HAS - a connector one, a splice two, a Y-split
+// three - where that face is on the part: the output faces marked on the library part, or the usual
+// faces of its kind until one is chosen. A SPECIAL has two, the left where its run STARTS and the
+// right where it FINISHES. Every brick turns a quarter at a time, and the part turns with it. A link
+// joins a port of one brick to a port of another. A fanout may finish on several ends, each taking so
+// many of its wires.
 //
 // Each brick has a place on a coarse grid - a column along the harness and a row across it - which is
 // the low-detail picture the user arranges. The real drawing is made from it: ends in one column
@@ -37,6 +38,7 @@ namespace Edraw_Desktop {
 // ==================================================================================================
 
 enum class BrickType { End, Fanout, Run, TwistedPair, TwistedBundle };
+// A special's two ports.
 enum BrickPort { kPortLeft = 0, kPortRight = 1 };
 
 QString brickTypeName(BrickType type);
@@ -47,8 +49,10 @@ inline bool brickIsSpecial(BrickType t) { return t != BrickType::End; }
 // The kinds an end brick can be: the parts a harness finishes on, then the joints it passes through.
 std::vector<PartKind> brickEndKinds();
 std::vector<PartKind> brickJointKinds();
-// A JOINT has an entry face each side; an end part has one.
+// A JOINT has an entry face each side (a Y-split three); an end part has one.
 bool brickKindIsJoint(PartKind kind);
+// How many connection faces a part of this kind has when no library part says.
+int brickKindFaceCount(PartKind kind);
 
 // A LABEL on a run: on the whole bundle, or on one wire of a fan, so far from one end.
 struct BrickLabel {
@@ -105,9 +109,28 @@ struct BrickLink {
     int wires = 0;     // wires a fanout gives the end at this link; 0 = an even share
 };
 
+// WHAT A BRICK LOOKS LIKE UNTURNED: its connection faces - where, which way they look, how long -
+// with the middle of the part at 0,0 on the drawing, and for an end the drawing itself. The brick's
+// turn is applied on top.
+struct BrickShape {
+    std::vector<Vec2> faceMid;
+    std::vector<Vec2> faceOut;      // square to each face, away from the part
+    std::vector<double> faceLen;
+    Vec2 half{12.0, 10.0};           // half the part's size along x and y
+    std::vector<Entity> drawing;    // an end's drawing, unturned
+    bool haveEnds = false;          // the library part's own near and far points
+    Vec2 nearAt{0.0, 0.0};
+    Vec2 farAt{0.0, 0.0};
+    int ports() const { return static_cast<int>(faceOut.size()); }
+};
+
 struct BrickDesign {
     std::vector<Brick> bricks;
     std::vector<BrickLink> links;
+    // Where library parts are read from - for how many faces an end has, and where. Not saved.
+    const PartsCatalog* catalog = nullptr;
+    // Shapes already worked out, by what decides them. Not saved.
+    mutable QHash<QString, BrickShape> shapeCache;
     // WHERE DIMENSIONS ARE TAKEN FROM at each end of a run: the end part's near point (its face) or
     // its far point (the back of it).
     bool dimFromFar = false;
@@ -116,6 +139,15 @@ struct BrickDesign {
     Brick* brick(const QString& id);
     const Brick* brick(const QString& id) const;
     QString addBrick(BrickType type, PartKind kind, double col, double row);
+    // The brick's shape, and its number of ports.
+    BrickShape shapeOf(const Brick& b) const;
+    int portCount(const Brick& b) const { return shapeOf(b).ports(); }
+    // The way a port faces - on the pane (y down) and on the drawing (y up) - with the turn in it.
+    Vec2 portPaneDir(const Brick& b, int port) const;
+    Vec2 portWorldDir(const Brick& b, int port) const;
+    // The port of `self` that best faces `toward` (pane units), of those `allowed` says may be used.
+    int facingPort(const Brick& self, const Vec2& toward,
+                   const std::function<bool(int)>& allowed = nullptr) const;
     void removeBrick(const QString& id);
     // LINK a port of an end to a port of a special. Refused, with the reason, when it would not
     // describe a harness: two ends or two specials, a port of a special already taken (a fanout may
@@ -139,9 +171,12 @@ struct BrickDesign {
     static BrickDesign fromJson(const QJsonObject& o);
 };
 
-// The way a port faces, on the pane (y down) and on the drawing (y up), with the brick's turn in it.
-Vec2 brickPortPaneDir(const Brick& b, int port);
-Vec2 brickPortWorldDir(const Brick& b, int port);
+// A special's shape: a port each side.
+BrickShape specialShape();
+// An end's shape: its library part's output faces, or the usual faces of its kind.
+BrickShape endShape(const Brick& b, const PartsCatalog* catalog);
+// A drawing direction turned `rot` quarters clockwise.
+Vec2 turnQuarters(const Vec2& v, int rot);
 
 // SYMMETRIC. The ends are laid out from the one most connected: it is column 0 on the axis, what its
 // runs reach is the next column out, and so on; the ends of a column are spread evenly either side

@@ -70,15 +70,43 @@ QString BrickRunSpec::outermost() const {
 
 // ---- Ports ---------------------------------------------------------------------------------------
 
-Vec2 brickPortPaneDir(const Brick& b, int port) {
-    Vec2 d = port == kPortLeft ? Vec2{-1.0, 0.0} : Vec2{1.0, 0.0};
-    for (int i = 0; i < ((b.rot % 4) + 4) % 4; ++i) d = Vec2{-d.y, d.x};   // a quarter clockwise
+int brickKindFaceCount(PartKind kind) {
+    if (kind == PartKind::YSplit) return 3;
+    return brickKindIsJoint(kind) ? 2 : 1;
+}
+
+Vec2 turnQuarters(const Vec2& v, int rot) {
+    Vec2 d = v;
+    for (int i = 0; i < ((rot % 4) + 4) % 4; ++i) d = Vec2{d.y, -d.x};   // a quarter clockwise
     return d;
 }
 
-Vec2 brickPortWorldDir(const Brick& b, int port) {
-    const Vec2 d = brickPortPaneDir(b, port);
-    return Vec2{d.x, -d.y};
+Vec2 BrickDesign::portWorldDir(const Brick& b, int port) const {
+    const BrickShape s = shapeOf(b);
+    if (port < 0 || port >= s.ports()) return Vec2{1.0, 0.0};
+    return turnQuarters(s.faceOut[static_cast<size_t>(port)], b.rot);
+}
+
+Vec2 BrickDesign::portPaneDir(const Brick& b, int port) const {
+    const Vec2 w = portWorldDir(b, port);
+    return Vec2{w.x, -w.y};
+}
+
+int BrickDesign::facingPort(const Brick& self, const Vec2& toward,
+                            const std::function<bool(int)>& allowed) const {
+    const BrickShape s = shapeOf(self);
+    int best = -1;
+    double bestDot = -1e300;
+    for (int p = 0; p < s.ports(); ++p) {
+        if (allowed && !allowed(p)) continue;
+        const Vec2 w = turnQuarters(s.faceOut[static_cast<size_t>(p)], self.rot);
+        const double d = dot(Vec2{w.x, -w.y}, toward);
+        if (d > bestDot + 1e-9) {
+            bestDot = d;
+            best = p;
+        }
+    }
+    return best;
 }
 
 // ---- The design ----------------------------------------------------------------------------------
@@ -143,16 +171,6 @@ QStringList BrickDesign::linksOf(const QString& id) const {
     return out;
 }
 
-namespace {
-
-// The port of `self` that faces `other` on the pane.
-int facingPort(const Brick& self, const Brick& other) {
-    const Vec2 d{other.col - self.col, other.row - self.row};
-    return dot(d, brickPortPaneDir(self, kPortRight)) >= 0.0 ? kPortRight : kPortLeft;
-}
-
-} // namespace
-
 int BrickDesign::portOn(const QString& id, const QString& other) const {
     const BrickLink* l = link(id, other);
     if (!l) return -1;
@@ -160,7 +178,7 @@ int BrickDesign::portOn(const QString& id, const QString& other) const {
     if (stated >= 0) return stated;
     const Brick* s = brick(id);
     const Brick* o = brick(other);
-    return s && o ? facingPort(*s, *o) : kPortRight;
+    return s && o ? std::max(0, facingPort(*s, Vec2{o->col - s->col, o->row - s->row})) : 0;
 }
 
 QStringList BrickDesign::startsOf(const QString& specialId) const {
@@ -210,7 +228,7 @@ bool BrickDesign::connect(const QString& a, const QString& b, QString* why, int 
     auto taken = [&](int port) { return (port == kPortLeft ? starts : finishes).size(); };
     const bool fanout = sp.type == BrickType::Fanout;
     if (sPort < 0) {
-        sPort = facingPort(sp, en);
+        sPort = std::max(0, facingPort(sp, Vec2{en.col - sp.col, en.row - sp.row}));
         // The side facing it is already used and the other side is free: the other side - a run
         // starts somewhere before it finishes anywhere, a fanout included.
         if (taken(sPort) >= 1 && taken(1 - sPort) == 0) sPort = 1 - sPort;
@@ -221,7 +239,34 @@ bool BrickDesign::connect(const QString& a, const QString& b, QString* why, int 
     if (fanout && taken(sPort) >= 1 && taken(1 - sPort) >= 2)
         return refuse(QStringLiteral("A fanout spreads from one part to several, not several to "
                                      "several"));
-    if (ePort < 0) ePort = facingPort(en, sp);
+    const int enPorts = portCount(en);
+    if (ePort >= enPorts || sPort > kPortRight)
+        return refuse(QStringLiteral("That brick has no such port"));
+    // AN END ON ITS FIRST LINK TURNS TO FACE IT: the port it is linked on toward the run - which
+    // is the way round anybody means a part they have only just joined to something.
+    const bool firstLink = linksOf(en.id).isEmpty();
+    // Toward it along whichever way it mostly lies, so a part linked on the slant turns to face
+    // along the harness rather than across it.
+    const Vec2 rawToward{sp.col - en.col, sp.row - en.row};
+    const Vec2 toward = std::abs(rawToward.x) >= std::abs(rawToward.y)
+                            ? Vec2{rawToward.x >= 0.0 ? 1.0 : -1.0, 0.0}
+                            : Vec2{0.0, rawToward.y >= 0.0 ? 1.0 : -1.0};
+    if (ePort < 0) ePort = std::max(0, facingPort(en, toward));
+    if (firstLink && toward.length() > 1e-9) {
+        Brick* e = brick(en.id);
+        int bestRot = e->rot;
+        double bestDot = -1e300;
+        for (int r = 0; r < 4; ++r) {
+            Brick t = *e;
+            t.rot = r;
+            const double d = dot(portPaneDir(t, ePort), toward);
+            if (d > bestDot + 1e-9) {
+                bestDot = d;
+                bestRot = r;
+            }
+        }
+        e->rot = bestRot;
+    }
     BrickLink l;
     l.a = a;
     l.b = b;
@@ -466,12 +511,12 @@ void arrangeBricks(BrickDesign& design) {
 
     // AND EVERY BRICK TURNED TO FACE WHAT IT IS LINKED TO: each port toward the bricks on it.
     for (Brick& b : design.bricks) {
-        Vec2 want[2] = {{0.0, 0.0}, {0.0, 0.0}};
+        std::vector<Vec2> want(static_cast<size_t>(std::max(1, design.portCount(b))), Vec2{0.0, 0.0});
         bool any = false;
         for (const QString& o : design.linksOf(b.id)) {
             const Brick* ob = design.brick(o);
             const int p = design.portOn(b.id, o);
-            if (!ob || p < 0) continue;
+            if (!ob || p < 0 || p >= static_cast<int>(want.size())) continue;
             want[p] += Vec2{ob->col - b.col, ob->row - b.row};
             any = true;
         }
@@ -481,8 +526,9 @@ void arrangeBricks(BrickDesign& design) {
         for (int r = 0; r < 4; ++r) {
             Brick t = b;
             t.rot = r;
-            const double v = dot(brickPortPaneDir(t, kPortLeft), want[0]) +
-                             dot(brickPortPaneDir(t, kPortRight), want[1]);
+            double v = 0.0;
+            for (size_t p = 0; p < want.size(); ++p)
+                v += dot(design.portPaneDir(t, static_cast<int>(p)), want[p]);
             if (v > bestVal + 1e-9) {
                 bestVal = v;
                 best = r;
@@ -680,39 +726,108 @@ Entity makeTextAt(const Vec2& at, const QString& text, double height, double rot
 
 } // namespace
 
+BrickShape specialShape() {
+    BrickShape s;
+    s.faceMid = {Vec2{-40.0, 0.0}, Vec2{40.0, 0.0}};
+    s.faceOut = {Vec2{-1.0, 0.0}, Vec2{1.0, 0.0}};
+    s.faceLen = {10.0, 10.0};
+    s.half = Vec2{40.0, 15.0};
+    return s;
+}
+
+BrickShape endShape(const Brick& b, const PartsCatalog* catalog) {
+    BrickShape s;
+    const LibraryPart* part = catalog && !b.libPart.isEmpty() ? catalog->byId(b.libPart) : nullptr;
+    if (part && part->hasMechanical()) {
+        // THE LIBRARY PART, set down by its first face: looking right when it has only that one, left
+        // when it has more - the way in of a joint - and every other face wherever the part has it.
+        const bool many = part->outputs.size() >= 2;
+        MechDrawOptions opt;
+        const PlacedLibraryPart placed = placeLibraryPartAtFace(
+            *part, Vec2{0.0, 0.0}, many ? M_PI : 0.0, many ? Vec2{1.0, 0.0} : Vec2{-1.0, 0.0}, opt);
+        Bounds bb;
+        for (const Entity& e : placed.entities) bb.expand(e.bounds());
+        const Vec2 c = bb.valid ? (bb.min + bb.max) * 0.5 : Vec2{0.0, 0.0};
+        s.drawing = placed.entities;
+        for (Entity& e : s.drawing) translateEntity(e, c * -1.0);
+        s.half = bb.valid ? (bb.max - bb.min) * 0.5 : Vec2{12.0, 10.0};
+        if (!placed.faces.empty()) {
+            for (size_t i = 0; i < placed.faces.size(); ++i) {
+                const Vec2 a = placed.faces[i].first - c, e = placed.faces[i].second - c;
+                const Vec2 mid = (a + e) * 0.5;
+                Vec2 n = (e - a).perp().normalized();
+                if (i == 0) n = many ? Vec2{-1.0, 0.0} : Vec2{1.0, 0.0};
+                else if (dot(n, mid) < 0.0) n = n * -1.0;   // away from the middle of the part
+                s.faceMid.push_back(mid);
+                s.faceOut.push_back(n);
+                s.faceLen.push_back(std::max(0.5, distance(a, e)));
+            }
+        } else {
+            // No face marked: the one it was set down by, at the joint, looking right.
+            s.faceMid.push_back(c * -1.0);
+            s.faceOut.push_back(Vec2{1.0, 0.0});
+            s.faceLen.push_back(placed.faceLengthMm > 1e-6 ? placed.faceLengthMm : s.half.y * 2.0);
+        }
+        if (placed.haveEnds) {
+            s.haveEnds = true;
+            s.nearAt = placed.nearAt - c;
+            s.farAt = placed.farAt - c;
+        }
+        return s;
+    }
+    // A PLACEHOLDER of the kind's rough size, with the kind's usual faces.
+    const Placeholder ph = placeholderFor(b.kind);
+    const double hx = ph.along / 2.0, hy = ph.across / 2.0;
+    s.half = Vec2{hx, hy};
+    const int faces = brickKindFaceCount(b.kind);
+    if (faces == 1) {
+        s.faceMid = {Vec2{hx, 0.0}};
+        s.faceOut = {Vec2{1.0, 0.0}};
+        s.faceLen = {ph.across};
+    } else if (faces == 2) {
+        s.faceMid = {Vec2{-hx, 0.0}, Vec2{hx, 0.0}};
+        s.faceOut = {Vec2{-1.0, 0.0}, Vec2{1.0, 0.0}};
+        s.faceLen = {ph.across, ph.across};
+    } else {
+        // A Y: one way in on the left, two ways out on the right, one above the other.
+        s.faceMid = {Vec2{-hx, 0.0}, Vec2{hx, hy / 2.0}, Vec2{hx, -hy / 2.0}};
+        s.faceOut = {Vec2{-1.0, 0.0}, Vec2{1.0, 0.0}, Vec2{1.0, 0.0}};
+        s.faceLen = {ph.across * 0.8, ph.across * 0.42, ph.across * 0.42};
+    }
+    Entity box;
+    box.type = EntityType::Polyline;
+    box.points = {Vec2{-hx, -hy}, Vec2{hx, -hy}, Vec2{hx, hy}, Vec2{-hx, hy}, Vec2{-hx, -hy}};
+    box.a = box.points.front();
+    box.b = box.points.back();
+    s.drawing.push_back(box);
+    s.drawing.push_back(makeTextAt(Vec2{-hx, hy + 2.0}, b.name.isEmpty() ? partKindName(b.kind) : b.name, 3.0));
+    return s;
+}
+
+BrickShape BrickDesign::shapeOf(const Brick& b) const {
+    if (b.type != BrickType::End) return specialShape();
+    const QString key = partKindKey(b.kind) + QLatin1Char('|') + b.libPart + QLatin1Char('|') + b.name +
+                        QLatin1Char('|') + QString::number(reinterpret_cast<quintptr>(catalog));
+    const auto it = shapeCache.constFind(key);
+    if (it != shapeCache.constEnd()) return it.value();
+    const BrickShape s = endShape(b, catalog);
+    shapeCache.insert(key, s);
+    return s;
+}
+
 BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* catalog,
                              const std::function<int(const QString& libPart)>& itemOf) {
     BrickBuild out;
     MechDrawOptions opt;
 
-    // WHAT EACH END IS.
-    struct EndInfo {
-        const Brick* brick = nullptr;
-        const LibraryPart* part = nullptr;
-        bool joint = false;
-        double across = 20.0;
-    };
-    QHash<QString, EndInfo> ends;
+    // WHAT EACH END IS: its shape, unturned, with a port for every connection face.
+    QHash<QString, BrickShape> shapes;
     double widest = 0.0;
     for (const Brick& b : design.bricks) {
         if (b.type != BrickType::End) continue;
-        EndInfo info;
-        info.brick = &b;
-        info.joint = brickKindIsJoint(b.kind);
-        info.part = catalog && !b.libPart.isEmpty() ? catalog->byId(b.libPart) : nullptr;
-        if (info.part && !info.part->hasMechanical()) info.part = nullptr;
-        if (info.part) {
-            const PlacedLibraryPart probe =
-                placeLibraryPartAtFace(*info.part, Vec2{0, 0}, 0.0, Vec2{-1, 0}, opt);
-            Bounds bb;
-            for (const Entity& e : probe.entities) bb.expand(e.bounds());
-            info.across = bb.valid ? std::max(bb.max.y - bb.min.y, bb.max.x - bb.min.x) : 20.0;
-        } else {
-            const Placeholder ph = placeholderFor(b.kind);
-            info.across = std::max(ph.across, ph.along);
-        }
-        widest = std::max(widest, info.across);
-        ends.insert(b.id, info);
+        const BrickShape s = endShape(b, catalog);
+        widest = std::max({widest, s.half.x * 2.0, s.half.y * 2.0});
+        shapes.insert(b.id, s);
     }
     const double rowPitch = std::max(40.0, widest + 25.0);
 
@@ -778,7 +893,8 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
 
     // THE COLUMNS, as far apart as the runs between them are long.
     std::vector<double> cols;
-    for (const auto& info : ends) cols.push_back(info.brick->col);
+    for (const Brick& b : design.bricks)
+        if (b.type == BrickType::End) cols.push_back(b.col);
     std::sort(cols.begin(), cols.end());
     cols.erase(std::unique(cols.begin(), cols.end(),
                            [](double x, double y) { return std::abs(x - y) < 1e-9; }),
@@ -803,117 +919,31 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         colX[i] = colX[i - 1] + (gap[i - 1] > 1e-9 ? gap[i - 1] : 150.0);
     auto endAt = [&](const Brick& b) { return Vec2{colX[colIndex(b.col)], -b.row * rowPitch}; };
 
-    // THE ENDS, and their faces.
-    for (auto it = ends.begin(); it != ends.end(); ++it) {
-        const EndInfo& info = it.value();
-        const Brick& b = *info.brick;
+    // THE ENDS: each its shape turned by the brick's quarters and set down on its place, a face for
+    // every port.
+    for (const Brick& b : design.bricks) {
+        if (b.type != BrickType::End) continue;
+        const BrickShape& shape = shapes[b.id];
         const Vec2 at = endAt(b);
-        // The port a one-faced part faces on: the one its links are on.
-        int facePort = kPortRight;
-        {
-            int onLeft = 0, onRight = 0;
-            for (const QString& o : design.linksOf(b.id))
-                (design.portOn(b.id, o) == kPortLeft ? onLeft : onRight)++;
-            if (onLeft > onRight) facePort = kPortLeft;
+        const double turn = -b.rot * M_PI / 2.0;
+        auto place = [&](const Vec2& v) { return at + turnQuarters(v, b.rot); };
+        std::vector<Entity> body = shape.drawing;
+        for (Entity& e : body) {
+            if (b.rot % 4 != 0) rotateEntity(e, Vec2{0.0, 0.0}, turn);
+            translateEntity(e, at);
+            e.layer = opt.layer;
         }
-        std::vector<Entity> body;
-        if (info.part && !info.joint) {
-            const Vec2 d = brickPortWorldDir(b, facePort);
-            const PlacedLibraryPart placed =
-                placeLibraryPartAtFace(*info.part, at, angleOf(d), d * -1.0, opt);
-            body = placed.entities;
-            Bounds bb;
-            for (const Entity& e : body) bb.expand(e.bounds());
+        for (int p = 0; p < shape.ports(); ++p) {
             BrickFace f;
-            f.centre = at;
-            f.out = d;
-            f.lengthMm = placed.faceLengthMm > 1e-6
-                             ? placed.faceLengthMm
-                             : (bb.valid ? std::abs(dot(bb.max - bb.min, d.perp())) : 20.0);
-            f.nearAt = placed.haveEnds ? placed.nearAt : at;
-            double back = 0.0;
-            if (bb.valid)
-                for (const Vec2& c : {bb.min, bb.max, Vec2{bb.min.x, bb.max.y}, Vec2{bb.max.x, bb.min.y}})
-                    back = std::max(back, dot(at - c, d));
-            f.farAt = placed.haveEnds ? placed.farAt : at - d * back;
-            // Both ports land on the one face it has.
-            out.faces.insert(faceKey(b.id, kPortLeft), f);
-            out.faces.insert(faceKey(b.id, kPortRight), f);
-        } else if (info.part && info.joint) {
-            // A JOINT: set down by its first face on the left port, the other face wherever the part
-            // has it, and the whole centred on its place.
-            const Vec2 dl = brickPortWorldDir(b, kPortLeft);
-            const PlacedLibraryPart placed =
-                placeLibraryPartAtFace(*info.part, Vec2{0, 0}, angleOf(dl), dl * -1.0, opt);
-            body = placed.entities;
-            Bounds bb;
-            for (const Entity& e : body) bb.expand(e.bounds());
-            const Vec2 bbMid = bb.valid ? (bb.min + bb.max) * 0.5 : Vec2{};
-            std::pair<Vec2, Vec2> f0{Vec2{0, 0} + dl.perp() * 5.0, Vec2{0, 0} - dl.perp() * 5.0};
-            if (!placed.faces.empty()) f0 = placed.faces[0];
-            std::pair<Vec2, Vec2> f1;
-            if (placed.faces.size() >= 2) f1 = placed.faces[1];
-            else f1 = {bbMid * 2.0 - f0.first, bbMid * 2.0 - f0.second};
-            const Vec2 m0 = (f0.first + f0.second) * 0.5, m1 = (f1.first + f1.second) * 0.5;
-            const Vec2 shift = at - (m0 + m1) * 0.5;
-            for (Entity& e : body) translateEntity(e, shift);
-            BrickFace fl, fr;
-            fl.centre = m0 + shift;
-            fr.centre = m1 + shift;
-            fl.out = dl;
-            fr.out = (m1 - m0).length() > 1e-9 ? (m1 - m0).normalized() : dl * -1.0;
-            fl.lengthMm = distance(f0.first, f0.second);
-            fr.lengthMm = distance(f1.first, f1.second);
-            fl.nearAt = fl.centre;
-            fl.farAt = fr.centre;
-            fr.nearAt = fr.centre;
-            fr.farAt = fl.centre;
-            out.faces.insert(faceKey(b.id, kPortLeft), fl);
-            out.faces.insert(faceKey(b.id, kPortRight), fr);
-        } else {
-            const Placeholder ph = placeholderFor(b.kind);
-            Entity box;
-            box.type = EntityType::Polyline;
-            box.layer = opt.layer;
-            if (info.joint) {
-                // A body with a face each side.
-                const Vec2 dr = brickPortWorldDir(b, kPortRight);
-                const Vec2 u = dr * (ph.along / 2.0), v = dr.perp() * (ph.across / 2.0);
-                box.points = {at - u - v, at + u - v, at + u + v, at - u + v, at - u - v};
-                BrickFace fl, fr;
-                fl.centre = at - u;
-                fr.centre = at + u;
-                fl.out = dr * -1.0;
-                fr.out = dr;
-                fl.lengthMm = fr.lengthMm = ph.across;
-                fl.nearAt = fl.centre;
-                fl.farAt = fr.centre;
-                fr.nearAt = fr.centre;
-                fr.farAt = fl.centre;
-                out.faces.insert(faceKey(b.id, kPortLeft), fl);
-                out.faces.insert(faceKey(b.id, kPortRight), fr);
-            } else {
-                const Vec2 d = brickPortWorldDir(b, facePort);
-                const Vec2 back = d * -ph.along, v = d.perp() * (ph.across / 2.0);
-                box.points = {at + v, at + v + back, at - v + back, at - v, at + v};
-                BrickFace f;
-                f.centre = at;
-                f.out = d;
-                f.lengthMm = ph.across;
-                f.nearAt = at;
-                f.farAt = at + back;
-                out.faces.insert(faceKey(b.id, kPortLeft), f);
-                out.faces.insert(faceKey(b.id, kPortRight), f);
-            }
-            box.a = box.points.front();
-            box.b = box.points.back();
-            body.push_back(box);
-            Entity label = makeTextAt(at + Vec2{-ph.along / 2.0, ph.across / 2.0 + 2.0},
-                                      b.name.isEmpty() ? partKindName(b.kind) : b.name, 3.0);
-            if (!info.joint) label.a = out.faces.value(faceKey(b.id, facePort)).farAt +
-                                       Vec2{0.0, ph.across / 2.0 + 2.0};
-            label.layer = opt.layer;
-            body.push_back(label);
+            f.centre = place(shape.faceMid[static_cast<size_t>(p)]);
+            f.out = turnQuarters(shape.faceOut[static_cast<size_t>(p)], b.rot);
+            f.lengthMm = shape.faceLen[static_cast<size_t>(p)];
+            // The part's reach behind this face, for a dimension taken from its far point.
+            const Vec2 o = shape.faceOut[static_cast<size_t>(p)];
+            const double depth = std::abs(o.x) * shape.half.x * 2.0 + std::abs(o.y) * shape.half.y * 2.0;
+            f.nearAt = shape.haveEnds ? place(shape.nearAt) : f.centre;
+            f.farAt = shape.haveEnds ? place(shape.farAt) : f.centre - f.out * depth;
+            out.faces.insert(faceKey(b.id, p), f);
         }
         // A BALLOON, pointing at the middle of the part, numbered by its line of the bill.
         if (b.balloon) {
@@ -921,17 +951,17 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             for (const Entity& e : body) bb.expand(e.bounds());
             if (bb.valid) {
                 const Vec2 tip = (bb.min + bb.max) * 0.5;
-                const Vec2 at{tip.x - 12.0, bb.max.y + 14.0};
+                const Vec2 bat{tip.x - 12.0, bb.max.y + 14.0};
                 const int item = itemOf && !b.libPart.isEmpty() ? itemOf(b.libPart) : 0;
                 Entity ball;
                 ball.type = EntityType::Circle;
-                ball.center = at;
-                ball.a = at;
+                ball.center = bat;
+                ball.a = bat;
                 ball.radius = 4.5;
                 ball.meta.insert(QStringLiteral("balloon"), true);
                 ball.meta.insert(QStringLiteral("text"), item > 0 ? QString::number(item) : QStringLiteral("?"));
                 ball.meta.insert(QStringLiteral("landing"), 6.0);
-                ball.meta.insert(QStringLiteral("landingSide"), tip.x >= at.x ? 1.0 : -1.0);
+                ball.meta.insert(QStringLiteral("landingSide"), tip.x >= bat.x ? 1.0 : -1.0);
                 ball.meta.insert(QStringLiteral("leaders"), QJsonArray{QJsonArray{tip.x, tip.y}});
                 ball.meta.insert(QStringLiteral("mechRole"), QStringLiteral("balloon"));
                 body.push_back(ball);

@@ -98,17 +98,31 @@ QRectF BrickCanvas::brickRect(const Brick& b) const {
     return QRectF(c.x() - sz.width() / 2.0, c.y() - sz.height() / 2.0, sz.width(), sz.height());
 }
 
+// A PORT SITS WHERE ITS FACE IS ON THE PART: out on the brick's edge the way the face looks, and
+// across that edge as far along as the face is along that side of the part - so a Y-split's two ways
+// out are one above the other, as on the part.
 QPointF BrickCanvas::portPoint(const Brick& b, int port) const {
-    const Vec2 d = brickPortPaneDir(b, port);
-    const double half = brickSize(b).width() / 2.0;
-    return brickRect(b).center() + QPointF(d.x * half, d.y * half);
+    const BrickShape s = d_->shapeOf(b);
+    const QRectF r = brickRect(b);
+    if (port < 0 || port >= s.ports()) return r.center();
+    const Vec2 o = s.faceOut[static_cast<size_t>(port)];
+    const Vec2 m = s.faceMid[static_cast<size_t>(port)];
+    const Vec2 across = o.perp();
+    const double reach = std::abs(across.x) * s.half.x + std::abs(across.y) * s.half.y;
+    const double t = std::clamp(reach > 1e-9 ? dot(m, across) / reach : 0.0, -1.0, 1.0);
+    const Vec2 wo = turnQuarters(o, b.rot), wa = turnQuarters(across, b.rot);
+    const QPointF d(wo.x, -wo.y), a(wa.x, -wa.y);
+    const bool sideways = std::abs(d.x()) > 0.5;
+    const double halfAlong = sideways ? r.width() / 2.0 : r.height() / 2.0;
+    const double halfAcross = sideways ? r.height() / 2.0 : r.width() / 2.0;
+    return r.center() + d * halfAlong + a * (t * halfAcross * 0.75);
 }
 
 std::pair<QString, int> BrickCanvas::portAt(const QPointF& at) const {
     std::pair<QString, int> best{QString(), -1};
     double bestD = 7.0;
     for (const Brick& b : d_->bricks)
-        for (int p : {kPortLeft, kPortRight}) {
+        for (int p = 0; p < d_->portCount(b); ++p) {
             const QPointF q = portPoint(b, p);
             const double dd = std::hypot(at.x() - q.x(), at.y() - q.y());
             if (dd <= bestD) {
@@ -274,7 +288,7 @@ void BrickCanvas::paintEvent(QPaintEvent*) {
         p.drawText(bottom, Qt::AlignCenter,
                    p.fontMetrics().elidedText(sub, Qt::ElideRight, int(bottom.width())));
         // THE TWO PORTS: filled where something is linked.
-        for (int port : {kPortLeft, kPortRight}) {
+        for (int port = 0; port < d_->portCount(b); ++port) {
             bool used = false;
             for (const QString& o : d_->linksOf(b.id))
                 if (d_->portOn(b.id, o) == port) used = true;
@@ -534,6 +548,7 @@ BrickWizardDialog::BrickWizardDialog(Editor* editor, QWidget* parent)
     setWindowTitle(QStringLiteral("Mechanical harness wizard"));
     resize(1500, 880);
     catalog_.openRemembered();
+    design_.catalog = &catalog_;
     buildUi();
     loadPanel();
     refreshPreview();

@@ -170,7 +170,7 @@ void testBuild() {
     d.brick(r1)->run.wires = 3;
     d.brick(r2)->run.wires = 3;
     const BrickBuild b = buildBrickHarness(d, nullptr);
-    const BrickFace fx = b.faces.value(x1 + QStringLiteral(":1"));
+    const BrickFace fx = b.faces.value(x1 + QStringLiteral(":0"));
     check(near(fx.out, Vec2{1, 0}) && near(b.faces.value(f1 + QStringLiteral(":0")).out, Vec2{-1, 0}),
           "build: each end faces what it is joined to, on the port it is linked on");
     std::vector<const Entity*> runs;
@@ -262,10 +262,10 @@ void testFanoutJointAndExtras() {
           "joint: a face each side, looking out each way");
     // TURNED a half round, its left port faces right.
     j.brick(sp)->rot = 2;
-    check(near(brickPortWorldDir(*j.brick(sp), kPortLeft), Vec2{1, 0}),
+    check(near(j.portWorldDir(*j.brick(sp), 0), Vec2{1, 0}),
           "rotate: turned twice, the left port faces right");
     j.brick(sp)->rot = 1;
-    check(near(brickPortWorldDir(*j.brick(sp), kPortRight), Vec2{0, -1}),
+    check(near(j.portWorldDir(*j.brick(sp), 1), Vec2{0, -1}),
           "rotate: turned once, the right port faces down the sheet");
     j.brick(sp)->rot = 0;
 
@@ -317,6 +317,92 @@ void testFanoutJointAndExtras() {
     check(farLen > nearLen + 1.0, "dimensions: from the far point of the part, the whole run is longer");
 }
 
+// A PORT FOR EVERY CONNECTION FACE the part has: by kind until a part is chosen, then the part's own.
+void testPortsPerFace() {
+    BrickDesign d;
+    const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+    const QString s = d.addBrick(BrickType::End, PartKind::Splice, 2, 0);
+    const QString y = d.addBrick(BrickType::End, PartKind::YSplit, 4, 0);
+    const QString f = d.addBrick(BrickType::Fanout, PartKind::Wire, 1, 0);
+    std::printf("  ports: connector %d, splice %d, Y-split %d, special %d\n", d.portCount(*d.brick(x)),
+                d.portCount(*d.brick(s)), d.portCount(*d.brick(y)), d.portCount(*d.brick(f)));
+    check(d.portCount(*d.brick(x)) == 1 && d.portCount(*d.brick(s)) == 2 && d.portCount(*d.brick(y)) == 3,
+          "ports: a connector one, a splice two, a Y-split three");
+    check(d.portCount(*d.brick(f)) == 2, "ports: a special starts on one side and finishes on the other");
+
+    // A LIBRARY PART WITH THREE MARKED FACES has three ports, where its faces are.
+    PartsCatalog cat;
+    cat.setRemembering(false);
+    QString pid;
+    {
+        LibraryPart& p = cat.active().add(PartKind::Connector);
+        pid = p.id;
+        QJsonArray drawing;
+        for (const auto& [a, b] : {std::pair<Vec2, Vec2>{{0, -15}, {40, -15}}, std::pair<Vec2, Vec2>{{40, -15}, {40, 15}},
+                                   std::pair<Vec2, Vec2>{{40, 15}, {0, 15}}, std::pair<Vec2, Vec2>{{0, 15}, {0, -15}}}) {
+            Entity l;
+            l.type = EntityType::Line;
+            l.a = a;
+            l.b = b;
+            drawing.append(l.toJson());
+        }
+        p.mechanical = drawing;
+        // one face on the left, two on the right one above the other
+        p.outputs = {{{0, -10}, {0, 10}}, {{40, 4}, {40, 14}}, {{40, -14}, {40, -4}}};
+    }
+    d.catalog = &cat;
+    d.brick(x)->libPart = pid;
+    const BrickShape sh = d.shapeOf(*d.brick(x));
+    check(sh.ports() == 3, "ports: a library part with three faces has three ports");
+    if (sh.ports() == 3) {
+        check(near(sh.faceOut[0], Vec2{-1, 0}) && near(sh.faceOut[1], Vec2{1, 0}) && near(sh.faceOut[2], Vec2{1, 0}),
+              "ports: each looking the way its face does - one left, two right");
+        check(sh.faceMid[1].y * sh.faceMid[2].y < 0.0 && near(sh.faceLen[1], 10.0),
+              "ports: the two on the right one above the other, each its face's length");
+    }
+    d.brick(x)->libPart.clear();
+
+    // RUNS ON A Y-SPLIT land on its three faces: one in, two out.
+    BrickDesign j;
+    const QString in = j.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+    const QString r0 = j.addBrick(BrickType::Fanout, PartKind::Wire, 1, 0);
+    const QString ys = j.addBrick(BrickType::End, PartKind::YSplit, 2, 0);
+    const QString r1 = j.addBrick(BrickType::Fanout, PartKind::Wire, 3, -1);
+    const QString r2 = j.addBrick(BrickType::Fanout, PartKind::Wire, 3, 1);
+    const QString o1 = j.addBrick(BrickType::End, PartKind::Ferrule, 4, -1);
+    const QString o2 = j.addBrick(BrickType::End, PartKind::Ferrule, 4, 1);
+    QString why;
+    j.connect(in, r0);
+    check(j.connect(r0, ys, &why, -1, 0) && j.connect(ys, r1, &why, 1, -1) && j.connect(ys, r2, &why, 2, -1),
+          "Y-split: linked on each of its three ports");
+    j.connect(r1, o1);
+    j.connect(r2, o2);
+    const BrickBuild b = buildBrickHarness(j, nullptr);
+    const BrickFace f0 = b.faces.value(ys + QStringLiteral(":0"));
+    const BrickFace f1 = b.faces.value(ys + QStringLiteral(":1"));
+    const BrickFace f2 = b.faces.value(ys + QStringLiteral(":2"));
+    check(b.faces.contains(ys + QStringLiteral(":2")) && near(f0.out, Vec2{-1, 0}) && near(f1.out, Vec2{1, 0}) &&
+              f1.centre.y > f2.centre.y,
+          "Y-split: a face in on the left, two out on the right one above the other");
+    int onUpper = 0, onLower = 0;
+    for (const Entity& e : b.entities) {
+        if (e.type != EntityType::TwistedPair) continue;
+        const QString bid = e.meta.value(QStringLiteral("brickId")).toString();
+        if (bid == r1 && distance(e.points.front(), f1.centre) < 0.5 * f1.lengthMm) ++onUpper;
+        if (bid == r2 && distance(e.points.front(), f2.centre) < 0.5 * f2.lengthMm) ++onLower;
+    }
+    check(onUpper == 1 && onLower == 1, "Y-split: each run out leaves from its own face");
+
+    // AN END TURNS TO FACE ITS FIRST LINK: a connector to the right of its run looks left.
+    BrickDesign t;
+    const QString run = t.addBrick(BrickType::Run, PartKind::Wire, 0, 0);
+    const QString xr = t.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+    t.connect(run, xr);
+    check(near(t.portWorldDir(*t.brick(xr), 0), Vec2{-1, 0}), "turn: linked from its left, it looks left");
+    t.brick(xr)->rot = (t.brick(xr)->rot + 1) % 4;
+    check(near(t.portWorldDir(*t.brick(xr), 0), Vec2{0, 1}), "turn: and turned a quarter, its one port with it");
+}
+
 void mouse(QWidget* w, QEvent::Type t, const QPointF& at, Qt::KeyboardModifiers mods = Qt::NoModifier) {
     QMouseEvent e(t, at, w->mapToGlobal(at), Qt::LeftButton,
                   t == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton, mods);
@@ -365,7 +451,7 @@ void testDialog() {
         const Brick* a = dlg.design().brick(from);
         const Brick* b = dlg.design().brick(to);
         const QPointF start = mods & Qt::ControlModifier ? canvas->brickRect(*a).center()
-                                                         : canvas->portPoint(*a, kPortRight);
+                                                         : canvas->portPoint(*a, dlg.design().facingPort(*a, QPointF(canvas->brickRect(*b).center() - canvas->brickRect(*a).center()).x() > 0 ? Vec2{1, 0} : Vec2{-1, 0}));
         mouse(canvas, QEvent::MouseButtonPress, start, mods);
         mouse(canvas, QEvent::MouseMove, canvas->brickRect(*b).center(), mods);
         mouse(canvas, QEvent::MouseButtonRelease, canvas->brickRect(*b).center(), mods);
@@ -478,11 +564,12 @@ void testDialogMore() {
     check(near(d.brick(f1)->row, 0.0) && near(d.brick(fan)->row, 1.0) &&
               near(d.brick(f1)->col, c1Was) && near(d.brick(fan)->col, cfWas),
           "move: everything picked moves together");
+    const int f1Rot = d.brick(f1)->rot, fanRot = d.brick(fan)->rot, x1Rot = d.brick(x1)->rot;
     if (auto* rot = dlg.findChild<QPushButton*>(QStringLiteral("brickRotate"))) rot->click();
-    check(d.brick(f1)->rot == 1 && d.brick(fan)->rot == 1 && d.brick(x1)->rot == 0,
+    check(d.brick(f1)->rot == (f1Rot + 1) % 4 && d.brick(fan)->rot == (fanRot + 1) % 4 && d.brick(x1)->rot == x1Rot,
           "rotate: the bar button turns what is picked a quarter");
     dlg.arrange();   // and arranging turns each to face what it is linked to again
-    check(d.brick(f1)->rot == 0 && d.brick(fan)->rot == 0, "arrange: turns them back to face their links");
+    check(d.brick(f1)->rot == f1Rot && d.brick(fan)->rot == fanRot, "arrange: turns them back to face their links");
 
     // THE FANOUT'S WIRES PER PART: picking its link to a ferrule, and saying two.
     canvas->setSelection({});
@@ -593,6 +680,7 @@ int run_brickharness_tests() {
     testArrange();
     testBuild();
     testFanoutJointAndExtras();
+    testPortsPerFace();
     testDialog();
     testDialogMore();
     if (fails == 0) std::printf("  brick harness: OK\n");
