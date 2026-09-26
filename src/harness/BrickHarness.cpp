@@ -370,6 +370,7 @@ QJsonObject BrickDesign::toJson() const {
             QJsonArray labels;
             for (const BrickLabel& l : r.labels)
                 labels.append(QJsonObject{{"lengthMm", l.lengthMm},
+                                          {"clearShrink", l.clearShrink},
                                           {"leader", l.leader},
                                           {"wire", l.wire},
                                           {"fromFinish", l.fromFinish},
@@ -395,7 +396,10 @@ QJsonObject BrickDesign::toJson() const {
                                                    {"dimTextTotal", r.dimTextTotal},
                                                    {"dimTextFans", r.dimTextFans},
                                                    {"dimTextBetween", r.dimTextBetween},
-                                                   {"fanSide", r.fanSide}};
+                                                   {"fanSide", r.fanSide},
+                                                   {"dimLinear", r.dimLinear},
+                                                   {"dimTrace", r.dimTrace},
+                                                   {"dimSingle", r.dimSingle}};
         }
         bs.append(o);
     }
@@ -455,6 +459,7 @@ BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
                 l.text = lo.value(QStringLiteral("text")).toString(l.text);
                 l.lengthMm = lo.value(QStringLiteral("lengthMm")).toDouble(0.0);
                 l.leader = lo.value(QStringLiteral("leader")).toBool(true);
+                l.clearShrink = lo.value(QStringLiteral("clearShrink")).toBool(false);
                 s.labels.push_back(l);
             }
             for (const QJsonValue x : r.value(QStringLiteral("nets")).toArray()) s.nets << x.toString();
@@ -462,6 +467,9 @@ BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
             s.dimTextFans = r.value(QStringLiteral("dimTextFans")).toString();
             s.dimTextBetween = r.value(QStringLiteral("dimTextBetween")).toString();
             s.fanSide = r.value(QStringLiteral("fanSide")).toInt(-1);
+            s.dimLinear = r.value(QStringLiteral("dimLinear")).toBool(true);
+            s.dimTrace = r.value(QStringLiteral("dimTrace")).toBool(false);
+            s.dimSingle = r.value(QStringLiteral("dimSingle")).toBool(false);
         }
         d.bricks.push_back(b);
     }
@@ -975,7 +983,9 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         const bool several = (s.type == BrickType::Fanout || s.type == BrickType::Run) && b.size() > 1;
         if (several) {
             int trunkAt = -1;
-            if (s.type == BrickType::Run) {
+            // One body up to where it divides - a cable's, or a fanout's gathered wires - and from
+            // there only the spread is divided between the parts.
+            if (s.type == BrickType::Run || s.type == BrickType::Fanout) {
                 Branch t;
                 t.special = &s;
                 if (!a.isEmpty()) t.a = a.front();
@@ -1176,11 +1186,15 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             const Vec2 d{s->col - j.grid.x, s->row - j.grid.y};
             const Vec2 out1 = std::abs(d.x) >= std::abs(d.y) ? Vec2{d.x >= 0.0 ? 1.0 : -1.0, 0.0}
                                                              : Vec2{0.0, d.y >= 0.0 ? -1.0 : 1.0};
-            const double ww = std::max(0.1, s->run.wireWidthMm);
+            // THE CABLE'S END is the face: as wide as the cable, which is what the wires go into.
+            const Brick* cable = design.brick(j.a)->type == BrickType::Run ? design.brick(j.a) : design.brick(j.b);
+            const double cww = std::max(0.1, cable->run.wireWidthMm);
+            const int cw = std::max(1, cable->run.wires);
             BrickFace f;
             f.centre = at;
             f.out = out1;
-            f.lengthMm = ww * 1.5 * std::max(1, s->run.wires);
+            f.lengthMm = cable->run.bodyWidthMm > 1e-9 ? cable->run.bodyWidthMm
+                                                       : cww * 1.5 * (cw - 1) + cww + 2.0;
             f.nearAt = f.farAt = at;
             out.faces.insert(faceKey(it.key() + QLatin1Char('@') + sid, 0), f);
         }
@@ -1233,7 +1247,12 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                 ww = std::max(ww, branches[u.branch].special->run.wireWidthMm);
             }
             const bool junction = it.key().startsWith(QLatin1String("~J"));
-            const double spread = junction ? ww * 1.5 * (total - 1) + ww : scale / 100.0 * f.lengthMm;
+            // At a junction the cable's own wires go on packed; a fan's enter across the drawing's
+            // share of the cable's width (Options, Drawing: Auto scale fan).
+            const bool cableSide = !uses.empty() && branches[uses.front().branch].special->type == BrickType::Run;
+            const double spread = !junction ? scale / 100.0 * f.lengthMm
+                                  : cableSide ? ww * 1.5 * (total - 1) + ww
+                                              : design.faceFanPct / 100.0 * f.lengthMm;
             const double lane = total > 1 ? std::max(0.0, spread - ww) / (total - 1) : 0.0;
             int k = 0;
             for (const Use& u : uses) {
@@ -1305,7 +1324,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
     // A LABEL: the house label model - the one the Special ribbon puts on a harness - fitted across
     // what it goes round, along the run, MASKING what is under it so it reads as over the wire, kept
     // off any bend, with its text called out on a leader or written on it.
-    std::optional<MechModel> labelModel;
+    std::optional<MechModel> labelModel, shrunkLabelModel;
     auto straightAround = [](const std::vector<Vec2>& path, double s, double& back, double& ahead) {
         // How far the path runs straight either side of the station, bends being turns of more than
         // a couple of degrees.
@@ -1327,10 +1346,13 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             set.load();
             const MechModel* m = set.of(MechModelKind::Label);
             labelModel = m && !m->isEmpty() ? *m : builtInMechModel(MechModelKind::Label);
+            const MechModel* h = set.of(MechModelKind::LabelUnderHeatshrink);
+            shrunkLabelModel = h && !h->isEmpty() ? *h : builtInMechModel(MechModelKind::LabelUnderHeatshrink);
         }
+        const MechModel& model = lab.clearShrink ? *shrunkLabelModel : *labelModel;
         Vec2 dir;
         const Vec2 mid0 = pointAlong(path, s, &dir);
-        const double margin = labelModel->exceedMm > 0.0 ? labelModel->exceedMm
+        const double margin = model.exceedMm > 0.0 ? model.exceedMm
                                                          : std::max(1.0, span * 0.12);
         const double across = span + 2.0 * margin;
         double along = lab.lengthMm > 1e-9 ? lab.lengthMm
@@ -1356,11 +1378,11 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             w.meta.insert(QStringLiteral("mechRole"), QStringLiteral("label"));
             ents.push_back(w);
         }
-        std::vector<Entity> model = mechModelEntities(*labelModel, Vec2{0.0, 0.0}, 0.0, along, across);
+        std::vector<Entity> drawn = mechModelEntities(model, Vec2{0.0, 0.0}, 0.0, along, across);
         Bounds bb;
-        for (const Entity& e : model) bb.expand(e.bounds());
+        for (const Entity& e : drawn) bb.expand(e.bounds());
         const Vec2 c = bb.valid ? (bb.min + bb.max) * 0.5 : Vec2{0.0, 0.0};
-        for (Entity& e : model) {
+        for (Entity& e : drawn) {
             translateEntity(e, c * -1.0);
             rotateEntity(e, Vec2{0.0, 0.0}, turn);
             translateEntity(e, mid0);
@@ -1441,7 +1463,8 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         // fanSide says - and is packed at the other.
         bool spreadA = !jA && !isSub && !br.freeStart;
         bool spreadB = !loose && !jB && !isTrunk;
-        if (s.type == BrickType::Fanout) {
+        if (s.type == BrickType::Fanout && isTrunk) spreadA = false;   // the body: gathered
+        if (s.type == BrickType::Fanout && !isTrunk && !isSub) {
             // In the special's own terms, turned round where the branch was built the other way.
             const int side = br.flipped ? 1 - design.fanoutSpreadSide(s) : design.fanoutSpreadSide(s);
             // Turned on purpose it spreads where it is told - at a junction too, as a breakout.
@@ -1449,10 +1472,14 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             spreadA = side == 0 && !isSub && !br.freeStart && (!jA || told);
             spreadB = side == 1 && !loose && !isTrunk && (!jB || told);
         }
-        if (!spreadA) la.lane = packed;
-        else if (jA) la.lane = packed * 2.0;   // a breakout at a junction: spread enough to see
-        if (!spreadB && !loose) lb.lane = packed;
-        else if (spreadB && jB) lb.lane = packed * 2.0;
+        // Where it does not spread its wires are packed - except where a fan goes into a cable, which
+        // it enters across the drawing's share of the cable's width (the junction's landing).
+        const bool intoCableA = jA && s.type != BrickType::Run;
+        const bool intoCableB = jB && s.type != BrickType::Run;
+        if (!spreadA && !intoCableA) la.lane = packed;
+        else if (spreadA && jA) la.lane = std::max(la.lane, packed * 2.0);
+        if (!spreadB && !loose && !intoCableB) lb.lane = packed;
+        else if (spreadB && jB) lb.lane = std::max(lb.lane, packed * 2.0);
         const double fanA = !spreadA ? 0.0
                             : r.fanStartMm >= 0.0 ? r.fanStartMm
                                                   : std::max(kWiresRunEnd, la.lane * (wires - 1) / 2.0);
@@ -1524,6 +1551,19 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                                     outer == QLatin1String("heatshrink") ? QStringLiteral("heatshrink")
                                                                          : QStringLiteral("cable"));
                     run.meta.insert(QStringLiteral("twistBodyWidth"), bodyWidth);
+                    // AT AN END THAT DOES NOT FAN - joined to a fanout, or where it splits - the
+                    // transition is the end boot, so one asked for at both ends is at both.
+                    const bool wantA = r.transitions == RunEnds::Start || r.transitions == RunEnds::Both;
+                    const bool wantB = r.transitions == RunEnds::Finish || r.transitions == RunEnds::Both;
+                    if ((wantA && !spreadA) || (wantB && !spreadB && !loose)) {
+                        run.meta.insert(QStringLiteral("twistEndBoot"), true);
+                        run.meta.insert(QStringLiteral("twistEndBootRecovered"), true);
+                    }
+                    // THE TRANSITION'S ENTRY the size of the bundle going into it.
+                    if (r.transitions != RunEnds::None) {
+                        const double entry = std::min(bodyWidth, packed * (wires - 1) + ww);
+                        run.meta.insert(QStringLiteral("twistBodyFace"), entry);
+                    }
                     run.meta.insert(QStringLiteral("twistBodyTransitionSides"),
                                     r.transitions == RunEnds::Start    ? QStringLiteral("start")
                                     : r.transitions == RunEnds::Finish ? QStringLiteral("finish")
@@ -1536,6 +1576,20 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         }
 
         const double total = routeLength(route);
+        // WHAT AUTO CAME TO, on the special's first run, so the window can show it.
+        if (!out.actual.contains(s.id) && !isSub) {
+            BrickActual act;
+            act.fanStart = fanA;
+            act.fanFinish = fanB;
+            act.bodyWidth = bodyWidth;
+            for (const Entity& e : made)
+                if (e.type == EntityType::TwistedPair) {
+                    const TwistFigures fig = twistedPairFigures(e);
+                    act.knee = fig.kneeRadius;
+                    act.fanKnee = fig.fanKnee;
+                }
+            out.actual.insert(s.id, act);
+        }
         // A BRAID, when it is the outermost, is shown as braid over the body between the fans.
         if (outer == QLatin1String("braid") && bodyWidth > 0.0 && total > fanA + fanB + 1.0) {
             std::vector<Vec2> mid{pointAlong(route, fanA)};
@@ -1577,8 +1631,87 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             const Vec2 from = design.dimFromFar ? fa.farAt : fa.nearAt;
             const Vec2 to = design.dimToFar ? fb.farAt : fb.nearAt;
             const double along = total + distance(from, fa.centre) + distance(to, fb.centre);
-            const Vec2 toAlong = straight ? to : from + fa.out * dot(to - from, fa.out);
-            dim(from, toAlong, -(gapOut + 10.0), along, !straight, r.dimTextTotal, "total");
+            const QString said = !r.dimTextTotal.isEmpty() ? r.dimTextTotal : fmt(along);
+            if (r.dimSingle) {
+                // SINGLE-ENDED: from the start, a short line with one arrow and the figure over it.
+                const Vec2 u = fa.out;
+                const Vec2 side = u.perp() * -(gapOut + 10.0);
+                const Vec2 p0 = from + side;
+                const Vec2 p1 = p0 + u * 25.0;
+                auto line = [&](const Vec2& a, const Vec2& b) {
+                    Entity l;
+                    l.type = EntityType::Line;
+                    l.a = a;
+                    l.b = b;
+                    l.meta.insert(QStringLiteral("mechRole"), QStringLiteral("dim"));
+                    l.meta.insert(QStringLiteral("brickDim"), QStringLiteral("total"));
+                    l.meta.insert(QStringLiteral("brickMeasured"), along);
+                    made.push_back(l);
+                };
+                line(from, p0 + side.normalized() * 1.5);                        // extension
+                line(p0, p1);                                                    // the short line
+                line(p0, p0 + u * 2.5 + u.perp() * 0.9);                         // the arrow
+                line(p0, p0 + u * 2.5 - u.perp() * 0.9);
+                Entity t = makeTextAt((p0 + p1) * 0.5 + side.normalized() * 1.2, said, 3.5,
+                                      angleOf(u.x < -1e-9 ? u * -1.0 : u));
+                t.meta.insert(QStringLiteral("justify"), QStringLiteral("BC"));
+                t.meta.insert(QStringLiteral("mechRole"), QStringLiteral("dim"));
+                t.meta.insert(QStringLiteral("brickDim"), QStringLiteral("total"));
+                t.meta.insert(QStringLiteral("brickMeasured"), along);
+                made.push_back(t);
+            } else if (!r.dimLinear && r.dimTrace && !straight) {
+                // TRACING THE RUN: the dimension line follows the harness round every bend, at
+                // its knee radius, off to one side of it.
+                double knee = std::max(0.0, r.kneeRadiusMm);
+                for (const Entity& e : made)
+                    if (e.type == EntityType::TwistedPair) knee = twistedPairFigures(e).kneeRadius;
+                std::vector<double> radii(route.size(), knee);
+                const std::vector<Vec2> round = roundedPolylinePerCorner(route, radii);
+                const std::vector<Vec2> path = offsetPolyline(round, gapOut + 10.0);
+                if (path.size() >= 2) {
+                    Entity l;
+                    l.type = EntityType::Polyline;
+                    l.points = path;
+                    l.a = path.front();
+                    l.b = path.back();
+                    l.meta.insert(QStringLiteral("mechRole"), QStringLiteral("dim"));
+                    l.meta.insert(QStringLiteral("brickDim"), QStringLiteral("total"));
+                    l.meta.insert(QStringLiteral("brickMeasured"), along);
+                    l.meta.insert(QStringLiteral("dimTrace"), true);
+                    made.push_back(l);
+                    // the arrows at the two ends, and the extension lines back to the run
+                    for (bool atEnd : {false, true}) {
+                        const Vec2 tip = atEnd ? path.back() : path.front();
+                        const Vec2 inward = (atEnd ? path[path.size() - 2] - path.back()
+                                                   : path[1] - path.front()).normalized();
+                        for (double sgn : {1.0, -1.0}) {
+                            Entity a;
+                            a.type = EntityType::Line;
+                            a.a = tip;
+                            a.b = tip + inward * 2.5 + inward.perp() * (0.9 * sgn);
+                            a.meta.insert(QStringLiteral("mechRole"), QStringLiteral("dim"));
+                            made.push_back(a);
+                        }
+                        Entity x;
+                        x.type = EntityType::Line;
+                        x.a = atEnd ? route.back() : route.front();
+                        x.b = tip;
+                        x.meta.insert(QStringLiteral("mechRole"), QStringLiteral("dim"));
+                        made.push_back(x);
+                    }
+                    Vec2 tdir;
+                    const Vec2 tAt = pointAlong(path, routeLength(path) / 2.0, &tdir);
+                    const Vec2 td = tdir.x < -1e-9 ? tdir * -1.0 : tdir;
+                    Entity t = makeTextAt(tAt + td.perp() * 1.2, said, 3.5, angleOf(td));
+                    t.meta.insert(QStringLiteral("justify"), QStringLiteral("BC"));
+                    t.meta.insert(QStringLiteral("mechRole"), QStringLiteral("dim"));
+                    made.push_back(t);
+                }
+            } else {
+                // LINEAR along the way the harness leaves, or at the angle from one point to the other.
+                const Vec2 toAlong = straight || !r.dimLinear ? to : from + fa.out * dot(to - from, fa.out);
+                dim(from, toAlong, -(gapOut + 10.0), along, !straight, r.dimTextTotal, "total");
+            }
         }
         if (r.dimFans) {
             if (fanA > 1e-9)
@@ -1647,6 +1780,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         stampBrick(made, s.id);
         for (Entity& e : made) {
             e.meta.insert(QStringLiteral("brickBranch"), static_cast<int>(i));
+            if (isTrunk) e.meta.insert(QStringLiteral("brickTrunk"), true);
             out.entities.push_back(std::move(e));
         }
     }

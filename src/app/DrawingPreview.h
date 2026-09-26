@@ -8,6 +8,8 @@
 #include <QWidget>
 #include <vector>
 
+class QToolButton;
+
 namespace Edraw_Desktop {
 
 // A set of entities drawn the way they will look on the sheet: framed to fit, through the same
@@ -50,6 +52,11 @@ public:
     // object being PICKED is still marked, because that is the answer to a question being asked right now
     // rather than chrome on a drawing being looked at.
     void setShowConnection(bool on);
+    // THE MAP: a button in the corner that turns on the whole drawing small, with the part in view
+    // outlined on it; a click on the map goes there.
+    void setMinimapAvailable(bool on);
+    void setMinimap(bool on);
+    bool minimap() const { return minimap_; }
     bool showsConnection() const { return showConn_; }
 
     // The objects, so a caller can write the pick back onto the part.
@@ -65,6 +72,7 @@ protected:
     void mouseMoveEvent(QMouseEvent* e) override;
     void mouseReleaseEvent(QMouseEvent* e) override;
     void mouseDoubleClickEvent(QMouseEvent* e) override;
+    void resizeEvent(QResizeEvent* e) override;
 
 private:
     QString caption_;
@@ -80,6 +88,11 @@ private:
     bool pickable_ = false;
     int picked_ = -1;
     bool showConn_ = true;
+    QRectF minimapRect() const;
+    bool minimap_ = false;
+    QToolButton* mapBtn_ = nullptr;
+    Bounds lastBounds_;
+    double lastScale_ = 1.0;
     // The mapping the last paint used, so a click can be turned back into a point on the drawing
     // rather than the transform being worked out twice from two different places.
     ViewTransform lastVt_;

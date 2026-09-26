@@ -65,6 +65,8 @@ struct BrickLabel {
     double lengthMm = 0.0;
     // Its text called out with a leader beside the run, on the drawing.
     bool leader = true;
+    // Covered over with clear heatshrink - the label model that has it.
+    bool clearShrink = false;
 };
 
 // WHAT A SPECIAL IS DRAWN WITH. Below nought is "the drawing decides"; nought is a real figure.
@@ -91,6 +93,12 @@ struct BrickRunSpec {
     QString dimTextTotal;
     QString dimTextFans;
     QString dimTextBetween;
+    // LINEAR: along the way the harness leaves its start. Not linear: at the angle from one point to
+    // the other - or, TRACING the run, along it round every bend, knee radius and all.
+    bool dimLinear = true;
+    bool dimTrace = false;
+    // The whole length said by a single-ended dimension: from its start, a short line with the figure.
+    bool dimSingle = false;
     // WHICH END A FANOUT SPREADS AT: -1 the end on a part (the start when both are), 0 the start,
     // 1 the finish.
     int fanSide = -1;
@@ -144,6 +152,9 @@ struct BrickDesign {
     std::vector<BrickLink> links;
     // Where library parts are read from - for how many faces an end has, and where. Not saved.
     const PartsCatalog* catalog = nullptr;
+    // How much of a cable's width the wires of a fan joined to it enter across (Options, Drawing:
+    // Auto scale fan). Not saved: it is the drawing's setting.
+    double faceFanPct = 95.0;
     // Shapes already worked out, by what decides them. Not saved.
     mutable QHash<QString, BrickShape> shapeCache;
     // WHERE DIMENSIONS ARE TAKEN FROM at each end of a run: the end part's near point (its face) or
@@ -217,8 +228,19 @@ struct BrickFace {
     Vec2 farAt{0.0, 0.0};
 };
 
+// WHAT A SPECIAL CAME TO where it was left on Auto: the figures the drawing worked out, so the
+// window can show them.
+struct BrickActual {
+    double fanStart = 0.0;
+    double fanFinish = 0.0;
+    double knee = 0.0;
+    double fanKnee = 0.0;
+    double bodyWidth = 0.0;
+};
+
 struct BrickBuild {
     std::vector<Entity> entities;           // every entity carries meta "brickId"
+    QHash<QString, BrickActual> actual;     // by special id
     QHash<QString, BrickFace> faces;        // by "<end id>:<port>"
     QStringList problems;                   // what could not be drawn, and why
 };

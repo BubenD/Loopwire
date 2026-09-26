@@ -19,7 +19,10 @@ class QLineEdit;
 class QPushButton;
 class QSpinBox;
 class QStackedWidget;
+class QSplitter;
+class QTabWidget;
 class QTableWidget;
+class QToolButton;
 class QTreeWidget;
 
 namespace Edraw_Desktop {
@@ -64,6 +67,11 @@ public:
     void deleteSelected();
     void moveSelection(double dCol, double dRow);
     void rotateSelection();
+    // THE MAP: the whole of it small in a corner, with the part in view marked; a click on it goes there.
+    void setMinimap(bool on);
+    bool minimap() const { return minimap_; }
+    // The middle of what is in view, on the grid.
+    QPointF viewCentreGrid() const;
 
 signals:
     void selectionChanged(const QString& current);
@@ -81,8 +89,12 @@ protected:
     void dragEnterEvent(QDragEnterEvent* e) override;
     void dragMoveEvent(QDragMoveEvent* e) override;
     void dropEvent(QDropEvent* e) override;
+    void resizeEvent(QResizeEvent* e) override;
 
 private:
+    QRectF minimapRect() const;
+    bool minimap_ = false;
+    QToolButton* mapButton_ = nullptr;
     BrickDesign* d_;
     QStringList sel_;
     std::pair<QString, QString> selLink_;
@@ -143,6 +155,14 @@ public:
     int bomItemOf(const QString& partId) const;
     void setAsk(std::function<bool(const QString& question)> ask) { ask_ = std::move(ask); }
 
+    // Put the picked end part as this library part - from the parts list - and on the bill.
+    bool assignPart(const QString& partId);
+
+    // WHERE THE BILL IS: 0 a tab on the left, 1 under the left, 2 under the preview, 3 above the
+    // pane, 4 under the right.
+    void placeBom(int where);
+    int bomPlace() const { return bomAt_; }
+
     // THE WIZARDS KEPT IN THE DRAWING, by name: saved with it, opened again, deleted.
     bool saveToDrawing(const QString& name);
     bool loadFromDrawing(const QString& name);
@@ -166,6 +186,7 @@ private:
     void refreshBom();
     void refreshSaved();
     void loadNets();
+    void showActuals();
     QWidget* buildEndPage();
     QWidget* buildRunPage();
     QWidget* buildLinkPage();
@@ -187,6 +208,20 @@ private:
     QLineEdit* harnessName_ = nullptr;
     QTableWidget* bom_ = nullptr;
     QTableWidget* nets_ = nullptr;
+    bool runSized_ = false;   // the run page's sections given their proportions, once it has a height
+    int bomAt_ = -1;
+    QTabWidget* leftTabs_ = nullptr;
+    QSplitter* leftSplit_ = nullptr;
+    QSplitter* middle_ = nullptr;
+    QSplitter* rightSplit_ = nullptr;
+    QComboBox* bomAtCombo_ = nullptr;
+    // THE AUTO BUTTONS: beside each figure the drawing works out when left alone - "A", lit while
+    // it is left alone, the figure shown then being what it came to.
+    QHash<QDoubleSpinBox*, QToolButton*> autoOf_;
+    QHash<QString, BrickActual> actual_;
+    QCheckBox* dimLinear_ = nullptr;
+    QCheckBox* dimTrace_ = nullptr;
+    QCheckBox* dimSingle_ = nullptr;
 
     BrickPalette* palette_ = nullptr;
     QTreeWidget* parts_ = nullptr;

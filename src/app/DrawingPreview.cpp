@@ -6,6 +6,8 @@
 #include "render/EntityRenderer.h"
 
 #include <QMouseEvent>
+#include <QResizeEvent>
+#include <QToolButton>
 #include <QPainter>
 #include <QWheelEvent>
 
@@ -118,7 +120,54 @@ void DrawingPreview::wheelEvent(QWheelEvent* e) {
     e->accept();
 }
 
+QRectF DrawingPreview::minimapRect() const {
+    return QRectF(width() - 190.0, height() - 124.0, 180.0, 114.0);
+}
+
+void DrawingPreview::setMinimapAvailable(bool on) {
+    if (on && !mapBtn_) {
+        mapBtn_ = new QToolButton(this);
+        mapBtn_->setObjectName(QStringLiteral("previewMap"));
+        mapBtn_->setText(QStringLiteral("Map"));
+        mapBtn_->setCheckable(true);
+        mapBtn_->setAutoRaise(true);
+        mapBtn_->setToolTip(QStringLiteral("The whole drawing small, with the part in view outlined"));
+        mapBtn_->setStyleSheet(QStringLiteral("QToolButton{color:#8fb0d6;font-size:10px;padding:1px 4px;}"
+                                              "QToolButton:checked{background:#2b6cb0;color:white;}"));
+        connect(mapBtn_, &QToolButton::toggled, this, [this](bool v) { setMinimap(v); });
+        mapBtn_->move(width() - 44, height() - 22);
+        mapBtn_->show();
+    }
+    if (mapBtn_) mapBtn_->setVisible(on);
+}
+
+void DrawingPreview::setMinimap(bool on) {
+    minimap_ = on;
+    if (mapBtn_ && mapBtn_->isChecked() != on) mapBtn_->setChecked(on);
+    update();
+}
+
+void DrawingPreview::resizeEvent(QResizeEvent* e) {
+    QWidget::resizeEvent(e);
+    if (mapBtn_) mapBtn_->move(width() - 44, 4 + 14);
+}
+
 void DrawingPreview::mousePressEvent(QMouseEvent* e) {
+    // A CLICK ON THE MAP goes there: that point to the middle of the view.
+    if (minimap_ && e->button() == Qt::LeftButton && lastBounds_.valid &&
+        minimapRect().contains(e->position())) {
+        const QRectF m = minimapRect().adjusted(6, 6, -6, -6);
+        const double w = std::max(1e-6, lastBounds_.max.x - lastBounds_.min.x);
+        const double h = std::max(1e-6, lastBounds_.max.y - lastBounds_.min.y);
+        const double s = std::min(m.width() / w, m.height() / h);
+        const double cx = (lastBounds_.min.x + lastBounds_.max.x) / 2.0;
+        const double cy = (lastBounds_.min.y + lastBounds_.max.y) / 2.0;
+        const double wx = cx + (e->position().x() - m.center().x()) / s;
+        const double wy = cy - (e->position().y() - m.center().y()) / s;
+        pan_ = QPointF((cx - wx) * lastScale_, (wy - cy) * lastScale_);
+        update();
+        return;
+    }
     // Picking one object: the nearest to the click, and only if the click is anywhere near it - a click
     // on empty space takes nothing rather than the least distant thing on the sheet.
     if (pickable_ && e->button() == Qt::LeftButton && lastVtValid_ && !ents_.empty()) {
@@ -236,6 +285,8 @@ void DrawingPreview::paintEvent(QPaintEvent*) {
     vt.view.y = box.center().y() + pan_.y() + (b.min.y + b.max.y) / 2.0 * scale;
     lastVt_ = vt;
     lastVtValid_ = true;
+    lastBounds_ = b;
+    lastScale_ = scale;
     p.save();
     p.setClipRect(box);
     EntityRenderer::setBackgroundColor(QColor("#2b2e33"));
@@ -266,6 +317,29 @@ void DrawingPreview::paintEvent(QPaintEvent*) {
         else EntityRenderer::draw(p, e, doc, vt, QColor("#d7dade"));
     }
     p.restore();
+    // THE MAP: the whole drawing, small, and the part of it in view outlined.
+    if (minimap_) {
+        const QRectF m = minimapRect();
+        p.save();
+        p.setPen(QPen(QColor("#4a4e55"), 1));
+        p.setBrush(QColor(30, 33, 38, 235));
+        p.drawRect(m);
+        const QRectF in = m.adjusted(6, 6, -6, -6);
+        const double s = std::min(in.width() / w, in.height() / h);
+        ViewTransform mv;
+        mv.view.scale = s;
+        mv.view.x = in.center().x() - (b.min.x + b.max.x) / 2.0 * s;
+        mv.view.y = in.center().y() + (b.min.y + b.max.y) / 2.0 * s;
+        p.setClipRect(m);
+        for (const Entity& e : doc.entities()) EntityRenderer::draw(p, e, doc, mv, QColor("#9aa3ad"));
+        // what is in view
+        const Vec2 tl = vt.toWorld(QPointF(box.left(), box.top()));
+        const Vec2 br = vt.toWorld(QPointF(box.right(), box.bottom()));
+        p.setPen(QPen(QColor("#2bd0ff"), 1.4));
+        p.setBrush(Qt::NoBrush);
+        p.drawRect(QRectF(mv.toScreen(tl), mv.toScreen(br)).normalized());
+        p.restore();
+    }
     // What the zoom is, once it is not the whole drawing - so it is never a mystery why only part of
     // the sheet is showing.
     if (zoom_ > 1.0 + 1e-9) {

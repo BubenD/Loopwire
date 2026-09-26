@@ -26,6 +26,9 @@
 #include <QTableWidget>
 #include <QTreeWidget>
 #include <QListWidget>
+#include <QSplitter>
+#include <QTabWidget>
+#include <QToolButton>
 #include "harness/Bom.h"
 #include "io/Dwx.h"
 #include <QDir>
@@ -240,7 +243,7 @@ void testFanoutJointAndExtras() {
     BrickBuild b = buildBrickHarness(d, nullptr);
     std::vector<const Entity*> branches;
     for (const Entity& e : b.entities)
-        if (e.meta.value(QStringLiteral("brickId")).toString() == fan &&
+        if (e.meta.value(QStringLiteral("brickId")).toString() == fan && !e.meta.contains(QStringLiteral("brickTrunk")) &&
             (e.type == EntityType::TwistedPair || e.type == EntityType::Polyline))
             branches.push_back(&e);
     int wiresDrawn = 0;
@@ -572,7 +575,7 @@ void testRoundThree() {
     const int rotWas = d.brick(f)->rot;
     if (auto* add = dlg.findChild<QPushButton*>(QStringLiteral("brickLabelAdd"))) add->click();
     auto* labels = dlg.findChild<QTableWidget*>(QStringLiteral("brickLabels"));
-    auto* text = labels ? qobject_cast<QLineEdit*>(labels->cellWidget(0, 5)) : nullptr;
+    auto* text = labels ? qobject_cast<QLineEdit*>(labels->cellWidget(0, 6)) : nullptr;
     if (text) {
         text->setFocus();
         text->setText(QStringLiteral("W7"));
@@ -791,7 +794,200 @@ void testRoundFour() {
     }
 }
 
-void mouse(QWidget* w, QEvent::Type t, const QPointF& at, Qt::KeyboardModifiers mods = Qt::NoModifier) {
+void mouse(QWidget* w, QEvent::Type t, const QPointF& at, Qt::KeyboardModifiers mods = Qt::NoModifier);
+
+// The fifth round.
+void testRoundFive() {
+    auto of = [](const BrickBuild& b, const QString& id, auto pred) {
+        std::vector<const Entity*> out;
+        for (const Entity& e : b.entities)
+            if (e.meta.value(QStringLiteral("brickId")).toString() == id && pred(e)) out.push_back(&e);
+        return out;
+    };
+    auto isRun = [](const Entity& e) { return e.type == EntityType::TwistedPair; };
+
+    // 1. A LABEL UNDER CLEAR HEATSHRINK is the label model that has the heatshrink on it.
+    {
+        BrickDesign d;
+        const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString r = d.addBrick(BrickType::Run, PartKind::Wire, 1, 0);
+        const QString y = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        d.connect(x, r);
+        d.connect(r, y);
+        d.brick(r)->run.labels.push_back({-1, false, 60.0, QStringLiteral("A"), 0.0, false, false});
+        auto parts = [&]() {
+            int n = 0;
+            for (const Entity& e : buildBrickHarness(d, nullptr).entities)
+                if (e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("label")) ++n;
+            return n;
+        };
+        const int plain = parts();
+        d.brick(r)->run.labels.front().clearShrink = true;
+        const int covered = parts();
+        std::printf("  clear heatshrink: %d label part(s), %d covered\n", plain, covered);
+        check(covered > plain, "label: under clear heatshrink, the heatshrink is drawn on it");
+    }
+
+    // 3. A FANOUT TO SEVERAL PARTS: one gathered body, only the spread divided.
+    // 4. and a fan into a cable enters across the drawing's share of the cable's width.
+    {
+        BrickDesign d;
+        const QString p1 = d.addBrick(BrickType::End, PartKind::Connector, 0, -1);
+        const QString p2 = d.addBrick(BrickType::End, PartKind::Connector, 0, 1);
+        const QString f = d.addBrick(BrickType::Fanout, PartKind::Wire, 2, 0);
+        const QString c = d.addBrick(BrickType::Run, PartKind::Wire, 4, 0);
+        const QString p3 = d.addBrick(BrickType::End, PartKind::Connector, 6, 0);
+        QString why;
+        d.connect(p1, f, &why, -1, kPortLeft);
+        d.connect(p2, f, &why, -1, kPortLeft);
+        d.connect(f, c, &why);
+        d.connect(c, p3);
+        d.brick(c)->run.bodyWidthMm = 10.0;
+        d.faceFanPct = 80.0;
+        const BrickBuild b = buildBrickHarness(d, nullptr);
+        const auto runs = of(b, f, isRun);
+        int trunks = 0;
+        const Entity* trunk = nullptr;
+        for (const Entity* e : runs)
+            if (e->meta.value(QStringLiteral("brickTrunk")).toBool()) {
+                ++trunks;
+                trunk = e;
+            }
+        std::printf("  fanout body: %d run(s), %d body\n", int(runs.size()), trunks);
+        check(runs.size() == 3 && trunks == 1, "fanout: one gathered body, and a spread to each part");
+        if (trunk) {
+            // The body's end at the cable: its wires across 80% of the cable's 10 mm.
+            const double laneAtCable = trunk->meta.value(QStringLiteral("twistLane")).toDouble();
+            const double ww = trunk->meta.value(QStringLiteral("twistWireWidth")).toDouble();
+            const int n = trunk->meta.value(QStringLiteral("twistWires")).toInt();
+            std::printf("  into the cable: %.2f across of 10\n", laneAtCable * (n - 1) + ww);
+            check(std::abs(laneAtCable * (n - 1) + ww - 8.0) < 1e-6,
+                  "fanout: enters the cable across the drawing's fan share of its width (80%)");
+        }
+        // 6. THE CABLE'S TRANSITIONS AT BOTH ENDS - at the end joined to the fanout too.
+        d.brick(c)->run.transitions = RunEnds::Both;
+        const BrickBuild withBoth = buildBrickHarness(d, nullptr);
+        const auto cr = of(withBoth, c, isRun);
+        check(!cr.empty() && cr[0]->meta.value(QStringLiteral("twistEndBoot")).toBool() &&
+                  cr[0]->meta.value(QStringLiteral("twistBodyTransitionSides")).toString() == QLatin1String("both"),
+              "transition: at both ends, the joined end as its end boot");
+    }
+
+    // 8, 9. THE WHOLE LENGTH: at its angle, tracing the run, single-ended.
+    {
+        BrickDesign d;
+        const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString r = d.addBrick(BrickType::Run, PartKind::Wire, 1, 0);
+        const QString y = d.addBrick(BrickType::End, PartKind::Connector, 2, 3);
+        d.connect(x, r);
+        d.connect(r, y);
+        BrickRunSpec& s = d.brick(r)->run;
+        s.dimTotal = true;
+        auto total = [&]() {
+            BrickBuild b = buildBrickHarness(d, nullptr);
+            std::vector<Entity> out;
+            for (const Entity& e : b.entities)
+                if (e.meta.value(QStringLiteral("brickDim")).toString() == QLatin1String("total") ||
+                    e.meta.value(QStringLiteral("dimTrace")).toBool())
+                    out.push_back(e);
+            return out;
+        };
+        auto lin = total();
+        s.dimLinear = false;
+        auto ang = total();
+        check(!lin.empty() && !ang.empty() && std::abs(lin[0].b.y - lin[0].a.y) < 1e-6 &&
+                  std::abs(ang[0].b.y - ang[0].a.y) > 1.0,
+              "dimension: linear along the harness; not linear, at the angle between its points");
+        s.dimTrace = true;
+        auto tr = total();
+        bool traced = false;
+        for (const Entity& e : tr) traced = traced || (e.type == EntityType::Polyline && e.points.size() > 3);
+        check(traced, "dimension: traced, its line follows the run round its bends");
+        s.dimTrace = false;
+        s.dimSingle = true;
+        auto single = total();
+        int lines = 0, texts = 0;
+        for (const Entity& e : single) {
+            if (e.type == EntityType::Line) ++lines;
+            if (e.type == EntityType::Text) ++texts;
+        }
+        check(lines >= 3 && texts == 1, "dimension: single-ended - a short line, an arrow, the figure over it");
+    }
+
+    // THE WINDOW: 2, 5, 7, 10, 11, 12.
+    Document doc;
+    Editor ed;
+    ed.setDocument(&doc);
+    BrickWizardDialog dlg(&ed);
+    dlg.show();
+    QApplication::processEvents();
+    // 10. A brick from the palette lands in view.
+    const QString x = dlg.addFromPalette(QStringLiteral("end|connector"));
+    const QString f = dlg.addFromPalette(QStringLiteral("fanout|wire"));
+    BrickCanvas* canvas = dlg.canvas();
+    check(QRectF(canvas->rect()).intersects(canvas->brickRect(*dlg.design().brick(x))) &&
+              QRectF(canvas->rect()).intersects(canvas->brickRect(*dlg.design().brick(f))),
+          "palette: a brick added lands in view");
+    check(!(canvas->brickRect(*dlg.design().brick(x)).intersects(canvas->brickRect(*dlg.design().brick(f)))),
+          "palette: and not on top of another");
+    // 2. The maps: a click on the pane's map goes there.
+    auto* map = canvas->findChild<QToolButton*>(QStringLiteral("brickMap"));
+    auto* pmap = dlg.preview()->findChild<QToolButton*>(QStringLiteral("previewMap"));
+    check(map && pmap, "map: a map button on the pane and on the preview");
+    if (map) map->click();
+    const QPointF before = canvas->viewCentreGrid();
+    mouse(canvas, QEvent::MouseButtonPress, QPointF(canvas->width() - 20.0, canvas->height() - 20.0));
+    mouse(canvas, QEvent::MouseButtonRelease, QPointF(canvas->width() - 20.0, canvas->height() - 20.0));
+    check(canvas->minimap() && canvas->viewCentreGrid() != before, "map: a click on it moves the view there");
+    if (map) map->click();
+    // 7. The Auto buttons.
+    dlg.design().connect(x, f);
+    dlg.selectBrick(f);
+    auto* fan = dlg.findChild<QDoubleSpinBox*>(QStringLiteral("brickFanStart"));
+    auto* fanA = dlg.findChild<QToolButton*>(QStringLiteral("brickFanStartAuto"));
+    check(fan && fanA && fanA->isChecked() && fan->value() > 0.0,
+          "auto: left alone, \"A\" is lit and the field shows the fan's actual length");
+    if (fan) fan->setValue(33.0);
+    check(fanA && !fanA->isChecked() && dlg.design().brick(f)->run.fanStartMm == 33.0,
+          "auto: a figure typed in takes it over");
+    if (fanA) fanA->click();
+    check(dlg.design().brick(f)->run.fanStartMm < 0.0, "auto: \"A\" gives it back to the drawing");
+    // 5. The sections fold.
+    auto* foldLabels = dlg.findChild<QToolButton*>(QStringLiteral("brickFoldLabels"));
+    auto* labels = dlg.findChild<QTableWidget*>(QStringLiteral("brickLabels"));
+    if (foldLabels) foldLabels->click();
+    check(foldLabels && labels && !labels->isVisible(), "sections: a section folds away");
+    if (foldLabels) foldLabels->click();
+    check(labels && labels->isVisible(), "sections: and back");
+    auto* sections = dlg.findChild<QSplitter*>(QStringLiteral("brickRunSections"));
+    check(sections && sections->count() == 5, "sections: in a splitter, each pulled taller or shorter");
+    // 11. A part from the list, assigned to the picked end part and put on the bill.
+    QString pid;
+    for (const LibraryPart* p : dlg.catalog().merged().ofKind(PartKind::Ferrule)) {
+        pid = p->id;
+        break;
+    }
+    if (!pid.isEmpty()) {
+        dlg.setAsk([](const QString&) { return false; });
+        dlg.selectBrick(x);
+        check(dlg.assignPart(pid) && dlg.design().brick(x)->libPart == pid &&
+                  dlg.design().brick(x)->kind == PartKind::Ferrule && dlg.bomItemOf(pid) > 0,
+              "parts list: assigned to the picked brick - its part, its kind - and on the bill");
+    }
+    // 12. The bill moves.
+    auto* bom = dlg.findChild<QTableWidget*>(QStringLiteral("brickBom"));
+    const int keep = dlg.bomPlace();
+    dlg.placeBom(2);
+    check(bom && qobject_cast<QSplitter*>(bom->parentWidget()) && dlg.bomPlace() == 2,
+          "bom: moved under the preview");
+    dlg.placeBom(0);
+    auto* tabs = bom ? qobject_cast<QTabWidget*>(bom->parentWidget() ? bom->parentWidget()->parentWidget() : nullptr)
+                     : nullptr;
+    check(tabs && tabs->indexOf(bom) >= 0, "bom: and back to a tab on the left");
+    dlg.placeBom(keep);
+}
+
+void mouse(QWidget* w, QEvent::Type t, const QPointF& at, Qt::KeyboardModifiers mods) {
     QMouseEvent e(t, at, w->mapToGlobal(at), Qt::LeftButton,
                   t == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton, mods);
     QApplication::sendEvent(w, &e);
@@ -851,11 +1047,12 @@ void testDialog() {
     // Dragging a brick's middle MOVES it instead.
     const Brick* fb = dlg.design().brick(f1);
     const double wasCol = fb->col;
+    const double wasRow = fb->row;
     const QPointF mid = canvas->brickRect(*fb).center();
     mouse(canvas, QEvent::MouseButtonPress, mid);
     mouse(canvas, QEvent::MouseMove, mid + QPointF(0, 58.0));
     mouse(canvas, QEvent::MouseButtonRelease, mid + QPointF(0, 58.0));
-    check(near(dlg.design().brick(f1)->col, wasCol) && near(dlg.design().brick(f1)->row, 1.0),
+    check(near(dlg.design().brick(f1)->col, wasCol) && near(dlg.design().brick(f1)->row, wasRow + 1.0),
           "wizard: dragging a brick by its middle moves it a grid step");
 
     // THE PREVIEW is the real drawing: a run between the two parts.
@@ -973,7 +1170,8 @@ void testDialogMore() {
     // f1 is the upper ferrule: its branch ends higher up the sheet.
     std::vector<std::pair<double, int>> ends;
     for (const Entity& e : dlg.preview()->entities())
-        if (e.type == EntityType::TwistedPair && e.meta.value(QStringLiteral("brickId")).toString() == fan)
+        if (e.type == EntityType::TwistedPair && e.meta.value(QStringLiteral("brickId")).toString() == fan &&
+            !e.meta.contains(QStringLiteral("brickTrunk")))
             ends.push_back({e.points.back().y, e.meta.value(QStringLiteral("twistWires")).toInt()});
     std::sort(ends.begin(), ends.end());
     const int toF1 = ends.size() == 2 ? ends[1].second : 0;
@@ -1073,6 +1271,7 @@ int run_brickharness_tests() {
     testDialogMore();
     testRoundThree();
     testRoundFour();
+    testRoundFive();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }
