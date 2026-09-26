@@ -13817,11 +13817,16 @@ void MainWindow::openBlockEditor(const QString& name) {
             return;
         }
     // Find it: a file block, or one of the library's drawings.
-    PartsCatalog catalog;
-    catalog.openRemembered();
+    // Its own file first: reading every block there is to find one was every imported sheet in the
+    // folder parsed on each double-click - seconds of nothing, several times over.
     BlockDef found;
-    for (const BlockDef& b : allBlocks(&catalog))
-        if (b.name == name) found = b;
+    if (!found.load(BlockDef::pathFor(name)) || found.name != name) {
+        found = BlockDef();
+        PartsCatalog catalog;
+        catalog.openRemembered();
+        for (const BlockDef& b : allBlocks(&catalog))
+            if (b.name == name) found = b;
+    }
     if (found.name.isEmpty()) {
         statusBar()->showMessage(QStringLiteral("No block called %1").arg(name), 4000);
         return;
@@ -13860,6 +13865,9 @@ void MainWindow::openBlockEditor(const QString& name) {
             activateIndex(i);
             break;
         }
+    // Looking at what is in it: a block is drawn about its own origin, and an imported sheet sits up and
+    // to the right of that - off the screen of a fresh tab, which then looks empty.
+    if (canvas_) canvas_->fitView();
     statusBar()->showMessage(
         QStringLiteral("Editing the block %1 — Save block puts it back and rebuilds every copy")
             .arg(name),
@@ -13889,10 +13897,19 @@ void MainWindow::saveBlockBeingEdited() {
         return;
     }
     // And every copy of it, on every drawing that is open, is rebuilt from what was just saved.
+    // A REFERENCE draws out of the file, so it has only to forget what it read and take the new box.
+    forgetBlockRefContent(name);
+    const Bounds local = blockLocalBounds(block.entities);
     int rebuilt = 0, sheets = 0;
     for (auto& d : docs_) {
         if (blockEdits_.contains(d.get())) continue;   // not the block's own tab
-        const int n = updateBlockInstances(*d, block);
+        int n = updateBlockInstances(*d, block);
+        for (Entity& e : d->entities())
+            if (e.type == EntityType::BlockRef && e.meta.value(QLatin1String(kBlockRefKey)).toString() == name) {
+                refitBlockRef(e, local);
+                ++n;
+            }
+        if (n > 0) d->setDirty(true);
         if (n > 0) {
             ++sheets;
             rebuilt += n;
@@ -16588,10 +16605,11 @@ bool MainWindow::importPdfFile(const QString& path, QString* said) {
     const bool savedBlock = def.save(BlockDef::pathFor(wanted));
     step(90, tr("Putting it on the drawing"));
     if (savedBlock) {
-        // One copy of it, on the origin - where the entities themselves would have gone. Not left
-        // PICKED: tens of thousands of picked objects is a lot of work for every panel and is not
-        // what anybody importing a drawing then wants to do with it.
-        editor_->appendEntities(blockInstanceEntities(def, Vec2{0.0, 0.0}, QString()), false);
+        // ONE OBJECT on the origin - where the entities themselves would have gone: a reference that
+        // draws the block out of its file. Laid down as the block's own entities it was tens of
+        // thousands of objects, and picking any one of them had every panel work through the whole set
+        // to find the rest of the copy - the window stopped for minutes. Not left picked either.
+        editor_->appendEntities({blockRefEntity(def, Vec2{0.0, 0.0})}, false);
         if (blockDlg_) blockDlg_->refresh();
         refreshBlocksPanel();
     } else {

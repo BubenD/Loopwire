@@ -1277,6 +1277,14 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
             g.push_back({b.valid ? b.center() : e.points[0], GripRole::Move, 0});
         }
         break;
+    case EntityType::BlockRef: {
+        // ONE HANDLE, its base point, to move it by. A corner handle would pull it out of shape, and a
+        // block is scaled and turned with Scale and Rotate like everything else.
+        Vec2 o, ux, uy;
+        if (blockRefFrame(e, o, ux, uy)) g.push_back({o, GripRole::Move, 0});
+        else if (!e.points.empty()) g.push_back({e.points[0], GripRole::Move, 0});
+        break;
+    }
     case EntityType::Image:   // a picture is resized by dragging a corner, or a side
     case EntityType::Rect:
         for (int i = 0; i < static_cast<int>(e.points.size()); ++i) {
@@ -2125,6 +2133,28 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
         // the connector.
         for (size_t i = 0; i < g.pinTip.size() && i < g.pinEnd.size(); ++i)
             best = std::min(best, segDist(g.pinTip[i], g.pinEnd[i]));
+        break;
+    }
+    case EntityType::BlockRef: {
+        // A BLOCK IS PICKED BY ITS LINES, as a block is anywhere else: a click on the drawing it draws
+        // takes it, a click in the white between leaves it alone - so a window can still be started over
+        // an imported sheet, and what is drawn on top of it can still be picked.
+        Vec2 o, ux, uy;
+        const auto content = blockRefFrame(e, o, ux, uy)
+                                 ? blockRefContent(e.meta.value(QLatin1String(kBlockRefKey)).toString())
+                                 : nullptr;
+        const double det = ux.x * uy.y - ux.y * uy.x;
+        const double k = ux.length();
+        if (!content || std::abs(det) < 1e-18 || k < 1e-12) {
+            for (size_t i = 0; i < e.points.size(); ++i)
+                best = std::min(best, segDist(e.points[i], e.points[(i + 1) % e.points.size()]));
+            break;
+        }
+        // The click, in the block's own coordinates.
+        const Vec2 d = p - o;
+        const Vec2 local{(d.x * uy.y - d.y * uy.x) / det, (ux.x * d.y - ux.y * d.x) / det};
+        const double near = content->nearest(local, [&](const Entity& x) { return distanceToEntity(x, local); });
+        if (std::isfinite(near)) best = std::min(best, near * k);
         break;
     }
     default:
@@ -5604,6 +5634,7 @@ std::vector<Vec2> entitySelectPoints(const Entity& e) {
     case EntityType::Polygon:
     case EntityType::Wipeout:
     case EntityType::Image:
+    case EntityType::BlockRef:
         pts = entityOutline(e);   // derived for a block arrow, stored for everything else
         break;
     case EntityType::Circle:
@@ -5839,7 +5870,8 @@ std::vector<std::pair<Vec2, Vec2>> entitySelectSegments(const Entity& e) {
     case EntityType::Rect:
     case EntityType::Polygon:
     case EntityType::Wipeout:
-    case EntityType::Image: {
+    case EntityType::Image:
+    case EntityType::BlockRef: {
         // The outline it HAS: a block arrow works its own out, so a zone touching the arrow on the
         // screen catches it rather than finding an empty list and concluding there is nothing there.
         const std::vector<Vec2> outline = entityOutline(e);
@@ -9718,7 +9750,9 @@ void Editor::onDoubleClick(const Vec2& world) {
                     emit changed();
                     return;
                 }
-                const QString block = entityBlockName(*e);
+                const QString block = e->type == EntityType::BlockRef
+                                          ? e->meta.value(QLatin1String(kBlockRefKey)).toString()
+                                          : entityBlockName(*e);
                 if (!block.isEmpty()) {
                     emit editBlockRequested(block);
                     return;
@@ -10416,6 +10450,7 @@ std::optional<std::vector<Vec2>> Editor::enclosingRegionLoop(const Vec2& seed) c
         case EntityType::Hatch:
         case EntityType::Wipeout:
         case EntityType::Image:
+        case EntityType::BlockRef:
         case EntityType::Text:
         case EntityType::Dimension:
             break; // fills / pictures / annotations are not boundaries

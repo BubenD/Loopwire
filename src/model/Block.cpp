@@ -6,13 +6,16 @@
 #include "tools/EntityTransforms.h"
 
 #include <QDate>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QUuid>
 #include <QHash>
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <functional>
 
 namespace Edraw_Desktop {
@@ -129,6 +132,188 @@ void clearEntityBlockStamp(Entity& e) {
     e.meta.remove(QLatin1String(kInstanceKey));
     e.meta.remove(QLatin1String(kOriginX));
     e.meta.remove(QLatin1String(kOriginY));
+}
+
+Bounds blockLocalBounds(const QJsonArray& entities) {
+    Bounds b;
+    for (const QJsonValue& v : entities) {
+        const Bounds eb = Entity::fromJson(v.toObject()).bounds();
+        if (eb.valid) {
+            b.expand(eb.min);
+            b.expand(eb.max);
+        }
+    }
+    return b;
+}
+
+namespace {
+// A box with no width or no height still has to have four distinct corners, or the reference's
+// frame cannot be read back off them.
+Bounds paddedBox(Bounds b) {
+    if (!b.valid) {
+        b.expand({0.0, 0.0});
+    }
+    if (b.max.x - b.min.x < 1e-6) { b.min.x -= 0.5; b.max.x += 0.5; }
+    if (b.max.y - b.min.y < 1e-6) { b.min.y -= 0.5; b.max.y += 0.5; }
+    return b;
+}
+
+void setBoxMeta(Entity& e, const Bounds& b) {
+    e.meta.insert(QStringLiteral("bx0"), b.min.x);
+    e.meta.insert(QStringLiteral("by0"), b.min.y);
+    e.meta.insert(QStringLiteral("bx1"), b.max.x);
+    e.meta.insert(QStringLiteral("by1"), b.max.y);
+}
+} // namespace
+
+Entity blockRefEntity(const BlockDef& block, const Vec2& at) {
+    Entity e;
+    e.type = EntityType::BlockRef;
+    const Bounds b = paddedBox(blockLocalBounds(block.entities));
+    e.points = {at + Vec2{b.min.x, b.min.y}, at + Vec2{b.max.x, b.min.y}, at + Vec2{b.max.x, b.max.y},
+                at + Vec2{b.min.x, b.max.y}};
+    e.meta.insert(QLatin1String(kBlockRefKey), block.name);
+    setBoxMeta(e, b);
+    return e;
+}
+
+bool blockRefFrame(const Entity& ref, Vec2& origin, Vec2& ux, Vec2& uy) {
+    if (ref.type != EntityType::BlockRef || ref.points.size() < 4) return false;
+    const double x0 = ref.meta.value(QStringLiteral("bx0")).toDouble();
+    const double y0 = ref.meta.value(QStringLiteral("by0")).toDouble();
+    const double w = ref.meta.value(QStringLiteral("bx1")).toDouble() - x0;
+    const double h = ref.meta.value(QStringLiteral("by1")).toDouble() - y0;
+    if (w <= 1e-12 || h <= 1e-12) return false;
+    ux = (ref.points[1] - ref.points[0]) * (1.0 / w);
+    uy = (ref.points[3] - ref.points[0]) * (1.0 / h);
+    origin = ref.points[0] - ux * x0 - uy * y0;
+    return true;
+}
+
+void refitBlockRef(Entity& ref, const Bounds& local) {
+    Vec2 o, ux, uy;
+    if (!blockRefFrame(ref, o, ux, uy)) return;
+    const Bounds b = paddedBox(local);
+    auto at = [&](double x, double y) { return o + ux * x + uy * y; };
+    ref.points = {at(b.min.x, b.min.y), at(b.max.x, b.min.y), at(b.max.x, b.max.y), at(b.min.x, b.max.y)};
+    setBoxMeta(ref, b);
+}
+
+namespace {
+struct KeptBlock {
+    QDateTime stamp;
+    std::shared_ptr<const BlockRefContent> content;
+};
+QHash<QString, KeptBlock>& keptBlocks() {
+    static QHash<QString, KeptBlock> kept;
+    return kept;
+}
+} // namespace
+
+void BlockRefContent::buildGrid() {
+    box = {};
+    for (const Bounds& b : bounds)
+        if (b.valid) box.expand(b);
+    cells.clear();
+    if (!box.valid) { cols = rows = 0; return; }
+    // About eight to a cell, square-ish, and never a silly number of them.
+    const double w = std::max(box.width(), 1e-6), h = std::max(box.height(), 1e-6);
+    const double per = std::sqrt(std::max<double>(1.0, double(entities.size()) / 8.0) / (w * h));
+    cols = std::clamp(int(std::ceil(w * per)), 1, 512);
+    rows = std::clamp(int(std::ceil(h * per)), 1, 512);
+    cells.assign(size_t(cols) * size_t(rows), {});
+    const double cw = w / cols, ch = h / rows;
+    for (size_t i = 0; i < bounds.size(); ++i) {
+        const Bounds& b = bounds[i];
+        if (!b.valid) continue;
+        const int x0 = std::clamp(int((b.min.x - box.min.x) / cw), 0, cols - 1);
+        const int x1 = std::clamp(int((b.max.x - box.min.x) / cw), 0, cols - 1);
+        const int y0 = std::clamp(int((b.min.y - box.min.y) / ch), 0, rows - 1);
+        const int y1 = std::clamp(int((b.max.y - box.min.y) / ch), 0, rows - 1);
+        for (int y = y0; y <= y1; ++y)
+            for (int x = x0; x <= x1; ++x) cells[size_t(y) * cols + x].push_back(int(i));
+    }
+}
+
+double BlockRefContent::nearest(const Vec2& p, const std::function<double(const Entity&)>& dist) const {
+    double near = std::numeric_limits<double>::infinity();
+    if (cols <= 0 || rows <= 0) return near;
+    const double cw = std::max(box.width(), 1e-6) / cols, ch = std::max(box.height(), 1e-6) / rows;
+    const double step = std::min(cw, ch);
+    // How far outside the grid the point is: nothing in it is nearer than that.
+    const double outX = std::max({box.min.x - p.x, 0.0, p.x - box.max.x});
+    const double outY = std::max({box.min.y - p.y, 0.0, p.y - box.max.y});
+    const double outside = std::hypot(outX, outY);
+    const int cx = std::clamp(int((p.x - box.min.x) / cw), 0, cols - 1);
+    const int cy = std::clamp(int((p.y - box.min.y) / ch), 0, rows - 1);
+    std::vector<char> looked(entities.size(), 0);
+    const int most = std::max(cols, rows);
+    for (int r = 0; r <= most; ++r) {
+        // Everything not yet looked at is at least this far off.
+        if (r > 0 && near <= outside + (r - 1) * step) break;
+        for (int y = cy - r; y <= cy + r; ++y) {
+            if (y < 0 || y >= rows) continue;
+            for (int x = cx - r; x <= cx + r; ++x) {
+                if (x < 0 || x >= cols) continue;
+                if (std::max(std::abs(x - cx), std::abs(y - cy)) != r) continue;   // the ring only
+                for (int i : cells[size_t(y) * cols + x]) {
+                    if (looked[size_t(i)]) continue;
+                    looked[size_t(i)] = 1;
+                    near = std::min(near, dist(entities[size_t(i)]));
+                }
+            }
+        }
+    }
+    return near;
+}
+
+std::shared_ptr<const BlockRefContent> blockRefContent(const QString& name) {
+    if (name.isEmpty()) return nullptr;
+    const QString path = BlockDef::pathFor(name);
+    const QFileInfo fi(path);
+    if (!fi.exists()) return nullptr;
+    auto& kept = keptBlocks();
+    const auto it = kept.constFind(name);
+    if (it != kept.constEnd() && it->stamp == fi.lastModified()) return it->content;
+    BlockDef def;
+    if (!def.load(path)) return nullptr;
+    auto ents = std::make_shared<BlockRefContent>();
+    ents->entities.reserve(static_cast<size_t>(def.entities.size()));
+    ents->bounds.reserve(static_cast<size_t>(def.entities.size()));
+    for (const QJsonValue& v : def.entities) {
+        ents->entities.push_back(Entity::fromJson(v.toObject()));
+        ents->bounds.push_back(ents->entities.back().bounds());
+    }
+    ents->buildGrid();
+    kept.insert(name, KeptBlock{fi.lastModified(), ents});
+    return ents;
+}
+
+std::vector<Entity> explodeBlockRef(const Entity& ref) {
+    Vec2 o, ux, uy;
+    if (!blockRefFrame(ref, o, ux, uy)) return {};
+    const auto content = blockRefContent(ref.meta.value(QLatin1String(kBlockRefKey)).toString());
+    if (!content) return {};
+    // The frame as the moves that make it: mirrored or not, then scaled, turned and put in place.
+    const bool mirrored = ux.x * uy.y - ux.y * uy.x < 0.0;
+    const double k = ux.length();
+    const double angle = std::atan2(ux.y, ux.x);
+    std::vector<Entity> out;
+    out.reserve(content->entities.size());
+    for (Entity e : content->entities) {
+        if (mirrored) mirrorEntity(e, Vec2{0.0, 0.0}, Vec2{1.0, 0.0});
+        if (std::abs(k - 1.0) > 1e-12) scaleEntity(e, Vec2{0.0, 0.0}, k);
+        if (std::abs(angle) > 1e-12) rotateEntity(e, Vec2{0.0, 0.0}, angle);
+        translateEntity(e, o);
+        if (e.layer.isEmpty() || e.layer == QLatin1String("0")) e.layer = ref.layer;
+        out.push_back(std::move(e));
+    }
+    return out;
+}
+
+void forgetBlockRefContent(const QString& name) {
+    if (name.isEmpty()) keptBlocks().clear();
+    else keptBlocks().remove(name);
 }
 
 std::vector<Entity> blockInstanceEntities(const BlockDef& block, const Vec2& at,
@@ -315,10 +500,28 @@ std::vector<BlockDef> libraryBlocks(const PartsCatalog& catalog) {
 }
 
 std::vector<BlockDef> allBlocks(const PartsCatalog* catalog) {
+    // READ ONCE, kept until the file changes. An imported sheet is a block of tens of thousands of
+    // lines, and the blocks panel, the Blocks window and naming the next import all ask for the whole
+    // list - every sheet ever imported was parsed again each time, and it grew with every import.
+    struct Read {
+        QDateTime stamp;
+        qint64 size = -1;
+        BlockDef block;
+    };
+    static QHash<QString, Read> read;
     std::vector<BlockDef> out;
     for (const QString& path : BlockDef::installed()) {
-        BlockDef b;
-        if (b.load(path)) out.push_back(b);
+        const QFileInfo fi(path);
+        auto it = read.find(path);
+        if (it == read.end() || it->stamp != fi.lastModified() || it->size != fi.size()) {
+            BlockDef b;
+            if (!b.load(path)) {
+                read.remove(path);
+                continue;
+            }
+            it = read.insert(path, Read{fi.lastModified(), fi.size(), b});
+        }
+        out.push_back(it->block);
     }
     if (catalog)
         for (BlockDef& b : libraryBlocks(*catalog)) out.push_back(b);

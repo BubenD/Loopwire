@@ -67,6 +67,13 @@ enum class EntityType {
     // by. `a` is its position; meta "pinNumber" is the number, handed out lowest-free-first so
     // deleting one and adding another reuses it rather than counting up forever.
     ConnectionPin,
+    // A BLOCK REFERENCE: one object that draws a whole block, read from the block's file. What a big
+    // import goes down as - a PDF is tens of thousands of lines, and as that many objects on the sheet
+    // every pick, hover and panel refresh walks all of them. As one reference it is one object.
+    // points = the four corners of the block's box on the sheet (local min, +x, max, +y), so moving,
+    // turning, scaling and mirroring it are the ordinary point maps. meta "blockRef" is the block's
+    // name and "bx0"/"by0"/"bx1"/"by1" its box in its own coordinates.
+    BlockRef,
 };
 
 EntityType entityTypeFromString(const QString& s);

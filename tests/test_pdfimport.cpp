@@ -10,6 +10,11 @@
 #include "tools/ToolId.h"
 #include "app/MainWindow.h"
 #include <QProgressBar>
+#include <QImage>
+#include <QPainter>
+#include "render/EntityRenderer.h"
+#include "tools/EntityTransforms.h"
+#include <cmath>
 #include "model/Document.h"
 
 #include <cstdio>
@@ -85,22 +90,48 @@ int run_pdfimport_tests() {
               "block: the block holds the lines separately - a path is not one object inside it");
         check(made.description.contains(stem), "block: and it says where it came from");
 
-        // One copy of it on the sheet - one object, not a heap of lines: every entity of it carries the
-        // block's name and the one instance key that makes it a copy.
+        // ONE OBJECT on the sheet, not a heap of lines: a block reference that draws the block out of
+        // its file. As the block's own entities, a big PDF was tens of thousands of objects and picking
+        // one of them stopped the window for minutes.
         Document* doc = win.findChild<Editor*>() ? win.findChild<Editor*>()->document() : nullptr;
         check(doc != nullptr, "block: there is a drawing to have imported into");
+        const Entity* ref = nullptr;
         if (doc) {
-            QSet<QString> instances;
-            int stamped = 0;
-            for (const Entity& e : doc->entities())
-                if (e.meta.value(QStringLiteral("block")).toString() == stem) {
-                    ++stamped;
-                    instances.insert(e.meta.value(QStringLiteral("blockInst")).toString());
+            int refs = 0, loose = 0;
+            for (const Entity& e : doc->entities()) {
+                if (e.type == EntityType::BlockRef && e.meta.value(QLatin1String(kBlockRefKey)).toString() == stem) {
+                    ++refs;
+                    ref = &e;
                 }
-            std::printf("  pdf block: %d entities on the sheet, %lld instance(s)\n", stamped,
-                        static_cast<long long>(instances.size()));
-            check(stamped >= 1, "block: a copy of it is on the sheet");
-            check(instances.size() == 1, "block: and it is ONE copy, however many lines it is drawn with");
+                if (e.meta.value(QStringLiteral("block")).toString() == stem) ++loose;
+            }
+            std::printf("  pdf block: %d reference(s), %d loose copy entities\n", refs, loose);
+            check(refs == 1 && loose == 0, "block: ONE reference to it on the sheet, however many lines it is");
+            const auto content = blockRefContent(stem);
+            check(content && content->entities.size() == 2, "block: and the reference draws the block's lines");
+            // The reference is round what it draws: its box is the block's box.
+            if (ref) {
+                const Bounds rb = ref->bounds();
+                const Bounds lb = blockLocalBounds(made.entities);
+                check(rb.valid && std::abs(rb.min.x - lb.min.x) < 1e-6 && std::abs(rb.max.y - lb.max.y) < 1e-6,
+                      "block: the reference's box is the block's");
+                check(explodeBlockRef(*ref).size() == 2, "block: and it breaks back into its two lines");
+                // Painted without trouble.
+                QImage img(200, 200, QImage::Format_ARGB32);
+                img.fill(Qt::white);
+                QPainter painter(&img);
+                ViewTransform vt;
+                vt.view.scale = 1.0;
+                vt.view.x = 100.0;
+                vt.view.y = 100.0;
+                EntityRenderer::draw(painter, *ref, *doc, vt, QColor());
+                painter.end();
+                int inked = 0;
+                for (int y = 0; y < img.height(); ++y)
+                    for (int x = 0; x < img.width(); ++x)
+                        if (img.pixelColor(x, y) != QColor(Qt::white)) ++inked;
+                check(inked > 0, "block: the reference draws its lines");
+            }
         }
 
         // Openable for editing: the block editor puts it on a tab of its own with its lines in it.
@@ -121,11 +152,22 @@ int run_pdfimport_tests() {
             // A point ON the geometry, not the middle of its bounding box: the middle of the box around an
             // L-shaped path is not on the path, and a double-click there hits nothing at all.
             Vec2 onIt{0.0, 0.0};
-            for (const Entity& e : doc->entities())
-                if (e.meta.value(QStringLiteral("block")).toString() == stem) {
-                    if (!e.points.empty()) onIt = e.points.front();
-                    else onIt = e.a;
+            if (const auto content = blockRefContent(stem); content && !content->entities.empty()) {
+                const Entity& first = content->entities.front();
+                onIt = first.points.empty() ? first.a : first.points.front();
+            }
+            // A click on its lines picks it.
+            {
+                Editor* ed0 = win.findChild<Editor*>();
+                if (ed0) {
+                    ed0->setTool(ToolId::Select);
+                    ed0->onPointerPress(onIt, Qt::LeftButton, Qt::NoModifier);
+                    ed0->onPointerRelease(onIt, Qt::LeftButton);
                 }
+                check(ed0 && ed0->selection().size() == 1 && ref && ed0->selection().front() == ref->id,
+                      "block: a click on its lines picks the reference, and only it");
+                if (ed0) ed0->clearSelection();
+            }
             Editor* ed = win.findChild<Editor*>();
             check(ed != nullptr, "block: the editor is there to double-click with");
             if (ed) {
@@ -188,6 +230,31 @@ int run_pdfimport_tests() {
         QString dxf = file;
         dxf.chop(4);
         QFile::remove(dxf + QStringLiteral(".dxf"));
+    }
+
+    // A BLOCK REFERENCE KEEPS ITS PLACE when the block changes: turned a quarter, doubled and moved, then
+    // the block grows - the block's origin is still where it was put, and one unit is still two, upright.
+    {
+        BlockDef def;
+        def.name = QStringLiteral("refit-test");
+        Entity l;
+        l.type = EntityType::Line;
+        l.a = {0, 0};
+        l.b = {10, 5};
+        def.entities.append(l.toJson());
+        Entity ref = blockRefEntity(def, Vec2{0, 0});
+        rotateEntity(ref, Vec2{0, 0}, M_PI / 2.0);
+        scaleEntity(ref, Vec2{0, 0}, 2.0);
+        translateEntity(ref, Vec2{100, 50});
+        Bounds grown;
+        grown.expand(Vec2{-4, -4});
+        grown.expand(Vec2{20, 8});
+        refitBlockRef(ref, grown);
+        Vec2 o, ux, uy;
+        const bool framed = blockRefFrame(ref, o, ux, uy);
+        check(framed && std::abs(o.x - 100) < 1e-6 && std::abs(o.y - 50) < 1e-6 && std::abs(ux.x) < 1e-6 &&
+                  std::abs(ux.y - 2.0) < 1e-6 && std::abs(uy.x + 2.0) < 1e-6,
+              "blockref: refitted to a bigger block, it keeps where it is, how it is turned and how big");
     }
 
     Document unchanged;

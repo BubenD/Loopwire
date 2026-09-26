@@ -6,6 +6,8 @@
 #include <QJsonObject>
 #include <QString>
 #include <QStringList>
+#include <functional>
+#include <memory>
 #include <vector>
 
 namespace Edraw_Desktop {
@@ -65,6 +67,45 @@ BlockDef blockFromEntities(const QString& name, const std::vector<Entity>& ents,
 // again and rebuilt when the definition changes.
 std::vector<Entity> blockInstanceEntities(const BlockDef& block, const Vec2& at,
                                           const QString& instanceKey);
+
+// ---- Block references ---------------------------------------------------------------------------
+// ONE OBJECT FOR A WHOLE BLOCK (EntityType::BlockRef). The copies above are the block's entities laid
+// down on the sheet, which is right for a symbol of a dozen lines and hopeless for a drawing of eighty
+// thousand: every one of them is picked, hovered, listed and grouped one by one. A reference draws the
+// block out of its file and is otherwise a box - it is what an imported PDF goes down as.
+inline constexpr char kBlockRefKey[] = "blockRef";
+
+// The box round a block's entities, in its own coordinates.
+Bounds blockLocalBounds(const QJsonArray& entities);
+// A reference to `block` with the block's base point at `at`, unturned and full size.
+Entity blockRefEntity(const BlockDef& block, const Vec2& at);
+// Where a reference puts the block: the sheet point of the block's origin, and the sheet vectors
+// one unit of the block's x and y become. False when the reference has no box to read it from.
+bool blockRefFrame(const Entity& ref, Vec2& origin, Vec2& ux, Vec2& uy);
+// The block was edited and its box is now `local`: the reference keeps where it is, how it is
+// turned and how big, and its corners are put round the new box.
+void refitBlockRef(Entity& ref, const Bounds& local);
+// The block's entities, as a reference draws them - read once and kept until the file changes.
+// Null when there is no such block.
+struct BlockRefContent {
+    std::vector<Entity> entities;
+    std::vector<Bounds> bounds;   // each one's, worked out once rather than on every paint and hover
+    // A GRID over the block, each cell listing what crosses it, so a click looks at the lines near it
+    // rather than at all eighty thousand.
+    Bounds box;
+    int cols = 0, rows = 0;
+    std::vector<std::vector<int>> cells;
+    void buildGrid();
+    // The least of `dist` over the entities, looking outwards from `p` and stopping once nothing
+    // unlooked-at can be nearer. Infinity when there is nothing.
+    double nearest(const Vec2& p, const std::function<double(const Entity&)>& dist) const;
+};
+std::shared_ptr<const BlockRefContent> blockRefContent(const QString& name);
+// The block's entities where the reference puts them on the sheet - for a file format with no
+// such thing as a reference, or to break one back into its lines. Empty when the block is gone.
+std::vector<Entity> explodeBlockRef(const Entity& ref);
+// Drop what is kept of a block (all of them when the name is empty), after it has been saved.
+void forgetBlockRefContent(const QString& name = QString());
 
 // WHICH DRAWING of the part a placed copy is: "mechanical", "schematic" or "fanout". One part is drawn
 // several ways - the body on the assembly, the symbol on the schematic, the fanout at the connector - and they

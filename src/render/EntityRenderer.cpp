@@ -2,6 +2,7 @@
 
 #include "geometry/Geometry.h"
 #include "harness/Harness.h"
+#include "model/Block.h"
 #include "model/Picture.h"
 
 #include <QFont>
@@ -11,6 +12,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
+#include <QImage>
 #include <QPolygonF>
 #include <QtMath>
 
@@ -25,6 +27,9 @@ QColor g_bgColor{"#1e2832"}; // canvas background, used to paint Wipeout masks
 // Drawing the inside of a detail view. A detail drawn inside a detail would draw itself for ever, and it is
 // not something a drawing office asks for - so the inner one is simply left out.
 bool g_inDetailView = false;
+// How many block references deep the drawing is: a block that holds a reference to itself would
+// otherwise draw itself for ever.
+int g_blockRefDepth = 0;
 } // namespace
 
 Vec2 detailViewTextAt(const Entity& e, bool big) {
@@ -2344,6 +2349,124 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
     case EntityType::Dimension:
         drawDimensionEntity(p, e, vt, color, g_dimDecimals);
         break;
+
+    case EntityType::BlockRef: {
+        // A WHOLE BLOCK, DRAWN OUT OF ITS FILE. The block's entities are drawn through a view that puts
+        // the block where the reference says - moved, turned, scaled, mirrored - exactly as the sheet
+        // itself would be drawn zoomed, so text, hatches and weights come out as they would in place.
+        Vec2 o, ux, uy;
+        if (!blockRefFrame(e, o, ux, uy)) break;
+        const auto content = g_blockRefDepth < 8 ? blockRefContent(e.meta.value(QLatin1String(kBlockRefKey)).toString())
+                                                 : nullptr;
+        const double k = ux.length();
+        const double s = vt.scale() * k;
+        if (!content || s <= 1e-12) {
+            // The block's file is gone: the box it filled, and its name, so it can be found and dealt with.
+            QPolygonF box;
+            for (const Vec2& c : e.points) box << vt.toScreen(c);
+            p.setPen(pen);
+            p.setBrush(Qt::NoBrush);
+            p.drawPolygon(box);
+            p.drawText(box.boundingRect(), Qt::AlignCenter, e.meta.value(QLatin1String(kBlockRefKey)).toString());
+            break;
+        }
+        // The inner view draws the block's point (x, y) at (x*s, -y*s); the painter's transform then
+        // takes that to where the reference puts it on the screen.
+        ViewTransform inner = vt;
+        inner.view.scale = s;
+        inner.view.x = 0.0;
+        inner.view.y = 0.0;
+        const QPointF f0 = vt.toScreen(o), f1 = vt.toScreen(o + ux), f2 = vt.toScreen(o + uy);
+        const QTransform t((f1.x() - f0.x()) / s, (f1.y() - f0.y()) / s, (f2.x() - f0.x()) / -s,
+                           (f2.y() - f0.y()) / -s, f0.x(), f0.y());
+        // ONLY WHAT IS ON THE SCREEN: zoomed into a corner of an imported sheet, the other ninety per cent
+        // of it is not drawn. The screen is taken back into the block's own coordinates to be compared.
+        Bounds seen;
+        bool cull = false;
+        if (p.device()) {
+            bool invertible = false;
+            const QTransform back = (t * p.transform()).inverted(&invertible);
+            if (invertible) {
+                const QRectF dev(0, 0, p.device()->width(), p.device()->height());
+                const QPolygonF poly = back.map(QPolygonF(dev));
+                for (const QPointF& q : poly) seen.expand(Vec2{q.x() / s, -q.y() / s});
+                // All of it on the screen: nothing to leave out, and no box to work out for each object.
+                const double bx0 = e.meta.value(QStringLiteral("bx0")).toDouble(), by0 = e.meta.value(QStringLiteral("by0")).toDouble();
+                const double bx1 = e.meta.value(QStringLiteral("bx1")).toDouble(), by1 = e.meta.value(QStringLiteral("by1")).toDouble();
+                cull = seen.valid && !(bx0 >= seen.min.x && bx1 <= seen.max.x && by0 >= seen.min.y && by1 <= seen.max.y);
+            }
+        }
+        auto drawContent = [&](QPainter& q) {
+            ++g_blockRefDepth;
+            for (size_t i = 0; i < content->entities.size(); ++i) {
+                const Entity& x = content->entities[i];
+                if (cull) {
+                    const Bounds& xb = content->bounds[i];
+                    if (xb.valid && (xb.max.x < seen.min.x || xb.min.x > seen.max.x || xb.max.y < seen.min.y ||
+                                     xb.min.y > seen.max.y))
+                        continue;
+                }
+                EntityRenderer::draw(q, x, doc, inner, overrideColor);
+            }
+            --g_blockRefDepth;
+        };
+        // DRAWN ONCE AND KEPT, while nothing about it changes. The canvas repaints on every mouse move -
+        // hover marks, the cursor, snap marks - and an imported sheet is tens of thousands of lines: drawn
+        // afresh each time, moving the mouse over it crawled. The picture is kept for the view, the
+        // colour it is drawn in and the settings that change how lines look, and redrawn when any of them
+        // does. Only for the screen: a print or an export draws it properly, every time.
+        const int devType = p.device() ? p.device()->devType() : 0;
+        const bool screen = g_blockRefDepth == 0 && !g_inDetailView &&
+                            (devType == QInternal::Widget || devType == QInternal::Pixmap ||
+                             devType == QInternal::Image);
+        if (screen) {
+            const QTransform full = t * p.transform();
+            const qreal dpr = p.device()->devicePixelRatioF();
+            const QSize dev(p.device()->width(), p.device()->height());
+            QString key = QStringLiteral("%1|%2|%3,%4,%5,%6,%7,%8|%9x%10@%11|%12")
+                              .arg(e.meta.value(QLatin1String(kBlockRefKey)).toString())
+                              .arg(quintptr(content.get()))
+                              .arg(full.m11(), 0, 'g', 12).arg(full.m12(), 0, 'g', 12)
+                              .arg(full.m21(), 0, 'g', 12).arg(full.m22(), 0, 'g', 12)
+                              .arg(full.dx(), 0, 'g', 12).arg(full.dy(), 0, 'g', 12)
+                              .arg(dev.width()).arg(dev.height()).arg(dpr)
+                              .arg(overrideColor.isValid() ? overrideColor.name(QColor::HexArgb) : QString());
+            key += QStringLiteral("|%1%2%3|%4|%5|%6|%7").arg(int(g_monochrome)).arg(int(g_whitePaper))
+                       .arg(int(g_plotLineweights)).arg(g_bgColor.name()).arg(g_annotationScale).arg(g_dimDecimals)
+                       .arg(s, 0, 'g', 12);
+            for (const Layer& ly : doc.layers())
+                key += QStringLiteral("|%1:%2:%3:%4").arg(ly.name, ly.color).arg(int(ly.visible)).arg(ly.weight);
+            static QHash<QString, QImage> kept;
+            static QStringList order;
+            auto it = kept.constFind(key);
+            if (it == kept.constEnd()) {
+                QImage img(QSize(qCeil(dev.width() * dpr), qCeil(dev.height() * dpr)),
+                           QImage::Format_ARGB32_Premultiplied);
+                img.setDevicePixelRatio(dpr);
+                img.fill(Qt::transparent);
+                QPainter ip(&img);
+                ip.setRenderHints(p.renderHints());
+                ip.setFont(p.font());
+                ip.setTransform(full);
+                drawContent(ip);
+                ip.end();
+                // A few kept - picked and not, and the last view or two - and no more.
+                while (order.size() >= 4) kept.remove(order.takeFirst());
+                order << key;
+                it = kept.insert(key, img);
+            }
+            p.save();
+            p.resetTransform();
+            p.drawImage(QPointF(0, 0), *it);
+            p.restore();
+            break;
+        }
+        p.save();
+        p.setTransform(t, true);
+        drawContent(p);
+        p.restore();
+        break;
+    }
 
     case EntityType::DetailView: {
         // THE SMALL THING, DRAWN AGAIN BIGGER. Two circles: one round the thing where it actually is, one

@@ -13,7 +13,7 @@ namespace Edraw_Desktop {
 
 namespace {
 struct TypeName { EntityType type; const char* name; };
-const std::array<TypeName, 28> kTypeNames = {{
+const std::array<TypeName, 29> kTypeNames = {{
     {EntityType::Line, "line"},
     {EntityType::DoubleLine, "doubleline"},
     {EntityType::Polyline, "polyline"},
@@ -42,6 +42,7 @@ const std::array<TypeName, 28> kTypeNames = {{
     {EntityType::Twist, "twist"},
     {EntityType::Screen, "screen"},
     {EntityType::ConnectionPin, "connectionpin"},
+    {EntityType::BlockRef, "blockref"},
 }};
 } // namespace
 
@@ -525,6 +526,7 @@ Bounds Entity::bounds() const {
     case EntityType::Polygon:
     case EntityType::Wipeout:
     case EntityType::Image:
+    case EntityType::BlockRef:
         for (const auto& p : points) bnds.expand(p);
         break;
     case EntityType::Circle:

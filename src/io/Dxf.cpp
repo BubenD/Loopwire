@@ -143,7 +143,22 @@ std::vector<Vec2> ellipsePoints(const Entity& e, int steps = 48) {
 
 } // namespace
 
-QString toDxf(const Document& doc) {
+QString toDxf(const Document& docIn) {
+    // A BLOCK REFERENCE goes out as the lines it draws: R12 has blocks, but a reader of the file
+    // wants the drawing, and a reference to a block file on this machine means nothing on another.
+    const bool hasRefs = std::any_of(docIn.entities().begin(), docIn.entities().end(),
+                                     [](const Entity& e) { return e.type == EntityType::BlockRef; });
+    Document exploded;
+    if (hasRefs) {
+        exploded = docIn;
+        std::vector<Entity> flat;
+        for (const Entity& e : docIn.entities()) {
+            if (e.type != EntityType::BlockRef) { flat.push_back(e); continue; }
+            for (Entity& x : explodeBlockRef(e)) flat.push_back(std::move(x));
+        }
+        exploded.entities() = std::move(flat);
+    }
+    const Document& doc = hasRefs ? exploded : docIn;
     QStringList L;
     // ONLY VARIABLES THAT EXIST IN R12.
     //
