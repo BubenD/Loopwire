@@ -1567,6 +1567,14 @@ bool Editor::isBlockPiece(const Entity& e) {
 
 void Editor::setDocument(Document* doc) {
     doc_ = doc;
+    // EVERY OBJECT HAS ITS OWN ID, or picking one picks every other that shares it. Anything that put
+    // objects straight into a document without one - the block editor did, eighty thousand lines all
+    // called "" - made a click on one line select the whole drawing, and each repaint then drew all
+    // of it as picked: tens of seconds a frame. Full UUIDs, since a short one is not unique among that
+    // many.
+    if (doc_)
+        for (Entity& e : doc_->entities())
+            if (e.id.isEmpty()) e.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
     selected_.clear();
     draftPts_.clear();
     modifyPts_.clear();
@@ -1695,11 +1703,40 @@ void Editor::pushUndo() {
     if (doc_) undo_.push(doc_->entities());
 }
 
+int Editor::indexOfId(const QString& id) const {
+    if (!doc_ || id.isEmpty()) return -1;
+    const auto& ents = doc_->entities();
+    const int n = static_cast<int>(ents.size());
+    // A SMALL DRAWING IS WALKED. The index is for the drawing where walking it for every picked object
+    // is the difference between an instant and minutes: eighty thousand picked lines looked up one
+    // walk each is three billion comparisons.
+    constexpr int kIndexFrom = 2000;
+    auto walk = [&]() -> int {
+        for (int i = 0; i < n; ++i)
+            if (ents[static_cast<size_t>(i)].id == id) return i;
+        return -1;
+    };
+    if (n < kIndexFrom) return walk();
+    if (idIndexDoc_ != doc_ || idIndexStale_) {
+        idIndex_.clear();
+        idIndex_.reserve(n);
+        // Backwards, so a repeated id ends up pointing at its FIRST object - the one the walk finds.
+        for (int i = n - 1; i >= 0; --i) idIndex_[ents[static_cast<size_t>(i)].id] = i;
+        idIndexDoc_ = doc_;
+        idIndexStale_ = false;
+    }
+    const auto it = idIndex_.constFind(id);
+    if (it != idIndex_.constEnd() && *it < n && ents[static_cast<size_t>(*it)].id == id) return *it;
+    // Not where the index says, or not in it: the document has changed since. Walk it this once, and
+    // have the index rebuilt next time if the walk finds what the index did not.
+    const int found = walk();
+    if (found >= 0 || it != idIndex_.constEnd()) idIndexStale_ = true;
+    return found;
+}
+
 const Entity* Editor::entityById(const QString& id) const {
-    if (!doc_ || id.isEmpty()) return nullptr;
-    for (const Entity& e : doc_->entities())
-        if (e.id == id) return &e;
-    return nullptr;
+    const int i = indexOfId(id);
+    return i < 0 ? nullptr : &doc_->entities()[static_cast<size_t>(i)];
 }
 
 void Editor::addEntity(Entity e) {
@@ -2180,6 +2217,13 @@ std::optional<QString> Editor::hitTest(const Vec2& world, const std::vector<QStr
     // on the joint), so clicking the line picked whatever was underneath it. Which is why a line meeting
     // a curve at a joint could not be filleted: the two picks were the same object.
     const auto& ents = doc_->entities();
+    // WHETHER A BREAK MARK HIDES THE CLICK is a question about the point, not about each object - so it
+    // is asked once. Asked for every object it walked the whole drawing for every object: eighty
+    // thousand lines squared, and a single click took over half a minute.
+    Entity anyRun;
+    anyRun.id = QStringLiteral("hit-test");
+    anyRun.type = EntityType::Line;
+    const bool hiddenHere = pointHiddenByBreak(anyRun, world);
     for (auto it = ents.rbegin(); it != ents.rend(); ++it) {
         // A default model's connection/near/far markers live on a LOCKED layer - locked so nothing else
         // on it (the drawing's own guide lines) can be nudged by accident - but the markers themselves are
@@ -2194,7 +2238,7 @@ std::optional<QString> Editor::hitTest(const Vec2& world, const std::vector<QStr
         if (!skip.empty() && std::find(skip.begin(), skip.end(), it->id) != skip.end()) continue;
         // A stretch of run that a break mark hides is not there to be clicked either: the drawing does
         // not show it, so a click in it belongs to the mark, or to nothing.
-        if (pointHiddenByBreak(*it, world)) continue;
+        if (hiddenHere && !it->id.isEmpty() && it->type != EntityType::LengthBreak) continue;
         const double d = distanceToEntity(*it, world);
         if (d < best) { best = d; hit = it->id; }
     }
@@ -2202,10 +2246,8 @@ std::optional<QString> Editor::hitTest(const Vec2& world, const std::vector<QStr
 }
 
 Entity* Editor::entityById(const QString& id) {
-    if (!doc_) return nullptr;
-    for (auto& e : doc_->entities())
-        if (e.id == id) return &e;
-    return nullptr;
+    const int i = indexOfId(id);
+    return i < 0 ? nullptr : &doc_->entities()[static_cast<size_t>(i)];
 }
 
 std::vector<Entity*> Editor::selectedEntities() {
@@ -6063,6 +6105,12 @@ void Editor::finishRegionSelect(bool subtract) {
     for (size_t i = 0; i < region.size(); ++i)
         regionEdges.emplace_back(region[i], region[(i + 1) % region.size()]);
 
+    const BreakMarks marks = breakMarks();   // once, not once per object
+    // What is picked, as a set to ask - and what the zone takes off, dropped in one pass at the end.
+    // Looking each caught object up in the growing list was the zone's own square: a window round
+    // most of a big drawing asked eighty thousand times of a list eighty thousand long.
+    QSet<QString> have = selectionSet();
+    QSet<QString> dropped;
     for (const auto& e : doc_->entities()) {
         if (const Layer* l = doc_->findLayer(e.layer); l && (!l->visible || l->locked))
             continue;
@@ -6079,7 +6127,7 @@ void Editor::finishRegionSelect(bool subtract) {
         // Only point-like entities (markers/connector) with no segments fall back to
         // the representative points.
         // What the drawing SHOWS of this run: a stretch a break mark hides is not there to be picked.
-        const auto segs = unmaskedSegments(e, entitySelectSegments(e));
+        const auto segs = unmaskedSegments(e, entitySelectSegments(e), marks);
         bool hit = false;
         if (!segs.empty()) {
             if (crossing) {
@@ -6111,13 +6159,17 @@ void Editor::finishRegionSelect(bool subtract) {
             hit = crossing ? (inside > 0) : (inside == static_cast<int>(pts.size()));
         }
         if (!hit) continue;
-        auto it = std::find(selected_.begin(), selected_.end(), e.id);
         if (subtract) {
-            if (it != selected_.end()) selected_.erase(it); // deselect
-        } else if (it == selected_.end()) {
+            if (have.contains(e.id)) dropped.insert(e.id); // deselect
+        } else if (!have.contains(e.id)) {
             selected_.push_back(e.id); // accumulate
+            have.insert(e.id);
         }
     }
+    if (!dropped.isEmpty())
+        selected_.erase(std::remove_if(selected_.begin(), selected_.end(),
+                                       [&dropped](const QString& id) { return dropped.contains(id); }),
+                        selected_.end());
     // A zone drawn INSIDE a table picks the cells it covers, not the table: that is how a block of
     // them is aligned in one go. Nothing else in the zone is touched, and a zone that reaches
     // outside the table selects objects the ordinary way.
@@ -8760,18 +8812,31 @@ bool Editor::pointHiddenByBreak(const Entity& host, const Vec2& p) const {
     return false;
 }
 
+Editor::BreakMarks Editor::breakMarks() const {
+    BreakMarks marks;
+    if (!doc_) return marks;
+    for (const auto& m : doc_->entities()) {
+        if (m.type != EntityType::LengthBreak) continue;
+        if (auto q = breakMaskQuad(m); q.size() == 4) marks.emplace_back(m.id, std::move(q));
+    }
+    return marks;
+}
+
 std::vector<std::pair<Vec2, Vec2>> Editor::unmaskedSegments(
     const Entity& host, const std::vector<std::pair<Vec2, Vec2>>& segs) const {
     if (!doc_ || host.id.isEmpty()) return segs;
+    return unmaskedSegments(host, segs, breakMarks());
+}
+
+std::vector<std::pair<Vec2, Vec2>> Editor::unmaskedSegments(
+    const Entity& host, const std::vector<std::pair<Vec2, Vec2>>& segs, const BreakMarks& marks) const {
+    if (!doc_ || host.id.isEmpty() || marks.empty()) return segs;
     // Every mark that hides part of this run. Not only the ones attached to it: a line drawn across
     // three wires breaks all three, and the mask is painted over all three, so all three have that
     // stretch taken out of what can be picked.
     std::vector<std::vector<Vec2>> quads;
-    for (const auto& m : doc_->entities()) {
-        if (m.type != EntityType::LengthBreak) continue;
-        if (m.id == host.id) continue;
-        if (auto q = breakMaskQuad(m); q.size() == 4) quads.push_back(std::move(q));
-    }
+    for (const auto& [id, quad] : marks)
+        if (id != host.id) quads.push_back(quad);
     if (quads.empty()) return segs;
 
     std::vector<std::pair<Vec2, Vec2>> out = segs;

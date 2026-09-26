@@ -10,6 +10,7 @@
 #include "tools/ToolId.h"
 #include "app/MainWindow.h"
 #include <QProgressBar>
+#include <QToolButton>
 #include <QImage>
 #include <QPainter>
 #include "render/EntityRenderer.h"
@@ -142,8 +143,41 @@ int run_pdfimport_tests() {
             for (int i = 0; i < bar->count(); ++i)
                 if (bar->tabText(i).contains(stem)) openForEditing = true;
         check(openForEditing, "block: and it opens on a tab of its own to be edited");
+        // EVERY LINE ITS OWN ID inside the block, and picking one picks that one. They all used to be
+        // called "", so a click on one line selected the whole drawing - and a big one stopped the window.
+        if (Editor* inside = win.findChild<Editor*>(); inside && inside->document()) {
+            QSet<QString> ids;
+            for (const Entity& e : inside->document()->entities()) ids.insert(e.id);
+            check(!ids.contains(QString()) && ids.size() == int(inside->document()->entities().size()),
+                  "block: every line in the block editor has an id of its own");
+            const Entity& first = inside->document()->entities().front();
+            inside->setTool(ToolId::Select);
+            const Vec2 mid = (first.a + first.b) * 0.5;
+            inside->onPointerPress(mid, Qt::LeftButton, Qt::NoModifier);
+            inside->onPointerRelease(mid, Qt::LeftButton);
+            check(inside->selection().size() == 1 && inside->selection().front() == first.id,
+                  "block: and a click on one line picks that line alone");
+            inside->clearSelection();
+        }
         win.cancelBlockEdit();
         QApplication::processEvents();
+
+        // THE HOME TAB'S EDIT BLOCK opens the picked block, the same as a double-click.
+        if (doc && ref) {
+            Editor* ed1 = win.findChild<Editor*>();
+            auto* editBtn = win.findChild<QToolButton*>(QStringLiteral("editBlockButton"));
+            check(editBtn != nullptr, "block: an Edit block button on the Home tab");
+            if (ed1 && editBtn) {
+                ed1->selectById(ref->id);
+                editBtn->click();
+                QApplication::processEvents();
+                Editor* now = win.findChild<Editor*>();
+                check(now && now->document() && now->document()->name().contains(stem),
+                      "block: and it opens the picked block for editing");
+                win.cancelBlockEdit();
+                QApplication::processEvents();
+            }
+        }
 
         // DOUBLE-CLICK it on the sheet and the block opens: the lines are separate objects there, every
         // drawing tool works on them, and what is copied inside can be pasted outside. Which is the whole

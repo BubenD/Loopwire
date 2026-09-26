@@ -198,6 +198,8 @@ public:
     // Blocks, as operations the host can be asked to perform - each is also reachable by name from
     // the command line. Opening one for editing puts it in a tab of its own on a grey canvas.
     void openBlockEditor(const QString& name);
+    // The picked block, opened for editing - the Home tab's Edit block.
+    void editSelectedBlock();
     void showBlockDialog();
     void saveBlockBeingEdited();
     void cancelBlockEdit();
@@ -683,7 +685,7 @@ private:
     bool saveLibraryPartDocument(Document* doc);
 
     // Blocks.
-    enum class BlockAction { Create, Insert, Manage, SaveEdit, CancelEdit };
+    enum class BlockAction { Create, Insert, Manage, Edit, SaveEdit, CancelEdit };
     QToolButton* makeBlockButton(QWidget* parent, BlockAction action);
     void createBlockFromSelection();
     // Close the block's tab and give the Blocks window back, however the edit ended.

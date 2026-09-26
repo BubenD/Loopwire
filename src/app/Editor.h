@@ -12,6 +12,7 @@
 #include "tools/ToolId.h"
 
 #include <QElapsedTimer>
+#include <QHash>
 #include <QJsonValue>
 #include <QObject>
 
@@ -746,6 +747,13 @@ public:
     bool pointHiddenByBreak(const Entity& host, const Vec2& p) const;
     std::vector<std::pair<Vec2, Vec2>> unmaskedSegments(
         const Entity& host, const std::vector<std::pair<Vec2, Vec2>>& segs) const;
+    // The break marks of the drawing, each by its id with the quad it hides - gathered once by whatever
+    // asks about every object in turn, and handed to the overload below, rather than the drawing being
+    // walked again for each object (eighty thousand lines squared, for one window selection).
+    using BreakMarks = std::vector<std::pair<QString, std::vector<Vec2>>>;
+    BreakMarks breakMarks() const;
+    std::vector<std::pair<Vec2, Vec2>> unmaskedSegments(
+        const Entity& host, const std::vector<std::pair<Vec2, Vec2>>& segs, const BreakMarks& marks) const;
     // The nearest point ON THE BODY of a wire (between its ends) within `tol`, and which wire it is.
     // What lets a run be landed on another run as a T, and what says a joint belongs there.
     std::optional<Vec2> wireBodyPointNear(const Vec2& q, double tol, QString* wireId = nullptr,
@@ -1557,6 +1565,15 @@ private:
     // The same, for the many things that only READ an object - painting an overlay, working out
     // where a route would go. Without it every one of them writes the same little search again.
     const Entity* entityById(const QString& id) const;
+    // Where an id is in the document, or -1. A big drawing is looked up through an index - see
+    // idIndex_ - and a small one by walking it, as it always was.
+    int indexOfId(const QString& id) const;
+    // ID -> POSITION, for a drawing big enough to need it. Every lookup is checked against the
+    // document before it is trusted, so an index gone stale (objects added, removed, reordered) is
+    // never wrong, only rebuilt: a hit is confirmed, and a miss falls back to the walk it replaces.
+    mutable QHash<QString, int> idIndex_;
+    mutable const Document* idIndexDoc_ = nullptr;
+    mutable bool idIndexStale_ = true;
 
     // Hatch "Pick Points": the smallest closed entity that encloses `seed`, or
     // nullptr if none surrounds it.

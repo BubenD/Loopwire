@@ -218,10 +218,15 @@ void MainWindow::buildHomeTab() {
         bg->addWidget(makeBlockButton(bw, BlockAction::Create), 0, 0);
         bg->addWidget(makeBlockButton(bw, BlockAction::Insert), 0, 1);
         bg->addWidget(makeBlockButton(bw, BlockAction::Manage), 0, 2);
+        {
+            QToolButton* edit = makeBlockButton(bw, BlockAction::Edit);
+            edit->setObjectName(QStringLiteral("editBlockButton"));
+            bg->addWidget(edit, 0, 3);
+        }
         saveBlockBtn_ = makeBlockButton(bw, BlockAction::SaveEdit);
-        bg->addWidget(saveBlockBtn_, 0, 3);
+        bg->addWidget(saveBlockBtn_, 0, 4);
         cancelBlockBtn_ = makeBlockButton(bw, BlockAction::CancelEdit);
-        bg->addWidget(cancelBlockBtn_, 0, 4);
+        bg->addWidget(cancelBlockBtn_, 0, 5);
         addGroup(lay, QStringLiteral("Block"), bw);
 }
 {

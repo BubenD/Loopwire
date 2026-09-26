@@ -1,5 +1,6 @@
 #include "app/MainWindow.h"
 #include <QProgressBar>
+#include <QItemSelectionModel>
 #include <QScopeGuard>
 
 #include "app/Chrome.h"
@@ -9494,10 +9495,21 @@ void MainWindow::refreshProperties() {
     // row where they agree shows the shared value, and every row where they disagree shows
     // the "#Value" marker rather than pretending one object's value speaks for all. A
     // mixed-type selection has no common panel, so only the General summary shows.
+    // Found through a table of the drawing, not a walk of it per picked object: eighty thousand picked
+    // lines walked for one at a time was a minute and a half before the panel appeared.
     std::vector<const Entity*> selEnts;
-    for (const auto& id : sel)
+    selEnts.reserve(sel.size());
+    if (sel.size() == 1) {
         for (const auto& ent : editDoc()->entities())
-            if (ent.id == id) { selEnts.push_back(&ent); break; }
+            if (ent.id == sel.front()) { selEnts.push_back(&ent); break; }
+    } else if (!sel.empty()) {
+        QHash<QString, const Entity*> byId;
+        byId.reserve(static_cast<qsizetype>(editDoc()->entities().size()));
+        for (const auto& ent : editDoc()->entities())
+            if (!byId.contains(ent.id)) byId.insert(ent.id, &ent);   // the first, as the walk found
+        for (const auto& id : sel)
+            if (const Entity* found = byId.value(id, nullptr)) selEnts.push_back(found);
+    }
     bool sameType = !selEnts.empty();
     for (const Entity* se : selEnts)
         if (se->type != selEnts.front()->type) { sameType = false; break; }
@@ -11279,13 +11291,29 @@ void MainWindow::refreshEntityList() {
     entityList_->clear();
     const auto& selList = editor_->selection();
     const QSet<QString> sel(selList.begin(), selList.end());
+    // AND THE PICKED ROWS MARKED IN ONE GO, as runs. Marking them one row at a time has the list merge
+    // each into everything marked before it - eighty thousand picked lines was a minute and a half.
+    QItemSelection picked;
+    int runFrom = -1, row = 0;
+    QAbstractItemModel* model = entityList_->model();
+    auto endRun = [&](int upTo) {
+        if (runFrom >= 0) picked.select(model->index(runFrom, 0), model->index(upTo, 0));
+        runFrom = -1;
+    };
     for (const auto& e : editDoc()->entities()) {
         auto* item = new QListWidgetItem(
             QStringLiteral("%1  [%2]").arg(entityTypeToString(e.type), e.id));
         item->setData(Qt::UserRole, e.id);
         entityList_->addItem(item);
-        if (sel.contains(e.id)) item->setSelected(true);
+        if (sel.contains(e.id)) {
+            if (runFrom < 0) runFrom = row;
+        } else {
+            endRun(row - 1);
+        }
+        ++row;
     }
+    endRun(row - 1);
+    if (!picked.isEmpty()) entityList_->selectionModel()->select(picked, QItemSelectionModel::Select);
     entityList_->setUpdatesEnabled(true);
 }
 
@@ -13710,6 +13738,8 @@ QToolButton* MainWindow::makeBlockButton(QWidget* parent, BlockAction action) {
         : action == BlockAction::Manage
             ? Look{"Blocks", "Every block there is: the ones saved as files, and every drawing in "
                              "the parts library"}
+        : action == BlockAction::Edit
+            ? Look{"Edit\nblock", "Open the selected block on a tab of its own, to change its lines"}
         : action == BlockAction::SaveEdit
             ? Look{"Save\nblock", "Only while a block is open for editing"}
             : Look{"Cancel\nblock", "Leave the block as it was and close it"};
@@ -13739,7 +13769,13 @@ QToolButton* MainWindow::makeBlockButton(QWidget* parent, BlockAction action) {
             ip.setBrush(QColor("#e6b45a"));
             ip.setPen(QPen(QColor("#e6b45a"), 1.0));
             ip.drawEllipse(QPointF(5, 20), 2.0, 2.0);   // the base point
-            if (action == BlockAction::Insert) {
+            if (action == BlockAction::Edit) {
+                // A pencil across the corner.
+                ip.setPen(QPen(QColor("#e6b45a"), 2.2));
+                ip.drawLine(17, 25, 26, 16);
+                ip.setPen(QPen(QColor("#e8e8e8"), 1.2));
+                ip.drawLine(15, 27, 17, 25);
+            } else if (action == BlockAction::Insert) {
                 ip.setPen(QPen(QColor("#8fb7ff"), 1.6));
                 ip.drawLine(21, 6, 26, 11);
                 ip.drawLine(26, 11, 21, 11);
@@ -13765,6 +13801,9 @@ QToolButton* MainWindow::makeBlockButton(QWidget* parent, BlockAction action) {
         case BlockAction::Manage:
             connect(btn, &QToolButton::clicked, this, [this] { showBlockDialog(); });
             break;
+        case BlockAction::Edit:
+            connect(btn, &QToolButton::clicked, this, [this] { editSelectedBlock(); });
+            break;
         case BlockAction::SaveEdit:
             btn->setEnabled(false);
             connect(btn, &QToolButton::clicked, this, [this] { saveBlockBeingEdited(); });
@@ -13775,6 +13814,27 @@ QToolButton* MainWindow::makeBlockButton(QWidget* parent, BlockAction action) {
             break;
     }
     return btn;
+}
+
+void MainWindow::editSelectedBlock() {
+    // The block that is picked on the sheet - a reference to one, or a piece of a placed copy - opened
+    // on its own tab, the same as double-clicking it.
+    if (!editor_ || !doc_) return;
+    QString name;
+    const auto& sel = editor_->selection();
+    const QSet<QString> picked(sel.begin(), sel.end());
+    for (const Entity& e : doc_->entities()) {
+        if (!picked.contains(e.id)) continue;
+        name = e.type == EntityType::BlockRef ? e.meta.value(QLatin1String(kBlockRefKey)).toString()
+                                              : entityBlockName(e);
+        if (!name.isEmpty()) break;
+    }
+    if (name.isEmpty()) {
+        statusBar()->showMessage(QStringLiteral("Select a block on the sheet first, then Edit block opens it"),
+                                 5000);
+        return;
+    }
+    openBlockEditor(name);
 }
 
 void MainWindow::showBlockDialog() {
@@ -13855,7 +13915,13 @@ void MainWindow::openBlockEditor(const QString& name) {
     }
     auto doc = std::make_unique<Document>(QStringLiteral("Block: %1").arg(name));
     doc->entities().clear();
-    for (const Entity& e : partDrawingEntities(found.entities)) doc->entities().push_back(e);
+    // Each line its own id: the library's drawings come without them, and eighty thousand lines all
+    // called the same thing were one object to the selection - a click on any picked them all.
+    int next = 0;
+    for (Entity& e : partDrawingEntities(found.entities)) {
+        e.id = QStringLiteral("blk%1").arg(++next);
+        doc->entities().push_back(std::move(e));
+    }
     Document* raw = doc.get();
     blockEdits_.insert(raw, name);
     addDocument(std::move(doc), QString());
