@@ -9,6 +9,7 @@
 #include "app/Editor.h"
 #include "tools/ToolId.h"
 #include "app/MainWindow.h"
+#include <QProgressBar>
 #include "model/Document.h"
 
 #include <cstdio>
@@ -65,6 +66,12 @@ int run_pdfimport_tests() {
         const bool ok = win.importPdfFile(file, &said);
         std::printf("  pdf block: %s\n", qPrintable(said));
         check(ok, "block: the PDF imports");
+        // AND IT LEAVES NOTHING BEHIND: no progress bar at the bottom, and the copy not left picked -
+        // a big PDF's tens of thousands of picked lines were minutes of work for every panel.
+        check(!win.findChild<QProgressBar*>(QStringLiteral("importProgress")),
+              "block: the progress bar is gone once the import is done");
+        check(win.findChild<Editor*>() && win.findChild<Editor*>()->selection().empty(),
+              "block: the imported copy is not left picked");
         check(said.contains(QStringLiteral("2 line(s)")),
               "block: a three-point path comes in as its two lines, not as one object");
 

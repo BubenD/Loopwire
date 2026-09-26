@@ -288,7 +288,7 @@ void parseStream(const QByteArray& stream, Document& doc) {
 
 } // namespace
 
-bool parse(const QByteArray& bytes, Document& doc, QString* error) {
+bool parse(const QByteArray& bytes, Document& doc, QString* error, const Progress& progress) {
     if (!PdfText::looksLikePdf(bytes)) {
         if (error) *error = QStringLiteral("The selected file is not a PDF.");
         return false;
@@ -300,7 +300,16 @@ bool parse(const QByteArray& bytes, Document& doc, QString* error) {
     extracted.entities().clear();
     qsizetype cursor = 0;
     int streams = 0;
+    int lastSaid = -1;
     while ((cursor = bytes.indexOf("stream", cursor)) >= 0) {
+        // HOW FAR THROUGH THE FILE: the reading is most of the work, so it is most of the bar.
+        if (progress && !bytes.isEmpty()) {
+            const int pct = static_cast<int>(70.0 * double(cursor) / double(bytes.size()));
+            if (pct != lastSaid) {
+                lastSaid = pct;
+                progress(pct, QStringLiteral("Reading the PDF's paths"));
+            }
+        }
         QByteArray stream;
         if (!streamBytes(bytes, cursor, stream)) break;
         const qsizetype objectStart = bytes.lastIndexOf("obj", cursor);
@@ -323,7 +332,9 @@ bool parse(const QByteArray& bytes, Document& doc, QString* error) {
     // import. That way PDF geometry gets the application's established DXF
     // normalization, IDs, layers, and entity representations before it is
     // appended to the active document by Editor::appendEntities().
+    if (progress) progress(72, QStringLiteral("Normalising %1 object(s)").arg(extracted.entities().size()));
     const QString dxf = dxf::toDxf(extracted);
+    if (progress) progress(86, QStringLiteral("Normalising %1 object(s)").arg(extracted.entities().size()));
     Document converted;
     QString dxfError;
     if (!dxf::parse(converted, dxf, &dxfError)) {
@@ -331,16 +342,18 @@ bool parse(const QByteArray& bytes, Document& doc, QString* error) {
         return false;
     }
     doc = std::move(converted);
+    if (progress) progress(100, QStringLiteral("Read"));
     return true;
 }
 
-bool importFile(Document& doc, const QString& path, QString* error) {
+bool importFile(Document& doc, const QString& path, QString* error, const Progress& progress) {
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
         if (error) *error = file.errorString();
         return false;
     }
-    return parse(file.readAll(), doc, error);
+    if (progress) progress(0, QStringLiteral("Reading the file"));
+    return parse(file.readAll(), doc, error, progress);
 }
 
 } // namespace Edraw_Desktop::pdf

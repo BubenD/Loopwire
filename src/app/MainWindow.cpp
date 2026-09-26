@@ -1,4 +1,6 @@
 #include "app/MainWindow.h"
+#include <QProgressBar>
+#include <QScopeGuard>
 
 #include "app/Chrome.h"
 #include "app/OutputDialog.h"
@@ -11269,16 +11271,22 @@ void MainWindow::refreshBomPanel() {
 
 void MainWindow::refreshEntityList() {
     if (!entityList_) return;
+    // A SET to look the selection up in, not a walk down it for every object: with a PDF's worth of
+    // lines on the sheet and all of them picked, walking the list for each was tens of thousands
+    // squared - minutes of nothing happening.
+    entityList_->setUpdatesEnabled(false);
+    const QSignalBlocker block(entityList_);
     entityList_->clear();
-    const auto& sel = editor_->selection();
+    const auto& selList = editor_->selection();
+    const QSet<QString> sel(selList.begin(), selList.end());
     for (const auto& e : editDoc()->entities()) {
         auto* item = new QListWidgetItem(
             QStringLiteral("%1  [%2]").arg(entityTypeToString(e.type), e.id));
         item->setData(Qt::UserRole, e.id);
-        if (std::find(sel.begin(), sel.end(), e.id) != sel.end())
-            item->setSelected(true);
         entityList_->addItem(item);
+        if (sel.contains(e.id)) item->setSelected(true);
     }
+    entityList_->setUpdatesEnabled(true);
 }
 
 // ---- Commands & dialogs ----------------------------------------------------
@@ -16470,9 +16478,36 @@ void MainWindow::importPdf() {
 
 bool MainWindow::importPdfFile(const QString& path, QString* said) {
     if (!doc_) return false;
+    // HOW FAR IT HAS GOT, at the bottom of the window. A big PDF is tens of thousands of lines and
+    // takes a while to read; without a sign of it the window looks like it has stopped.
+    auto* bar = new QProgressBar(this);
+    bar->setObjectName(QStringLiteral("importProgress"));
+    bar->setRange(0, 100);
+    bar->setMaximumWidth(260);
+    bar->setTextVisible(true);
+    auto* stage = new QLabel(this);
+    stage->setObjectName(QStringLiteral("importStage"));
+    statusBar()->addPermanentWidget(stage);
+    statusBar()->addPermanentWidget(bar);
+    const auto done = qScopeGuard([this, bar, stage] {
+        // Gone the moment the import is over, whichever way it ends.
+        statusBar()->removeWidget(bar);
+        statusBar()->removeWidget(stage);
+        delete bar;
+        delete stage;
+    });
+    auto step = [bar, stage](int pct, const QString& what) {
+        bar->setValue(std::clamp(pct, 0, 100));
+        stage->setText(what);
+        // Drawn now, but nothing typed or clicked is acted on while the import is under way.
+        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    };
+    step(0, tr("Importing %1").arg(QFileInfo(path).fileName()));
     Document imported;
     QString error;
-    if (!pdf::importFile(imported, path, &error)) {
+    // The reading is the first 60% of the bar; laying it out as a block is the rest.
+    const pdf::Progress reading = [&step](int pct, const QString& what) { step(pct * 60 / 100, what); };
+    if (!pdf::importFile(imported, path, &error, reading)) {
         if (said) *said = error;
         else QMessageBox::warning(this, QStringLiteral("PDF import failed"), error);
         return false;
@@ -16502,6 +16537,7 @@ bool MainWindow::importPdfFile(const QString& path, QString* said) {
     // segment each is what makes an imported PDF editable, which is the whole reason for importing it as a
     // block rather than as a picture. Nothing about how it LOOKS changes: a polyline and its segments draw
     // the same lines.
+    step(62, tr("Splitting %1 path(s) into lines").arg(imported.entities().size()));
     std::vector<Entity> placed;
     placed.reserve(imported.entities().size() * 2);
     int fromPaths = 0;
@@ -16531,6 +16567,7 @@ bool MainWindow::importPdfFile(const QString& path, QString* said) {
     if (dxfPath.endsWith(QStringLiteral(".pdf"), Qt::CaseInsensitive))
         dxfPath.chop(4);
     dxfPath += QStringLiteral(".dxf");
+    step(68, tr("Writing %1").arg(QFileInfo(dxfPath).fileName()));
     Document asDxf;
     asDxf.entities().clear();
     for (const Entity& e : placed) asDxf.entities().push_back(e);
@@ -16543,20 +16580,26 @@ bool MainWindow::importPdfFile(const QString& path, QString* said) {
     // As one block it is one object on the sheet, insertable again as often as it is wanted, and openable
     // on its own tab (Blocks, or right-click it) where the lines can be worked on and saved back to every
     // copy at once.
+    step(76, tr("Making the block of %1 line(s)").arg(placed.size()));
     const QString wanted = blockNameForImport(QFileInfo(path).completeBaseName());
     BlockDef def = blockFromEntities(wanted, placed, Vec2{0.0, 0.0});
     def.description = QStringLiteral("Imported from %1").arg(QFileInfo(path).fileName());
+    step(84, tr("Saving the block"));
     const bool savedBlock = def.save(BlockDef::pathFor(wanted));
+    step(90, tr("Putting it on the drawing"));
     if (savedBlock) {
-        // One copy of it, on the origin - where the entities themselves would have gone.
-        editor_->appendEntities(blockInstanceEntities(def, Vec2{0.0, 0.0}, QString()));
+        // One copy of it, on the origin - where the entities themselves would have gone. Not left
+        // PICKED: tens of thousands of picked objects is a lot of work for every panel and is not
+        // what anybody importing a drawing then wants to do with it.
+        editor_->appendEntities(blockInstanceEntities(def, Vec2{0.0, 0.0}, QString()), false);
         if (blockDlg_) blockDlg_->refresh();
         refreshBlocksPanel();
     } else {
         // The block folder could not be written. Rather than lose the import, the lines go down as they
         // are and the message says which of the two happened.
-        editor_->appendEntities(placed);
+        editor_->appendEntities(placed, false);
     }
+    step(97, tr("Drawing it"));
     canvas_->fitView();
     QStringList told;
     told << (savedBlock ? tr("Imported %1 line(s) from %2 as the block \"%3\", one copy on 0,0 — "
