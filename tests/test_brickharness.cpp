@@ -29,6 +29,7 @@
 #include <QSplitter>
 #include <QTabWidget>
 #include <QToolButton>
+#include <QMenu>
 #include "harness/Bom.h"
 #include "io/Dwx.h"
 #include <QDir>
@@ -873,6 +874,23 @@ void testRoundFive() {
               "transition: at both ends, the joined end as its end boot");
     }
 
+    // 7 (round six). A FAN CONVERGES TO SO MANY WIRES.
+    {
+        BrickDesign d;
+        const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString fo = d.addBrick(BrickType::Fanout, PartKind::Wire, 1, 0);
+        const QString y = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        d.connect(x, fo);
+        d.connect(fo, y);
+        d.brick(fo)->run.wires = 6;
+        d.brick(fo)->run.trunkWires = 2;
+        const BrickBuild b = buildBrickHarness(d, nullptr);
+        const auto runs = of(b, fo, isRun);
+        check(!runs.empty() && runs[0]->meta.value(QStringLiteral("twistTrunkWires")).toInt() == 2 &&
+                  b.actual.value(fo).trunk == 2.0,
+              "converge: the fan's wires gathered to the number asked for");
+    }
+
     // 8, 9. THE WHOLE LENGTH: at its angle, tracing the run, single-ended.
     {
         BrickDesign d;
@@ -959,8 +977,38 @@ void testRoundFive() {
     check(foldLabels && labels && !labels->isVisible(), "sections: a section folds away");
     if (foldLabels) foldLabels->click();
     check(labels && labels->isVisible(), "sections: and back");
-    auto* sections = dlg.findChild<QSplitter*>(QStringLiteral("brickRunSections"));
-    check(sections && sections->count() == 5, "sections: in a splitter, each pulled taller or shorter");
+    // FOLDED, A SECTION IS ITS HEADER, and the next follows straight after it.
+    auto* foldStack = dlg.findChild<QToolButton*>(QStringLiteral("brickFoldStack"));
+    auto* foldDims = dlg.findChild<QToolButton*>(QStringLiteral("brickFoldDims"));
+    auto* foldNets = dlg.findChild<QToolButton*>(QStringLiteral("brickFoldNets"));
+    auto yOf = [&dlg](QWidget* w) { return w->mapTo(&dlg, QPoint(0, 0)).y(); };
+    if (foldStack && foldDims) {
+        foldStack->click();
+        QApplication::processEvents();
+        const int gap = yOf(foldDims) - (yOf(foldStack) + foldStack->height());
+        std::printf("  sections: folded, the next %d px after its header\n", gap);
+        check(gap >= 0 && gap <= 8, "sections: folded to its header, the next right after it");
+        foldStack->click();
+        QApplication::processEvents();
+    }
+    // PULLED TALLER BY ITS GRIP, it pushes everything after it down.
+    auto* grip = dlg.findChild<QWidget*>(QStringLiteral("brickFoldNetsGrip"));
+    if (grip && foldNets && foldDims) {
+        const int dimsWas = yOf(foldDims);
+        const QPointF g(grip->width() / 2.0, 3.0);
+        QMouseEvent press(QEvent::MouseButtonPress, g, grip->mapToGlobal(g), Qt::LeftButton, Qt::LeftButton,
+                          Qt::NoModifier);
+        QApplication::sendEvent(grip, &press);
+        const QPointF to = g + QPointF(0, 60);
+        QMouseEvent move(QEvent::MouseMove, to, grip->mapToGlobal(to), Qt::NoButton, Qt::LeftButton,
+                         Qt::NoModifier);
+        QApplication::sendEvent(grip, &move);
+        QApplication::processEvents();
+        std::printf("  sections: pulled 60 taller, the next moved %d\n", yOf(foldDims) - dimsWas);
+        check(std::abs(yOf(foldDims) - dimsWas - 60) <= 2, "sections: pulled taller, it pushes the rest down");
+    } else {
+        check(false, "sections: a grip to pull a section taller");
+    }
     // 11. A part from the list, assigned to the picked end part and put on the bill.
     QString pid;
     for (const LibraryPart* p : dlg.catalog().merged().ofKind(PartKind::Ferrule)) {
@@ -977,13 +1025,66 @@ void testRoundFive() {
     // 12. The bill moves.
     auto* bom = dlg.findChild<QTableWidget*>(QStringLiteral("brickBom"));
     const int keep = dlg.bomPlace();
+    auto* box = dlg.findChild<QWidget*>(QStringLiteral("brickBomBox"));
     dlg.placeBom(2);
-    check(bom && qobject_cast<QSplitter*>(bom->parentWidget()) && dlg.bomPlace() == 2,
+    check(box && qobject_cast<QSplitter*>(box->parentWidget()) && dlg.bomPlace() == 2,
           "bom: moved under the preview");
     dlg.placeBom(0);
-    auto* tabs = bom ? qobject_cast<QTabWidget*>(bom->parentWidget() ? bom->parentWidget()->parentWidget() : nullptr)
+    auto* tabs = box ? qobject_cast<QTabWidget*>(box->parentWidget() ? box->parentWidget()->parentWidget() : nullptr)
                      : nullptr;
-    check(tabs && tabs->indexOf(bom) >= 0, "bom: and back to a tab on the left");
+    check(tabs && tabs->indexOf(box) >= 0, "bom: and back to a tab on the left");
+    // THE LEFT'S BOTTOM HALF.
+    dlg.placeBom(1);
+    QApplication::processEvents();
+    auto* left = box ? qobject_cast<QSplitter*>(box->parentWidget()) : nullptr;
+    check(left && left->indexOf(box) == 1 && std::abs(left->sizes().value(0) - left->sizes().value(1)) <= 2,
+          "bom: in the bottom half of the left");
+    // REMOVED from the bill: the part assigned above.
+    if (!pid.isEmpty()) {
+        int row = -1;
+        for (int i = 0; bom && i < bom->rowCount(); ++i)
+            if (dlg.catalog().byId(pid) && bom->item(i, 3)->text() == dlg.catalog().byId(pid)->mfrPn) row = i;
+        check(row >= 0 && dlg.removeFromBom(row) && dlg.bomItemOf(pid) == 0,
+              "bom: a line taken off the bill");
+    }
+
+    // THE RIGHT-CLICK MENU: turning, moving, duplicating, unlinking, deleting what is picked.
+    {
+        dlg.selectBrick(f);
+        QMenu menu;
+        canvas->fillContextMenu(menu);
+        QStringList said;
+        std::function<void(QMenu*)> collect = [&](QMenu* m) {
+            for (QAction* a : m->actions()) {
+                if (a->menu()) collect(a->menu());
+                else if (!a->isSeparator()) said << a->text().section(QLatin1Char('\t'), 0, 0);
+            }
+        };
+        collect(&menu);
+        std::printf("  menu: [%s]\n", qPrintable(said.join(QStringLiteral(", "))));
+        check(said.contains(QStringLiteral("Rotate a quarter")) && said.contains(QStringLiteral("Left")) &&
+                  said.contains(QStringLiteral("Delete")) && said.contains(QStringLiteral("Turn the fan round")),
+              "menu: rotate, move, turn a fan round, delete");
+        auto trigger = [&](const QString& text) {
+            std::function<bool(QMenu*)> find = [&](QMenu* m) {
+                for (QAction* a : m->actions()) {
+                    if (a->menu() && find(a->menu())) return true;
+                    if (a->text().section(QLatin1Char('\t'), 0, 0) == text) {
+                        a->trigger();
+                        return true;
+                    }
+                }
+                return false;
+            };
+            find(&menu);
+        };
+        const int rotWas = dlg.design().brick(f)->rot;
+        trigger(QStringLiteral("Rotate a quarter"));
+        check(dlg.design().brick(f)->rot == (rotWas + 1) % 4, "menu: rotate turns it");
+        const size_t count = dlg.design().bricks.size();
+        trigger(QStringLiteral("Duplicate"));
+        check(dlg.design().bricks.size() == count + 1, "menu: duplicate makes another");
+    }
     dlg.placeBom(keep);
 }
 
@@ -1241,8 +1342,9 @@ void testDialogMore() {
               d.brick(fan)->run.stack.contains(QStringLiteral("braid")),
           "stack: layers added through the panel, the last on outermost");
     auto* stack = dlg.findChild<QListWidget*>(QStringLiteral("brickStack"));
-    check(stack && stack->count() == 3 && stack->item(0)->text().contains(QStringLiteral("Heatshrink")),
-          "stack: listed from the outside in, the one seen first");
+    check(stack && stack->count() == 3 && stack->item(0)->text().contains(QStringLiteral("Wires")) &&
+              stack->item(2)->text().contains(QStringLiteral("Heatshrink")),
+          "stack: listed from the inside out - the wires first, the one seen last");
     if (stack) stack->setCurrentRow(1);   // the braid
     if (auto* out = dlg.findChild<QPushButton*>(QStringLiteral("brickStackOut"))) out->click();
     check(d.brick(fan)->run.outermost() == QLatin1String("braid"), "stack: moved outward, the braid is seen");

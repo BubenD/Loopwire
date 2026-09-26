@@ -1,5 +1,6 @@
 #pragma once
 
+#include "harness/Bom.h"
 #include "harness/BrickHarness.h"
 #include "harness/PartsLibrary.h"
 
@@ -16,6 +17,7 @@ class QComboBox;
 class QDoubleSpinBox;
 class QLabel;
 class QLineEdit;
+class QMenu;
 class QPushButton;
 class QSpinBox;
 class QStackedWidget;
@@ -70,6 +72,10 @@ public:
     // THE MAP: the whole of it small in a corner, with the part in view marked; a click on it goes there.
     void setMinimap(bool on);
     bool minimap() const { return minimap_; }
+    // THE RIGHT-CLICK MENU on the pane: turning, moving, turning a fan round, duplicating, unlinking,
+    // deleting what is picked - or fitting and the map, on nothing.
+    void fillContextMenu(QMenu& menu);
+    void duplicateSelection();
     // The middle of what is in view, on the grid.
     QPointF viewCentreGrid() const;
 
@@ -90,6 +96,7 @@ protected:
     void dragMoveEvent(QDragMoveEvent* e) override;
     void dropEvent(QDropEvent* e) override;
     void resizeEvent(QResizeEvent* e) override;
+    void contextMenuEvent(QContextMenuEvent* e) override;
 
 private:
     QRectF minimapRect() const;
@@ -161,6 +168,9 @@ public:
     // WHERE THE BILL IS: 0 a tab on the left, 1 under the left, 2 under the preview, 3 above the
     // pane, 4 under the right.
     void placeBom(int where);
+    // Take a line of the bill, as the table shows it, off the drawing's bill. A line the drawing
+    // itself calls for cannot be - it is there because the part is on the drawing.
+    bool removeFromBom(int shownRow);
     int bomPlace() const { return bomAt_; }
 
     // THE WIZARDS KEPT IN THE DRAWING, by name: saved with it, opened again, deleted.
@@ -208,8 +218,10 @@ private:
     QLineEdit* harnessName_ = nullptr;
     QTableWidget* bom_ = nullptr;
     QTableWidget* nets_ = nullptr;
-    bool runSized_ = false;   // the run page's sections given their proportions, once it has a height
     int bomAt_ = -1;
+    QWidget* bomBox_ = nullptr;
+    std::vector<BomRow> bomShown_;
+    QDoubleSpinBox* trunk_ = nullptr;
     QTabWidget* leftTabs_ = nullptr;
     QSplitter* leftSplit_ = nullptr;
     QSplitter* middle_ = nullptr;

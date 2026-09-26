@@ -399,7 +399,8 @@ QJsonObject BrickDesign::toJson() const {
                                                    {"fanSide", r.fanSide},
                                                    {"dimLinear", r.dimLinear},
                                                    {"dimTrace", r.dimTrace},
-                                                   {"dimSingle", r.dimSingle}};
+                                                   {"dimSingle", r.dimSingle},
+                                                   {"trunkWires", r.trunkWires}};
         }
         bs.append(o);
     }
@@ -470,6 +471,7 @@ BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
             s.dimLinear = r.value(QStringLiteral("dimLinear")).toBool(true);
             s.dimTrace = r.value(QStringLiteral("dimTrace")).toBool(false);
             s.dimSingle = r.value(QStringLiteral("dimSingle")).toBool(false);
+            s.trunkWires = r.value(QStringLiteral("trunkWires")).toInt(0);
         }
         d.bricks.push_back(b);
     }
@@ -1572,6 +1574,9 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                 }
             }
             if (r.kneeRadiusMm >= 0.0) run.meta.insert(QStringLiteral("twistKnee"), r.kneeRadiusMm);
+            // CONVERGED TO so many lines where the wires are gathered, when it is said.
+            if (!laidUp && r.trunkWires > 0)
+                run.meta.insert(QStringLiteral("twistTrunkWires"), std::clamp(r.trunkWires, 1, wires));
             made.push_back(run);
         }
 
@@ -1587,6 +1592,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                     const TwistFigures fig = twistedPairFigures(e);
                     act.knee = fig.kneeRadius;
                     act.fanKnee = fig.fanKnee;
+                    act.trunk = fig.trunk;
                 }
             out.actual.insert(s.id, act);
         }

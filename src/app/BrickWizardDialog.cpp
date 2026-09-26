@@ -35,6 +35,8 @@
 #include <QTableWidget>
 #include <QTreeWidget>
 #include <QSettings>
+#include <QMenu>
+#include <QContextMenuEvent>
 #include <QToolButton>
 #include <QResizeEvent>
 #include <QVBoxLayout>
@@ -68,9 +70,61 @@ QSizeF brickSize(const Brick& b) {
     return brickKindIsJoint(b.kind) ? QSizeF(90.0, 34.0) : QSizeF(96.0, 38.0);
 }
 
-// A SECTION OF THE RIGHT-HAND PANEL: a header that folds it away and back, and the section itself,
-// in a splitter whose edges pull it taller or shorter.
-QWidget* foldSection(const QString& title, QWidget* body, QSplitter* into, const char* name) {
+// A SECTION CHANGED SIZE - folded, or pulled taller or shorter - and the column it stands in lays itself
+// out again at once, so what is after it moves up or down with it rather than the space staying.
+void relayColumn(QWidget* section) {
+    if (!section) return;
+    if (section->layout()) section->layout()->activate();
+    section->updateGeometry();
+    section->adjustSize();
+    if (QWidget* column = section->parentWidget()) {
+        if (column->layout()) {
+            column->layout()->invalidate();
+            column->layout()->activate();
+        }
+        column->updateGeometry();
+        column->adjustSize();
+    }
+}
+
+// A GRIP ALONG THE BOTTOM OF A SECTION: dragged, the section grows or shrinks, and everything after it
+// is pushed down or pulled up with it.
+class SectionGrip : public QWidget {
+public:
+    SectionGrip(QWidget* body, QWidget* parent) : QWidget(parent), body_(body) {
+        setFixedHeight(7);
+        setCursor(Qt::SizeVerCursor);
+        setToolTip(QStringLiteral("Drag to make this section taller or shorter"));
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);
+        p.setPen(QColor(0x7a, 0x84, 0x90));
+        const int c = width() / 2;
+        p.drawLine(c - 14, 2, c + 14, 2);
+        p.drawLine(c - 14, 4, c + 14, 4);
+    }
+    void mousePressEvent(QMouseEvent* e) override {
+        from_ = e->globalPosition().y();
+        start_ = body_->height();
+    }
+    void mouseMoveEvent(QMouseEvent* e) override {
+        if (!(e->buttons() & Qt::LeftButton)) return;
+        body_->setFixedHeight(std::max(40, int(start_ + e->globalPosition().y() - from_)));
+        relayColumn(parentWidget());
+    }
+
+private:
+    QWidget* body_;
+    double from_ = 0.0;
+    int start_ = 0;
+};
+
+// A SECTION OF THE RIGHT-HAND PANEL: a header that folds it to one line, straight after the one
+// before it; its body as tall as it needs, or - given a height - as tall as it is pulled with its grip.
+QWidget* foldSection(const QString& title, QWidget* body, QVBoxLayout* into, const char* name,
+                     int height = 0) {
     auto* sec = new QWidget;
     auto* lay = new QVBoxLayout(sec);
     lay->setContentsMargins(0, 0, 0, 0);
@@ -86,14 +140,30 @@ QWidget* foldSection(const QString& title, QWidget* body, QSplitter* into, const
     head->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     head->setStyleSheet(QStringLiteral("QToolButton{font-weight:bold;text-align:left;}"));
     lay->addWidget(head);
-    lay->addWidget(body, 1);
-    QObject::connect(head, &QToolButton::toggled, sec, [sec, head, body](bool open) {
+    lay->addWidget(body);
+    QWidget* grip = nullptr;
+    if (height > 0) {
+        body->setFixedHeight(height);
+        grip = new SectionGrip(body, sec);
+        grip->setObjectName(QLatin1String(name) + QStringLiteral("Grip"));
+        lay->addWidget(grip);
+    }
+    QObject::connect(head, &QToolButton::toggled, sec, [sec, head, body, grip](bool open) {
         body->setVisible(open);
+        if (grip) grip->setVisible(open);
         head->setArrowType(open ? Qt::DownArrow : Qt::RightArrow);
-        sec->setMaximumHeight(open ? QWIDGETSIZE_MAX : head->sizeHint().height() + 2);
+        relayColumn(sec);
     });
     into->addWidget(sec);
     return sec;
+}
+
+// The column the sections stand in, top to bottom, with nothing between them.
+QVBoxLayout* sectionColumn(QWidget* column) {
+    auto* lay = new QVBoxLayout(column);
+    lay->setContentsMargins(2, 2, 2, 2);
+    lay->setSpacing(3);
+    return lay;
 }
 
 QWidget* scrolled(QWidget* w) {
@@ -564,6 +634,75 @@ void BrickCanvas::mouseReleaseEvent(QMouseEvent* e) {
     update();
 }
 
+void BrickCanvas::contextMenuEvent(QContextMenuEvent* e) {
+    // The brick under the pointer is what the menu is for - picked, if it was not already.
+    const QString hit = brickAt(e->pos());
+    if (!hit.isEmpty() && !sel_.contains(hit)) {
+        sel_ = {hit};
+        selLink_ = {};
+        emit selectionChanged(hit);
+        update();
+    }
+    QMenu menu(this);
+    fillContextMenu(menu);
+    menu.exec(e->globalPos());
+}
+
+void BrickCanvas::fillContextMenu(QMenu& menu) {
+    if (sel_.isEmpty()) {
+        menu.addAction(QStringLiteral("Fit everything in view"), this, [this] { fit(); });
+        menu.addAction(minimap_ ? QStringLiteral("Hide the map") : QStringLiteral("Show the map"), this,
+                       [this] { setMinimap(!minimap_); });
+        return;
+    }
+    menu.addAction(QStringLiteral("Rotate a quarter\tR"), this, [this] { rotateSelection(); });
+    QMenu* move = menu.addMenu(QStringLiteral("Move"));
+    move->addAction(QStringLiteral("Left\t←"), this, [this] { moveSelection(-1.0, 0.0); });
+    move->addAction(QStringLiteral("Right\t→"), this, [this] { moveSelection(1.0, 0.0); });
+    move->addAction(QStringLiteral("Up\t↑"), this, [this] { moveSelection(0.0, -1.0); });
+    move->addAction(QStringLiteral("Down\t↓"), this, [this] { moveSelection(0.0, 1.0); });
+    bool fans = false;
+    for (const QString& id : sel_)
+        if (const Brick* b = d_->brick(id); b && b->type == BrickType::Fanout) fans = true;
+    if (fans)
+        menu.addAction(QStringLiteral("Turn the fan round\tShift"), this, [this] {
+            for (const QString& id : sel_)
+                if (Brick* b = d_->brick(id); b && b->type == BrickType::Fanout)
+                    b->run.fanSide = 1 - d_->fanoutSpreadSide(*b);
+            emit designChanged();
+            update();
+        });
+    menu.addAction(QStringLiteral("Duplicate"), this, [this] { duplicateSelection(); });
+    menu.addAction(QStringLiteral("Unlink"), this, [this] {
+        for (const QString& id : sel_)
+            for (const QString& o : d_->linksOf(id)) d_->disconnect(id, o);
+        emit designChanged();
+        update();
+    });
+    menu.addSeparator();
+    menu.addAction(QStringLiteral("Delete\tDel"), this, [this] { deleteSelected(); });
+}
+
+void BrickCanvas::duplicateSelection() {
+    QStringList made;
+    for (const QString& id : sel_) {
+        const Brick* b = d_->brick(id);
+        if (!b) continue;
+        const Brick copy = *b;
+        const QString nid = d_->addBrick(copy.type, copy.kind, copy.col, copy.row + 1.0);
+        Brick* nb = d_->brick(nid);
+        *nb = copy;
+        nb->id = nid;
+        nb->row += 1.0;
+        made << nid;
+    }
+    if (made.isEmpty()) return;
+    sel_ = made;
+    emit selectionChanged(selected());
+    emit designChanged();
+    update();
+}
+
 // SHIFT PRESSED AND LET GO ON ITS OWN turns the picked fanouts round: the spread goes to the other
 // end. Shift with a click is adding to what is picked, and does not.
 void BrickCanvas::keyReleaseEvent(QKeyEvent* e) {
@@ -725,7 +864,7 @@ void BrickWizardDialog::buildUi() {
     keep->addWidget(new QLabel(QStringLiteral("BOM"), this));
     bomAtCombo_ = new QComboBox(this);
     bomAtCombo_->setObjectName(QStringLiteral("brickBomAt"));
-    bomAtCombo_->addItems({QStringLiteral("Left, a tab"), QStringLiteral("Left, bottom"),
+    bomAtCombo_->addItems({QStringLiteral("Left, a tab"), QStringLiteral("Left, bottom half"),
                            QStringLiteral("Middle, bottom"), QStringLiteral("Middle, top"),
                            QStringLiteral("Right, bottom")});
     keep->addWidget(bomAtCombo_);
@@ -876,7 +1015,25 @@ void BrickWizardDialog::buildUi() {
     bom_->horizontalHeader()->setStretchLastSection(true);
     bom_->verticalHeader()->setVisible(false);
     bom_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    bom_->setSelectionMode(QAbstractItemView::NoSelection);
+    bom_->setSelectionMode(QAbstractItemView::SingleSelection);
+    bom_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    // The bill and what is done to it, moved together wherever it is put.
+    bomBox_ = new QWidget(this);
+    bomBox_->setObjectName(QStringLiteral("brickBomBox"));
+    {
+        auto* bl = new QVBoxLayout(bomBox_);
+        bl->setContentsMargins(0, 0, 0, 0);
+        bom_->setParent(bomBox_);
+        bl->addWidget(bom_, 1);
+        auto* row = new QHBoxLayout;
+        auto* rm = new QPushButton(QStringLiteral("Remove from BOM"), bomBox_);
+        rm->setObjectName(QStringLiteral("brickBomRemove"));
+        rm->setToolTip(QStringLiteral("Take the picked line off the drawing's bill"));
+        row->addStretch(1);
+        row->addWidget(rm);
+        bl->addLayout(row);
+        connect(rm, &QPushButton::clicked, this, [this] { removeFromBom(bom_->currentRow()); });
+    }
     connect(canvas_, &BrickCanvas::selectionChanged, this, [this](const QString&) {
         loadPanel();
         refreshPreview();
@@ -927,7 +1084,7 @@ void BrickWizardDialog::buildUi() {
     }
     refreshSaved();
     {
-        const int at = std::clamp(QSettings().value(QStringLiteral("brickWizard/bomAt"), 0).toInt(), 0, 4);
+        const int at = std::clamp(QSettings().value(QStringLiteral("brickWizard/bomAt"), 1).toInt(), 0, 4);
         const QSignalBlocker block(bomAtCombo_);
         bomAtCombo_->setCurrentIndex(at);
         placeBom(at);
@@ -936,9 +1093,9 @@ void BrickWizardDialog::buildUi() {
 }
 
 QWidget* BrickWizardDialog::buildEndPage() {
-    auto* sections = new QSplitter(Qt::Vertical, panel_);
-    sections->setObjectName(QStringLiteral("brickEndSections"));
-    sections->setChildrenCollapsible(false);
+    auto* column = new QWidget;
+    column->setObjectName(QStringLiteral("brickEndSections"));
+    QVBoxLayout* cols = sectionColumn(column);
     auto* page = new QWidget;
     auto* f = new QFormLayout(page);
     endKind_ = new QLabel(page);
@@ -972,11 +1129,10 @@ QWidget* BrickWizardDialog::buildEndPage() {
     params_->horizontalHeader()->setStretchLastSection(true);
     params_->verticalHeader()->setVisible(false);
     params_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    params_->setMinimumHeight(80);
-    foldSection(QStringLiteral("Part"), scrolled(page), sections, "brickFoldPart");
-    foldSection(QStringLiteral("Parameters"), params_, sections, "brickFoldParams");
-    sections->setStretchFactor(0, 2);
-    sections->setStretchFactor(1, 3);
+    params_->setMinimumHeight(30);
+    foldSection(QStringLiteral("Part"), page, cols, "brickFoldPart");
+    foldSection(QStringLiteral("Parameters"), params_, cols, "brickFoldParams", 260);
+    cols->addStretch(1);
     connect(part_, &QComboBox::currentIndexChanged, this, [this](int) {
         writeEnd();
         loadPanel();
@@ -990,13 +1146,13 @@ QWidget* BrickWizardDialog::buildEndPage() {
         loadPanel();
         refreshPreview();
     });
-    return sections;
+    return scrolled(column);
 }
 
 QWidget* BrickWizardDialog::buildRunPage() {
-    auto* sections = new QSplitter(Qt::Vertical, panel_);
-    sections->setObjectName(QStringLiteral("brickRunSections"));
-    sections->setChildrenCollapsible(false);
+    auto* column = new QWidget;
+    column->setObjectName(QStringLiteral("brickRunSections"));
+    QVBoxLayout* cols = sectionColumn(column);
     auto* page = new QWidget;
     auto* form = new QFormLayout(page);
     runKind_ = new QLabel(page);
@@ -1020,6 +1176,9 @@ QWidget* BrickWizardDialog::buildRunPage() {
     form->addRow(QStringLiteral("Length"), length_);
     wireWidth_ = spin("brickWireWidth", 0.2, 20.0, 0.1, QStringLiteral(" mm"));
     form->addRow(QStringLiteral("Wire width"), wireWidth_);
+    // How many lines the wires converge to where they are gathered.
+    trunk_ = spin("brickTrunk", 1.0, 12.0, 1.0, QStringLiteral(" wires"));
+    trunk_->setDecimals(0);
     // A FIGURE THE DRAWING WORKS OUT WHEN LEFT ALONE: its actual size in the field, and "A" beside it
     // - lit while it is left alone. Typing a figure takes it over; "A" gives it back.
     auto withAuto = [this, page](QDoubleSpinBox* s, const char* name) {
@@ -1051,6 +1210,7 @@ QWidget* BrickWizardDialog::buildRunPage() {
     form->addRow(QStringLiteral("Bend radius, body"), withAuto(knee_, "brickKneeAuto"));
     fanKnee_ = spin("brickFanKnee", 0.0, 1000.0, 0.5, QStringLiteral(" mm"));
     form->addRow(QStringLiteral("Bend radius, fans"), withAuto(fanKnee_, "brickFanKneeAuto"));
+    form->addRow(QStringLiteral("Converge to"), withAuto(trunk_, "brickTrunkAuto"));
     fanScale_ = spin("brickFanScale", 5.0, 100.0, 5.0, QStringLiteral(" %"));
     form->addRow(QStringLiteral("Fans across the face"), fanScale_);
     bodyScale_ = spin("brickBodyScale", 5.0, 100.0, 5.0, QStringLiteral(" %"));
@@ -1063,7 +1223,7 @@ QWidget* BrickWizardDialog::buildRunPage() {
                             QStringLiteral("Both")});
     form->addRow(QStringLiteral("Transition heatshrink"), transitions_);
     for (QDoubleSpinBox* s : {length_, wireWidth_, fanStart_, fanFinish_, knee_, fanKnee_, fanScale_,
-                              bodyScale_, bodyWidth_})
+                              bodyScale_, bodyWidth_, trunk_})
         connect(s, &QDoubleSpinBox::valueChanged, this, [this, s](double) {
             // A figure typed in takes it over from Auto.
             if (QToolButton* a = autoOf_.value(s)) {
@@ -1072,7 +1232,7 @@ QWidget* BrickWizardDialog::buildRunPage() {
             }
             writeRun();
         });
-    foldSection(QStringLiteral("Run"), scrolled(page), sections, "brickFoldRun");
+    foldSection(QStringLiteral("Run"), page, cols, "brickFoldRun");
     connect(wires_, &QSpinBox::valueChanged, this, [this](int) {
         writeRun();
         loadLabels();   // the wires a label can go on
@@ -1089,17 +1249,17 @@ QWidget* BrickWizardDialog::buildRunPage() {
     nets_->setHorizontalHeaderLabels({QStringLiteral("Wire"), QStringLiteral("Net")});
     nets_->horizontalHeader()->setStretchLastSection(true);
     nets_->verticalHeader()->setVisible(false);
-    nets_->setMinimumHeight(60);
+    nets_->setMinimumHeight(30);
     nv->addWidget(nets_);
     netBox->setTitle(QString());
-    foldSection(QStringLiteral("Wires and nets"), netBox, sections, "brickFoldNets");
+    foldSection(QStringLiteral("Wires and nets"), netBox, cols, "brickFoldNets", 150);
 
     // THE STACK, from the middle out; the top of the list is the outermost, and only it is seen.
-    auto* stackBox = new QGroupBox(QStringLiteral("Stack — from the outside in"), page);
+    auto* stackBox = new QGroupBox(QStringLiteral("Stack — from the inside out"), page);
     auto* sv = new QVBoxLayout(stackBox);
     stack_ = new QListWidget(stackBox);
     stack_->setObjectName(QStringLiteral("brickStack"));
-    stack_->setMaximumHeight(110);
+    stack_->setMinimumHeight(30);
     sv->addWidget(stack_);
     auto* sb = new QHBoxLayout;
     auto* addLayer = new QComboBox(stackBox);
@@ -1120,7 +1280,7 @@ QWidget* BrickWizardDialog::buildRunPage() {
     auto* rmBtn = layerBtn("brickStackRemove", QStringLiteral("Remove"));
     sv->addLayout(sb);
     stackBox->setTitle(QString());
-    foldSection(QStringLiteral("Stack — from the outside in"), stackBox, sections, "brickFoldStack");
+    foldSection(QStringLiteral("Stack — from the inside out"), stackBox, cols, "brickFoldStack", 150);
     auto editStack = [this](auto fn) {
         Brick* b = design_.brick(canvas_->selected());
         if (!b || !brickIsSpecial(b->type)) return;
@@ -1140,27 +1300,32 @@ QWidget* BrickWizardDialog::buildRunPage() {
             if (!s.contains(key)) s << key;
         });
     });
-    // The list shows the outermost first: list row r is stack index size-1-r.
+    // The list is the stack as it goes on, the wires first and the outermost last: row r is layer r.
     connect(outBtn, &QPushButton::clicked, this, [this, editStack] {
-        const int r = stack_->currentRow();
+        const int i = stack_->currentRow();
+        bool moved = false;
         editStack([&](QStringList& s) {
-            const int i = s.size() - 1 - r;
-            if (r > 0 && i >= 1 && i + 1 < s.size()) s.swapItemsAt(i, i + 1);
+            if (i >= 1 && i + 1 < s.size()) {
+                s.swapItemsAt(i, i + 1);
+                moved = true;
+            }
         });
-        stack_->setCurrentRow(std::max(0, r - 1));
+        stack_->setCurrentRow(moved ? i + 1 : i);
     });
     connect(inBtn, &QPushButton::clicked, this, [this, editStack] {
-        const int r = stack_->currentRow();
+        const int i = stack_->currentRow();
+        bool moved = false;
         editStack([&](QStringList& s) {
-            const int i = s.size() - 1 - r;
-            if (i >= 2) s.swapItemsAt(i, i - 1);
+            if (i >= 2 && i < s.size()) {
+                s.swapItemsAt(i, i - 1);
+                moved = true;
+            }
         });
-        stack_->setCurrentRow(r + 1);
+        stack_->setCurrentRow(moved ? i - 1 : i);
     });
     connect(rmBtn, &QPushButton::clicked, this, [this, editStack] {
-        const int r = stack_->currentRow();
+        const int i = stack_->currentRow();
         editStack([&](QStringList& s) {
-            const int i = s.size() - 1 - r;
             if (i >= 1 && i < s.size()) s.removeAt(i);
         });
     });
@@ -1217,7 +1382,7 @@ QWidget* BrickWizardDialog::buildRunPage() {
             writeRun();
         });
     dims->setTitle(QString());
-    foldSection(QStringLiteral("Dimensions"), dims, sections, "brickFoldDims");
+    foldSection(QStringLiteral("Dimensions"), dims, cols, "brickFoldDims");
 
     // LABELS.
     auto* labBox = new QGroupBox(QStringLiteral("Labels"), page);
@@ -1230,7 +1395,7 @@ QWidget* BrickWizardDialog::buildRunPage() {
                                         QStringLiteral("Text")});
     labels_->horizontalHeader()->setStretchLastSection(true);
     labels_->verticalHeader()->setVisible(false);
-    labels_->setMinimumHeight(60);
+    labels_->setMinimumHeight(30);
     lv->addWidget(labels_);
     auto* lb = new QHBoxLayout;
     auto* addLab = new QPushButton(QStringLiteral("Add label"), labBox);
@@ -1242,10 +1407,8 @@ QWidget* BrickWizardDialog::buildRunPage() {
     lb->addStretch(1);
     lv->addLayout(lb);
     labBox->setTitle(QString());
-    foldSection(QStringLiteral("Labels"), labBox, sections, "brickFoldLabels");
-    // The run's own figures get most of the height to begin with; the rest pull out as needed.
-    sections->setStretchFactor(0, 5);
-    for (int i = 1; i < sections->count(); ++i) sections->setStretchFactor(i, 2);
+    foldSection(QStringLiteral("Labels"), labBox, cols, "brickFoldLabels", 190);
+    cols->addStretch(1);
     connect(addLab, &QPushButton::clicked, this, [this] {
         Brick* b = design_.brick(canvas_->selected());
         if (!b || !brickIsSpecial(b->type)) return;
@@ -1261,7 +1424,7 @@ QWidget* BrickWizardDialog::buildRunPage() {
         loadLabels();
         refreshPreview();
     });
-    return sections;
+    return scrolled(column);
 }
 
 QWidget* BrickWizardDialog::buildLinkPage() {
@@ -1451,14 +1614,6 @@ void BrickWizardDialog::loadPanel() {
         return;
     }
     panel_->setCurrentIndex(2);
-    // THE RUN'S OWN FIGURES get most of the height, the first time the page has a height to share.
-    if (!runSized_) {
-        if (auto* sp = findChild<QSplitter*>(QStringLiteral("brickRunSections")); sp && sp->height() > 200) {
-            const int h = sp->height();
-            sp->setSizes({int(h * 0.44), int(h * 0.12), int(h * 0.13), int(h * 0.14), int(h * 0.17)});
-            runSized_ = true;
-        }
-    }
     const QSignalBlocker s1(wires_), s2(length_), s3(wireWidth_), s4(fanStart_), s5(fanFinish_),
         s6(knee_), s7(fanKnee_), s8(fanScale_), s9(transitions_), s10(bodyScale_), s11(bodyWidth_),
         s12(dimTotal_), s13(dimFans_), s14(dimBetween_);
@@ -1466,6 +1621,8 @@ void BrickWizardDialog::loadPanel() {
     runKind_->setText(brickTypeName(b->type));
     wires_->setValue(r.wires);
     wires_->setEnabled(b->type != BrickType::TwistedPair);
+    trunk_->setEnabled(b->type == BrickType::Fanout || b->type == BrickType::Run);
+    trunk_->setMaximum(std::max(1, r.wires));
     length_->setValue(r.lengthMm);
     wireWidth_->setValue(r.wireWidthMm);
     // Each Auto figure: "A" lit when left alone, the field its actual size then (showActuals).
@@ -1473,7 +1630,8 @@ void BrickWizardDialog::loadPanel() {
                                           {fanFinish_, r.fanFinishMm, r.fanFinishMm < 0.0},
                                           {knee_, r.kneeRadiusMm, r.kneeRadiusMm < 0.0},
                                           {fanKnee_, r.fanKneeMm, r.fanKneeMm < 0.0},
-                                          {bodyWidth_, r.bodyWidthMm, r.bodyWidthMm <= 1e-9}}) {
+                                          {bodyWidth_, r.bodyWidthMm, r.bodyWidthMm <= 1e-9},
+                                          {trunk_, double(r.trunkWires), r.trunkWires <= 0}}) {
         QToolButton* a = autoOf_.value(spinBox);
         const QSignalBlocker ba(a);
         a->setChecked(isAuto);
@@ -1502,7 +1660,7 @@ void BrickWizardDialog::loadPanel() {
     }
     const int keep = stack_->currentRow();
     stack_->clear();
-    for (int i = r.stack.size() - 1; i >= 0; --i) {
+    for (int i = 0; i < r.stack.size(); ++i) {
         auto* it = new QListWidgetItem(layerName(r.stack[i]), stack_);
         if (i == r.stack.size() - 1) {
             QFont f = it->font();
@@ -1525,7 +1683,8 @@ void BrickWizardDialog::showActuals() {
                                   {fanFinish_, a.fanFinish},
                                   {knee_, a.knee},
                                   {fanKnee_, a.fanKnee},
-                                  {bodyWidth_, a.bodyWidth}}) {
+                                  {bodyWidth_, a.bodyWidth},
+                                  {trunk_, a.trunk}}) {
         QToolButton* btn = autoOf_.value(spinBox);
         if (!btn || !btn->isChecked()) continue;
         const QSignalBlocker block(spinBox);
@@ -1624,6 +1783,7 @@ void BrickWizardDialog::writeRun() {
     r.fanScalePct = fanScale_->value();
     r.bodyScalePct = bodyScale_->value();
     r.bodyWidthMm = manual(bodyWidth_) ? bodyWidth_->value() : 0.0;
+    r.trunkWires = manual(trunk_) ? static_cast<int>(std::lround(trunk_->value())) : 0;
     r.dimLinear = dimLinear_->isChecked();
     r.dimTrace = dimTrace_->isChecked();
     r.dimSingle = dimSingle_->isChecked();
@@ -1657,19 +1817,54 @@ void BrickWizardDialog::refreshPreview() {
 }
 
 void BrickWizardDialog::placeBom(int where) {
-    if (!bom_ || where < 0 || where > 4) return;
+    if (!bomBox_ || where < 0 || where > 4) return;
     // Out of wherever it was.
-    if (const int t = leftTabs_->indexOf(bom_); t >= 0) leftTabs_->removeTab(t);
+    if (const int t = leftTabs_->indexOf(bomBox_); t >= 0) leftTabs_->removeTab(t);
     switch (where) {
-    case 0: leftTabs_->addTab(bom_, QStringLiteral("BOM")); break;
-    case 1: leftSplit_->addWidget(bom_); break;
-    case 2: middle_->addWidget(bom_); break;
-    case 3: middle_->insertWidget(0, bom_); break;
-    default: rightSplit_->addWidget(bom_); break;
+    case 0: leftTabs_->addTab(bomBox_, QStringLiteral("BOM")); break;
+    case 1: {
+        // THE BOTTOM HALF of the left: the bricks and parts above, the bill below.
+        leftSplit_->addWidget(bomBox_);
+        const int h = std::max(400, leftSplit_->height());
+        leftSplit_->setSizes({h / 2, h / 2});
+        break;
     }
-    bom_->show();
+    case 2: middle_->addWidget(bomBox_); break;
+    case 3: middle_->insertWidget(0, bomBox_); break;
+    default: rightSplit_->addWidget(bomBox_); break;
+    }
+    bomBox_->show();
     bomAt_ = where;
     QSettings().setValue(QStringLiteral("brickWizard/bomAt"), where);
+}
+
+bool BrickWizardDialog::removeFromBom(int shownRow) {
+    Document* doc = document();
+    if (!doc || shownRow < 0 || shownRow >= static_cast<int>(bomShown_.size())) {
+        status_->setText(QStringLiteral("Pick a line of the BOM to remove"));
+        return false;
+    }
+    const BomRow target = bomShown_[static_cast<size_t>(shownRow)];
+    BomTable table;
+    table.fromJson(doc->bom());
+    const size_t was = table.rows.size();
+    table.rows.erase(std::remove_if(table.rows.begin(), table.rows.end(),
+                                    [&](const BomRow& r) { return bomSameThing(r, target); }),
+                     table.rows.end());
+    if (table.rows.size() == was) {
+        status_->setText(QStringLiteral("That line is there because the part is on the drawing - remove the "
+                                        "part from the drawing to take it off"));
+        return false;
+    }
+    doc->bom() = table.toJson();
+    doc->setDirty(true);
+    emit bomChanged();
+    refreshBom();
+    loadPanel();
+    refreshPreview();
+    status_->setText(QStringLiteral("%1 taken off the BOM").arg(target.mfrPn.isEmpty() ? target.description
+                                                                                        : target.mfrPn));
+    return true;
 }
 
 bool BrickWizardDialog::assignPart(const QString& partId) {
@@ -1719,6 +1914,7 @@ void BrickWizardDialog::refreshBom() {
         rows.insert(rows.end(), drawn.begin(), drawn.end());
     }
     if (table.config.unify) rows = bomUnify(rows);
+    bomShown_ = rows;
     QSet<QString> used;
     for (const Brick& b : design_.bricks)
         if (!b.libPart.isEmpty()) used.insert(b.libPart);

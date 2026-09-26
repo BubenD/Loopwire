@@ -102,6 +102,8 @@ struct BrickRunSpec {
     // WHICH END A FANOUT SPREADS AT: -1 the end on a part (the start when both are), 0 the start,
     // 1 the finish.
     int fanSide = -1;
+    // HOW MANY LINES THE WIRES CONVERGE TO where they are gathered; 0 = as the drawing draws it.
+    int trunkWires = 0;
     std::vector<BrickLabel> labels;
     // THE NET OF EACH WIRE, numbered from the top down like the labels: taken from the schematic
     // where the part is on it, or given here.
@@ -236,6 +238,7 @@ struct BrickActual {
     double knee = 0.0;
     double fanKnee = 0.0;
     double bodyWidth = 0.0;
+    double trunk = 0.0;
 };
 
 struct BrickBuild {
