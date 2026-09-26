@@ -12,6 +12,7 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFormLayout>
+#include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -316,6 +317,7 @@ void BrickCanvas::paintEvent(QPaintEvent*) {
 
 void BrickCanvas::mousePressEvent(QMouseEvent* e) {
     setFocus(Qt::MouseFocusReason);
+    shiftAlone_ = false;
     pressAt_ = cursor_ = e->position();
     if (e->button() == Qt::MiddleButton) {
         drag_ = Drag::Pan;
@@ -456,7 +458,33 @@ void BrickCanvas::mouseReleaseEvent(QMouseEvent* e) {
     update();
 }
 
+// SHIFT PRESSED AND LET GO ON ITS OWN turns the picked fanouts round: the spread goes to the other
+// end. Shift with a click is adding to what is picked, and does not.
+void BrickCanvas::keyReleaseEvent(QKeyEvent* e) {
+    if (e->key() == Qt::Key_Shift && !e->isAutoRepeat() && shiftAlone_) {
+        shiftAlone_ = false;
+        bool turned = false;
+        for (const QString& id : sel_)
+            if (Brick* b = d_->brick(id); b && b->type == BrickType::Fanout) {
+                b->run.fanSide = 1 - d_->fanoutSpreadSide(*b);
+                turned = true;
+            }
+        if (turned) {
+            emit message(QStringLiteral("Fanout turned round - it spreads at the other end"));
+            emit designChanged();
+            update();
+        }
+        return;
+    }
+    QWidget::keyReleaseEvent(e);
+}
+
 void BrickCanvas::keyPressEvent(QKeyEvent* e) {
+    if (e->key() == Qt::Key_Shift && !e->isAutoRepeat()) {
+        shiftAlone_ = true;
+        return;
+    }
+    shiftAlone_ = false;
     if (e->key() == Qt::Key_Delete || e->key() == Qt::Key_Backspace) {
         deleteSelected();
         return;
@@ -680,7 +708,8 @@ void BrickWizardDialog::buildUi() {
     parts_ = new QTreeWidget(partsPage);
     parts_->setObjectName(QStringLiteral("brickParts"));
     parts_->setHeaderLabels({QStringLiteral("P/N"), QStringLiteral("Description"), QStringLiteral("Kind"),
-                             QStringLiteral("Manufacturer")});
+                             QStringLiteral("Manufacturer"), QStringLiteral("Drawing"),
+                             QStringLiteral("Entry faces"), QStringLiteral("Near / far")});
     parts_->setRootIsDecorated(false);
     parts_->setSelectionMode(QAbstractItemView::ExtendedSelection);
     parts_->header()->setStretchLastSection(false);
@@ -966,26 +995,43 @@ QWidget* BrickWizardDialog::buildRunPage() {
 
     // DIMENSIONS.
     auto* dims = new QGroupBox(QStringLiteral("Dimensions"), page);
-    auto* dv = new QHBoxLayout(dims);
+    auto* dv = new QGridLayout(dims);
     dimTotal_ = new QCheckBox(QStringLiteral("Whole length"), dims);
     dimTotal_->setObjectName(QStringLiteral("brickDimTotal"));
     dimFans_ = new QCheckBox(QStringLiteral("Fans only"), dims);
     dimFans_->setObjectName(QStringLiteral("brickDimFans"));
     dimBetween_ = new QCheckBox(QStringLiteral("Between fans"), dims);
     dimBetween_->setObjectName(QStringLiteral("brickDimBetween"));
-    for (QCheckBox* c : {dimTotal_, dimFans_, dimBetween_}) {
-        dv->addWidget(c);
+    auto sayEdit = [dims](const char* name) {
+        auto* e = new QLineEdit(dims);
+        e->setObjectName(QLatin1String(name));
+        e->setPlaceholderText(QStringLiteral("the measurement"));
+        e->setToolTip(QStringLiteral("What the dimension says on the drawing - the real length is kept "
+                                     "with it"));
+        return e;
+    };
+    dimTextTotal_ = sayEdit("brickDimTextTotal");
+    dimTextFans_ = sayEdit("brickDimTextFans");
+    dimTextBetween_ = sayEdit("brickDimTextBetween");
+    int dr = 0;
+    for (auto [c, e] : {std::pair<QCheckBox*, QLineEdit*>{dimTotal_, dimTextTotal_}, {dimFans_, dimTextFans_},
+                        {dimBetween_, dimTextBetween_}}) {
+        dv->addWidget(c, dr, 0);
+        dv->addWidget(e, dr, 1);
+        ++dr;
         connect(c, &QCheckBox::toggled, this, [this](bool) { writeRun(); });
+        connect(e, &QLineEdit::textEdited, this, [this](const QString&) { writeRun(); });
     }
     v->addWidget(dims);
 
     // LABELS.
     auto* labBox = new QGroupBox(QStringLiteral("Labels"), page);
     auto* lv = new QVBoxLayout(labBox);
-    labels_ = new QTableWidget(0, 4, labBox);
+    labels_ = new QTableWidget(0, 6, labBox);
     labels_->setObjectName(QStringLiteral("brickLabels"));
     labels_->setHorizontalHeaderLabels({QStringLiteral("On"), QStringLiteral("From"),
-                                        QStringLiteral("Distance"), QStringLiteral("Text")});
+                                        QStringLiteral("Distance"), QStringLiteral("Length"),
+                                        QStringLiteral("Show on drawing"), QStringLiteral("Text")});
     labels_->horizontalHeader()->setStretchLastSection(true);
     labels_->verticalHeader()->setVisible(false);
     labels_->setMinimumHeight(140);
@@ -1050,9 +1096,20 @@ void BrickWizardDialog::fillPartsList() {
             const QStringList cols{p->mfrPn, p->description, partKindName(p->kind), p->mfrName};
             if (!filter.isEmpty() && !cols.join(QLatin1Char(' ')).contains(filter, Qt::CaseInsensitive))
                 continue;
-            auto* it = new QTreeWidgetItem(parts_, cols);
+            // WHAT THE WIZARD CAN SET IT DOWN BY: a drawing, its entry faces, its near and far points.
+            const bool line = partDrawingConnectionLine(p->mechanical) >= 0;
+            const QString faces = !p->outputs.empty() ? QString::number(p->outputs.size())
+                                  : line               ? QStringLiteral("line")
+                                                       : QStringLiteral("—");
+            QStringList row = cols;
+            row << (p->hasMechanical() ? QStringLiteral("✔") : QStringLiteral("—")) << faces
+                << (p->hasNearPoint && p->hasFarPoint ? QStringLiteral("✔") : QStringLiteral("—"));
+            auto* it = new QTreeWidgetItem(parts_, row);
             it->setData(0, Qt::UserRole, p->id);
             it->setToolTip(1, p->description);
+            it->setToolTip(4, QStringLiteral("Has a mechanical drawing"));
+            it->setToolTip(5, QStringLiteral("Entry faces marked (ports the brick gets)"));
+            it->setToolTip(6, QStringLiteral("Near and far points marked (for dimensions)"));
         }
 }
 
@@ -1211,6 +1268,11 @@ void BrickWizardDialog::loadPanel() {
     dimTotal_->setChecked(r.dimTotal);
     dimFans_->setChecked(r.dimFans);
     dimBetween_->setChecked(r.dimBetween);
+    for (auto [e, t] : {std::pair<QLineEdit*, QString>{dimTextTotal_, r.dimTextTotal}, {dimTextFans_, r.dimTextFans},
+                        {dimTextBetween_, r.dimTextBetween}}) {
+        const QSignalBlocker block(e);
+        if (e->text() != t) e->setText(t);
+    }
     const int keep = stack_->currentRow();
     stack_->clear();
     for (int i = r.stack.size() - 1; i >= 0; --i) {
@@ -1248,12 +1310,25 @@ void BrickWizardDialog::loadLabels() {
         dist->setDecimals(1);
         dist->setSuffix(QStringLiteral(" mm"));
         dist->setValue(l.distanceMm);
+        auto* len = new QDoubleSpinBox(labels_);
+        len->setRange(0.0, 1000.0);
+        len->setDecimals(1);
+        len->setSuffix(QStringLiteral(" mm"));
+        len->setSpecialValueText(QStringLiteral("Auto"));
+        len->setToolTip(QStringLiteral("How long the label is - kept off a bend either way"));
+        len->setValue(l.lengthMm);
+        auto* shown = new QCheckBox(labels_);
+        shown->setToolTip(QStringLiteral("Call the label's text out with a leader on the drawing"));
+        shown->setChecked(l.leader);
         auto* text = new QLineEdit(l.text, labels_);
+        text->setPlaceholderText(QStringLiteral("the wire's net"));
         labels_->setCellWidget(i, 0, on);
         labels_->setCellWidget(i, 1, from);
         labels_->setCellWidget(i, 2, dist);
-        labels_->setCellWidget(i, 3, text);
-        auto write = [this, id, i, on, from, dist, text] {
+        labels_->setCellWidget(i, 3, len);
+        labels_->setCellWidget(i, 4, shown);
+        labels_->setCellWidget(i, 5, text);
+        auto write = [this, id, i, on, from, dist, len, shown, text] {
             Brick* br = design_.brick(id);
             if (!br || i >= static_cast<int>(br->run.labels.size())) return;
             BrickLabel& lab = br->run.labels[i];
@@ -1261,12 +1336,16 @@ void BrickWizardDialog::loadLabels() {
             lab.fromFinish = from->currentIndex() == 1;
             lab.distanceMm = dist->value();
             lab.text = text->text();
+            lab.lengthMm = len->value();
+            lab.leader = shown->isChecked();
             refreshPreview();
         };
         connect(on, &QComboBox::currentIndexChanged, this, write);
         connect(from, &QComboBox::currentIndexChanged, this, write);
         connect(dist, &QDoubleSpinBox::valueChanged, this, write);
         connect(text, &QLineEdit::textEdited, this, write);
+        connect(len, &QDoubleSpinBox::valueChanged, this, write);
+        connect(shown, &QCheckBox::toggled, this, write);
     }
 }
 
@@ -1301,6 +1380,9 @@ void BrickWizardDialog::writeRun() {
     r.dimTotal = dimTotal_->isChecked();
     r.dimFans = dimFans_->isChecked();
     r.dimBetween = dimBetween_->isChecked();
+    r.dimTextTotal = dimTextTotal_->text().trimmed();
+    r.dimTextFans = dimTextFans_->text().trimmed();
+    r.dimTextBetween = dimTextBetween_->text().trimmed();
     canvas_->update();
     refreshPreview();
 }

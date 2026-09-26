@@ -77,6 +77,7 @@ protected:
     void mouseMoveEvent(QMouseEvent* e) override;
     void mouseReleaseEvent(QMouseEvent* e) override;
     void keyPressEvent(QKeyEvent* e) override;
+    void keyReleaseEvent(QKeyEvent* e) override;
     void dragEnterEvent(QDragEnterEvent* e) override;
     void dragMoveEvent(QDragMoveEvent* e) override;
     void dropEvent(QDropEvent* e) override;
@@ -97,6 +98,7 @@ private:
     QHash<QString, QPointF> startAt_;   // where each picked brick was when the drag began
     QPointF panFrom_;
     bool zoneAdd_ = false;
+    bool shiftAlone_ = false;   // Shift pressed and let go with nothing clicked in between
 };
 
 // The bricks to choose from: the end parts, the joints, then the specials. Dragged onto the pane;
@@ -222,6 +224,9 @@ private:
     QCheckBox* dimTotal_ = nullptr;
     QCheckBox* dimFans_ = nullptr;
     QCheckBox* dimBetween_ = nullptr;
+    QLineEdit* dimTextTotal_ = nullptr;
+    QLineEdit* dimTextFans_ = nullptr;
+    QLineEdit* dimTextBetween_ = nullptr;
     QTableWidget* labels_ = nullptr;
     // a link
     QLabel* linkText_ = nullptr;

@@ -69,7 +69,8 @@ void testLinks() {
     const QString run2 = d.addBrick(BrickType::Run, PartKind::Wire, 1, 1);
     QString why;
     check(!d.connect(x1, x2, &why) && !why.isEmpty(), "links: two end parts are not linked directly");
-    check(!d.connect(run, run2, &why), "links: nor two specials");
+    const QString fan = d.addBrick(BrickType::Fanout, PartKind::Wire, 1, 2);
+    check(!d.connect(run, fan, &why), "links: two specials only when one is a cable / heatshrink run");
     check(d.connect(x1, run, &why) && d.connect(run, x2, &why), "links: an end, a run, an end");
     check(!d.connect(run, x3, &why), "links: a run goes between two ends and no more");
     check(!d.connect(x1, run, &why), "links: the same link is not made twice");
@@ -282,7 +283,7 @@ void testFanoutJointAndExtras() {
     s.transitions = RunEnds::Finish;
     s.dimTotal = s.dimFans = s.dimBetween = true;
     s.labels.push_back({-1, false, 60.0, QStringLiteral("W1")});
-    s.labels.push_back({1, true, 5.0, QStringLiteral("2")});
+    s.labels.push_back({1, false, 5.0, QStringLiteral("2")});
     b = buildBrickHarness(j, nullptr);
     const Entity* body = nullptr;
     int dims = 0, labels = 0, braids = 0;
@@ -302,7 +303,7 @@ void testFanoutJointAndExtras() {
     check(body && body->meta.value(QStringLiteral("twistBodyTransitionSides")).toString() ==
                       QLatin1String("finish"),
           "transition: on the finish end only, as asked");
-    check(dims == 4, "dimensions: the whole run, each fan, and between the fans");
+    check(dims == 3, "dimensions: the whole run, the fan (a fanout spreads at one end), and between");
     check(labels == 2, "labels: one on the whole harness, one on a wire of the fan");
     s.stack = {QStringLiteral("wires"), QStringLiteral("heatshrink"), QStringLiteral("braid")};
     b = buildBrickHarness(j, nullptr);
@@ -434,11 +435,11 @@ void testRoundThreeModel() {
     for (const Entity& en : b.entities) {
         if (en.type == EntityType::TwistedPair) run = &en;
         if (en.meta.value(QStringLiteral("mechRole")).toString() != QLatin1String("label")) continue;
-        if (en.type == EntityType::Text) texts.push_back(&en);
+        if (en.meta.contains(QStringLiteral("labelText"))) texts.push_back(&en);
         else ++modelParts;
     }
     QStringList said;
-    for (const Entity* t : texts) said << t->meta.value(QStringLiteral("text")).toString();
+    for (const Entity* t : texts) said << t->meta.value(QStringLiteral("labelText")).toString();
     std::printf("  labels: %d text(s) [%s], %d model part(s)\n", int(texts.size()), qPrintable(said.join(", ")),
                 modelParts);
     check(said.contains(QStringLiteral("GND")) && said.contains(QStringLiteral("L3")) &&
@@ -461,12 +462,15 @@ void testRoundThreeModel() {
         const Entity* gnd = nullptr;
         const Entity* l3 = nullptr;
         for (const Entity* t : texts) {
-            if (t->meta.value(QStringLiteral("text")).toString() == QLatin1String("GND")) gnd = t;
-            if (t->meta.value(QStringLiteral("text")).toString() == QLatin1String("L3")) l3 = t;
+            if (t->meta.value(QStringLiteral("labelText")).toString() == QLatin1String("GND")) gnd = t;
+            if (t->meta.value(QStringLiteral("labelText")).toString() == QLatin1String("L3")) l3 = t;
         }
-        check(gnd && l3 && onAWire(gnd->a) < 1e-6 && onAWire(l3->a) < 1e-6,
+        auto midOf = [](const Entity* t) {
+            return Vec2{t->meta.value(QStringLiteral("labelMidX")).toDouble(), t->meta.value(QStringLiteral("labelMidY")).toDouble()};
+        };
+        check(gnd && l3 && onAWire(midOf(gnd)) < 1e-6 && onAWire(midOf(l3)) < 1e-6,
               "labels: a label on a wire is centred on that wire");
-        check(gnd && l3 && gnd->a.y > l3->a.y, "labels: the wires are counted from the top down");
+        check(gnd && l3 && midOf(gnd).y > midOf(l3).y, "labels: the wires are counted from the top down");
     }
 
     // A CABLE WITH A FAN FINISHING ON TWO PARTS: one cable to where it splits, the wires on from there.
@@ -568,7 +572,7 @@ void testRoundThree() {
     const int rotWas = d.brick(f)->rot;
     if (auto* add = dlg.findChild<QPushButton*>(QStringLiteral("brickLabelAdd"))) add->click();
     auto* labels = dlg.findChild<QTableWidget*>(QStringLiteral("brickLabels"));
-    auto* text = labels ? qobject_cast<QLineEdit*>(labels->cellWidget(0, 3)) : nullptr;
+    auto* text = labels ? qobject_cast<QLineEdit*>(labels->cellWidget(0, 5)) : nullptr;
     if (text) {
         text->setFocus();
         text->setText(QStringLiteral("W7"));
@@ -612,6 +616,179 @@ void testRoundThree() {
     QFile::remove(path);
     check(dlg.deleteFromDrawing(QStringLiteral("W2")) && dlg.savedNames() == QStringList({QStringLiteral("W1")}),
           "saved: one deleted, the other kept");
+}
+
+// The fourth round.
+void testRoundFour() {
+    auto runsOf = [](const BrickBuild& b, const QString& id) {
+        std::vector<const Entity*> out;
+        for (const Entity& e : b.entities)
+            if (e.type == EntityType::TwistedPair && e.meta.value(QStringLiteral("brickId")).toString() == id)
+                out.push_back(&e);
+        return out;
+    };
+
+    // 1. THE DESIGNATOR, in front of the part: past its end away from the harness.
+    {
+        BrickDesign d;
+        const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        d.brick(x)->name = QStringLiteral("X7");
+        const QString r = d.addBrick(BrickType::Run, PartKind::Wire, 1, 0);
+        d.connect(x, r);
+        const BrickBuild b = buildBrickHarness(d, nullptr);
+        const Entity* des = nullptr;
+        Bounds part;
+        for (const Entity& e : b.entities) {
+            if (e.meta.value(QStringLiteral("brickId")).toString() != x) continue;
+            if (e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("designator")) des = &e;
+            else part.expand(e.bounds());
+        }
+        check(des && des->meta.value(QStringLiteral("text")).toString() == QLatin1String("X7") && part.valid &&
+                  des->a.x < part.min.x,
+              "designator: always written, in front of the part - past its end away from the harness");
+    }
+
+    // 3. TWO CONNECTORS ON THE SAME SIDE OF A CABLE are both joined to it.
+    {
+        BrickDesign d;
+        const QString a = d.addBrick(BrickType::End, PartKind::Connector, 0, -1);
+        const QString b = d.addBrick(BrickType::End, PartKind::Connector, 0, 1);
+        const QString c = d.addBrick(BrickType::Run, PartKind::Wire, 2, 0);
+        QString why;
+        check(d.connect(a, c, &why, -1, kPortLeft) && d.connect(b, c, &why, -1, kPortLeft),
+              "same side: two connectors on the cable's start");
+        const BrickBuild bb = buildBrickHarness(d, nullptr);
+        const auto runs = runsOf(bb, c);
+        int onA = 0, onB = 0;
+        const BrickFace fa = bb.faces.value(a + QStringLiteral(":0"));
+        const BrickFace fb = bb.faces.value(b + QStringLiteral(":0"));
+        for (const Entity* r : runs) {
+            for (const Vec2& p : {r->points.front(), r->points.back()}) {
+                if (distance(p, fa.centre) < fa.lengthMm) ++onA;
+                if (distance(p, fb.centre) < fb.lengthMm) ++onB;
+            }
+        }
+        std::printf("  same side: %d run(s), %d on one connector, %d on the other\n", int(runs.size()), onA, onB);
+        check(onA == 1 && onB == 1, "same side: both are joined - the cable splits to them");
+    }
+
+    // 4. A FANOUT spreads at the end on a part; turned, at the other.
+    // 9. and it may be carried on into a cable, the wires passing straight through.
+    {
+        BrickDesign d;
+        const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString f = d.addBrick(BrickType::Fanout, PartKind::Wire, 1, 0);
+        const QString c = d.addBrick(BrickType::Run, PartKind::Wire, 3, 0);
+        const QString y = d.addBrick(BrickType::End, PartKind::Connector, 4, 0);
+        QString why;
+        d.connect(x, f);
+        check(d.connect(f, c, &why), "join: a fanout carried on into a cable");
+        d.connect(c, y);
+        const BrickDesign keep = d;
+        BrickBuild b = buildBrickHarness(d, nullptr);
+        const auto fr = runsOf(b, f);
+        const auto cr = runsOf(b, c);
+        check(fr.size() == 1 && cr.size() == 1, "join: a run each side of the junction");
+        if (fr.size() == 1 && cr.size() == 1) {
+            check(fr[0]->meta.value(QStringLiteral("twistSpread")).toString() == QLatin1String("start") &&
+                      fr[0]->meta.value(QStringLiteral("twistEndsFinish")).toDouble() == 0.0,
+                  "fanout: spreads at the connector, packed where it joins the cable");
+            check(distance(fr[0]->points.back(), cr[0]->points.front()) < 1e-6,
+                  "join: the cable starts where the fanout ends");
+        }
+        d.brick(f)->run.fanSide = 1;
+        b = buildBrickHarness(d, nullptr);
+        const auto turned = runsOf(b, f);
+        check(!turned.empty() && turned[0]->meta.value(QStringLiteral("twistSpread")).toString() == QLatin1String("finish"),
+              "fanout: turned round, it spreads at the other end");
+    }
+
+    // 10. PLACED BY LENGTH: two runs of different lengths to one connector.
+    {
+        BrickDesign d;
+        const QString a = d.addBrick(BrickType::End, PartKind::Connector, 0, -1);
+        const QString b = d.addBrick(BrickType::End, PartKind::Connector, 0, 1);
+        const QString m = d.addBrick(BrickType::End, PartKind::Connector, 4, 0);
+        const QString r1 = d.addBrick(BrickType::Run, PartKind::Wire, 2, -1);
+        const QString r2 = d.addBrick(BrickType::TwistedPair, PartKind::Wire, 2, 1);
+        d.connect(a, r1);
+        d.connect(r1, m);
+        d.connect(b, r2);
+        d.connect(r2, m);
+        d.brick(r1)->run.lengthMm = 200.0;
+        d.brick(r2)->run.lengthMm = 300.0;
+        const BrickBuild bb = buildBrickHarness(d, nullptr);
+        const double xa = bb.faces.value(a + QStringLiteral(":0")).centre.x;
+        const double xb = bb.faces.value(b + QStringLiteral(":0")).centre.x;
+        const double xm = bb.faces.value(m + QStringLiteral(":0")).centre.x;
+        std::printf("  by length: %.0f and %.0f from the common connector\n", xm - xa, xm - xb);
+        check(std::abs((xm - xb) - (xm - xa) - 100.0) < 30.0 && xb < xa,
+              "by length: the longer run's connector sits further off");
+    }
+
+    // 5-8. A LABEL masks what is under it, calls its text out on a leader (or writes it on itself),
+    // is kept off a bend; a dimension says what it is told and keeps the measurement.
+    {
+        BrickDesign d;
+        const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString r = d.addBrick(BrickType::Run, PartKind::Wire, 1, 0);
+        const QString y = d.addBrick(BrickType::End, PartKind::Connector, 2, 3);
+        d.connect(x, r);
+        d.connect(r, y);
+        BrickRunSpec& s = d.brick(r)->run;
+        s.labels.push_back({-1, false, 60.0, QStringLiteral("A"), 0.0, true});
+        s.labels.push_back({-1, false, 90.0, QStringLiteral("B"), 400.0, false});
+        s.dimTotal = true;
+        s.dimTextTotal = QStringLiteral("250 ±5");
+        const BrickBuild b = buildBrickHarness(d, nullptr);
+        int masks = 0;
+        const Entity* a = nullptr;
+        const Entity* bText = nullptr;
+        double longest = 0.0;
+        const Entity* total = nullptr;
+        for (const Entity& e : b.entities) {
+            if (e.type == EntityType::Wipeout && e.meta.value(QStringLiteral("labelMask")).toBool()) {
+                ++masks;
+                longest = std::max(longest, distance(e.points[0], e.points[1]));
+            }
+            if (e.meta.value(QStringLiteral("labelText")).toString() == QLatin1String("A")) a = &e;
+            if (e.meta.value(QStringLiteral("labelText")).toString() == QLatin1String("B")) bText = &e;
+            if (e.meta.value(QStringLiteral("brickDim")).toString() == QLatin1String("total")) total = &e;
+        }
+        check(masks == 2, "label: each masks what is under it - it is over the wire, not see-through");
+        check(a && a->meta.value(QStringLiteral("textLeader")).toBool(), "label: shown on the drawing, its text on a leader");
+        check(bText && bText->type == EntityType::Text, "label: not shown with a leader, its text on the label");
+        std::printf("  label: asked 400 long, drawn %.1f\n", longest);
+        check(longest < 399.0, "label: kept off the bend - shortened to the straight it sits on");
+        check(total && total->meta.value(QStringLiteral("textOverride")).toString() == s.dimTextTotal &&
+                  total->meta.value(QStringLiteral("brickMeasured")).toDouble() > 1.0,
+              "dimension: says what it is told, the real length kept with it");
+    }
+
+    // 2 and 4 in the window: the parts list's columns, and Shift turning a fanout.
+    {
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        BrickWizardDialog dlg(&ed);
+        dlg.show();
+        QApplication::processEvents();
+        auto* parts = dlg.findChild<QTreeWidget*>(QStringLiteral("brickParts"));
+        check(parts && parts->columnCount() == 7 &&
+                  parts->headerItem()->text(5) == QLatin1String("Entry faces"),
+              "parts list: says which parts have a drawing, entry faces and near/far points");
+        BrickDesign& d = dlg.design();
+        const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString f = d.addBrick(BrickType::Fanout, PartKind::Wire, 1, 0);
+        d.connect(x, f);
+        dlg.selectBrick(f);
+        const int was = d.fanoutSpreadSide(*d.brick(f));
+        QKeyEvent down(QEvent::KeyPress, Qt::Key_Shift, Qt::ShiftModifier);
+        QKeyEvent up(QEvent::KeyRelease, Qt::Key_Shift, Qt::NoModifier);
+        QApplication::sendEvent(dlg.canvas(), &down);
+        QApplication::sendEvent(dlg.canvas(), &up);
+        check(d.fanoutSpreadSide(*d.brick(f)) == 1 - was, "fanout: Shift on its own turns its spread round");
+    }
 }
 
 void mouse(QWidget* w, QEvent::Type t, const QPointF& at, Qt::KeyboardModifiers mods = Qt::NoModifier) {
@@ -895,6 +1072,7 @@ int run_brickharness_tests() {
     testDialog();
     testDialogMore();
     testRoundThree();
+    testRoundFour();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

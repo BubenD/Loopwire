@@ -60,6 +60,11 @@ struct BrickLabel {
     bool fromFinish = false;    // measured from the finish end rather than the start
     double distanceMm = 40.0;   // from that end's entry face, along the run
     QString text;               // empty: the wire's net name, if it has one
+    // How long the label is along the run; 0 = as long as suits it. Either way it is kept off a
+    // bend - shortened to the straight it sits on.
+    double lengthMm = 0.0;
+    // Its text called out with a leader beside the run, on the drawing.
+    bool leader = true;
 };
 
 // WHAT A SPECIAL IS DRAWN WITH. Below nought is "the drawing decides"; nought is a real figure.
@@ -82,6 +87,13 @@ struct BrickRunSpec {
     bool dimTotal = false;
     bool dimFans = false;
     bool dimBetween = false;
+    // What those dimensions SAY, when it is not the measured figure - the measurement is kept too.
+    QString dimTextTotal;
+    QString dimTextFans;
+    QString dimTextBetween;
+    // WHICH END A FANOUT SPREADS AT: -1 the end on a part (the start when both are), 0 the start,
+    // 1 the finish.
+    int fanSide = -1;
     std::vector<BrickLabel> labels;
     // THE NET OF EACH WIRE, numbered from the top down like the labels: taken from the schematic
     // where the part is on it, or given here.
@@ -167,6 +179,10 @@ struct BrickDesign {
     // The ends a special starts from (its left port) and finishes on (its right port).
     QStringList startsOf(const QString& specialId) const;
     QStringList finishesOf(const QString& specialId) const;
+    // Everything on one port of a special: its parts, and a special it is joined to.
+    QStringList sideOf(const QString& specialId, int port) const;
+    // The end a fanout spreads at, 0 the start or 1 the finish, as fanSide decides it.
+    int fanoutSpreadSide(const Brick& s) const;
     // Every end of a special, the starts first.
     QStringList endsOf(const QString& specialId) const;
 
