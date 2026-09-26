@@ -15,6 +15,8 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QInputDialog>
+#include <QShowEvent>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
@@ -559,6 +561,59 @@ Document* BrickWizardDialog::document() const { return editor_ ? editor_->docume
 void BrickWizardDialog::buildUi() {
     auto* root = new QVBoxLayout(this);
 
+    // THE HARNESSES KEPT IN THE DRAWING: which one this is, and saving, opening and deleting them.
+    auto* keep = new QHBoxLayout;
+    keep->addWidget(new QLabel(QStringLiteral("Harness"), this));
+    harnessName_ = new QLineEdit(this);
+    harnessName_->setObjectName(QStringLiteral("brickHarnessName"));
+    harnessName_->setPlaceholderText(QStringLiteral("W1"));
+    harnessName_->setMaximumWidth(200);
+    keep->addWidget(harnessName_);
+    auto* saveBtn = new QPushButton(QStringLiteral("Save to drawing"), this);
+    saveBtn->setObjectName(QStringLiteral("brickSave"));
+    keep->addWidget(saveBtn);
+    keep->addSpacing(12);
+    keep->addWidget(new QLabel(QStringLiteral("Saved in this drawing"), this));
+    saved_ = new QComboBox(this);
+    saved_->setObjectName(QStringLiteral("brickSaved"));
+    saved_->setMinimumContentsLength(16);
+    keep->addWidget(saved_);
+    auto* openBtn = new QPushButton(QStringLiteral("Open"), this);
+    openBtn->setObjectName(QStringLiteral("brickOpen"));
+    keep->addWidget(openBtn);
+    auto* newBtn = new QPushButton(QStringLiteral("New"), this);
+    newBtn->setObjectName(QStringLiteral("brickNew"));
+    keep->addWidget(newBtn);
+    auto* delBtn = new QPushButton(QStringLiteral("Delete saved"), this);
+    delBtn->setObjectName(QStringLiteral("brickDeleteSaved"));
+    keep->addWidget(delBtn);
+    keep->addStretch(1);
+    root->addLayout(keep);
+    connect(saveBtn, &QPushButton::clicked, this, [this] {
+        QString name = harnessName_->text().trimmed();
+        if (name.isEmpty()) {
+            name = QInputDialog::getText(this, QStringLiteral("Save harness"), QStringLiteral("Name"),
+                                         QLineEdit::Normal, QStringLiteral("W1"));
+            if (name.trimmed().isEmpty()) return;
+        }
+        saveToDrawing(name.trimmed());
+    });
+    connect(openBtn, &QPushButton::clicked, this, [this] {
+        if (saved_->currentIndex() >= 0) loadFromDrawing(saved_->currentText());
+    });
+    connect(newBtn, &QPushButton::clicked, this, [this] {
+        design_.bricks.clear();
+        design_.links.clear();
+        currentName_.clear();
+        harnessName_->clear();
+        canvas_->setSelection({});
+        designChanged();
+        status_->setText(QStringLiteral("A new harness"));
+    });
+    connect(delBtn, &QPushButton::clicked, this, [this] {
+        if (saved_->currentIndex() >= 0) deleteFromDrawing(saved_->currentText());
+    });
+
     // THE BAR: turning and moving what is picked, arranging the whole, and where dimensions go from.
     auto* bar = new QHBoxLayout;
     auto button = [&](const char* name, const QString& text, const QString& tip, auto fn) {
@@ -652,8 +707,19 @@ void BrickWizardDialog::buildUi() {
     canvas_->setObjectName(QStringLiteral("brickCanvas"));
     preview_ = new DrawingPreview(QStringLiteral("Preview"), middle);
     preview_->setEmptyText(QStringLiteral("The drawing appears here as the bricks are linked"));
-    middle->setStretchFactor(0, 1);
-    middle->setStretchFactor(1, 1);
+    // THE BILL, LIVE: every line of the drawing's bill of materials as it stands, the parts this
+    // harness uses in bold - so what adding a part did is seen as it is done.
+    bom_ = new QTableWidget(0, 5, middle);
+    bom_->setObjectName(QStringLiteral("brickBom"));
+    bom_->setHorizontalHeaderLabels({QStringLiteral("Item"), QStringLiteral("Qty"), QStringLiteral("Unit"),
+                                     QStringLiteral("P/N"), QStringLiteral("Description")});
+    bom_->horizontalHeader()->setStretchLastSection(true);
+    bom_->verticalHeader()->setVisible(false);
+    bom_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    bom_->setSelectionMode(QAbstractItemView::NoSelection);
+    middle->setStretchFactor(0, 3);
+    middle->setStretchFactor(1, 3);
+    middle->setStretchFactor(2, 1);
     connect(canvas_, &BrickCanvas::selectionChanged, this, [this](const QString&) {
         loadPanel();
         refreshPreview();
@@ -696,6 +762,16 @@ void BrickWizardDialog::buildUi() {
     connect(close, &QPushButton::clicked, this, &QDialog::hide);
     bottom->addWidget(close);
     root->addLayout(bottom);
+
+    // NO BUTTON HERE IS PRESSED BY ENTER. A dialog's buttons are all "default" to Qt, and Enter in a
+    // text field presses the first of them - which was Rotate: typing a label's name and pressing
+    // Enter turned the harness round.
+    for (QPushButton* b : findChildren<QPushButton*>()) {
+        b->setAutoDefault(false);
+        b->setDefault(false);
+    }
+    refreshSaved();
+    refreshBom();
 }
 
 QWidget* BrickWizardDialog::buildEndPage() {
@@ -801,8 +877,22 @@ QWidget* BrickWizardDialog::buildRunPage() {
     connect(wires_, &QSpinBox::valueChanged, this, [this](int) {
         writeRun();
         loadLabels();   // the wires a label can go on
+        loadNets();
     });
     connect(transitions_, &QComboBox::currentIndexChanged, this, [this](int) { writeRun(); });
+
+    // THE WIRES AND THEIR NETS, numbered from the top down as the labels are. A net is picked from
+    // the schematic's - those landing on the parts this run is linked to - or typed in.
+    auto* netBox = new QGroupBox(QStringLiteral("Wires and nets"), page);
+    auto* nv = new QVBoxLayout(netBox);
+    nets_ = new QTableWidget(0, 2, netBox);
+    nets_->setObjectName(QStringLiteral("brickNets"));
+    nets_->setHorizontalHeaderLabels({QStringLiteral("Wire"), QStringLiteral("Net")});
+    nets_->horizontalHeader()->setStretchLastSection(true);
+    nets_->verticalHeader()->setVisible(false);
+    nets_->setMinimumHeight(120);
+    nv->addWidget(nets_);
+    v->addWidget(netBox);
 
     // THE STACK, from the middle out; the top of the list is the outermost, and only it is seen.
     auto* stackBox = new QGroupBox(QStringLiteral("Stack — from the outside in"), page);
@@ -1026,11 +1116,12 @@ void BrickWizardDialog::loadPanel() {
         const Brick* b = design_.brick(link.second);
         const Brick* sp = a && brickIsSpecial(a->type) ? a : b;
         const Brick* en = sp == a ? b : a;
-        if (sp && en && sp->type == BrickType::Fanout && design_.portOn(sp->id, en->id) == kPortRight) {
+        const bool splits = sp && (sp->type == BrickType::Fanout ||
+                                   (sp->type == BrickType::Run && design_.finishesOf(sp->id).size() > 1));
+        if (sp && en && splits && design_.portOn(sp->id, en->id) == kPortRight) {
             panel_->setCurrentIndex(3);
             const QSignalBlocker block(linkWires_);
-            linkText_->setText(QStringLiteral("The fanout %1 to %2.")
-                                   .arg(brickTitle(*sp), brickTitle(*en)));
+            linkText_->setText(QStringLiteral("%1 to %2.").arg(brickTitle(*sp), brickTitle(*en)));
             linkWires_->setMaximum(sp->run.wires);
             linkWires_->setValue(design_.link(link.first, link.second)->wires);
             return;
@@ -1133,6 +1224,7 @@ void BrickWizardDialog::loadPanel() {
     }
     stack_->setCurrentRow(std::clamp(keep, 0, stack_->count() - 1));
     loadLabels();
+    loadNets();
 }
 
 void BrickWizardDialog::loadLabels() {
@@ -1220,6 +1312,188 @@ void BrickWizardDialog::refreshPreview() {
         if (sel.contains(e.meta.value(QStringLiteral("brickId")).toString()))
             e.meta.insert(QLatin1String(kPreviewSelectedKey), true);
     preview_->setEntities(ents);
+    refreshBom();
+}
+
+void BrickWizardDialog::keyPressEvent(QKeyEvent* e) {
+    // Enter finishes typing, and nothing else: it does not press a button or close the window.
+    if (e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) {
+        e->accept();
+        return;
+    }
+    QDialog::keyPressEvent(e);
+}
+
+void BrickWizardDialog::showEvent(QShowEvent* e) {
+    QDialog::showEvent(e);
+    refreshSaved();   // the drawing may have changed while it was away
+    refreshBom();
+}
+
+void BrickWizardDialog::refreshBom() {
+    if (!bom_) return;
+    bom_->setRowCount(0);
+    const Document* doc = document();
+    if (!doc) return;
+    BomTable table;
+    table.fromJson(doc->bom());
+    std::vector<BomRow> rows = table.rows;
+    if (table.config.includeDrawing) {
+        const std::vector<BomRow> drawn = bomFromDrawing(*doc, catalog_.merged());
+        rows.insert(rows.end(), drawn.begin(), drawn.end());
+    }
+    if (table.config.unify) rows = bomUnify(rows);
+    QSet<QString> used;
+    for (const Brick& b : design_.bricks)
+        if (!b.libPart.isEmpty()) used.insert(b.libPart);
+    for (size_t i = 0; i < rows.size(); ++i) {
+        const BomRow& r = rows[i];
+        const int at = bom_->rowCount();
+        bom_->insertRow(at);
+        const QStringList cells{QString::number(i + 1), QString::number(r.qty), r.unit,
+                                r.mfrPn.isEmpty() ? r.internalPn : r.mfrPn, r.description};
+        for (int c = 0; c < cells.size(); ++c) {
+            auto* it = new QTableWidgetItem(cells[c]);
+            if (used.contains(r.partId)) {
+                QFont f = it->font();
+                f.setBold(true);
+                it->setFont(f);
+            }
+            bom_->setItem(at, c, it);
+        }
+    }
+}
+
+QStringList BrickWizardDialog::schematicNets(const QStringList& designators) const {
+    QStringList nets;
+    const Document* doc = document();
+    if (!doc || designators.isEmpty()) return nets;
+    std::vector<Vec2> pins;
+    for (const Entity& e : doc->entities()) {
+        if (e.type != EntityType::Connector) continue;
+        const ConnectorSpec spec = connectorSpecFromMeta(e.meta);
+        if (!designators.contains(spec.designator, Qt::CaseInsensitive)) continue;
+        const ConnectorGeometry g = connectorGeometry(e.a, spec);
+        pins.insert(pins.end(), g.pinEnd.begin(), g.pinEnd.end());
+    }
+    // A wire is on a pin where one of its ends is on the pin's end.
+    auto onPin = [&pins](const Vec2& p) {
+        for (const Vec2& q : pins)
+            if (distance(p, q) < 1e-3) return true;
+        return false;
+    };
+    for (const Entity& w : doc->entities()) {
+        if (w.type != EntityType::Wire || w.points.size() < 2) continue;
+        if (!onPin(w.points.front()) && !onPin(w.points.back())) continue;
+        QString net = w.meta.value(QStringLiteral("netName")).toString();
+        if (net.isEmpty()) net = w.meta.value(QStringLiteral("wireLabel")).toString();
+        if (!net.isEmpty() && !nets.contains(net)) nets << net;
+    }
+    nets.sort(Qt::CaseInsensitive);
+    return nets;
+}
+
+void BrickWizardDialog::loadNets() {
+    const Brick* b = design_.brick(canvas_->selected());
+    const QSignalBlocker block(nets_);
+    nets_->setRowCount(0);
+    if (!b || !brickIsSpecial(b->type)) return;
+    // What the schematic has on the parts this run is linked to, by their designators.
+    QStringList designators;
+    for (const QString& e : design_.endsOf(b->id))
+        if (const Brick* eb = design_.brick(e); eb && !eb->name.isEmpty()) designators << eb->name;
+    const QStringList offered = schematicNets(designators);
+    const QString id = b->id;
+    for (int w = 0; w < b->run.wires; ++w) {
+        nets_->insertRow(w);
+        nets_->setItem(w, 0, new QTableWidgetItem(QString::number(w + 1)));
+        nets_->item(w, 0)->setFlags(Qt::ItemIsEnabled);
+        auto* net = new QComboBox(nets_);
+        net->setEditable(true);
+        net->addItem(QString());
+        net->addItems(offered);
+        net->setCurrentText(w < b->run.nets.size() ? b->run.nets[w] : QString());
+        nets_->setCellWidget(w, 1, net);
+        connect(net, &QComboBox::currentTextChanged, this, [this, id, w](const QString& t) {
+            Brick* br = design_.brick(id);
+            if (!br) return;
+            while (br->run.nets.size() <= w) br->run.nets << QString();
+            br->run.nets[w] = t.trimmed();
+            refreshPreview();
+        });
+    }
+}
+
+QStringList BrickWizardDialog::savedNames() const {
+    const Document* doc = document();
+    if (!doc) return {};
+    QStringList names = doc->wizards().value(QStringLiteral("harnesses")).toObject().keys();
+    names.sort(Qt::CaseInsensitive);
+    return names;
+}
+
+void BrickWizardDialog::refreshSaved() {
+    if (!saved_) return;
+    const QSignalBlocker block(saved_);
+    const QString keep = saved_->currentText();
+    saved_->clear();
+    saved_->addItems(savedNames());
+    const int at = saved_->findText(!currentName_.isEmpty() ? currentName_ : keep);
+    if (at >= 0) saved_->setCurrentIndex(at);
+}
+
+bool BrickWizardDialog::saveToDrawing(const QString& name) {
+    Document* doc = document();
+    if (!doc || name.trimmed().isEmpty()) return false;
+    QJsonObject all = doc->wizards();
+    QJsonObject harnesses = all.value(QStringLiteral("harnesses")).toObject();
+    harnesses.insert(name.trimmed(), design_.toJson());
+    all.insert(QStringLiteral("harnesses"), harnesses);
+    doc->wizards() = all;
+    doc->setDirty(true);
+    currentName_ = name.trimmed();
+    harnessName_->setText(currentName_);
+    refreshSaved();
+    status_->setText(QStringLiteral("Saved \"%1\" in the drawing").arg(currentName_));
+    return true;
+}
+
+bool BrickWizardDialog::loadFromDrawing(const QString& name) {
+    const Document* doc = document();
+    if (!doc) return false;
+    const QJsonObject harnesses = doc->wizards().value(QStringLiteral("harnesses")).toObject();
+    if (!harnesses.contains(name)) return false;
+    design_ = BrickDesign::fromJson(harnesses.value(name).toObject());
+    design_.catalog = &catalog_;
+    {
+        const QSignalBlocker b1(dimFrom_), b2(dimTo_);
+        dimFrom_->setCurrentIndex(design_.dimFromFar ? 1 : 0);
+        dimTo_->setCurrentIndex(design_.dimToFar ? 1 : 0);
+    }
+    currentName_ = name;
+    harnessName_->setText(name);
+    canvas_->setSelection({});
+    canvas_->fit();
+    designChanged();
+    refreshSaved();
+    status_->setText(QStringLiteral("Opened \"%1\"").arg(name));
+    return true;
+}
+
+bool BrickWizardDialog::deleteFromDrawing(const QString& name) {
+    Document* doc = document();
+    if (!doc) return false;
+    QJsonObject all = doc->wizards();
+    QJsonObject harnesses = all.value(QStringLiteral("harnesses")).toObject();
+    if (!harnesses.contains(name)) return false;
+    harnesses.remove(name);
+    all.insert(QStringLiteral("harnesses"), harnesses);
+    doc->wizards() = all;
+    doc->setDirty(true);
+    if (currentName_ == name) currentName_.clear();
+    refreshSaved();
+    status_->setText(QStringLiteral("Deleted \"%1\" from the drawing").arg(name));
+    return true;
 }
 
 int BrickWizardDialog::bomItemOf(const QString& partId) const {
@@ -1257,6 +1531,7 @@ bool BrickWizardDialog::addPartToBom(const QString& partId, double qty) {
     doc->bom() = table.toJson();
     doc->setDirty(true);
     emit bomChanged();
+    refreshBom();
     return true;
 }
 

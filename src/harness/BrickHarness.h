@@ -59,7 +59,7 @@ struct BrickLabel {
     int wire = -1;              // -1 = the whole harness; 0.. = that wire of the fan at `fromFinish`
     bool fromFinish = false;    // measured from the finish end rather than the start
     double distanceMm = 40.0;   // from that end's entry face, along the run
-    QString text = QStringLiteral("LABEL");
+    QString text;               // empty: the wire's net name, if it has one
 };
 
 // WHAT A SPECIAL IS DRAWN WITH. Below nought is "the drawing decides"; nought is a real figure.
@@ -83,6 +83,9 @@ struct BrickRunSpec {
     bool dimFans = false;
     bool dimBetween = false;
     std::vector<BrickLabel> labels;
+    // THE NET OF EACH WIRE, numbered from the top down like the labels: taken from the schematic
+    // where the part is on it, or given here.
+    QStringList nets;
 
     // What is outermost, and so what the body is drawn as.
     QString outermost() const;

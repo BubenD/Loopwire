@@ -109,6 +109,10 @@ public:
     // The drawing's bill of materials: the rows someone typed and the column headings they chose.
     // The rows the drawing itself implies are not kept here - they are read off the entities every
     // time, so they cannot go stale (see bomFromDrawing).
+    // THE HARNESS WIZARDS laid out on this drawing, each by name - saved with it, so a harness
+    // described in the wizard can be opened again and changed.
+    QJsonObject& wizards() { return wizards_; }
+    const QJsonObject& wizards() const { return wizards_; }
     QJsonObject& bom() { return bom_; }
     const QJsonObject& bom() const { return bom_; }
 
@@ -131,6 +135,7 @@ private:
     int multiLineCount_ = 3;
     int polygonSides_ = 5;
     QJsonObject bom_;
+    QJsonObject wizards_;
     QJsonObject harnessPresets_;
     QJsonObject bundlePresets_;
     std::vector<DrawingLayout> layouts_;

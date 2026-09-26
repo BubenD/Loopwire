@@ -2,6 +2,7 @@
 
 #include "geometry/Geometry.h"
 #include "harness/MechanicalHarness.h"
+#include "harness/MechModels.h"
 #include "tools/EntityTransforms.h"
 
 #include <QHash>
@@ -12,6 +13,7 @@
 #include <cmath>
 #include <deque>
 #include <map>
+#include <optional>
 
 namespace Edraw_Desktop {
 
@@ -227,16 +229,22 @@ bool BrickDesign::connect(const QString& a, const QString& b, QString* why, int 
     const QStringList starts = startsOf(sp.id), finishes = finishesOf(sp.id);
     auto taken = [&](int port) { return (port == kPortLeft ? starts : finishes).size(); };
     const bool fanout = sp.type == BrickType::Fanout;
+    // WHICH SIDES MAY TAKE SEVERAL PARTS: a fanout's, and a cable's where it has a fan to split.
+    auto several = [&](int port) {
+        if (fanout) return true;
+        if (sp.type != BrickType::Run) return false;
+        return (port == kPortRight ? sp.run.fanFinishMm : sp.run.fanStartMm) != 0.0;
+    };
     if (sPort < 0) {
         sPort = std::max(0, facingPort(sp, Vec2{en.col - sp.col, en.row - sp.row}));
         // The side facing it is already used and the other side is free: the other side - a run
         // starts somewhere before it finishes anywhere, a fanout included.
         if (taken(sPort) >= 1 && taken(1 - sPort) == 0) sPort = 1 - sPort;
     }
-    if (!fanout && taken(sPort) >= 1)
-        return refuse(QStringLiteral("That end of the run is already on a part - only a fanout "
-                                     "finishes on several"));
-    if (fanout && taken(sPort) >= 1 && taken(1 - sPort) >= 2)
+    if (!several(sPort) && taken(sPort) >= 1)
+        return refuse(QStringLiteral("That end of the run is already on a part - a fanout, or a "
+                                     "cable with a fan there, finishes on several"));
+    if (several(sPort) && taken(sPort) >= 1 && taken(1 - sPort) >= 2)
         return refuse(QStringLiteral("A fanout spreads from one part to several, not several to "
                                      "several"));
     const int enPorts = portCount(en);
@@ -334,7 +342,8 @@ QJsonObject BrickDesign::toJson() const {
                                                    {"dimTotal", r.dimTotal},
                                                    {"dimFans", r.dimFans},
                                                    {"dimBetween", r.dimBetween},
-                                                   {"labels", labels}};
+                                                   {"labels", labels},
+                                                   {"nets", QJsonArray::fromStringList(r.nets)}};
         }
         bs.append(o);
     }
@@ -394,6 +403,7 @@ BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
                 l.text = lo.value(QStringLiteral("text")).toString(l.text);
                 s.labels.push_back(l);
             }
+            for (const QJsonValue x : r.value(QStringLiteral("nets")).toArray()) s.nets << x.toString();
         }
         d.bricks.push_back(b);
     }
@@ -838,6 +848,8 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         QString endA, endB;   // endB empty: a loose end
         int portA = 0, portB = 0;
         int wires = 2;
+        bool trunk = false;   // a cable that splits: the stretch up to where it does
+        int splitOf = -1;     // one of the runs out of that split: the trunk's index
     };
     std::vector<Branch> branches;
     for (const Brick& s : design.bricks) {
@@ -848,7 +860,22 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             continue;
         }
         if (a.isEmpty()) std::swap(a, b);   // a run on one part only: from it, loose
-        if (s.type == BrickType::Fanout && b.size() > 1) {
+        // A FANOUT, or A CABLE WITH A FAN, finishing on several parts. A fanout sends a branch from
+        // the part to each; a cable runs as one to where it splits, and its wires fan out from there
+        // to each part - the fan split between the connectors.
+        if ((s.type == BrickType::Fanout || s.type == BrickType::Run) && b.size() > 1) {
+            const bool split = s.type == BrickType::Run;
+            int trunkAt = -1;
+            if (split) {
+                Branch t;
+                t.special = &s;
+                t.endA = a.front();
+                t.portA = design.portOn(a.front(), s.id);
+                t.trunk = true;
+                t.wires = 0;
+                trunkAt = static_cast<int>(branches.size());
+                branches.push_back(t);
+            }
             // Each part it finishes on takes the wires its link says, or an even share of the rest.
             int given = 0, open = 0;
             for (const QString& e : b) {
@@ -875,6 +902,8 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                 br.portA = design.portOn(a.front(), s.id);
                 br.portB = design.portOn(e, s.id);
                 br.wires = l && l->wires > 0 ? l->wires : share;
+                br.splitOf = trunkAt;
+                if (trunkAt >= 0) branches[static_cast<size_t>(trunkAt)].wires += br.wires;
                 branches.push_back(br);
             }
             continue;
@@ -950,8 +979,10 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             Bounds bb;
             for (const Entity& e : body) bb.expand(e.bounds());
             if (bb.valid) {
-                const Vec2 tip = (bb.min + bb.max) * 0.5;
-                const Vec2 bat{tip.x - 12.0, bb.max.y + 14.0};
+                // THE LEADER lands on the top edge of the part, from a balloon up and to one side
+                // of it - far enough off that the leader is a line and not a stub inside the part.
+                const Vec2 tip{(bb.min.x + bb.max.x) / 2.0, bb.max.y};
+                const Vec2 bat{tip.x - 18.0, bb.max.y + 16.0};
                 const int item = itemOf && !b.libPart.isEmpty() ? itemOf(b.libPart) : 0;
                 Entity ball;
                 ball.type = EntityType::Circle;
@@ -962,8 +993,16 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                 ball.meta.insert(QStringLiteral("text"), item > 0 ? QString::number(item) : QStringLiteral("?"));
                 ball.meta.insert(QStringLiteral("landing"), 6.0);
                 ball.meta.insert(QStringLiteral("landingSide"), tip.x >= bat.x ? 1.0 : -1.0);
-                ball.meta.insert(QStringLiteral("leaders"), QJsonArray{QJsonArray{tip.x, tip.y}});
+                // Built a step at a time: QJsonArray{QJsonArray{x, y}} is a COPY of the inner array, not an
+                // array holding it, and the leaders came out as [x, y] - which the renderer reads as no tip at all.
+                QJsonArray point;
+                point.append(tip.x);
+                point.append(tip.y);
+                QJsonArray leaders;
+                leaders.append(point);
+                ball.meta.insert(QStringLiteral("leaders"), leaders);
                 ball.meta.insert(QStringLiteral("mechRole"), QStringLiteral("balloon"));
+                ball.meta.insert(QStringLiteral("arrowSize"), 2.2);
                 body.push_back(ball);
             }
         }
@@ -994,7 +1033,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             const BrickFace fa = out.faces.value(ka);
             const Vec2 toB = br.endB.isEmpty() ? fa.centre + fa.out
                                                : endAt(*design.brick(br.endB));
-            byFace[ka].push_back({i, false, br.wires, dot(toB, fa.out.perp())});
+            if (br.splitOf < 0) byFace[ka].push_back({i, false, br.wires, dot(toB, fa.out.perp())});
             if (!br.endB.isEmpty()) {
                 const QString kb = faceKey(br.endB, br.portB);
                 const BrickFace fb = out.faces.value(kb);
@@ -1031,27 +1070,120 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         }
     }
 
+    // WHERE A CABLE SPLITS: straight out of its part, short of the nearest part it finishes on by
+    // room for the fans, and each run out of it starting side by side across the cable's end, in
+    // the order of where they go.
+    std::vector<Vec2> splitAt(branches.size()), splitDir(branches.size(), Vec2{1.0, 0.0});
+    for (size_t t = 0; t < branches.size(); ++t) {
+        if (!branches[t].trunk) continue;
+        const BrickRunSpec& r = branches[t].special->run;
+        const BrickFace fa = out.faces.value(faceKey(branches[t].endA, branches[t].portA));
+        const double ww = std::max(0.1, r.wireWidthMm);
+        std::vector<size_t> subs;
+        double nearest = 1e300, fanMax = 0.0;
+        for (size_t k = 0; k < branches.size(); ++k) {
+            if (branches[k].splitOf != static_cast<int>(t)) continue;
+            subs.push_back(k);
+            nearest = std::min(nearest, dot(atB[k].centre - atA[t].centre, fa.out));
+            const int w = std::max(1, branches[k].wires);
+            fanMax = std::max(fanMax, r.fanFinishMm > 0.0 ? r.fanFinishMm
+                                                         : std::max(kWiresRunEnd, atB[k].lane * (w - 1) / 2.0));
+        }
+        if (subs.empty()) continue;
+        const double d = std::max(15.0, std::min(nearest * 0.45, nearest - fanMax - 10.0));
+        const Vec2 at = atA[t].centre + fa.out * d;
+        splitAt[t] = at;
+        std::stable_sort(subs.begin(), subs.end(), [&](size_t x, size_t y) {
+            return dot(atB[x].centre, fa.out.perp()) < dot(atB[y].centre, fa.out.perp());
+        });
+        const double packed = ww * 1.5;
+        double total = 0.0;
+        for (size_t k : subs) total += std::max(1, branches[k].wires) * packed;
+        double acc = -total / 2.0;
+        for (size_t k : subs) {
+            const double width = std::max(1, branches[k].wires) * packed;
+            splitAt[k] = at + fa.out.perp() * (acc + width / 2.0);
+            splitDir[k] = fa.out;
+            acc += width;
+        }
+    }
+
+    // A LABEL: the house label model - the one the Special ribbon puts on a harness - fitted across
+    // what it goes round, along the run, with its text on it.
+    std::optional<MechModel> labelModel;
+    auto labelEntities = [&](const Vec2& mid, const Vec2& dir, double span, const QString& text,
+                             bool small) {
+        if (!labelModel) {
+            MechModelSet set;
+            set.load();
+            const MechModel* m = set.of(MechModelKind::Label);
+            labelModel = m && !m->isEmpty() ? *m : builtInMechModel(MechModelKind::Label);
+        }
+        const double margin = labelModel->exceedMm > 0.0 ? labelModel->exceedMm
+                                                         : std::max(1.0, span * 0.12);
+        const double across = span + 2.0 * margin;
+        const double along = small ? std::max(8.0, across * 1.8) : std::max(18.0, across * 1.3);
+        std::vector<Entity> ents = mechModelEntities(*labelModel, Vec2{0.0, 0.0}, 0.0, along, across);
+        Bounds bb;
+        for (const Entity& e : ents) bb.expand(e.bounds());
+        const Vec2 c = bb.valid ? (bb.min + bb.max) * 0.5 : Vec2{0.0, 0.0};
+        // Read the right way up: a run going leftward has its label turned round.
+        Vec2 d = dir.normalized();
+        if (d.x < -1e-9 || (std::abs(d.x) <= 1e-9 && d.y < 0.0)) d = d * -1.0;
+        const double turn = angleOf(d);
+        for (Entity& e : ents) {
+            translateEntity(e, c * -1.0);
+            rotateEntity(e, Vec2{0.0, 0.0}, turn);
+            translateEntity(e, mid);
+            e.meta.insert(QStringLiteral("mechRole"), QStringLiteral("label"));
+        }
+        if (!text.isEmpty()) {
+            Entity t = makeTextAt(mid, text, std::clamp(across * 0.55, 1.2, along / std::max(1, int(text.size())) * 1.6), turn);
+            t.meta.insert(QStringLiteral("justify"), QStringLiteral("MC"));
+            t.meta.insert(QStringLiteral("mechRole"), QStringLiteral("label"));
+            ents.push_back(t);
+        }
+        return ents;
+    };
+
+    // Which run of a special its labels go on: the first, or the cable where it splits.
+    QHash<const Brick*, size_t> labelBranch;
+    for (size_t i = 0; i < branches.size(); ++i)
+        if (branches[i].splitOf < 0 && !labelBranch.contains(branches[i].special))
+            labelBranch.insert(branches[i].special, i);
+
     // THE RUNS.
     for (size_t i = 0; i < branches.size(); ++i) {
         const Branch& br = branches[i];
         const Brick& s = *br.special;
         const BrickRunSpec& r = s.run;
         const BrickFace fa = out.faces.value(faceKey(br.endA, br.portA));
+        const bool isTrunk = br.trunk;
+        const bool isSub = br.splitOf >= 0;
         const bool loose = br.endB.isEmpty();
         const BrickFace fb = loose ? BrickFace{} : out.faces.value(faceKey(br.endB, br.portB));
         const int wires = std::max(1, br.wires);
         const double ww = std::max(0.1, r.wireWidthMm);
-        const Landing la = atA[i];
+        Landing la = atA[i];
+        if (isSub) {
+            la.centre = splitAt[i];
+            la.lane = ww * 1.5;
+            la.share = ww * 1.5 * wires;
+        }
         const Landing lb = loose ? la : atB[i];
         // The fans: as long as asked, or as long as the wires need to spread.
-        const double fanA = r.fanStartMm >= 0.0 ? r.fanStartMm
+        const double fanA = isSub ? 0.0
+                            : r.fanStartMm >= 0.0 ? r.fanStartMm
                                                 : std::max(kWiresRunEnd, la.lane * (wires - 1) / 2.0);
         const double fanB = loose ? 0.0
                             : r.fanFinishMm >= 0.0 ? r.fanFinishMm
                                                    : std::max(kWiresRunEnd, lb.lane * (wires - 1) / 2.0);
         const double lead = std::max({fanA, fanB, 10.0}) + std::max(0.0, r.kneeRadiusMm) + 5.0;
-        std::vector<Vec2> route = loose ? std::vector<Vec2>{la.centre, la.centre + fa.out * r.lengthMm}
-                                        : routeBetweenFaces(la.centre, fa.out, lb.centre, fb.out, lead);
+        std::vector<Vec2> route;
+        if (isTrunk) route = {la.centre, splitAt[i]};
+        else if (isSub) route = routeBetweenFaces(la.centre, splitDir[i], lb.centre, fb.out, fanB + 5.0);
+        else if (loose) route = {la.centre, la.centre + fa.out * r.lengthMm};
+        else route = routeBetweenFaces(la.centre, fa.out, lb.centre, fb.out, lead);
         if (route.size() < 2) continue;
         std::vector<Entity> made;
 
@@ -1086,8 +1218,9 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                 run.meta.insert(QStringLiteral("twistEnds"),
                                 r.fanStartMm >= 0.0 ? r.fanStartMm : kTwistedPairLead);
             } else {
-                run.meta.insert(QStringLiteral("twistSpread"),
-                                loose ? QStringLiteral("start") : QStringLiteral("both"));
+                run.meta.insert(QStringLiteral("twistSpread"), isSub   ? QStringLiteral("finish")
+                                                               : loose ? QStringLiteral("start")
+                                                                       : QStringLiteral("both"));
                 run.meta.insert(QStringLiteral("twistSidesSame"), false);
                 run.meta.insert(QStringLiteral("twistLane"), std::max(1e-3, la.lane));
                 run.meta.insert(QStringLiteral("twistLaneFinish"), std::max(1e-3, lb.lane));
@@ -1098,7 +1231,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                     run.meta.insert(QStringLiteral("twistFanKneeFinish"), r.fanKneeMm);
                 }
                 // THE BODY IS THE OUTERMOST OF THE STACK: a braid under a heatshrink is not seen.
-                if (outer != QLatin1String("wires")) {
+                if (outer != QLatin1String("wires") && !isSub) {
                     const double share = loose ? la.share : std::min(la.share, lb.share);
                     const int layers = std::max(0, static_cast<int>(r.stack.size()) - 2);
                     bodyWidth = r.bodyWidthMm > 1e-9 ? r.bodyWidthMm
@@ -1147,7 +1280,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         const double gapOut = std::max(bodyWidth, la.lane * (wires - 1) + ww) / 2.0 + 10.0;
         auto fmt = [](double v) { return QString::number(v, 'f', 1); };
         const bool straight = route.size() == 2;
-        if (r.dimTotal && !loose) {
+        if (r.dimTotal && !loose && !isSub) {
             const Vec2 from = design.dimFromFar ? fa.farAt : fa.nearAt;
             const Vec2 to = design.dimToFar ? fb.farAt : fb.nearAt;
             const double along = total + distance(from, fa.centre) + distance(to, fb.centre);
@@ -1159,55 +1292,79 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             made.push_back(d);
         }
         if (r.dimFans) {
-            Entity d = makeDim(route.front(), pointAlong(route, fanA), gapOut, QString());
-            d.meta.insert(QStringLiteral("brickDim"), QStringLiteral("fanStart"));
-            made.push_back(d);
+            if (!isSub) {
+                Entity d = makeDim(route.front(), pointAlong(route, fanA), gapOut, QString());
+                d.meta.insert(QStringLiteral("brickDim"), QStringLiteral("fanStart"));
+                made.push_back(d);
+            }
             if (!loose) {
                 Entity e = makeDim(pointAlong(route, total - fanB), route.back(), gapOut, QString());
                 e.meta.insert(QStringLiteral("brickDim"), QStringLiteral("fanFinish"));
                 made.push_back(e);
             }
         }
-        if (r.dimBetween && !loose && total > fanA + fanB) {
+        if (r.dimBetween && !loose && !isSub && total > fanA + fanB) {
             const Vec2 p0 = pointAlong(route, fanA), p1 = pointAlong(route, total - fanB);
             Entity d = makeDim(p0, p1, gapOut, straight ? QString() : fmt(total - fanA - fanB));
             d.meta.insert(QStringLiteral("brickDim"), QStringLiteral("between"));
             made.push_back(d);
         }
 
-        // LABELS: on the whole bundle, or on one wire of a fan, so far along from the end chosen.
-        for (const BrickLabel& lab : r.labels) {
-            const bool fromB = lab.fromFinish && !loose;
-            const double s0 = fromB ? total - lab.distanceMm : lab.distanceMm;
-            Vec2 dir;
-            const Vec2 at = pointAlong(route, s0, &dir);
-            if (lab.wire < 0) {
-                const double across = std::max(bodyWidth, 1.5 * ww * std::min(wires, 3)) + 2.0;
-                Entity box = makeBoxAt(at, dir, 14.0, across);
-                box.meta.insert(QStringLiteral("mechRole"), QStringLiteral("label"));
-                made.push_back(box);
-                Entity t = makeTextAt(at + dir.perp() * (across / 2.0 + 2.0), lab.text, 2.5, angleOf(dir));
-                t.meta.insert(QStringLiteral("mechRole"), QStringLiteral("label"));
-                made.push_back(t);
-            } else {
-                // On one wire of the fan: where that wire is at that distance into the fan.
-                const int k = std::clamp(lab.wire, 0, wires - 1);
-                const Landing& l = fromB ? lb : la;
-                const double fan = fromB ? fanB : fanA;
-                const double t = fan > 1e-9 ? std::clamp(lab.distanceMm / fan, 0.0, 1.0) : 1.0;
-                const double packed = ww * 1.5;
-                const double slot = k - (wires - 1) / 2.0;
-                const double off = slot * (l.lane * (1.0 - t) + packed * t);
-                // Across the run as it runs from that end.
-                const Vec2 side = (fromB ? dir * -1.0 : dir).perp();
-                const Vec2 p = at + side * off;
-                Entity box = makeBoxAt(p, dir, 8.0, ww + 1.5);
-                box.meta.insert(QStringLiteral("mechRole"), QStringLiteral("label"));
-                made.push_back(box);
-                Entity tx = makeTextAt(p + side * (slot >= 0 ? ww + 2.0 : -(ww + 4.0)), lab.text, 1.8,
-                                       angleOf(dir));
-                tx.meta.insert(QStringLiteral("mechRole"), QStringLiteral("label"));
-                made.push_back(tx);
+        // LABELS: on the whole bundle, or on one wire of a fan, so far along from the end chosen -
+        // on the special's first run, or on the cable up to where it splits.
+        if (labelBranch.value(&s) == i && !r.labels.empty()) {
+            // EVERY WIRE'S OWN PATH, as the harness draws it: each wire is drawn as two edges, and
+            // the middle of the two is where a label on that wire is centred.
+            std::vector<std::vector<Vec2>> centres;
+            for (const Entity& e : made) {
+                if (e.type == EntityType::TwistedPair) {
+                    const std::vector<std::vector<Vec2>> strands = twistedPairStrands(e);
+                    for (size_t j = 0; j + 1 < strands.size(); j += 2) {
+                        const std::vector<Vec2>& ea = strands[j];
+                        const std::vector<Vec2>& eb = strands[j + 1];
+                        if (ea.size() != eb.size() || ea.size() < 2) continue;
+                        std::vector<Vec2> c(ea.size());
+                        for (size_t q = 0; q < ea.size(); ++q) c[q] = (ea[q] + eb[q]) * 0.5;
+                        centres.push_back(c);
+                    }
+                } else if (e.type == EntityType::Polyline && e.meta.value(QStringLiteral("double")).toBool()) {
+                    centres.push_back(e.points);
+                }
+            }
+            for (const BrickLabel& lab : r.labels) {
+                const bool fromB = lab.fromFinish && !loose;
+                if (lab.wire < 0) {
+                    const double s0 = fromB ? total - lab.distanceMm : lab.distanceMm;
+                    Vec2 dir;
+                    const Vec2 at = pointAlong(route, s0, &dir);
+                    const double span = bodyWidth > 0.0 ? bodyWidth
+                                                        : ww * 1.5 * (std::min(wires, 3) - 1) + ww;
+                    for (Entity& e : labelEntities(at, dir, span, lab.text, false)) made.push_back(e);
+                    continue;
+                }
+                // ON ONE WIRE: the wires fanned at that end, numbered from the top down (from the
+                // left, where the fan runs up or down the sheet), and the label centred on that
+                // wire so far from the face.
+                const Vec2 endPt = fromB ? route.back() : route.front();
+                const Vec2 endOut = fromB ? (loose ? fa.out : fb.out) : fa.out;
+                const double reach = (fromB ? lb.lane : la.lane) * (wires - 1) / 2.0 + 2.0 * ww + 0.5;
+                std::vector<std::vector<Vec2>> fan;
+                for (const std::vector<Vec2>& c : centres) {
+                    if (distance(c.front(), endPt) <= reach) fan.push_back(c);
+                    else if (distance(c.back(), endPt) <= reach)
+                        fan.push_back(std::vector<Vec2>(c.rbegin(), c.rend()));
+                }
+                if (fan.empty()) continue;
+                const bool upDown = std::abs(endOut.y) > std::abs(endOut.x);
+                std::stable_sort(fan.begin(), fan.end(), [upDown](const auto& x, const auto& y) {
+                    return upDown ? x.front().x < y.front().x : x.front().y > y.front().y;
+                });
+                const int k = std::clamp(lab.wire, 0, static_cast<int>(fan.size()) - 1);
+                Vec2 dir;
+                const Vec2 at = pointAlong(fan[static_cast<size_t>(k)], lab.distanceMm, &dir);
+                QString text = lab.text;
+                if (text.isEmpty() && k < r.nets.size()) text = r.nets[k];
+                for (Entity& e : labelEntities(at, dir, ww, text, true)) made.push_back(e);
             }
         }
 

@@ -141,12 +141,29 @@ public:
     int bomItemOf(const QString& partId) const;
     void setAsk(std::function<bool(const QString& question)> ask) { ask_ = std::move(ask); }
 
+    // THE WIZARDS KEPT IN THE DRAWING, by name: saved with it, opened again, deleted.
+    bool saveToDrawing(const QString& name);
+    bool loadFromDrawing(const QString& name);
+    bool deleteFromDrawing(const QString& name);
+    QStringList savedNames() const;
+    QString currentName() const { return currentName_; }
+
+    // The nets on the schematic wires landing on the pins of the connectors so designated.
+    QStringList schematicNets(const QStringList& designators) const;
+
 signals:
     // The bill was changed from here, so the window showing it can catch up.
     void bomChanged();
 
+protected:
+    void keyPressEvent(QKeyEvent* e) override;
+    void showEvent(QShowEvent* e) override;
+
 private:
     void buildUi();
+    void refreshBom();
+    void refreshSaved();
+    void loadNets();
     QWidget* buildEndPage();
     QWidget* buildRunPage();
     QWidget* buildLinkPage();
@@ -163,6 +180,11 @@ private:
     PartsCatalog catalog_;
     BrickDesign design_;
     std::function<bool(const QString&)> ask_;
+    QString currentName_;
+    QComboBox* saved_ = nullptr;
+    QLineEdit* harnessName_ = nullptr;
+    QTableWidget* bom_ = nullptr;
+    QTableWidget* nets_ = nullptr;
 
     BrickPalette* palette_ = nullptr;
     QTreeWidget* parts_ = nullptr;
