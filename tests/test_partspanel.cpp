@@ -8,6 +8,7 @@
 // And a shop connects more than one library: the house library, a customer's, a project's. Which of them the
 // panel is drawn from is the first thing to be able to say about it, so it is said with a tick per library.
 #include <QLayout>
+#include <QAbstractButton>
 #include "app/MainWindow.h"
 #include <QWidgetAction>
 #include "harness/Bom.h"
@@ -906,6 +907,21 @@ int run_partspanel_tests() {
         dlg.show();
         QApplication::processEvents();
 
+        // EVERY CAPTION READS, however small the window is dragged: each button with words on it is held
+        // at the width its words need, and the window cannot be made narrower than that. (The test screen
+        // is smaller than the window, so the window is given what a big enough screen would give it.)
+        {
+            dlg.setMinimumSize(dlg.layout()->minimumSize());
+            dlg.resize(300, 200);
+            QApplication::processEvents();
+            QStringList cut;
+            for (QAbstractButton* b : dlg.findChildren<QAbstractButton*>())
+                if (b->isVisibleTo(&dlg) && !b->text().isEmpty() && b->width() + 1 < b->sizeHint().width())
+                    cut << b->text();
+            if (!cut.isEmpty()) std::printf("  library: cut captions: %s\n", qPrintable(cut.join(QStringLiteral(", "))));
+            check(cut.isEmpty(), "library: no button is narrower than its caption, even at the smallest size");
+        }
+
         QToolButton* eye = nullptr;
         for (QToolButton* b : dlg.findChildren<QToolButton*>())
             if (b->isCheckable() && b->text().contains(QStringLiteral("Connection points"))) eye = b;
@@ -999,8 +1015,13 @@ int run_partspanel_tests() {
         dlg.selectPart(QStringLiteral("P-PANES"));
         // Wide enough that there IS slack to drag: four panes with a floor of 150 px each fill a 600-pixel
         // row exactly, and a row with nothing spare cannot be re-divided however good the splitter is.
-        dlg.resize(1600, 900);
+        // Now that no pane goes narrower than its buttons' captions, "wide enough" is measured from what the
+        // window needs rather than guessed: its minimum, and room beyond it.
+        // Measured once it is on screen, styled and filled, which is when its needs are real.
         dlg.show();
+        QApplication::processEvents();
+        dlg.setMinimumSize(dlg.layout()->minimumSize());
+        dlg.resize(std::max(1600, dlg.layout()->minimumSize().width() + 400), 900);
         QApplication::processEvents();
 
         // FOUR PANES OF A SPLITTER, equal to begin with and any one of them draggable wider.

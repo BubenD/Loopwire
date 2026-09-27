@@ -54,6 +54,10 @@ public:
     // should not have to do it again on the next opening.
     void closeEvent(QCloseEvent* e) override;
 
+    // Holds every captioned button at the width its words need and sets the window's minimum to what the
+    // layouts then ask for (never more than the screen). Returns that need, unclamped.
+    QSize holdCaptions();
+
     // Where the library is read from / written to (the default path unless told otherwise).
     void setLibraryPath(const QString& path);
     // THE WINDOW FOLLOWS A CHANGE OF SCHEME.

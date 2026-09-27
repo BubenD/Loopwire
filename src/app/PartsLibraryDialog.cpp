@@ -51,6 +51,8 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPushButton>
+#include <QAbstractButton>
+#include <QFontMetrics>
 #include <QScrollArea>
 #include <QScreen>
 #include <QGuiApplication>
@@ -149,6 +151,26 @@ QWidget* rowHost(QWidget* parent, const QString& label, QWidget* field, const QS
 PartsLibraryDialog::PartsLibraryDialog(Editor* editor, QWidget* parent,
                                        std::function<void(QString, LibraryPartDrawing)> onEdit)
     : QDialog(parent), editor_(editor), onEdit_(std::move(onEdit)) {
+    // The first time the window is on screen its needs are measured again, now that it is styled and its
+    // lists are filled - both of which make buttons and panes wider than they were at construction - and
+    // it is widened to them if it opened narrower.
+    struct FirstShow : QObject {
+        PartsLibraryDialog* dlg;
+        explicit FirstShow(PartsLibraryDialog* d) : QObject(d), dlg(d) {}
+        bool eventFilter(QObject* o, QEvent* e) override {
+            if (o == dlg && e->type() == QEvent::Show) {
+                QTimer::singleShot(0, dlg, [d = dlg] {
+                    d->holdCaptions();
+                    if (d->width() < d->minimumWidth() || d->height() < d->minimumHeight())
+                        d->resize(d->size().expandedTo(d->minimumSize()));
+                });
+                dlg->removeEventFilter(this);
+                deleteLater();
+            }
+            return false;
+        }
+    };
+    installEventFilter(new FirstShow(this));
     setWindowTitle(QStringLiteral("Harness parts library"));
     // WIDE ENOUGH THAT EVERY BUTTON CAN BE READ. Three drawings side by side, each with its own row of
     // buttons under it, and a window opened at a width somebody picked once means captions cut in half -
@@ -172,13 +194,9 @@ PartsLibraryDialog::PartsLibraryDialog(Editor* editor, QWidget* parent,
         if (QScreen* screen = QGuiApplication::primaryScreen())
             room = screen->availableGeometry().size() - QSize(80, 120);
 
-        // NOTHING MAY BE SQUEEZED SMALLER THAN ITS CAPTIONS. The layout knows what the widest row of
-        // buttons under a drawing needs; saying so as a MINIMUM means neither a remembered size from a
-        // bigger screen nor a drag of the corner can cut "Capture selection" in half. Clamped to the
-        // screen, because a minimum larger than the display is a window that cannot be used at all.
-        const QSize least = minimumSizeHint().expandedTo(layout() ? layout()->minimumSize() : QSize());
-        setMinimumSize(QSize(std::min(least.width(), room.width()),
-                             std::min(least.height(), room.height())));
+        // NOTHING MAY BE SQUEEZED SMALLER THAN ITS CAPTIONS - see holdCaptions. Asked again when the window
+        // is first shown, because that is when it is styled and filled and its real needs are known.
+        const QSize least = holdCaptions();
 
         // THE SIZE IT WAS LEFT AT, when there is one. Somebody who has widened this window once so that
         // every caption reads has already answered the question; asking again on the next opening is
@@ -186,9 +204,12 @@ PartsLibraryDialog::PartsLibraryDialog(Editor* editor, QWidget* parent,
         // be the screen it was last sized on.
         const QSize remembered =
             QSettings().value(QStringLiteral("ui/partsLibrarySize")).toSize();
-        const QSize open = remembered.isValid() && remembered.width() > 0 && remembered.height() > 0
-                               ? remembered
-                               : QSize(want.width(), std::max(want.height(), 760));
+        // And never smaller than what reads: a size remembered from before the captions were held is not
+        // a size to open at.
+        const QSize open = (remembered.isValid() && remembered.width() > 0 && remembered.height() > 0
+                                ? remembered
+                                : QSize(want.width(), std::max(want.height(), 760)))
+                               .expandedTo(least);
         resize(std::min(open.width(), room.width()), std::min(open.height(), room.height()));
     }
     // The chooser and the library list are FILLED here, not by buildUi - which only makes the widgets.
@@ -491,9 +512,60 @@ void PartsLibraryDialog::refreshLibraryChooser() {
     syncing_ = false;
 }
 
+QSize PartsLibraryDialog::holdCaptions() {
+    // NOTHING MAY BE SQUEEZED SMALLER THAN ITS CAPTIONS. Every button with words on it is held at the
+    // width its words need, so the layouts' own minimum is the width at which every caption reads - and
+    // that, set as the window's minimum, means neither a remembered size from a bigger screen nor a drag
+    // of the corner can cut "Capture selection" in half. Clamped to the screen, because a minimum larger
+    // than the display is a window that cannot be used at all.
+    //
+    // Measured STYLED: a widget's size before its style is applied is not the size it will have on screen.
+    ensurePolished();
+    for (QWidget* w : findChildren<QWidget*>()) w->ensurePolished();
+    for (QAbstractButton* b : findChildren<QAbstractButton*>())
+        if (!b->text().isEmpty()) b->setMinimumWidth(std::max(b->minimumWidth(), b->sizeHint().width()));
+    // Two buttons change their words as they are used; each is held at the wider of its two.
+    auto holdForEither = [](QAbstractButton* b, const QString& one, const QString& other) {
+        if (!b) return;
+        const QFontMetrics fm(b->font());
+        const int chrome = b->sizeHint().width() - fm.horizontalAdvance(b->text());
+        b->setMinimumWidth(std::max(b->minimumWidth(),
+                                    chrome + std::max(fm.horizontalAdvance(one), fm.horizontalAdvance(other))));
+    };
+    holdForEither(showConnBtn_, QStringLiteral("Connection points shown"), QStringLiteral("Connection points hidden"));
+    holdForEither(fanoutMirrorBtn_, QStringLiteral("Mirror the front"), QStringLiteral("Mirror the back"));
+    // The three drawing panes share one floor - the widest of their button rows - so they open, and stay,
+    // the same width: one pane with a longer caption is not a reason for it to be the bigger one.
+    for (QSplitter* sp : findChildren<QSplitter*>()) {
+        if (sp->count() != 3 || sp->findChildren<DrawingPreview*>().size() != 3) continue;
+        int floor = 0;
+        for (int i = 0; i < sp->count(); ++i) {
+            sp->widget(i)->setMinimumWidth(0);   // asked afresh, not answered with last time's floor
+            floor = std::max(floor, sp->widget(i)->minimumSizeHint().width());
+        }
+        for (int i = 0; i < sp->count(); ++i) sp->widget(i)->setMinimumWidth(floor);
+    }
+    // The layouts worked out again now that the floors above are set, or they answer from before.
+    for (QWidget* w : findChildren<QWidget*>())
+        if (w->layout()) w->layout()->invalidate();
+    if (layout()) {
+        layout()->invalidate();
+        layout()->activate();
+    }
+    const QSize least = minimumSizeHint().expandedTo(layout() ? layout()->minimumSize() : QSize());
+    QSize room(1600, 900);
+    if (QScreen* screen = this->screen() ? this->screen() : QGuiApplication::primaryScreen())
+        room = screen->availableGeometry().size() - QSize(80, 120);
+    setMinimumSize(QSize(std::min(least.width(), room.width()), std::min(least.height(), room.height())));
+    return least;
+}
+
 void PartsLibraryDialog::buildUi() {
     auto* root = new QVBoxLayout(this);
     auto* split = new QSplitter(Qt::Horizontal, this);
+    // Neither side can be dragged shut, or narrower than what it holds - the buttons along the bottom
+    // of each have to stay readable.
+    split->setChildrenCollapsible(false);
     root->addWidget(split, 1);
     // The parts list opens wide enough for its columns - the two sign columns included. Left to
     // itself the splitter halves the window and the signs end up beyond the right-hand edge.
@@ -906,20 +978,16 @@ void PartsLibraryDialog::buildUi() {
         drawSplit->addWidget(paneHost[i]);
         drawSplit->setStretchFactor(i, 1);
     }
-    // A ROW OF BUTTONS THAT CAN GET OUT OF THE WAY. Two rows rather than one, so a pane needs half the width
-    // to show them, and each button allowed to shrink below its caption - a pane pulled narrow elides the
-    // words (the tooltip still says what it does) instead of refusing to be narrow and holding the whole
-    // splitter open. The same two-equal-rows shape the ribbon's icon groups use.
+    // A ROW OF BUTTONS IN TWO ROWS, so a pane needs half the width to show them - the same two-equal-rows
+    // shape the ribbon's icon groups use. No button goes narrower than its caption: a pane cannot be
+    // pulled so narrow that "Capture selection" reads "Captu", because a button whose words are cut is a
+    // button nobody can be sure of.
     auto reflowButtons = [](QWidget* host) {
         const QList<QPushButton*> bs =
             host->findChildren<QPushButton*>(QString(), Qt::FindDirectChildrenOnly);
-        // PREFERRED, not ignored: the window opens at a width where every caption is READ, because a button
-        // whose words are cut in half ("r from opposite fa") is a button nobody can be sure of. The small
-        // minimum is what still lets a pane be dragged narrow afterwards - then, and only then, the words
-        // give way and the tooltip answers for them.
         for (QPushButton* b : bs) {
             b->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-            b->setMinimumWidth(28);
+            b->setMinimumWidth(b->sizeHint().width());   // never narrower than its words
         }
         if (bs.size() < 3) return;
         delete host->layout();
