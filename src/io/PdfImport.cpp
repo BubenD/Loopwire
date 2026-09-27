@@ -33,6 +33,7 @@ struct Token {
     QByteArray text;
     bool number = false;
     double value = 0.0;
+    int kind = 0;   // 0 a word (operator, name, number), 1 a (literal) string, 2 a <hex> string
 };
 
 bool delimiter(char c) {
@@ -54,8 +55,10 @@ std::vector<Token> tokenize(const QByteArray& bytes) {
             continue;
         }
         if (ch == '(') {
+            // A STRING, kept (escapes and all) for the text it shows.
             int depth = 1;
             ++i;
+            const qsizetype s0 = i;
             while (i < bytes.size() && depth > 0) {
                 if (bytes.at(i) == '\\') i += 2;
                 else {
@@ -64,6 +67,7 @@ std::vector<Token> tokenize(const QByteArray& bytes) {
                     ++i;
                 }
             }
+            out.push_back({bytes.mid(s0, std::max<qsizetype>(0, i - 1 - s0)), false, 0.0, 1});
             continue;
         }
         if (ch == '<') {
@@ -72,7 +76,9 @@ std::vector<Token> tokenize(const QByteArray& bytes) {
                 i += 2;
             } else {
                 ++i;
+                const qsizetype s0 = i;
                 while (i < bytes.size() && bytes.at(i) != '>') ++i;
+                out.push_back({bytes.mid(s0, i - s0), false, 0.0, 2});
                 if (i < bytes.size()) ++i;
             }
             continue;
@@ -380,11 +386,83 @@ PdfObjects readObjects(const QByteArray& bytes) {
     return objs;
 }
 
+// ---- Fonts: what a code says, and how far it moves the pen ------------------------------------------
+
+struct FontInfo {
+    PdfText::GlyphMap map;
+    bool twoByte = false;                 // Identity-H and the other two-byte CID encodings
+    double defaultWidth = 1000.0;         // a CID font's /DW
+    QHash<quint32, double> widths;        // by code, in thousandths of the type size
+    bool known = false;                   // the font was found at all
+};
+
+FontInfo loadFont(const PdfObjects& objs, int ref) {
+    FontInfo f;
+    const QByteArray text = objs.text.value(ref);
+    if (text.isEmpty()) return f;
+    f.known = true;
+    const auto d = dictEntries(text);
+    const int toUni = refNumber(d.value("ToUnicode"));
+    if (toUni >= 0) f.map = PdfText::readToUnicode(objs.stream(toUni));
+    const QByteArray sub = d.value("Subtype");
+    if (sub == "/Type0") {
+        f.twoByte = true;
+        const std::vector<int> desc = references(objs.resolve(d.value("DescendantFonts")));
+        if (!desc.empty()) {
+            const auto cid = dictEntries(objs.text.value(desc.front()));
+            if (cid.contains("DW")) f.defaultWidth = objs.resolve(cid.value("DW")).toDouble();
+            // /W: "c [w1 w2 ...]" gives widths from c on; "c1 c2 w" gives one width to a range.
+            const std::vector<Token> w = tokenize(objs.resolve(cid.value("W")));
+            size_t k = 0;
+            if (!w.empty() && w[0].text == "[") k = 1;
+            while (k < w.size()) {
+                if (!w[k].number) { ++k; continue; }
+                const quint32 c = static_cast<quint32>(w[k].value);
+                ++k;
+                if (k < w.size() && w[k].text == "[") {
+                    ++k;
+                    quint32 code = c;
+                    while (k < w.size() && w[k].text != "]") {
+                        if (w[k].number) f.widths.insert(code++, w[k].value);
+                        ++k;
+                    }
+                    ++k;
+                } else if (k + 1 < w.size() && w[k].number && w[k + 1].number) {
+                    const quint32 c2 = static_cast<quint32>(w[k].value);
+                    const double width = w[k + 1].value;
+                    for (quint32 code = c; code <= c2 && code - c < 65536; ++code) f.widths.insert(code, width);
+                    k += 2;
+                }
+            }
+        }
+    } else {
+        const int first = objs.resolve(d.value("FirstChar")).toInt();
+        const std::vector<double> ws = numbers(objs.resolve(d.value("Widths")));
+        for (size_t k = 0; k < ws.size(); ++k) f.widths.insert(static_cast<quint32>(first + static_cast<int>(k)), ws[k]);
+        if (f.map.empty()) {
+            const QByteArray enc = objs.resolve(d.value("Encoding"));
+            if (enc.contains("Differences")) f.map = PdfText::readDifferences(enc);
+        }
+    }
+    return f;
+}
+
+// A run of shown text: where it starts and ends on its baseline, what it says, how tall and how turned.
+struct TextPiece {
+    Vec2 start, end;
+    QString text;
+    double height = 0.0;
+    double rotation = 0.0;   // radians
+    QString color;
+};
+
 // ---- One content stream -----------------------------------------------------------------------------
 
 struct Context {
     const PdfObjects* objs = nullptr;
     int depth = 0;
+    QHash<int, FontInfo>* fonts = nullptr;     // loaded once per file, by object number
+    std::vector<TextPiece>* texts = nullptr;   // where the shown text goes
 };
 
 void parseStream(const QByteArray& stream, Document& doc, const Matrix& base = {}, const Context& ctx = {},
@@ -395,7 +473,21 @@ void parseStream(const QByteArray& stream, Document& doc, const Matrix& base = {
         Matrix matrix;
         QString strokeColor = QStringLiteral("#000000");
         QString fillColor = QStringLiteral("#000000");
+        // The text state, which q and Q keep with the rest.
+        double charSpace = 0.0, wordSpace = 0.0, hScale = 1.0, leading = 0.0, rise = 0.0, fontSize = 12.0;
+        int fontRef = -1;
     };
+    // The text and text-line matrices, which BT starts afresh.
+    Matrix tm, tlm;
+    // A TJ array being gathered: its strings and its numbers, in order.
+    struct ArrayItem {
+        QByteArray bytes;
+        bool isString = false;
+        double number = 0.0;
+    };
+    std::vector<ArrayItem> array;
+    bool inArray = false;
+    std::vector<QByteArray> strings;   // strings since the last operator
     std::vector<GraphicsState> states;
     GraphicsState state;
     state.matrix = base;
@@ -417,17 +509,112 @@ void parseStream(const QByteArray& stream, Document& doc, const Matrix& base = {
         haveCurrent = true;
     };
 
+    // THE FONT in force, looked up in the resources by the name Tf gave.
+    auto fontByName = [&](const QByteArray& name) -> int {
+        if (!ctx.objs) return -1;
+        const auto res = dictEntries(ctx.objs->resolve(resources));
+        const auto fonts = dictEntries(ctx.objs->resolve(res.value("Font")));
+        return refNumber(fonts.value(name));
+    };
+    auto fontInfo = [&]() -> const FontInfo* {
+        if (!ctx.fonts || !ctx.objs || state.fontRef < 0) return nullptr;
+        auto it = ctx.fonts->find(state.fontRef);
+        if (it == ctx.fonts->end()) it = ctx.fonts->insert(state.fontRef, loadFont(*ctx.objs, state.fontRef));
+        return &it.value();
+    };
+    // SHOWING TEXT: each code set at the pen, the pen moved on by the code's width, and the run kept as
+    // one piece - where it starts and ends, what it says, how tall and which way it reads.
+    auto show = [&](const QByteArray& bytes) {
+        if (!ctx.texts || bytes.isEmpty()) return;
+        const FontInfo* font = fontInfo();
+        const bool two = font && (font->twoByte || font->map.codeBytes >= 2);
+        const int step = two ? 2 : 1;
+        const Matrix m = multiply(state.matrix, tm);
+        const Vec2 origin = m.map({0.0, state.rise});
+        QString said;
+        double advance = 0.0;   // in text space
+        for (qsizetype k = 0; k + step <= bytes.size(); k += step) {
+            quint32 code = 0;
+            for (int b = 0; b < step; ++b) code = (code << 8) | static_cast<unsigned char>(bytes.at(k + b));
+            const QString ch = PdfText::mapCode(code, font ? &font->map : nullptr);
+            said += ch;
+            double w = 0.0;
+            if (font && font->widths.contains(code)) w = font->widths.value(code);
+            else if (font && font->twoByte) w = font->defaultWidth;
+            else w = PdfText::estimateWidth(ch.isEmpty() ? QChar(' ') : ch.at(0));
+            double dx = w / 1000.0 * state.fontSize + state.charSpace;
+            if (step == 1 && code == 32) dx += state.wordSpace;
+            advance += dx * state.hScale;
+        }
+        tm = multiply(tm, {1, 0, 0, 1, advance, 0});
+        const Vec2 right = m.map({1.0, 0.0}) - m.map({0.0, 0.0});
+        const Vec2 up = m.map({0.0, 1.0}) - m.map({0.0, 0.0});
+        TextPiece piece;
+        piece.start = origin;
+        piece.end = m.map({advance, state.rise});
+        piece.text = said;
+        piece.height = state.fontSize * up.length();
+        piece.rotation = std::atan2(right.y, right.x);
+        piece.color = state.fillColor;
+        if (piece.height > 1e-6) ctx.texts->push_back(std::move(piece));
+    };
+    auto nextLine = [&](double tx, double ty) {
+        tlm = multiply(tlm, {1, 0, 0, 1, tx, ty});
+        tm = tlm;
+    };
+
     for (const Token& token : tokens) {
         if (token.number) {
             nums.push_back(token.value);
+            if (inArray) array.push_back({QByteArray(), false, token.value});
+            continue;
+        }
+        if (token.kind != 0) {
+            const QByteArray bytes = token.kind == 1 ? PdfText::unescapeLiteral(token.text) : PdfText::unhex(token.text);
+            if (inArray) array.push_back({bytes, true, 0.0});
+            else strings.push_back(bytes);
             continue;
         }
         const QByteArray& op = token.text;
+        if (op == "[") { inArray = true; array.clear(); continue; }
+        if (op == "]") { inArray = false; continue; }
         if (op.startsWith('/')) {
             lastName = op.mid(1);
             nums.clear();
             continue;
         }
+        // THE TEXT OPERATORS.
+        if (op == "BT") { tm = tlm = Matrix{}; nums.clear(); strings.clear(); continue; }
+        if (op == "ET") { nums.clear(); strings.clear(); continue; }
+        {
+            std::vector<double> t;
+            bool handled = true;
+            if (op == "Tf" && take(1, t)) { state.fontSize = t[0]; state.fontRef = fontByName(lastName); }
+            else if (op == "Tc" && take(1, t)) state.charSpace = t[0];
+            else if (op == "Tw" && take(1, t)) state.wordSpace = t[0];
+            else if (op == "Tz" && take(1, t)) state.hScale = t[0] / 100.0;
+            else if (op == "TL" && take(1, t)) state.leading = t[0];
+            else if (op == "Ts" && take(1, t)) state.rise = t[0];
+            else if (op == "Td" && take(2, t)) nextLine(t[0], t[1]);
+            else if (op == "TD" && take(2, t)) { state.leading = -t[1]; nextLine(t[0], t[1]); }
+            else if (op == "Tm" && take(6, t)) { tlm = {t[0], t[1], t[2], t[3], t[4], t[5]}; tm = tlm; }
+            else if (op == "T*") nextLine(0.0, -state.leading);
+            else if (op == "Tj") { for (const QByteArray& s : strings) show(s); }
+            else if (op == "'") { nextLine(0.0, -state.leading); for (const QByteArray& s : strings) show(s); }
+            else if (op == "\"") {
+                if (take(2, t)) { state.wordSpace = t[0]; state.charSpace = t[1]; }
+                nextLine(0.0, -state.leading);
+                for (const QByteArray& s : strings) show(s);
+            } else if (op == "TJ") {
+                for (const ArrayItem& item : array) {
+                    if (item.isString) show(item.bytes);
+                    else tm = multiply(tm, {1, 0, 0, 1, -item.number / 1000.0 * state.fontSize * state.hScale, 0});
+                }
+                array.clear();
+            } else handled = false;
+            if (handled) { nums.clear(); strings.clear(); continue; }
+        }
+        strings.clear();
         if (op == "q") { states.push_back(state); nums.clear(); continue; }
         if (op == "Q") {
             if (!states.empty()) { state = states.back(); states.pop_back(); }
@@ -632,6 +819,81 @@ Vec2 pageToSheet(const Vec2& p, const Page& page) {
     }
 }
 
+// THE PIECES OF TEXT JOINED into words and lines. A PDF sets text a word or a letter at a time - and a
+// kerned line comes as a string per pair of letters - so each piece on its own is useless on a drawing.
+// Pieces that follow one another along the same baseline, the same size and turn, are one text; a gap
+// the width of a space between them is a space.
+std::vector<TextPiece> joinPieces(const std::vector<TextPiece>& pieces) {
+    // First the runs - pieces that follow on along one baseline - each with the gap before every piece.
+    struct Run {
+        std::vector<const TextPiece*> parts;
+        std::vector<double> gaps;   // gaps[k] is the gap before parts[k], k >= 1
+    };
+    std::vector<Run> runs;
+    for (const TextPiece& p : pieces) {
+        if (!runs.empty()) {
+            Run& run = runs.back();
+            const TextPiece& last = *run.parts.back();
+            const double h = last.height;
+            const Vec2 dir{std::cos(last.rotation), std::sin(last.rotation)};
+            const Vec2 d = p.start - last.end;
+            const double along = d.x * dir.x + d.y * dir.y;
+            const double across = -d.x * dir.y + d.y * dir.x;
+            const bool same = std::abs(p.height - h) <= 0.08 * h && std::abs(p.rotation - last.rotation) < 0.02 &&
+                              p.color == last.color;
+            if (same && std::abs(across) < 0.25 * h && along > -0.6 * h && along < 1.4 * h) {
+                run.parts.push_back(&p);
+                run.gaps.push_back(along);
+                continue;
+            }
+        }
+        if (p.text.trimmed().isEmpty()) continue;   // a space on its own starts nothing
+        runs.push_back({{&p}, {0.0}});
+    }
+    // Then the words. A gap is a space when it is wider than a space's worth of the type - and wider than
+    // what the run does between every letter anyway: a line set letter by letter with the letters spread
+    // has a gap after each one, and those are tracking, not spaces.
+    std::vector<TextPiece> out;
+    for (const Run& run : runs) {
+        TextPiece t = *run.parts.front();
+        const double h = t.height;
+        std::vector<double> inner(run.gaps.begin() + 1, run.gaps.end());
+        double usual = 0.0;
+        if (inner.size() >= 3) {
+            std::vector<double> sorted = inner;
+            std::nth_element(sorted.begin(), sorted.begin() + sorted.size() / 2, sorted.end());
+            usual = std::max(0.0, sorted[sorted.size() / 2]);
+        }
+        const double spaceAt = std::max(0.18 * h, usual + 0.15 * h);
+        for (size_t k = 1; k < run.parts.size(); ++k) {
+            const TextPiece& p = *run.parts[k];
+            if (run.gaps[k] > spaceAt && !t.text.endsWith(QLatin1Char(' ')) && !p.text.startsWith(QLatin1Char(' ')))
+                t.text += QLatin1Char(' ');
+            t.text += p.text;
+            t.end = p.end;
+        }
+        t.text = t.text.trimmed();
+        if (!t.text.isEmpty()) out.push_back(std::move(t));
+    }
+    return out;
+}
+
+// A piece of text as a text object: its anchor the bottom-left of its letters, a little under the
+// baseline where the descenders reach, so the baseline lands where the PDF put it.
+Entity textEntity(const TextPiece& t) {
+    Entity e;
+    e.type = EntityType::Text;
+    e.layer = QStringLiteral("0");
+    e.color = t.color.isEmpty() ? QStringLiteral("#000000") : t.color;
+    const Vec2 up{-std::sin(t.rotation), std::cos(t.rotation)};
+    e.a = t.start - up * (0.21 * t.height);
+    e.rotation = t.rotation;
+    e.meta.insert(QStringLiteral("text"), t.text);
+    e.meta.insert(QStringLiteral("size"), t.height);
+    e.meta.insert(QStringLiteral("justify"), QStringLiteral("BL"));
+    return e;
+}
+
 // A stream that is not a drawing at all, for the reading of a file with no page tree to follow: fonts,
 // colour profiles, metadata, pictures, the file's own indexes.
 bool notDrawing(const QHash<QByteArray, QByteArray>& d) {
@@ -656,6 +918,8 @@ bool parse(const QByteArray& bytes, Document& doc, QString* error, const Progres
     // not destroy the drawing that was already open in the caller.
     Document extracted;
     extracted.entities().clear();
+    std::vector<Entity> texts;   // the text, placed; added after the lines have been normalised
+    QHash<int, FontInfo> fonts;
     int streams = 0;
     if (progress) progress(5, QStringLiteral("Reading the PDF's objects"));
     const PdfObjects objs = readObjects(bytes);
@@ -675,6 +939,9 @@ bool parse(const QByteArray& bytes, Document& doc, QString* error, const Progres
             one.entities().clear();
             Context ctx;
             ctx.objs = &objs;
+            ctx.fonts = &fonts;
+            std::vector<TextPiece> pieces;
+            ctx.texts = &pieces;
             parseStream(pageContent(objs, page), one, Matrix{}, ctx, page.resources);
             ++streams;
             Bounds box;
@@ -703,6 +970,19 @@ bool parse(const QByteArray& bytes, Document& doc, QString* error, const Progres
                     for (Vec2& p : e.points) place(p);
                 }
                 extracted.entities().push_back(std::move(e));
+            }
+            // THE TEXT, on the same terms: on the page, turned with it.
+            const int turns = page.box.size() == 4 ? (((page.rotate % 360) + 360) % 360) / 90 : 0;
+            for (const TextPiece& t : joinPieces(pieces)) {
+                if (box.valid && (t.start.x < box.min.x || t.start.x > box.max.x || t.start.y < box.min.y ||
+                                  t.start.y > box.max.y))
+                    continue;
+                Entity e = textEntity(t);
+                if (page.box.size() == 4) {
+                    e.a = pageToSheet(e.a, page) + Vec2{offsetX, 0.0};
+                    e.rotation -= turns * M_PI / 2.0;
+                }
+                texts.push_back(std::move(e));
             }
             offsetX += pageWidth > 0.0 ? pageWidth + 20.0 : 0.0;
         }
@@ -736,7 +1016,7 @@ bool parse(const QByteArray& bytes, Document& doc, QString* error, const Progres
             cursor += 6;
         }
     }
-    if (extracted.entities().empty()) {
+    if (extracted.entities().empty() && texts.empty()) {
         if (error) *error = streams == 0
                                   ? QStringLiteral("The PDF contains no readable content streams.")
                                   : QStringLiteral("The PDF contains no supported vector paths.");
@@ -752,9 +1032,15 @@ bool parse(const QByteArray& bytes, Document& doc, QString* error, const Progres
     if (progress) progress(86, QStringLiteral("Normalising %1 object(s)").arg(extracted.entities().size()));
     Document converted;
     QString dxfError;
-    if (!dxf::parse(converted, dxf, &dxfError)) {
+    if (!extracted.entities().empty() && !dxf::parse(converted, dxf, &dxfError)) {
         if (error) *error = dxfError;
         return false;
+    }
+    if (extracted.entities().empty()) converted.entities().clear();
+    // The text goes straight in: through a DXF it would be pressed into the file's older character set.
+    for (Entity& t : texts) {
+        t.id = QUuid::createUuid().toString(QUuid::WithoutBraces).left(8);
+        converted.entities().push_back(std::move(t));
     }
     doc = std::move(converted);
     if (progress) progress(100, QStringLiteral("Read"));

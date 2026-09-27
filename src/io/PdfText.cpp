@@ -989,5 +989,35 @@ QString extractFromFile(const QString& path, QString* why) {
     return extract(bytes, why);
 }
 
+GlyphMap readToUnicode(const QByteArray& cmap) {
+    const CMap c = parseCMap(cmap);
+    GlyphMap g;
+    g.single = c.single;
+    g.codeBytes = c.codeBytes;
+    return g;
+}
+
+GlyphMap readDifferences(const QByteArray& encodingDict) {
+    const CMap c = parseDifferences(encodingDict);
+    GlyphMap g;
+    g.single = c.single;
+    g.codeBytes = 1;
+    return g;
+}
+
+QString mapCode(quint32 code, const GlyphMap* map) {
+    if (map && !map->empty()) {
+        const auto it = map->single.constFind(code);
+        if (it != map->single.constEnd()) return *it;
+        if (map->codeBytes > 1) return QString();
+    }
+    if (code >= 32 && code < 0x100) return QString(QChar(static_cast<ushort>(code)));
+    return QString();
+}
+
+QByteArray unescapeLiteral(const QByteArray& raw) { return decodeLiteral(raw); }
+QByteArray unhex(const QByteArray& raw) { return decodeHexString(raw); }
+int estimateWidth(QChar c) { return helveticaWidth(c); }
+
 } // namespace PdfText
 } // namespace Edraw_Desktop

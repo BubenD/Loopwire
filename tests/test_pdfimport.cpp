@@ -392,6 +392,47 @@ int run_pdfimport_tests() {
               "pdf pages: no clip box, no font program, nothing off the page - and the page comes in turned");
     }
 
+    // THE TEXT COMES IN, where the page sets it: a word shown whole, a kerned word shown in pieces (one
+    // word, not two), two words set apart by a gap (a space between them), each the size it was set at.
+    {
+        const QByteArray content =
+            "0 0 m 10 0 l S BT /F1 10 Tf 100 700 Td (HELLO) Tj ET "
+            "BT /F1 10 Tf 1 0 0 1 100 650 Tm [(WOR) -20 (LD)] TJ ET "
+            "BT /F1 12 Tf 100 600 Td [(LEFT) -600 (RIGHT)] TJ ET";
+        auto obj = [](int n, const QByteArray& dict, const QByteArray& stream = QByteArray()) {
+            QByteArray o = QByteArray::number(n) + " 0 obj\n" + dict + "\n";
+            if (!stream.isNull()) o += "stream\n" + stream + "\nendstream\n";
+            return o + "endobj\n";
+        };
+        QByteArray pdfBytes = "%PDF-1.5\n";
+        pdfBytes += obj(1, "<</Type/Catalog/Pages 2 0 R>>");
+        pdfBytes += obj(2, "<</Type/Pages/Kids[3 0 R]/Count 1>>");
+        pdfBytes += obj(3, "<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R"
+                           "/Resources<</Font<</F1 5 0 R>>>>>>");
+        pdfBytes += obj(4, "<</Length " + QByteArray::number(content.size()) + ">>", content);
+        pdfBytes += obj(5, "<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>");
+        pdfBytes += "trailer <</Root 1 0 R>>\n%%EOF\n";
+        Document got;
+        QString err;
+        const bool read = pdf::parse(pdfBytes, got, &err);
+        auto textOf = [&](const QString& s) -> const Entity* {
+            for (const Entity& e : got.entities())
+                if (e.type == EntityType::Text && e.meta.value(QStringLiteral("text")).toString() == s) return &e;
+            return nullptr;
+        };
+        QStringList said;
+        for (const Entity& e : got.entities())
+            if (e.type == EntityType::Text) said << e.meta.value(QStringLiteral("text")).toString();
+        std::printf("  pdf text: [%s]\n", qPrintable(said.join(QStringLiteral(" | "))));
+        const Entity* hello = textOf(QStringLiteral("HELLO"));
+        check(read && hello, "pdf text: a word shown in a PDF comes in as text");
+        check(hello && std::abs(hello->meta.value(QStringLiteral("size")).toDouble() - 10.0) < 1e-6 &&
+                  std::abs(hello->a.x - 100.0) < 1e-6 && std::abs(hello->a.y - 700.0) < 3.0,
+              "pdf text: at the size it was set, where it was set");
+        check(textOf(QStringLiteral("WORLD")) != nullptr, "pdf text: a kerned word is one word, not its pieces");
+        check(textOf(QStringLiteral("LEFT RIGHT")) != nullptr, "pdf text: a gap the width of a space is a space");
+    }
+
     // THE LAST FIFTEEN DRAWINGS: one opened goes to the top of File > Open recent, the list stops at
     // fifteen, and the menu offers each of them.
     {

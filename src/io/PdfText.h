@@ -15,6 +15,7 @@
 #pragma once
 
 #include <QByteArray>
+#include <QHash>
 #include <QString>
 
 namespace Edraw_Desktop {
@@ -33,6 +34,27 @@ bool looksLikePdf(const QByteArray& bytes);
 // A zlib or raw-DEFLATE stream, inflated. Public because it is generally useful and because it is
 // worth testing on its own. Returns an empty array on malformed input.
 QByteArray inflate(const QByteArray& in, bool zlibHeader);
+
+// ---- For reading text WHERE IT IS, not only what it says (the PDF importer) ----
+
+// A font's codes to characters: its /ToUnicode map, or the glyph names of an /Encoding /Differences.
+struct GlyphMap {
+    QHash<quint32, QString> single;
+    int codeBytes = 1;   // 1 for a simple font, 2 for Identity-H and friends
+    bool empty() const { return single.isEmpty(); }
+};
+// A /ToUnicode CMap stream's contents, read.
+GlyphMap readToUnicode(const QByteArray& cmap);
+// The /Differences of a font's /Encoding dictionary (the dictionary's text), read.
+GlyphMap readDifferences(const QByteArray& encodingDict);
+// One code, as characters - empty when the map does not have it.
+QString mapCode(quint32 code, const GlyphMap* map);
+// A literal string's bytes with its escapes undone, and a hex string's bytes.
+QByteArray unescapeLiteral(const QByteArray& raw);
+QByteArray unhex(const QByteArray& raw);
+// How wide a character is, in thousandths of the type size - Helvetica's widths, for a font that does
+// not say.
+int estimateWidth(QChar c);
 
 } // namespace PdfText
 } // namespace Edraw_Desktop
