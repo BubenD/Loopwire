@@ -338,6 +338,60 @@ int run_pdfimport_tests() {
               "blockref: refitted to a bigger block, it keeps where it is, how it is turned and how big");
     }
 
+    // A PDF IS READ THE WAY A VIEWER DRAWS IT: its page's content is one stream even when it is stored in
+    // pieces (and the drawing state runs across the cut), a form XObject is placed through its matrix, a
+    // clipping path is not drawn, a font's program is not geometry, nothing off the page is kept, and a
+    // page shown turned - /Rotate 90 - comes in turned. Each of these put pieces of a real drawing in the
+    // wrong place, or outside the page altogether.
+    {
+        const QByteArray partA = "0 0 612 792 re W n q 1 0 0 1 100 50 cm 0 0 m 10 0 l";
+        const QByteArray partB = "S Q /Fm0 Do 2000 2000 m 2100 2000 l S";
+        const QByteArray form = "0 0 m 20 0 l S";
+        const QByteArray font = "0 0 m 9000 9000 l S";
+        auto obj = [](int n, const QByteArray& dict, const QByteArray& stream = QByteArray()) {
+            QByteArray o = QByteArray::number(n) + " 0 obj\n" + dict + "\n";
+            if (!stream.isNull())
+                o += "stream\n" + stream + "\nendstream\n";
+            return o + "endobj\n";
+        };
+        QByteArray pdfBytes = "%PDF-1.5\n";
+        pdfBytes += obj(1, "<</Type/Catalog/Pages 2 0 R>>");
+        pdfBytes += obj(2, "<</Type/Pages/Kids[3 0 R]/Count 1>>");
+        pdfBytes += obj(3, "<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Rotate 90/Contents[4 0 R 5 0 R]"
+                           "/Resources<</XObject<</Fm0 6 0 R>>/Font<</F1 7 0 R>>>>>>");
+        pdfBytes += obj(4, "<</Length " + QByteArray::number(partA.size()) + ">>", partA);
+        pdfBytes += obj(5, "<</Length " + QByteArray::number(partB.size()) + ">>", partB);
+        pdfBytes += obj(6, "<</Type/XObject/Subtype/Form/BBox[0 0 50 50]/Matrix[1 0 0 1 300 300]/Length " +
+                               QByteArray::number(form.size()) + ">>",
+                        form);
+        pdfBytes += obj(7, "<</Length " + QByteArray::number(font.size()) + "/Length1 " +
+                               QByteArray::number(font.size()) + ">>",
+                        font);
+        pdfBytes += "trailer <</Root 1 0 R>>\n%%EOF\n";
+
+        Document got;
+        QString err;
+        const bool read = pdf::parse(pdfBytes, got, &err);
+        std::printf("  pdf pages: %s, %zu object(s)\n", read ? "read" : qPrintable(err), got.entities().size());
+        auto hasLine = [&](Vec2 p, Vec2 q) {
+            for (const Entity& e : got.entities()) {
+                const Vec2 a = e.type == EntityType::Line ? e.a : (e.points.empty() ? Vec2{} : e.points.front());
+                const Vec2 b = e.type == EntityType::Line ? e.b : (e.points.empty() ? Vec2{} : e.points.back());
+                auto nearP = [](Vec2 u, Vec2 v) { return std::abs(u.x - v.x) < 0.01 && std::abs(u.y - v.y) < 0.01; };
+                if ((nearP(a, p) && nearP(b, q)) || (nearP(a, q) && nearP(b, p))) return true;
+            }
+            return false;
+        };
+        // Turned: page (x, y) is shown at (y, 612 - x).
+        check(read && hasLine({50, 512}, {50, 502}),
+              "pdf pages: a line drawn across two content streams keeps the placement set before the cut");
+        check(hasLine({300, 312}, {300, 292}), "pdf pages: a form XObject is drawn where its matrix puts it");
+        Bounds all;
+        for (const Entity& e : got.entities()) all.expand(e.bounds());
+        check(got.entities().size() == 2 && all.valid && all.max.x <= 792.5 && all.max.y <= 612.5,
+              "pdf pages: no clip box, no font program, nothing off the page - and the page comes in turned");
+    }
+
     // THE LAST FIFTEEN DRAWINGS: one opened goes to the top of File > Open recent, the list stops at
     // fifteen, and the menu offers each of them.
     {
