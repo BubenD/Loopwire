@@ -11,6 +11,7 @@
 #include <QAbstractButton>
 #include <QGroupBox>
 #include <QMouseEvent>
+#include <QTreeWidgetItemIterator>
 #include <QTableWidget>
 #include <QCheckBox>
 #include "app/MainWindow.h"
@@ -2461,16 +2462,32 @@ int run_partspanel_tests() {
             if (e.type == EntityType::Text && e.meta.contains(QStringLiteral("wiredLead")))
                 labels << e.meta.value(QStringLiteral("text")).toString();
         std::printf("  wired show: schematic labels [%s]\n", qPrintable(labels.join(QStringLiteral(" | "))));
-        check(labels.size() == 3 && labels.value(0) == QStringLiteral("Red  26 AWG  150 mm"),
-              "wired show: above every lead on the schematic, the wire's colour, cross section and length");
-        d.labelLength = false;
+        check(labels.size() == 3 && labels.value(0) == QStringLiteral("Red  26 AWG"),
+              "wired show: above every lead on the schematic, the wire's colour and cross section");
+        // THE WIRE'S LENGTH ON THE SCHEMATIC is a figure, not a label: each lead is drawn that long.
+        d.schemLeadMm = 42.0;
+        d.labelSize = false;
         setPartWiredDisplay(part, d);
         const std::vector<Entity> schem2 = partDrawingEntities(withWiredWires(part, false, part.schematic));
         QString first;
-        for (const Entity& e : schem2)
-            if (e.type == EntityType::Text && e.meta.contains(QStringLiteral("wiredLead")) && first.isEmpty())
-                first = e.meta.value(QStringLiteral("text")).toString();
-        check(first == QStringLiteral("Red  26 AWG"), "wired show: and only what is ticked");
+        double leadLen = 0.0;
+        for (const Entity& e : schem2) {
+            if (!e.meta.contains(QStringLiteral("wiredLead"))) continue;
+            if (e.type == EntityType::Text && first.isEmpty()) first = e.meta.value(QStringLiteral("text")).toString();
+            if (e.type == EntityType::Line && leadLen == 0.0) leadLen = distance(e.a, e.b);
+        }
+        check(first == QStringLiteral("Red"), "wired show: and only what is ticked");
+        check(std::abs(leadLen - 42.0) < 1e-6, "wired show: each lead drawn as long as the schematic's wire length");
+        // PLACED BY HAND, both drawings come with their wires; the harness builder asks without them.
+        auto leadsIn = [](const std::vector<Entity>& es) {
+            int n = 0;
+            for (const Entity& e : es) n += e.meta.contains(QStringLiteral("wiredLead")) ? 1 : 0;
+            return n;
+        };
+        check(leadsIn(partBlockInstance(part, true, Vec2{0, 0}, QString(), true)) == 3 &&
+                  leadsIn(partBlockInstance(part, false, Vec2{0, 0}, QString(), true)) > 0 &&
+                  leadsIn(partBlockInstance(part, true, Vec2{0, 0})) == 0,
+              "wired show: placed from the library, schematic and mechanical come with their wires");
     }
 
     // ---- a connector that comes with its wires: a tick, and a row per pin saying what each wire is ----
@@ -2590,6 +2607,85 @@ int run_partspanel_tests() {
                     std::printf("  sections: pulled 60 taller, the next moved %d\n", nowAt - wasAt);
                     check(std::abs(nowAt - wasAt - 60) <= 2, "sections: pulled taller, the rest are pushed down");
                 }
+            }
+
+            // THE DISPLAY SETTINGS SHOW ONLY UNDER THEIR OWN TICK.
+            {
+                auto* mechTick = dlg.findChild<QCheckBox*>(QStringLiteral("wiredShowMech"));
+                auto* mechParams = dlg.findChild<QWidget*>(QStringLiteral("wiredMechParams"));
+                auto* schemTick = dlg.findChild<QCheckBox*>(QStringLiteral("wiredShowSchem"));
+                auto* schemParams = dlg.findChild<QWidget*>(QStringLiteral("wiredSchemParams"));
+                check(mechTick && mechParams && schemTick && schemParams && !mechParams->isVisibleTo(&dlg) &&
+                          !schemParams->isVisibleTo(&dlg),
+                      "wired: unticked, the drawing settings are hidden");
+                if (mechTick && mechParams && schemTick && schemParams) {
+                    mechTick->setChecked(true);
+                    schemTick->setChecked(true);
+                    QApplication::processEvents();
+                    check(mechParams->isVisibleTo(&dlg) && schemParams->isVisibleTo(&dlg),
+                          "wired: ticked, each shows its settings");
+                    mechTick->setChecked(false);
+                    schemTick->setChecked(false);
+                }
+            }
+            // FOLDED TO ITS TITLE, and remembered.
+            {
+                QSettings().setValue(QStringLiteral("partsLibrary/foldMode"), QStringLiteral("remember"));
+                QToolButton* fold = nullptr;
+                for (QToolButton* b : group->findChildren<QToolButton*>(QStringLiteral("foldSection"), Qt::FindDirectChildrenOnly))
+                    fold = b;
+                check(fold != nullptr, "fold: the section has an arrow to fold it");
+                if (fold) {
+                    const int open = group->height();
+                    fold->click();
+                    QApplication::processEvents();
+                    std::printf("  fold: %d px open, %d folded\n", open, group->height());
+                    check(group->property("folded").toBool() && group->height() < open && group->height() < 50,
+                          "fold: it folds to its title");
+                    fold->click();
+                    QApplication::processEvents();
+                    check(!group->property("folded").toBool(), "fold: and opens again");
+                }
+            }
+            // N/A: the schematic does not apply - its pane stands down and the list says so.
+            {
+                auto* na = dlg.findChild<QPushButton*>(QStringLiteral("naButton_schematic"));
+                check(na != nullptr && na->isCheckable(), "n/a: each drawing has an N/A button");
+                if (na) {
+                    na->setChecked(true);
+                    QApplication::processEvents();
+                    QWidget* pane = nullptr;
+                    for (DrawingPreview* v : dlg.findChildren<DrawingPreview*>())
+                        if (v->caption() == QStringLiteral("Schematic symbol")) pane = v;
+                    bool buttonsOff = true;
+                    for (QPushButton* b : na->parentWidget()->findChildren<QPushButton*>(QString(), Qt::FindDirectChildrenOnly))
+                        if (b != na && b->isEnabled()) buttonsOff = false;
+                    check(pane && !pane->isEnabled() && buttonsOff, "n/a: pressed, the pane and its buttons stand down");
+                    QString mark;
+                    for (QTreeWidget* t : dlg.findChildren<QTreeWidget*>())
+                        for (QTreeWidgetItemIterator it(t); *it; ++it)
+                            if ((*it)->data(0, Qt::UserRole).toString() == QStringLiteral("P-WIRED")) mark = (*it)->text(2);
+                    check(mark == QStringLiteral("N/A"), "n/a: and the part's row in the list says N/A");
+                    check(dlg.saveLibrary(), "n/a: saves");
+                    PartsLibrary again;
+                    again.load(libFile);
+                    const LibraryPart* ap = again.byId(QStringLiteral("P-WIRED"));
+                    check(ap && partDrawingNotApplicable(*ap, QStringLiteral("schematic")) &&
+                              !partDrawingNotApplicable(*ap, QStringLiteral("mechanical")),
+                          "n/a: kept on the part, for that drawing only");
+                    na->setChecked(false);
+                    QApplication::processEvents();
+                    check(pane && pane->isEnabled(), "n/a: released, the pane is back");
+                }
+            }
+            // PLACE puts down both drawings, to begin with.
+            {
+                int ticked = 0;
+                for (QCheckBox* b : dlg.findChildren<QCheckBox*>())
+                    if ((b->text() == QStringLiteral("Mechanical drawing") || b->text() == QStringLiteral("Schematic symbol")) &&
+                        b->isChecked())
+                        ++ticked;
+                check(ticked == 2, "place: the mechanical drawing and the schematic are both ticked to begin with");
             }
 
             dlg.selectPart(QStringLiteral("P-HOSE"));

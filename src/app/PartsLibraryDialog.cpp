@@ -353,6 +353,16 @@ void PartsLibraryDialog::setPartSigns(QTreeWidgetItem* item, const LibraryPart& 
     const bool stdSchem = !ownSchem && !builtinSchematicSymbol(part.kind).isEmpty();
     item->setIcon(2, symbolSignIcon(false, ownSchem, stdSchem));
     item->setIcon(3, symbolSignIcon(true, part.hasMechanical(), false));
+    item->setText(2, QString());
+    item->setText(3, QString());
+    // N/A: that drawing does not apply to this part, which is not the same as not drawn yet.
+    for (const auto& [col, which] : {std::pair<int, QString>{2, QStringLiteral("schematic")},
+                                     std::pair<int, QString>{3, QStringLiteral("mechanical")}}) {
+        if (!partDrawingNotApplicable(part, which)) continue;
+        item->setIcon(col, QIcon());
+        item->setText(col, QStringLiteral("N/A"));
+        item->setToolTip(col, QStringLiteral("The %1 drawing does not apply to this part").arg(which));
+    }
     // The datasheet: whether one is attached, and whether the file is actually still there - a part
     // pointing at a datasheet that has been deleted is not the same as a part with one, and the list
     // is where that is noticed.
@@ -1135,7 +1145,9 @@ void PartsLibraryDialog::buildUi() {
             auto* act = new QAction(QString::fromLatin1(w.text), this);
             act->setCheckable(true);
             act->setData(static_cast<int>(w.kind));
-            act->setChecked(w.kind == LibraryPartDrawing::Mechanical);
+            // Both drawings ticked to begin with: a part placed by hand is usually wanted on the schematic and
+            // on the mechanical sheet alike, and a wired connector brings its wires on each.
+            act->setChecked(w.kind == LibraryPartDrawing::Mechanical || w.kind == LibraryPartDrawing::Schematic);
             auto* box = new QCheckBox(QString::fromLatin1(w.text), panel);
             box->setChecked(act->isChecked());
             connect(box, &QCheckBox::toggled, act, &QAction::setChecked);
@@ -1173,6 +1185,27 @@ void PartsLibraryDialog::buildUi() {
         rl->addStretch(1);
         dgOuter->addWidget(row);
     }
+    // N/A: this drawing does not apply to the part. Pressed, the pane stands down - its drawing and its buttons
+    // - and the part's row in the list says N/A instead of "not drawn yet".
+    auto addNotApplicable = [this](QWidget* btns, int pane) {
+        static const char* const kWhich[3] = {"mechanical", "schematic", "fanout"};
+        auto* na = new QPushButton(QStringLiteral("N/A"), btns);
+        na->setObjectName(QStringLiteral("naButton_%1").arg(QLatin1String(kWhich[pane])));
+        na->setCheckable(true);
+        na->setToolTip(QStringLiteral("This drawing does not apply to this part"));
+        naBtn_[pane] = na;
+        const QString which = QLatin1String(kWhich[pane]);
+        connect(na, &QPushButton::toggled, this, [this, which](bool on) {
+            if (syncing_) return;
+            LibraryPart* p = current();
+            if (!p) return;
+            setPartDrawingNotApplicable(*p, which, on);
+            touched();
+            applyNotApplicable();
+            reloadTree();
+        });
+        if (auto* lay = btns->layout()) lay->addWidget(na);
+    };
     for (int i = 0; i < 3; ++i) {
         const bool isFanout = i == 2;
         QWidget* fanoutSideRowPending = nullptr;
@@ -1270,6 +1303,7 @@ void PartsLibraryDialog::buildUi() {
                 }
             });
             bl->addWidget(clr);
+            addNotApplicable(btns, i);
             reflowButtons(btns);
             paneLay[i]->addWidget(btns);
             if (fanoutSideRowPending) paneLay[i]->addWidget(fanoutSideRowPending);
@@ -1339,6 +1373,7 @@ void PartsLibraryDialog::buildUi() {
         auto* clr = new QPushButton(QStringLiteral("Clear"), btns);
         connect(clr, &QPushButton::clicked, this, [this, mech] { clearDrawing(mech); });
         bl->addWidget(clr);
+        addNotApplicable(btns, i);
         reflowButtons(btns);
         paneLay[i]->addWidget(btns);
     }
@@ -1527,22 +1562,28 @@ void PartsLibraryDialog::buildUi() {
         connect(copyKey, &QShortcut::activated, this, [this] { copyWireCells(); });
         auto* pasteKey = new QShortcut(QKeySequence::Paste, wiresTable_, nullptr, nullptr, Qt::WidgetWithChildrenShortcut);
         connect(pasteKey, &QShortcut::activated, this, [this] { pasteWireCells(); });
-        // HOW THE WIRES ARE SHOWN: fanned out on the mechanical drawing, labelled on the schematic.
+        // HOW THE WIRES ARE SHOWN: fanned out on the mechanical drawing, labelled on the schematic. Each tick
+        // shows its own settings under it only while it is ticked.
         {
             auto* show = new QWidget(wiresHost_);
-            auto* sl = new QGridLayout(show);
-            sl->setContentsMargins(0, 4, 0, 0);
-            sl->setHorizontalSpacing(6);
+            auto* sv = new QVBoxLayout(show);
+            sv->setContentsMargins(0, 4, 0, 0);
+            sv->setSpacing(2);
             wiredMechBox_ = new QCheckBox(QStringLiteral("Show the wires on the mechanical drawing"), show);
             wiredMechBox_->setObjectName(QStringLiteral("wiredShowMech"));
-            sl->addWidget(wiredMechBox_, 0, 0, 1, 8);
-            wiredSideBox_ = new QComboBox(show);
+            sv->addWidget(wiredMechBox_);
+            wiredMechParams_ = new QWidget(show);
+            wiredMechParams_->setObjectName(QStringLiteral("wiredMechParams"));
+            auto* ml = new QHBoxLayout(wiredMechParams_);
+            ml->setContentsMargins(18, 0, 0, 0);
+            ml->setSpacing(6);
+            wiredSideBox_ = new QComboBox(wiredMechParams_);
             wiredSideBox_->setObjectName(QStringLiteral("wiredSide"));
             wiredSideBox_->addItem(QStringLiteral("Away from the body"), QStringLiteral("away"));
             wiredSideBox_->addItem(QStringLiteral("Toward the body"), QStringLiteral("toward"));
             wiredSideBox_->setToolTip(QStringLiteral("Which side of the output face the wires fan out to"));
-            auto spin = [show](const char* name, double lo, double hi, const QString& tip) {
-                auto* s = new QDoubleSpinBox(show);
+            auto spin = [](QWidget* host, const char* name, double lo, double hi, const QString& tip) {
+                auto* s = new QDoubleSpinBox(host);
                 s->setObjectName(QLatin1String(name));
                 s->setRange(lo, hi);
                 s->setDecimals(1);
@@ -1550,32 +1591,46 @@ void PartsLibraryDialog::buildUi() {
                 s->setToolTip(tip);
                 return s;
             };
-            wiredStraightBox_ = spin("wiredStraight", 0.0, 1000.0, QStringLiteral("How far the wires run straight out of the face before they spread"));
-            wiredPitchBox_ = spin("wiredPitch", 0.1, 100.0, QStringLiteral("How far apart the wires are once spread"));
-            wiredLengthBox_ = spin("wiredLength", 1.0, 100000.0, QStringLiteral("How long the leads are"));
-            int col = 0;
-            auto cap = [&](const QString& text, QWidget* w) {
-                auto* l = new QLabel(text, show);
+            wiredStraightBox_ = spin(wiredMechParams_, "wiredStraight", 0.0, 1000.0,
+                                     QStringLiteral("How far the wires run straight out of the face before they spread"));
+            wiredPitchBox_ = spin(wiredMechParams_, "wiredPitch", 0.1, 100.0,
+                                  QStringLiteral("How far apart the wires are once spread"));
+            wiredLengthBox_ = spin(wiredMechParams_, "wiredLength", 1.0, 100000.0, QStringLiteral("How long the leads are"));
+            auto cap = [](QWidget* host, QHBoxLayout* into, const QString& text, QWidget* w) {
+                auto* l = new QLabel(text, host);
                 setRole(l, "caption");
-                sl->addWidget(l, 1, col++);
-                sl->addWidget(w, 1, col++);
+                into->addWidget(l);
+                into->addWidget(w);
             };
-            cap(QStringLiteral("Side"), wiredSideBox_);
-            cap(QStringLiteral("Straight"), wiredStraightBox_);
-            cap(QStringLiteral("Fan pitch"), wiredPitchBox_);
-            cap(QStringLiteral("Length"), wiredLengthBox_);
-            wiredSchemBox_ = new QCheckBox(QStringLiteral("Label the wires on the schematic:"), show);
+            cap(wiredMechParams_, ml, QStringLiteral("Side"), wiredSideBox_);
+            cap(wiredMechParams_, ml, QStringLiteral("Straight"), wiredStraightBox_);
+            cap(wiredMechParams_, ml, QStringLiteral("Fan pitch"), wiredPitchBox_);
+            cap(wiredMechParams_, ml, QStringLiteral("Length"), wiredLengthBox_);
+            ml->addStretch(1);
+            sv->addWidget(wiredMechParams_);
+            wiredSchemBox_ = new QCheckBox(QStringLiteral("Label the wires on the schematic"), show);
             wiredSchemBox_->setObjectName(QStringLiteral("wiredShowSchem"));
-            wiredLabelColorBox_ = new QCheckBox(QStringLiteral("Colour"), show);
-            wiredLabelSizeBox_ = new QCheckBox(QStringLiteral("Cross section"), show);
-            wiredLabelLengthBox_ = new QCheckBox(QStringLiteral("Length"), show);
-            sl->addWidget(wiredSchemBox_, 2, 0, 1, 3);
-            sl->addWidget(wiredLabelColorBox_, 2, 3, 1, 1);
-            sl->addWidget(wiredLabelSizeBox_, 2, 4, 1, 2);
-            sl->addWidget(wiredLabelLengthBox_, 2, 6, 1, 2);
-            sl->setColumnStretch(8, 1);
+            sv->addWidget(wiredSchemBox_);
+            wiredSchemParams_ = new QWidget(show);
+            wiredSchemParams_->setObjectName(QStringLiteral("wiredSchemParams"));
+            auto* scl = new QHBoxLayout(wiredSchemParams_);
+            scl->setContentsMargins(18, 0, 0, 0);
+            scl->setSpacing(6);
+            wiredLabelColorBox_ = new QCheckBox(QStringLiteral("Colour"), wiredSchemParams_);
+            wiredLabelSizeBox_ = new QCheckBox(QStringLiteral("Cross section"), wiredSchemParams_);
+            scl->addWidget(wiredLabelColorBox_);
+            scl->addWidget(wiredLabelSizeBox_);
+            // THE LENGTH OF THE WIRE ON THE SCHEMATIC: how long each lead is drawn, so the symbol is placed
+            // with its wires already there and already labelled, ready to be carried on from.
+            wiredSchemLeadBox_ = spin(wiredSchemParams_, "wiredSchemLead", 1.0, 10000.0,
+                                      QStringLiteral("How long each wire is drawn on the schematic, out of its pin"));
+            cap(wiredSchemParams_, scl, QStringLiteral("Wire length"), wiredSchemLeadBox_);
+            scl->addStretch(1);
+            sv->addWidget(wiredSchemParams_);
             hl->addWidget(show);
             auto write = [this] {
+                wiredMechParams_->setVisible(wiredMechBox_->isChecked());
+                wiredSchemParams_->setVisible(wiredSchemBox_->isChecked());
                 if (syncing_) return;
                 LibraryPart* p = current();
                 if (!p) return;
@@ -1588,15 +1643,15 @@ void PartsLibraryDialog::buildUi() {
                 d.schematic = wiredSchemBox_->isChecked();
                 d.labelColor = wiredLabelColorBox_->isChecked();
                 d.labelSize = wiredLabelSizeBox_->isChecked();
-                d.labelLength = wiredLabelLengthBox_->isChecked();
+                d.schemLeadMm = wiredSchemLeadBox_->value();
                 setPartWiredDisplay(*p, d);
                 touched();
                 refreshWiredPreviews();
             };
-            for (QCheckBox* b : {wiredMechBox_, wiredSchemBox_, wiredLabelColorBox_, wiredLabelSizeBox_, wiredLabelLengthBox_})
+            for (QCheckBox* b : {wiredMechBox_, wiredSchemBox_, wiredLabelColorBox_, wiredLabelSizeBox_})
                 connect(b, &QCheckBox::toggled, this, write);
             connect(wiredSideBox_, &QComboBox::currentIndexChanged, this, write);
-            for (QDoubleSpinBox* s : {wiredStraightBox_, wiredPitchBox_, wiredLengthBox_})
+            for (QDoubleSpinBox* s : {wiredStraightBox_, wiredPitchBox_, wiredLengthBox_, wiredSchemLeadBox_})
                 connect(s, &QDoubleSpinBox::valueChanged, this, write);
         }
         auto* same = new QPushButton(QStringLiteral("Same as pin 1 for all"), group);
@@ -1640,10 +1695,62 @@ void PartsLibraryDialog::buildUi() {
         };
         auto reset = [sections] {
             for (QWidget* s : sections) {
+                if (s->property("folded").toBool()) continue;   // a folded section stays folded
                 s->setMinimumHeight(0);
                 s->setMaximumHeight(QWIDGETSIZE_MAX);
             }
         };
+        // FOLDED TO ITS TITLE by the arrow at its top right - and, as the Options say, remembered for the next
+        // time, always open, or always folded.
+        const QString foldMode = QSettings().value(QStringLiteral("partsLibrary/foldMode"),
+                                                   QStringLiteral("remember")).toString();
+        int f = 0;
+        for (QWidget* s : sections) {
+            auto* g = qobject_cast<QGroupBox*>(s);
+            const QString key = QStringLiteral("partsLibrary/folded/section%1").arg(f);
+            s->setObjectName(s->objectName().isEmpty() ? QStringLiteral("partSection%1").arg(f) : s->objectName());
+            ++f;
+            if (!g) continue;
+            auto* arrow = new QToolButton(g);
+            arrow->setObjectName(QStringLiteral("foldSection"));
+            arrow->setAutoRaise(true);
+            arrow->setArrowType(Qt::DownArrow);
+            arrow->setFixedSize(18, 16);
+            arrow->setFocusPolicy(Qt::NoFocus);
+            arrow->setToolTip(QStringLiteral("Fold this section to its title, or open it again"));
+            auto place = [g, arrow] { arrow->move(g->width() - arrow->width() - 4, 0); arrow->raise(); };
+            struct Follow : QObject {
+                std::function<void()> fn;
+                bool eventFilter(QObject*, QEvent* e) override {
+                    if (e->type() == QEvent::Resize || e->type() == QEvent::Show) fn();
+                    return false;
+                }
+            };
+            auto* follow = new Follow;
+            follow->setParent(g);
+            follow->fn = place;
+            g->installEventFilter(follow);
+            auto setFolded = [g, arrow](bool folded) {
+                g->setProperty("folded", folded);
+                arrow->setArrowType(folded ? Qt::RightArrow : Qt::DownArrow);
+                const int titleH = g->fontMetrics().height() + 10;
+                if (folded) {
+                    g->setMinimumHeight(titleH);
+                    g->setMaximumHeight(titleH);
+                } else {
+                    g->setMinimumHeight(0);
+                    g->setMaximumHeight(QWIDGETSIZE_MAX);
+                }
+            };
+            connect(arrow, &QToolButton::clicked, this, [g, setFolded, key, foldMode] {
+                const bool folded = !g->property("folded").toBool();
+                setFolded(folded);
+                if (foldMode == QLatin1String("remember")) QSettings().setValue(key, folded);
+            });
+            const bool startFolded = foldMode == QLatin1String("folded") ||
+                                     (foldMode == QLatin1String("remember") && QSettings().value(key, false).toBool());
+            setFolded(startFolded);
+        }
         int n = 0;
         for (QWidget* s : sections) {
             QWidget* grip = makeSectionGrip(s, right, freeze, reset);
@@ -1848,6 +1955,7 @@ void PartsLibraryDialog::showPart(const QString& id) {
     }
     showFanoutSide();
     refreshDatasheetRow();
+    applyNotApplicable();
     if (mechPreview_) {
         if (have && p) mechPreview_->setEntities(markedMechanicalDrawing(*p));
         else mechPreview_->setDrawing(QJsonArray());
@@ -1874,6 +1982,7 @@ void PartsLibraryDialog::showPart(const QString& id) {
 
 void PartsLibraryDialog::rebuildParamForm() {
     refreshContactRow();   // a different part, different contacts - or none, if it is not a connector
+    applyNotApplicable();   // after everything that turns a pane's buttons on
     if (!paramLay_) return;
     paramWidgets_.clear();
     // Clear the form: the parameters belong to the KIND, so they are rebuilt whenever it changes.
@@ -2657,7 +2766,7 @@ void PartsLibraryDialog::insertIntoDrawing(bool mechanical) {
     // it is wanted - and put down as one it stays one thing: picked in a click, moved in a piece, and
     // rebuilt everywhere on the sheet when the part's drawing is changed. Loose lines were none of that
     // the moment they landed.
-    std::vector<Entity> block = partBlockInstance(*p, mechanical, Vec2{0.0, 0.0});
+    std::vector<Entity> block = partBlockInstance(*p, mechanical, Vec2{0.0, 0.0}, QString(), true);
     // The contact fitted, stamped on every entity of the block: whichever of them the bill of materials
     // reads, it finds the same answer, and a block copied on the sheet carries its contact with it.
     if (!contactId.isEmpty())
@@ -2872,7 +2981,8 @@ void PartsLibraryDialog::refreshContactChoice() {
 void PartsLibraryDialog::refreshContactRow() {
     if (genSymbolBtn_) {
         const LibraryPart* part = current();
-        genSymbolBtn_->setEnabled(part && part->kind == PartKind::Connector);
+        genSymbolBtn_->setEnabled(part && part->kind == PartKind::Connector &&
+                                  !partDrawingNotApplicable(*part, QStringLiteral("schematic")));
     }
     refreshContactChoice();
     // And the pins it comes with, if it does: rebuilt from the part, because a form that remembers the last
@@ -2928,8 +3038,50 @@ void PartsLibraryDialog::rebuildWires() {
         wiredSchemBox_->setChecked(d.schematic);
         wiredLabelColorBox_->setChecked(d.labelColor);
         wiredLabelSizeBox_->setChecked(d.labelSize);
-        wiredLabelLengthBox_->setChecked(d.labelLength);
+        wiredSchemLeadBox_->setValue(d.schemLeadMm);
+        wiredMechParams_->setVisible(d.mechanical);
+        wiredSchemParams_->setVisible(d.schematic);
         syncing_ = was;
+    }
+}
+
+void PartsLibraryDialog::applyNotApplicable() {
+    const LibraryPart* p = current();
+    static const char* const kWhich[3] = {"mechanical", "schematic", "fanout"};
+    DrawingPreview* views[3] = {mechPreview_, schemPreview_, fanoutPreview_};
+    for (int i = 0; i < 3; ++i) {
+        QPushButton* na = naBtn_[i];
+        if (!na) continue;
+        const bool off = p && partDrawingNotApplicable(*p, QLatin1String(kWhich[i]));
+        {
+            const QSignalBlocker hush(na);
+            na->setChecked(off);
+        }
+        na->setEnabled(p != nullptr);
+        // The rest of the pane stands down with it: its buttons, and the drawing itself.
+        if (QWidget* btns = na->parentWidget())
+            for (QPushButton* b : btns->findChildren<QPushButton*>(QString(), Qt::FindDirectChildrenOnly))
+                if (b != na) b->setEnabled(!off);
+        if (DrawingPreview* v = views[i]) {
+            const bool wasOff = !v->isEnabled();
+            v->setEnabled(!off);
+            if (off) {
+                v->setEmptyText(QStringLiteral("N/A — not applicable to this part"));
+                v->setDrawing(QJsonArray());
+            } else if (wasOff && p) {
+                // Back in use: the pane shows the part's drawing again.
+                if (i == 0) {
+                    v->setEmptyText(QStringLiteral("no drawing yet"));
+                    if (p->hasMechanical()) v->setEntities(markedMechanicalDrawing(*p));
+                    else v->setDrawing(QJsonArray());
+                } else if (i == 1) {
+                    v->setEmptyText(QStringLiteral("no drawing yet"));
+                    v->setDrawing(withWiredWires(*p, false, partSchematicDrawing(*p)));
+                } else {
+                    showFanoutSide();
+                }
+            }
+        }
     }
 }
 
@@ -3517,10 +3669,10 @@ void PartsLibraryDialog::placeTicked() {
         std::vector<Entity> one;
         switch (kind) {
         case LibraryPartDrawing::Mechanical:
-            one = partBlockInstance(*p, /*mechanical=*/true, Vec2{0.0, 0.0});
+            one = partBlockInstance(*p, /*mechanical=*/true, Vec2{0.0, 0.0}, QString(), true);
             break;
         case LibraryPartDrawing::Schematic:
-            one = partBlockInstance(*p, /*mechanical=*/false, Vec2{0.0, 0.0});
+            one = partBlockInstance(*p, /*mechanical=*/false, Vec2{0.0, 0.0}, QString(), true);
             break;
         case LibraryPartDrawing::Fanout:
             if (!p->fanout.isEmpty())

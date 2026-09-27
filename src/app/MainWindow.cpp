@@ -3290,7 +3290,7 @@ void MainWindow::placeLibraryPart(const QString& partId, bool mechanical) {
     catalog.openRemembered();
     const LibraryPart* part = catalog.byId(partId);
     if (!part) return;
-    std::vector<Entity> block = partBlockInstance(*part, mechanical, Vec2{0.0, 0.0});
+    std::vector<Entity> block = partBlockInstance(*part, mechanical, Vec2{0.0, 0.0}, QString(), true);
     if (block.empty()) {
         statusBar()->showMessage(tr("%1 has no %2 drawing to place")
                                      .arg(part->title(), mechanical ? tr("mechanical")
@@ -7513,6 +7513,9 @@ void MainWindow::applyTheme(bool dark) {
         "QToolButton:checked{background:{SEL};border-color:#3d8bfd;}"
         "QToolButton:pressed{background:{HEADER};}"
         "QToolBar::separator{background:{LINE};width:1px;margin:4px 4px;}"
+        // THE BORDERS BETWEEN THE CANVAS AND THE PANELS either side of it, seen: a light line to drag.
+        "QMainWindow::separator{background:#c8ccd2;width:3px;height:3px;}"
+        "QMainWindow::separator:hover{background:#3d8bfd;}"
         "QDockWidget{color:{TEXT};titlebar-close-icon:none;titlebar-normal-icon:none;}"
         "QDockWidget::title{background:{HEADER};padding:5px 8px;border-bottom:1px solid {LINE};"
         "font-weight:bold;color:{TEXT};}"
@@ -8844,6 +8847,17 @@ void MainWindow::showOptions(const QString& page) {
         "Shift+click on a part's entry face while drawing a cable or heatshrink makes it this "
         "wide a share of the face, centred on it."));
     dwf->addRow(QStringLiteral("Cable/heatshrink scale"), cableScale);
+    // THE PARTS LIBRARY'S SECTIONS, folded: remembered for next time, or always opened, or always folded.
+    auto* foldMode = new QComboBox(drw);
+    foldMode->setObjectName(QStringLiteral("optPartsFoldMode"));
+    foldMode->addItem(QStringLiteral("Remember folded sections"), QStringLiteral("remember"));
+    foldMode->addItem(QStringLiteral("Always open"), QStringLiteral("open"));
+    foldMode->addItem(QStringLiteral("Always folded"), QStringLiteral("folded"));
+    foldMode->setCurrentIndex(std::max(0, foldMode->findData(QSettings().value(QStringLiteral("partsLibrary/foldMode"),
+                                                                               QStringLiteral("remember")))));
+    foldMode->setToolTip(QStringLiteral("What the parts library's sections do when it opens: as they were left, all "
+                                        "open, or all folded to their titles"));
+    dwf->addRow(QStringLiteral("Parts library sections"), foldMode);
     tabs->addTab(drw, QStringLiteral("Drawing"));
 
     // ===== Units =====
@@ -9003,6 +9017,7 @@ void MainWindow::showOptions(const QString& page) {
     editor_->setShowAngles(angles->isChecked());
     editor_->setFaceFanScale(fanScale->value());
     editor_->setFaceCableScale(cableScale->value());
+    QSettings().setValue(QStringLiteral("partsLibrary/foldMode"), foldMode->currentData().toString());
     EntityRenderer::setDimensionDecimals(dimDec->value());
     EntityRenderer::setLengthUnitInch(lenUnit->currentIndex() == 1);
     EntityRenderer::setDualUnits(dualUnits->isChecked());
@@ -15704,8 +15719,8 @@ void MainWindow::placeFromPartsPanel(const QString& partId, bool hasMech) {
         for (Entity& e : one) all.push_back(std::move(e));
         placed << name;
     };
-    if (ticked(0)) addOne(partBlockInstance(*part, /*mechanical=*/true, Vec2{0.0, 0.0}), tr("mechanical"));
-    if (ticked(1)) addOne(partBlockInstance(*part, /*mechanical=*/false, Vec2{0.0, 0.0}), tr("schematic"));
+    if (ticked(0)) addOne(partBlockInstance(*part, /*mechanical=*/true, Vec2{0.0, 0.0}, QString(), true), tr("mechanical"));
+    if (ticked(1)) addOne(partBlockInstance(*part, /*mechanical=*/false, Vec2{0.0, 0.0}, QString(), true), tr("schematic"));
     if (ticked(2)) {
         // Either side may be the one that was drawn, so each falls back to a mirror of the other: a part
         // whose back is the drawn side still puts a front down when a front is asked for.

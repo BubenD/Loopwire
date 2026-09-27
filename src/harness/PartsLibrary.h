@@ -466,6 +466,11 @@ struct PartPinWire {
                od.trimmed().isEmpty();
     }
 };
+// A DRAWING THAT DOES NOT APPLY to this part - a cable tie has no schematic symbol, a label no fanout - marked
+// so, rather than left looking like work not yet done. `which` is "mechanical", "schematic" or "fanout".
+bool partDrawingNotApplicable(const LibraryPart& part, const QString& which);
+void setPartDrawingNotApplicable(LibraryPart& part, const QString& which, bool na);
+
 bool partIsWired(const LibraryPart& part);
 void setPartWired(LibraryPart& part, bool on);
 // One per pin, 1..wayCount (or further, when wires were described for more pins than it now has), with
@@ -488,7 +493,7 @@ struct WiredDisplay {
     bool schematic = false;
     bool labelColor = true;
     bool labelSize = true;
-    bool labelLength = true;
+    double schemLeadMm = 30.0;   // how long each wire is drawn on the schematic
 };
 WiredDisplay partWiredDisplay(const LibraryPart& part);
 void setPartWiredDisplay(LibraryPart& part, const WiredDisplay& d);

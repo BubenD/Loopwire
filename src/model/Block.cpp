@@ -338,8 +338,11 @@ std::vector<Entity> blockInstanceEntities(const BlockDef& block, const Vec2& at,
 // ---- The library's drawings are blocks too -------------------------------------------------------
 
 std::vector<Entity> partBlockInstance(const LibraryPart& part, bool mechanical, const Vec2& at,
-                                      const QString& instanceKey) {
-    const QJsonArray drawing = mechanical ? part.mechanical : partSchematicDrawing(part);
+                                      const QString& instanceKey, bool withWires) {
+    // A wired connector placed by hand comes with its wires when it is set to show them; the harness builder
+    // asks without, since it draws the harness's own wires.
+    const QJsonArray bare = mechanical ? part.mechanical : partSchematicDrawing(part);
+    const QJsonArray drawing = withWires ? withWiredWires(part, mechanical, bare) : bare;
     if (drawing.isEmpty()) return {};
     // The same block libraryBlocks() offers, built here rather than searched for: a part's drawing IS
     // the block, and naming it the same way is what lets every copy already on a sheet be rebuilt when

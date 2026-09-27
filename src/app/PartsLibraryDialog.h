@@ -242,8 +242,13 @@ private:
     QCheckBox* wiredSchemBox_ = nullptr;
     QCheckBox* wiredLabelColorBox_ = nullptr;
     QCheckBox* wiredLabelSizeBox_ = nullptr;
-    QCheckBox* wiredLabelLengthBox_ = nullptr;
+    QDoubleSpinBox* wiredSchemLeadBox_ = nullptr;
+    QWidget* wiredMechParams_ = nullptr;    // shown only while the mechanical tick is on
+    QWidget* wiredSchemParams_ = nullptr;   // and these only while the schematic one is
     void refreshWiredPreviews();
+    // N/A on a drawing pane: that drawing does not apply to the part, and the pane stands down.
+    QPushButton* naBtn_[3] = {nullptr, nullptr, nullptr};   // mechanical, schematic, fanout
+    void applyNotApplicable();
 public:
     // The picked cells of the wire table to the clipboard, and the clipboard into them (Ctrl+C / Ctrl+V).
     void copyWireCells();

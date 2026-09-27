@@ -240,6 +240,15 @@ void setPartIncludesPins(LibraryPart& part, bool on) {
 
 // ---- A connector that comes with its wires ------------------------------------------------------
 
+bool partDrawingNotApplicable(const LibraryPart& part, const QString& which) {
+    return part.value(QStringLiteral("na_") + which) == QStringLiteral("1");
+}
+
+void setPartDrawingNotApplicable(LibraryPart& part, const QString& which, bool na) {
+    if (na) part.params.insert(QStringLiteral("na_") + which, QStringLiteral("1"));
+    else part.params.remove(QStringLiteral("na_") + which);
+}
+
 bool partIsWired(const LibraryPart& part) {
     const QString v = part.value(QStringLiteral("wired"));
     return v == QStringLiteral("1") || v.compare(QStringLiteral("yes"), Qt::CaseInsensitive) == 0 ||
@@ -335,7 +344,7 @@ WiredDisplay partWiredDisplay(const LibraryPart& part) {
     d.schematic = flag("wiredShowSchem", false);
     d.labelColor = flag("wiredLabelColor", true);
     d.labelSize = flag("wiredLabelSize", true);
-    d.labelLength = flag("wiredLabelLength", true);
+    d.schemLeadMm = num("wiredSchemLead", d.schemLeadMm);
     return d;
 }
 
@@ -349,7 +358,7 @@ void setPartWiredDisplay(LibraryPart& part, const WiredDisplay& d) {
     flag("wiredShowSchem", d.schematic);
     flag("wiredLabelColor", d.labelColor);
     flag("wiredLabelSize", d.labelSize);
-    flag("wiredLabelLength", d.labelLength);
+    part.params.insert(QStringLiteral("wiredSchemLead"), QString::number(d.schemLeadMm));
 }
 
 QString leadColorHex(const QString& name) {
@@ -418,7 +427,7 @@ QJsonArray withWiredWires(const LibraryPart& part, bool mechanical, const QJsonA
         const ConnectorSpec spec = connectorSpecFromMeta(e.meta);
         const ConnectorGeometry g = connectorGeometry(e.a, spec);
         const double pitch = spec.pitch > 0.0 ? spec.pitch : 2.54;
-        const double lead = std::max(20.0, 10.0 * pitch);
+        const double lead = d.schemLeadMm > 0.0 ? d.schemLeadMm : std::max(20.0, 10.0 * pitch);
         const double textH = std::max(1.0, pitch * 0.45);
         for (size_t k = 0; k < g.pinEnd.size() && k < g.pinTip.size(); ++k) {
             const int pin = static_cast<int>(k) + 1;
@@ -440,7 +449,6 @@ QJsonArray withWiredWires(const LibraryPart& part, bool mechanical, const QJsonA
             if (d.labelSize && !wire.size.trimmed().isEmpty())
                 said << wire.size.trimmed() + (wire.unit == QStringLiteral("mm2") ? QStringLiteral(" mm²")
                                                                                    : QStringLiteral(" AWG"));
-            if (d.labelLength && d.lengthMm > 0.0) said << QStringLiteral("%1 mm").arg(d.lengthMm, 0, 'g', 6);
             if (said.isEmpty()) continue;
             // Above the lead, in the middle of it, reading left to right whichever way the pin points.
             Vec2 up = dir.perp();

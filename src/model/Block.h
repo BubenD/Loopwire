@@ -127,8 +127,10 @@ int recoverEntryFaces(std::vector<Entity>& ents, const PartsCatalog& catalog);
 // One copy of a library part's drawing, stamped as a block copy: what goes on the sheet when a part is
 // inserted, or when the harness builder puts one down. The block is the part - the same name
 // libraryBlocks() gives it - so editing the part's drawing rebuilds every copy already placed.
+// `withWires`: a wired connector comes with its wires on (see withWiredWires) - what a placement by hand
+// wants, and not what the harness builder wants, since it draws the harness's own.
 std::vector<Entity> partBlockInstance(const LibraryPart& part, bool mechanical, const Vec2& at,
-                                      const QString& instanceKey = QString());
+                                      const QString& instanceKey = QString(), bool withWires = false);
 
 // The same, for a drawing of the part that is neither of those two - the fanout. `what` names it, so the
 // block is "X (fanout)" and every copy of it can be rebuilt when the part's drawing changes, exactly as the
