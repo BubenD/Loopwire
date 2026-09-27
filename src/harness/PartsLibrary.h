@@ -441,6 +441,7 @@ struct PartPinType {
     QString gauge;   // the conductor it takes, in that unit
     QString amps;    // its current rating, if the datasheet gives one
     QString pins;    // which pins are this type: "1-3", "1,2,5", empty = all of them
+    QString gender;  // "male" (pins) or "female" (sockets); empty = not said
 };
 
 // Whether this connector comes with its pins fitted. With them fitted there is no contact to order, so the

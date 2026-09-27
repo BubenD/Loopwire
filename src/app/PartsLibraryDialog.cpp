@@ -37,6 +37,8 @@
 #include <QGroupBox>
 #include <QHeaderView>
 #include <QTableWidget>
+#include <QStyledItemDelegate>
+#include <QScrollBar>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
@@ -514,6 +516,60 @@ void PartsLibraryDialog::refreshLibraryChooser() {
     syncing_ = false;
 }
 
+namespace {
+// THE WIRE TABLE'S EDITORS: a menu to pick from (and type over) for the colour and the insulation, AWG or
+// mm² for the unit, and a plain field for the figures.
+class WireCellDelegate : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+    QWidget* createEditor(QWidget* parent, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
+        switch (index.column()) {
+        case 1:
+        case 4: {
+            auto* c = new QComboBox(parent);
+            c->setEditable(true);
+            c->addItem(QString());
+            c->addItems(index.column() == 1 ? wireColorChoices() : wireInsulationChoices());
+            return c;
+        }
+        case 3: {
+            auto* c = new QComboBox(parent);
+            c->addItem(QStringLiteral("AWG"), QStringLiteral("AWG"));
+            c->addItem(QStringLiteral("mm²"), QStringLiteral("mm2"));
+            return c;
+        }
+        default: {
+            auto* e = new QLineEdit(parent);
+            e->setPlaceholderText(index.column() == 2 ? QStringLiteral("24") : QStringLiteral("1.2"));
+            return e;
+        }
+        }
+        (void)option;
+    }
+    void setEditorData(QWidget* editor, const QModelIndex& index) const override {
+        const QString now = index.data(Qt::DisplayRole).toString();
+        if (auto* c = qobject_cast<QComboBox*>(editor)) {
+            if (index.column() == 3) c->setCurrentIndex(index.data(Qt::UserRole).toString() == QStringLiteral("mm2") ? 1 : 0);
+            else c->setCurrentText(now);
+        } else if (auto* e = qobject_cast<QLineEdit*>(editor)) {
+            e->setText(now);
+        }
+    }
+    void setModelData(QWidget* editor, QAbstractItemModel* model, const QModelIndex& index) const override {
+        if (auto* c = qobject_cast<QComboBox*>(editor)) {
+            if (index.column() == 3) {
+                model->setData(index, c->currentData(), Qt::UserRole);
+                model->setData(index, c->currentText(), Qt::DisplayRole);
+            } else {
+                model->setData(index, c->currentText(), Qt::DisplayRole);
+            }
+        } else if (auto* e = qobject_cast<QLineEdit*>(editor)) {
+            model->setData(index, e->text(), Qt::DisplayRole);
+        }
+    }
+};
+} // namespace
+
 QSize PartsLibraryDialog::holdCaptions() {
     // NOTHING MAY BE SQUEEZED SMALLER THAN ITS CAPTIONS. Every button with words on it is held at the
     // width its words need, so the layouts' own minimum is the width at which every caption reads - and
@@ -536,6 +592,13 @@ QSize PartsLibraryDialog::holdCaptions() {
     };
     holdForEither(showConnBtn_, QStringLiteral("Connection points shown"), QStringLiteral("Connection points hidden"));
     holdForEither(fanoutMirrorBtn_, QStringLiteral("Mirror the front"), QStringLiteral("Mirror the back"));
+    // The part's column scrolls up and down - its sections can be pulled taller than the window - but
+    // never sideways: it is as wide as its widest row of captions, so none of them is ever cut.
+    if (auto* sc = findChild<QScrollArea*>(QStringLiteral("partPaneScroll")); sc && sc->widget()) {
+        sc->widget()->ensurePolished();
+        if (sc->widget()->layout()) sc->widget()->layout()->activate();
+        sc->setMinimumWidth(sc->widget()->minimumSizeHint().width() + sc->verticalScrollBar()->sizeHint().width() + 2);
+    }
     // The three drawing panes share one floor - the widest of their button rows - so they open, and stay,
     // the same width: one pane with a longer caption is not a reason for it to be the bigger one.
     for (QSplitter* sp : findChildren<QSplitter*>()) {
@@ -1409,7 +1472,12 @@ void PartsLibraryDialog::buildUi() {
                 rebuildWires();
             }
         });
-        wl->addWidget(wiredBox_);
+        // The tick and "same for all" on one line: the button is about the table the tick opens.
+        auto* tickRow = new QHBoxLayout;
+        tickRow->setContentsMargins(0, 0, 0, 0);
+        tickRow->addWidget(wiredBox_);
+        tickRow->addStretch(1);
+        wl->addLayout(tickRow);
         wiresHost_ = new QWidget(group);
         auto* hl = new QVBoxLayout(wiresHost_);
         hl->setContentsMargins(0, 0, 0, 0);
@@ -1421,8 +1489,33 @@ void PartsLibraryDialog::buildUi() {
         wiresTable_->verticalHeader()->setVisible(false);
         wiresTable_->horizontalHeader()->setStretchLastSection(true);
         wiresTable_->setMinimumHeight(160);
+        // LIKE A SPREADSHEET: cells picked by dragging (the table scrolls when the drag reaches its edge) or
+        // with Ctrl, and a value given to one of them is given to every picked cell of its column - which is
+        // how a lead with twenty wires of one kind is filled in with one entry.
+        wiresTable_->setSelectionMode(QAbstractItemView::ExtendedSelection);
+        wiresTable_->setSelectionBehavior(QAbstractItemView::SelectItems);
+        wiresTable_->setAutoScroll(true);
+        wiresTable_->setAutoScrollMargin(24);
+        wiresTable_->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed |
+                                     QAbstractItemView::AnyKeyPressed | QAbstractItemView::SelectedClicked);
+        wiresTable_->setItemDelegate(new WireCellDelegate(wiresTable_));
+        connect(wiresTable_, &QTableWidget::itemChanged, this, [this](QTableWidgetItem* item) {
+            if (syncing_ || !item || item->column() == 0) return;
+            // Given to every other picked cell of the same column.
+            const QString text = item->text();
+            const QVariant data = item->data(Qt::UserRole);
+            {
+                const QSignalBlocker hush(wiresTable_);
+                for (QTableWidgetItem* other : wiresTable_->selectedItems()) {
+                    if (other == item || other->column() != item->column()) continue;
+                    other->setText(text);
+                    other->setData(Qt::UserRole, data);
+                }
+            }
+            writeWires();
+        });
         hl->addWidget(wiresTable_);
-        auto* same = new QPushButton(QStringLiteral("Same as pin 1 for all"), wiresHost_);
+        auto* same = new QPushButton(QStringLiteral("Same as pin 1 for all"), group);
         same->setObjectName(QStringLiteral("wiresSameAll"));
         same->setToolTip(QStringLiteral("Every pin's wire the same size, unit, insulation and diameter as pin 1's "
                                         "(colours are left as they are)"));
@@ -1442,13 +1535,46 @@ void PartsLibraryDialog::buildUi() {
             touched();
             rebuildWires();
         });
-        hl->addWidget(same, 0, Qt::AlignLeft);
+        wiresSameBtn_ = same;
+        tickRow->addWidget(same);
         wl->addWidget(wiresHost_);
         rv->addWidget(group);
     }
 
     rv->addWidget(draw, 2);
-    split->addWidget(right);
+    // THE SECTIONS PULLED TALLER OR SHORTER by the grip under each: the one dragged changes, and everything
+    // after it is pushed down or pulled up (the column scrolls when it outgrows the window). The first drag
+    // fixes every section at the height it has, so the rest keep theirs; a double-click lets them all size
+    // themselves again.
+    {
+        std::vector<QWidget*> sections;
+        for (int i = 0; i < rv->count(); ++i)
+            if (QWidget* w = rv->itemAt(i)->widget()) sections.push_back(w);
+        auto freeze = [sections] {
+            for (QWidget* s : sections)
+                if (s->isVisible()) s->setFixedHeight(s->height());
+        };
+        auto reset = [sections] {
+            for (QWidget* s : sections) {
+                s->setMinimumHeight(0);
+                s->setMaximumHeight(QWIDGETSIZE_MAX);
+            }
+        };
+        int n = 0;
+        for (QWidget* s : sections) {
+            QWidget* grip = makeSectionGrip(s, right, freeze, reset);
+            grip->setObjectName(QStringLiteral("partSectionGrip%1").arg(n++));
+            rv->insertWidget(rv->indexOf(s) + 1, grip);
+        }
+        rv->addStretch(0);   // where the space goes once every section has a height of its own
+    }
+    auto* paneScroll = new QScrollArea(split);
+    paneScroll->setObjectName(QStringLiteral("partPaneScroll"));
+    paneScroll->setWidgetResizable(true);
+    paneScroll->setFrameShape(QFrame::NoFrame);
+    paneScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    paneScroll->setWidget(right);
+    split->addWidget(paneScroll);
     split->setStretchFactor(0, 1);
     split->setStretchFactor(1, 2);
 
@@ -2671,58 +2797,46 @@ void PartsLibraryDialog::rebuildWires() {
         wiredBox_->setChecked(wired);
     }
     wiresHost_->setVisible(wired);
+    if (wiresSameBtn_) wiresSameBtn_->setVisible(wired);
     const QSignalBlocker hush(wiresTable_);
     wiresTable_->setRowCount(0);
     if (!wired) return;
     const std::vector<PartPinWire> wires = partPinWires(*p);
     wiresTable_->setRowCount(static_cast<int>(wires.size()));
-    auto combo = [this](const QStringList& choices, const QString& now) {
-        auto* c = new QComboBox(wiresTable_);
-        c->setEditable(true);
-        c->addItem(QString());
-        c->addItems(choices);
-        c->setCurrentText(now);
-        connect(c, &QComboBox::currentTextChanged, this, [this](const QString&) { writeWires(); });
-        return c;
-    };
-    auto line = [this](const QString& now, const QString& hint) {
-        auto* e = new QLineEdit(now, wiresTable_);
-        e->setPlaceholderText(hint);
-        connect(e, &QLineEdit::editingFinished, this, [this] { writeWires(); });
-        return e;
-    };
     for (int r = 0; r < static_cast<int>(wires.size()); ++r) {
         const PartPinWire& w = wires[static_cast<size_t>(r)];
         auto* pin = new QTableWidgetItem(QString::number(w.pin));
-        pin->setFlags(Qt::ItemIsEnabled);
+        pin->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
         pin->setTextAlignment(Qt::AlignCenter);
         wiresTable_->setItem(r, 0, pin);
-        wiresTable_->setCellWidget(r, 1, combo(wireColorChoices(), w.color));
-        wiresTable_->setCellWidget(r, 2, line(w.size, QStringLiteral("24")));
-        auto* unit = new QComboBox(wiresTable_);
-        unit->addItem(QStringLiteral("AWG"), QStringLiteral("AWG"));
-        unit->addItem(QStringLiteral("mm²"), QStringLiteral("mm2"));
-        unit->setCurrentIndex(w.unit == QStringLiteral("mm2") ? 1 : 0);
-        connect(unit, &QComboBox::currentIndexChanged, this, [this](int) { writeWires(); });
-        wiresTable_->setCellWidget(r, 3, unit);
-        wiresTable_->setCellWidget(r, 4, combo(wireInsulationChoices(), w.insulation));
-        wiresTable_->setCellWidget(r, 5, line(w.od, QStringLiteral("1.2")));
+        wiresTable_->setItem(r, 1, new QTableWidgetItem(w.color));
+        wiresTable_->setItem(r, 2, new QTableWidgetItem(w.size));
+        auto* unit = new QTableWidgetItem(w.unit == QStringLiteral("mm2") ? QStringLiteral("mm²") : QStringLiteral("AWG"));
+        unit->setData(Qt::UserRole, w.unit == QStringLiteral("mm2") ? QStringLiteral("mm2") : QStringLiteral("AWG"));
+        wiresTable_->setItem(r, 3, unit);
+        wiresTable_->setItem(r, 4, new QTableWidgetItem(w.insulation));
+        wiresTable_->setItem(r, 5, new QTableWidgetItem(w.od));
     }
     wiresTable_->resizeColumnsToContents();
+    wiresTable_->setColumnWidth(1, std::max(wiresTable_->columnWidth(1), 110));
+    wiresTable_->setColumnWidth(4, std::max(wiresTable_->columnWidth(4), 100));
 }
 
 void PartsLibraryDialog::writeWires() {
     LibraryPart* p = current();
     if (!p || !wiresTable_ || syncing_) return;
     std::vector<PartPinWire> wires;
+    auto text = [this](int r, int c) { return wiresTable_->item(r, c) ? wiresTable_->item(r, c)->text() : QString(); };
     for (int r = 0; r < wiresTable_->rowCount(); ++r) {
         PartPinWire w;
         w.pin = wiresTable_->item(r, 0) ? wiresTable_->item(r, 0)->text().toInt() : r + 1;
-        if (auto* c = qobject_cast<QComboBox*>(wiresTable_->cellWidget(r, 1))) w.color = c->currentText();
-        if (auto* e = qobject_cast<QLineEdit*>(wiresTable_->cellWidget(r, 2))) w.size = e->text();
-        if (auto* c = qobject_cast<QComboBox*>(wiresTable_->cellWidget(r, 3))) w.unit = c->currentData().toString();
-        if (auto* c = qobject_cast<QComboBox*>(wiresTable_->cellWidget(r, 4))) w.insulation = c->currentText();
-        if (auto* e = qobject_cast<QLineEdit*>(wiresTable_->cellWidget(r, 5))) w.od = e->text();
+        w.color = text(r, 1);
+        w.size = text(r, 2);
+        const QTableWidgetItem* unit = wiresTable_->item(r, 3);
+        w.unit = unit && (unit->data(Qt::UserRole).toString() == QStringLiteral("mm2") || unit->text().startsWith(QStringLiteral("mm")))
+                     ? QStringLiteral("mm2") : QStringLiteral("AWG");
+        w.insulation = text(r, 4);
+        w.od = text(r, 5);
         wires.push_back(w);
     }
     setPartPinWires(*p, wires);
@@ -3072,7 +3186,7 @@ void PartsLibraryDialog::rebuildPinTypes() {
         // a datasheet calls it is its CROSS SECTION - and the unit box needs no heading at all, because it
         // says AWG or mm2 on its own face. "Current (A" was a heading cut in half by a column too narrow for
         // it, which is worse than no heading.
-        const Col cols[] = {{"Pin size", 70, 0},
+        const Col cols[] = {{"Gender", 76, 0},
                             {"Cross section", 90, 0},
                             {"", 62, 0},
                             {"Current (A)", 70, 0},
@@ -3109,13 +3223,19 @@ void PartsLibraryDialog::rebuildPinTypes() {
             if (schemPreview_ && !cp->hasSchematic())
                 schemPreview_->setDrawing(partSchematicDrawing(*cp));
         };
-        auto* size = new QLineEdit(types[row].size, host);
-        size->setPlaceholderText(QStringLiteral("size"));
-        size->setFixedWidth(70);
-        size->setToolTip(QStringLiteral("What the maker calls this pin - \"16\", \"20\", \"6.3 mm blade\""));
-        connect(size, &QLineEdit::textEdited, this,
-                [write](const QString& t) { write([t](PartPinType& x) { x.size = t; }); });
-        hl->addWidget(size);
+        // MALE OR FEMALE: pins or sockets - what a mating connector has to be the other of.
+        auto* gender = new QComboBox(host);
+        gender->addItem(QString(), QString());
+        gender->addItem(QStringLiteral("Male"), QStringLiteral("male"));
+        gender->addItem(QStringLiteral("Female"), QStringLiteral("female"));
+        gender->setCurrentIndex(std::max(0, gender->findData(types[row].gender.toLower())));
+        gender->setFixedWidth(76);
+        gender->setToolTip(QStringLiteral("Male (pins) or female (sockets)"));
+        connect(gender, &QComboBox::currentIndexChanged, this, [write, gender](int) {
+            const QString g = gender->currentData().toString();
+            write([g](PartPinType& x) { x.gender = g; });
+        });
+        hl->addWidget(gender);
         auto* gauge = new QLineEdit(types[row].gauge, host);
         // A RANGE IS A REAL ANSWER. A pin takes a range of conductors, not one: a size 20 contact is
         // crimped onto anything from 24 to 20 AWG, and a datasheet states it that way. Written as "20-16"
@@ -3138,15 +3258,14 @@ void PartsLibraryDialog::rebuildPinTypes() {
                 [write](const QString& t) { write([t](PartPinType& x) { x.unit = t; }); });
         hl->addWidget(unit);
         auto* amps = new QLineEdit(types[row].amps, host);
-        amps->setPlaceholderText(QStringLiteral("A"));
+        amps->setPlaceholderText(QStringLiteral("1"));
         amps->setFixedWidth(70);   // as wide as its own heading, which was being cut in half
         amps->setToolTip(QStringLiteral("What it is rated to carry, if the datasheet says"));
         connect(amps, &QLineEdit::textEdited, this,
                 [write](const QString& t) { write([t](PartPinType& x) { x.amps = t; }); });
         hl->addWidget(amps);
         auto* pins = new QLineEdit(types[row].pins, host);
-        pins->setPlaceholderText(ways > 0 ? QStringLiteral("pins (1-%1)").arg(ways)
-                                         : QStringLiteral("pins"));
+        pins->setPlaceholderText(ways > 0 ? QStringLiteral("1-%1").arg(ways) : QStringLiteral("1"));
         pins->setToolTip(QStringLiteral(
             "Which pins are this type - \"1-3\", \"1,2,5\". Left empty it means all of them, which is right "
             "for a connector with one size in it and wrong for one with two."));

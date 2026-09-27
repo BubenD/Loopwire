@@ -231,6 +231,7 @@ private:
     QCheckBox* wiredBox_ = nullptr;
     QWidget* wiresHost_ = nullptr;
     QTableWidget* wiresTable_ = nullptr;
+    QPushButton* wiresSameBtn_ = nullptr;
     void rebuildWires();
     void writeWires();
     std::vector<QAction*> placeWhat_;

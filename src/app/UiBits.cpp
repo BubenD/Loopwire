@@ -14,6 +14,8 @@
 #include <QJsonObject>
 #include <QLineEdit>
 #include <QMenu>
+#include <QMouseEvent>
+#include <QLayout>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
@@ -27,6 +29,68 @@
 #include <algorithm>
 
 namespace Edraw_Desktop {
+
+namespace {
+class SectionGripWidget : public QWidget {
+public:
+    SectionGripWidget(QWidget* section, QWidget* parent, std::function<void()> onPress, std::function<void()> onReset)
+        : QWidget(parent), section_(section), onPress_(std::move(onPress)), onReset_(std::move(onReset)) {
+        setFixedHeight(8);
+        setCursor(Qt::SizeVerCursor);
+        setToolTip(QStringLiteral("Drag to make the section above taller or shorter - the rest move with it. "
+                                  "Double-click to let every section size itself again."));
+        setVisible(section->isVisibleTo(section->parentWidget()));
+        section->installEventFilter(this);
+    }
+
+protected:
+    bool eventFilter(QObject* o, QEvent* e) override {
+        if (o == section_ && (e->type() == QEvent::Show || e->type() == QEvent::Hide))
+            setVisible(e->type() == QEvent::Show);
+        return false;
+    }
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);
+        p.setPen(QColor(0x7a, 0x84, 0x90));
+        const int c = width() / 2;
+        p.drawLine(c - 16, 3, c + 16, 3);
+        p.drawLine(c - 16, 5, c + 16, 5);
+    }
+    void mousePressEvent(QMouseEvent* e) override {
+        if (onPress_) onPress_();
+        from_ = e->globalPosition().y();
+        start_ = section_->height();
+    }
+    void mouseMoveEvent(QMouseEvent* e) override {
+        if (!(e->buttons() & Qt::LeftButton)) return;
+        const int want = std::max(section_->minimumSizeHint().height() > 0 ? 40 : 20,
+                                  int(start_ + e->globalPosition().y() - from_));
+        section_->setFixedHeight(want);
+        if (QWidget* column = parentWidget()) {
+            if (column->layout()) {
+                column->layout()->invalidate();
+                column->layout()->activate();
+            }
+            column->updateGeometry();
+            column->adjustSize();
+        }
+    }
+    void mouseDoubleClickEvent(QMouseEvent*) override {
+        if (onReset_) onReset_();
+    }
+
+private:
+    QWidget* section_;
+    std::function<void()> onPress_, onReset_;
+    double from_ = 0.0;
+    int start_ = 0;
+};
+} // namespace
+
+QWidget* makeSectionGrip(QWidget* section, QWidget* parent, std::function<void()> onPress,
+                         std::function<void()> onReset) {
+    return new SectionGripWidget(section, parent, std::move(onPress), std::move(onReset));
+}
 
 namespace {
 

@@ -330,6 +330,7 @@ std::vector<PartPinType> partPinTypes(const LibraryPart& part) {
         t.gauge = o.value(QStringLiteral("gauge")).toString();
         t.amps = o.value(QStringLiteral("amps")).toString();
         t.pins = o.value(QStringLiteral("pins")).toString();
+        t.gender = o.value(QStringLiteral("gender")).toString();
         out.push_back(t);
     }
     return out;
@@ -339,7 +340,8 @@ void setPartPinTypes(LibraryPart& part, const std::vector<PartPinType>& types) {
     QJsonArray arr;
     for (const PartPinType& t : types) {
         // A row with nothing in it is not a pin type, it is a row somebody started and left.
-        if (t.size.trimmed().isEmpty() && t.gauge.trimmed().isEmpty() && t.amps.trimmed().isEmpty())
+        if (t.size.trimmed().isEmpty() && t.gauge.trimmed().isEmpty() && t.amps.trimmed().isEmpty() &&
+            t.gender.trimmed().isEmpty())
             continue;
         QJsonObject o;
         o.insert(QStringLiteral("size"), t.size.trimmed());
@@ -352,6 +354,7 @@ void setPartPinTypes(LibraryPart& part, const std::vector<PartPinType>& types) {
         o.insert(QStringLiteral("gauge"), gauge);
         if (!t.amps.trimmed().isEmpty()) o.insert(QStringLiteral("amps"), t.amps.trimmed());
         if (!t.pins.trimmed().isEmpty()) o.insert(QStringLiteral("pins"), t.pins.trimmed());
+        if (!t.gender.trimmed().isEmpty()) o.insert(QStringLiteral("gender"), t.gender.trimmed());
         arr.append(o);
     }
     if (arr.isEmpty()) part.params.remove(QStringLiteral("pinTypes"));

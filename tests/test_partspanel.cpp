@@ -10,6 +10,7 @@
 #include <QLayout>
 #include <QAbstractButton>
 #include <QGroupBox>
+#include <QMouseEvent>
 #include <QTableWidget>
 #include <QCheckBox>
 #include "app/MainWindow.h"
@@ -1798,8 +1799,10 @@ int run_partspanel_tests() {
             // And a row appears to describe the pins, with a way to add a second type.
             int fields = 0;
             for (QLineEdit* le : dlg.findChildren<QLineEdit*>())
-                if (le->isVisible() && (le->placeholderText() == QStringLiteral("size") ||
-                                        le->placeholderText().contains(QStringLiteral("20-16"))))
+                if (le->isVisible() && le->placeholderText().contains(QStringLiteral("20-16"))) ++fields;
+            // The pin's gender: male or female, from a menu.
+            for (QComboBox* g : dlg.findChildren<QComboBox*>())
+                if (g->isVisible() && g->findData(QStringLiteral("male")) >= 0 && g->findData(QStringLiteral("female")) >= 0)
                     ++fields;
             QPushButton* another = nullptr;
             for (QPushButton* b : dlg.findChildren<QPushButton*>())
@@ -2040,7 +2043,7 @@ int run_partspanel_tests() {
         std::printf("  pin heads: %s\n", qPrintable(said.join(QStringLiteral(" | "))));
         // In the words a datasheet uses: what the column holds is the pin's CROSS SECTION, and the unit box
         // needs no heading because it says AWG or mm2 on its own face.
-        check(heads.contains(QStringLiteral("Pin size")) &&
+        check(heads.contains(QStringLiteral("Gender")) &&
                   heads.contains(QStringLiteral("Cross section")) &&
                   heads.contains(QStringLiteral("Current (A)")) &&
                   heads.contains(QStringLiteral("Pins")),
@@ -2442,20 +2445,29 @@ int run_partspanel_tests() {
             QApplication::processEvents();
             check(table->isVisibleTo(&dlg) && table->rowCount() == 4,
                   "wired: ticked, the wires open - a row for each of its four pins");
-            auto* colour = qobject_cast<QComboBox*>(table->cellWidget(1, 1));
-            auto* size = qobject_cast<QLineEdit*>(table->cellWidget(1, 2));
-            auto* unit = qobject_cast<QComboBox*>(table->cellWidget(1, 3));
-            auto* insulation = qobject_cast<QComboBox*>(table->cellWidget(1, 4));
-            auto* od = qobject_cast<QLineEdit*>(table->cellWidget(1, 5));
-            check(colour && size && unit && insulation && od, "wired: colour, size, unit, insulation, diameter");
-            if (colour && size && unit && insulation && od) {
-                colour->setCurrentText(QStringLiteral("Red"));
-                size->setText(QStringLiteral("0.5"));
-                emit size->editingFinished();
-                unit->setCurrentIndex(unit->findData(QStringLiteral("mm2")));
-                insulation->setCurrentText(QStringLiteral("PTFE"));
-                od->setText(QStringLiteral("1.3"));
-                emit od->editingFinished();
+            // The "same for all" button sits on the tick's own line.
+            auto* same = dlg.findChild<QPushButton*>(QStringLiteral("wiresSameAll"));
+            check(same && same->isVisibleTo(&dlg) && std::abs(same->mapTo(&dlg, QPoint(0, 0)).y() -
+                                                              wired->mapTo(&dlg, QPoint(0, 0)).y()) < 12,
+                  "wired: \"Same as pin 1 for all\" is on the line with the tick");
+            check(table->columnCount() == 6 && table->item(1, 1) && table->item(1, 5),
+                  "wired: colour, size, unit, insulation, diameter");
+            if (table->item(1, 1) && table->item(3, 1)) {
+                // LIKE A SPREADSHEET: pins 2 to 4 picked, and a colour given to one of them goes to all three.
+                table->clearSelection();
+                table->setRangeSelected(QTableWidgetSelectionRange(1, 1, 3, 1), true);
+                table->item(1, 1)->setText(QStringLiteral("Red"));
+                QApplication::processEvents();
+                check(table->item(2, 1)->text() == QStringLiteral("Red") && table->item(3, 1)->text() == QStringLiteral("Red") &&
+                          table->item(0, 1)->text().isEmpty(),
+                      "wired: a value given to one picked cell goes to every picked cell of its column");
+                table->clearSelection();
+                table->item(1, 2)->setText(QStringLiteral("0.5"));
+                table->item(1, 3)->setData(Qt::UserRole, QStringLiteral("mm2"));
+                table->item(1, 3)->setText(QStringLiteral("mm²"));
+                table->item(1, 4)->setText(QStringLiteral("PTFE"));
+                table->item(1, 5)->setText(QStringLiteral("1.3"));
+                QApplication::processEvents();
             }
             check(dlg.saveLibrary(), "wired: the part saves");
             PartsLibrary again;
@@ -2470,12 +2482,42 @@ int run_partspanel_tests() {
                                 qPrintable(w.unit), qPrintable(w.insulation), qPrintable(w.od));
                     check(w.pin == 2 && w.color == QStringLiteral("Red") && w.size == QStringLiteral("0.5") &&
                               w.unit == QStringLiteral("mm2") && w.insulation == QStringLiteral("PTFE") &&
-                              w.od == QStringLiteral("1.3") && wires[0].empty(),
-                          "wired: pin 2's wire is what was entered, and the others are left blank");
+                              w.od == QStringLiteral("1.3") && wires[0].empty() &&
+                              wires[3].color == QStringLiteral("Red"),
+                          "wired: pin 2's wire is what was entered, pin 4 got the shared colour, pin 1 is blank");
                 }
             } else {
                 check(false, "wired: the part is in the library");
             }
+            // THE SECTIONS ARE PULLED TALLER BY THE GRIP UNDER EACH, and what comes after moves with it.
+            {
+                QWidget* grip = nullptr;
+                for (QWidget* g : dlg.findChildren<QWidget*>())
+                    if (g->objectName().startsWith(QStringLiteral("partSectionGrip")) && g->isVisibleTo(&dlg) &&
+                        g->mapTo(&dlg, QPoint(0, 0)).y() > group->mapTo(&dlg, QPoint(0, 0)).y() &&
+                        (!grip || g->mapTo(&dlg, QPoint(0, 0)).y() < grip->mapTo(&dlg, QPoint(0, 0)).y()))
+                        grip = g;   // the one just under the Wires section
+                QWidget* after = nullptr;
+                for (QGroupBox* b : dlg.findChildren<QGroupBox*>())
+                    if (b->title() == QStringLiteral("Drawings")) after = b;
+                check(grip && after, "sections: a grip under the Wires section, and a section after it");
+                if (grip && after) {
+                    const int wasAt = after->mapTo(&dlg, QPoint(0, 0)).y();
+                    const QPointF g(grip->width() / 2.0, 3.0);
+                    QMouseEvent press(QEvent::MouseButtonPress, g, grip->mapToGlobal(g), Qt::LeftButton, Qt::LeftButton,
+                                      Qt::NoModifier);
+                    QApplication::sendEvent(grip, &press);
+                    const QPointF to = g + QPointF(0, 60);
+                    QMouseEvent move(QEvent::MouseMove, to, grip->mapToGlobal(to), Qt::NoButton, Qt::LeftButton,
+                                     Qt::NoModifier);
+                    QApplication::sendEvent(grip, &move);
+                    QApplication::processEvents();
+                    const int nowAt = after->mapTo(&dlg, QPoint(0, 0)).y();
+                    std::printf("  sections: pulled 60 taller, the next moved %d\n", nowAt - wasAt);
+                    check(std::abs(nowAt - wasAt - 60) <= 2, "sections: pulled taller, the rest are pushed down");
+                }
+            }
+
             dlg.selectPart(QStringLiteral("P-HOSE"));
             QApplication::processEvents();
             check(!group->isVisibleTo(&dlg), "wired: something other than a connector does not offer it");

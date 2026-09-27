@@ -44,6 +44,12 @@ QColor missInk();   // attached, but not on disk
 QColor warnInk();   // wrong, or something that has to be said
 
 // The three signs, drawn: a plus, a minus, and a cross for "take this one out".
+// A GRIP UNDER A SECTION of a column: dragged up or down, the section above it is made shorter or taller
+// and everything after it is pulled up or pushed down with it. `onPress` runs as the drag starts (to fix
+// the other sections' heights, say), `onReset` on a double-click. The grip hides when its section does.
+QWidget* makeSectionGrip(QWidget* section, QWidget* parent, std::function<void()> onPress = {},
+                         std::function<void()> onReset = {});
+
 QIcon plusIcon(const QColor& ink = QColor("#8fd6a2"), int size = 16);
 QIcon minusIcon(const QColor& ink = QColor("#e0a0a0"), int size = 16);
 QIcon crossIcon(const QColor& ink = QColor("#e0a0a0"), int size = 16);
