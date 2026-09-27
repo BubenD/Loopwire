@@ -476,6 +476,28 @@ void setPartPinWires(LibraryPart& part, const std::vector<PartPinWire>& wires);
 QStringList wireColorChoices();
 QStringList wireInsulationChoices();
 
+// HOW A WIRED CONNECTOR'S WIRES ARE SHOWN. On the mechanical drawing: fanned out of its output face, to one
+// side or the other, running straight for a while, then spread to a pitch, and as long as the leads are. On
+// the schematic: a lead out of every pin, with what the wire is written above it.
+struct WiredDisplay {
+    bool mechanical = false;
+    bool flipSide = false;       // toward the body rather than away from it
+    double straightMm = 10.0;    // straight out of the face before the fan spreads
+    double pitchMm = 4.0;        // between the wires once spread
+    double lengthMm = 300.0;     // how long the leads are
+    bool schematic = false;
+    bool labelColor = true;
+    bool labelSize = true;
+    bool labelLength = true;
+};
+WiredDisplay partWiredDisplay(const LibraryPart& part);
+void setPartWiredDisplay(LibraryPart& part, const WiredDisplay& d);
+// The drawing with a wired connector's wires added, as WiredDisplay says - unchanged for any other part.
+// `mechanical` picks which of the two the drawing is.
+QJsonArray withWiredWires(const LibraryPart& part, bool mechanical, const QJsonArray& drawing);
+// A wire colour's name as a colour to draw it in; empty (the layer's own) for black and for anything unknown.
+QString leadColorHex(const QString& name);
+
 // The gauge of every pin, 1..wayCount, worked out from the types' pin lists - what a schematic symbol
 // labels its pins with. A pin no type claims is left empty rather than guessed at.
 QStringList partPinGauges(const LibraryPart& part);

@@ -38,6 +38,11 @@
 #include <QHeaderView>
 #include <QTableWidget>
 #include <QStyledItemDelegate>
+#include <QShortcut>
+#include <QClipboard>
+#include <QGuiApplication>
+#include <QDoubleSpinBox>
+#include <climits>
 #include <QScrollBar>
 #include <QHBoxLayout>
 #include <QIcon>
@@ -1515,6 +1520,85 @@ void PartsLibraryDialog::buildUi() {
             writeWires();
         });
         hl->addWidget(wiresTable_);
+        // COPY AND PASTE, the way a spreadsheet does: the picked cells go to the clipboard as rows and
+        // tab-separated columns, and what is pasted fills from the first picked cell - or, a single value,
+        // every picked cell.
+        auto* copyKey = new QShortcut(QKeySequence::Copy, wiresTable_, nullptr, nullptr, Qt::WidgetWithChildrenShortcut);
+        connect(copyKey, &QShortcut::activated, this, [this] { copyWireCells(); });
+        auto* pasteKey = new QShortcut(QKeySequence::Paste, wiresTable_, nullptr, nullptr, Qt::WidgetWithChildrenShortcut);
+        connect(pasteKey, &QShortcut::activated, this, [this] { pasteWireCells(); });
+        // HOW THE WIRES ARE SHOWN: fanned out on the mechanical drawing, labelled on the schematic.
+        {
+            auto* show = new QWidget(wiresHost_);
+            auto* sl = new QGridLayout(show);
+            sl->setContentsMargins(0, 4, 0, 0);
+            sl->setHorizontalSpacing(6);
+            wiredMechBox_ = new QCheckBox(QStringLiteral("Show the wires on the mechanical drawing"), show);
+            wiredMechBox_->setObjectName(QStringLiteral("wiredShowMech"));
+            sl->addWidget(wiredMechBox_, 0, 0, 1, 8);
+            wiredSideBox_ = new QComboBox(show);
+            wiredSideBox_->setObjectName(QStringLiteral("wiredSide"));
+            wiredSideBox_->addItem(QStringLiteral("Away from the body"), QStringLiteral("away"));
+            wiredSideBox_->addItem(QStringLiteral("Toward the body"), QStringLiteral("toward"));
+            wiredSideBox_->setToolTip(QStringLiteral("Which side of the output face the wires fan out to"));
+            auto spin = [show](const char* name, double lo, double hi, const QString& tip) {
+                auto* s = new QDoubleSpinBox(show);
+                s->setObjectName(QLatin1String(name));
+                s->setRange(lo, hi);
+                s->setDecimals(1);
+                s->setSuffix(QStringLiteral(" mm"));
+                s->setToolTip(tip);
+                return s;
+            };
+            wiredStraightBox_ = spin("wiredStraight", 0.0, 1000.0, QStringLiteral("How far the wires run straight out of the face before they spread"));
+            wiredPitchBox_ = spin("wiredPitch", 0.1, 100.0, QStringLiteral("How far apart the wires are once spread"));
+            wiredLengthBox_ = spin("wiredLength", 1.0, 100000.0, QStringLiteral("How long the leads are"));
+            int col = 0;
+            auto cap = [&](const QString& text, QWidget* w) {
+                auto* l = new QLabel(text, show);
+                setRole(l, "caption");
+                sl->addWidget(l, 1, col++);
+                sl->addWidget(w, 1, col++);
+            };
+            cap(QStringLiteral("Side"), wiredSideBox_);
+            cap(QStringLiteral("Straight"), wiredStraightBox_);
+            cap(QStringLiteral("Fan pitch"), wiredPitchBox_);
+            cap(QStringLiteral("Length"), wiredLengthBox_);
+            wiredSchemBox_ = new QCheckBox(QStringLiteral("Label the wires on the schematic:"), show);
+            wiredSchemBox_->setObjectName(QStringLiteral("wiredShowSchem"));
+            wiredLabelColorBox_ = new QCheckBox(QStringLiteral("Colour"), show);
+            wiredLabelSizeBox_ = new QCheckBox(QStringLiteral("Cross section"), show);
+            wiredLabelLengthBox_ = new QCheckBox(QStringLiteral("Length"), show);
+            sl->addWidget(wiredSchemBox_, 2, 0, 1, 3);
+            sl->addWidget(wiredLabelColorBox_, 2, 3, 1, 1);
+            sl->addWidget(wiredLabelSizeBox_, 2, 4, 1, 2);
+            sl->addWidget(wiredLabelLengthBox_, 2, 6, 1, 2);
+            sl->setColumnStretch(8, 1);
+            hl->addWidget(show);
+            auto write = [this] {
+                if (syncing_) return;
+                LibraryPart* p = current();
+                if (!p) return;
+                WiredDisplay d;
+                d.mechanical = wiredMechBox_->isChecked();
+                d.flipSide = wiredSideBox_->currentData().toString() == QStringLiteral("toward");
+                d.straightMm = wiredStraightBox_->value();
+                d.pitchMm = wiredPitchBox_->value();
+                d.lengthMm = wiredLengthBox_->value();
+                d.schematic = wiredSchemBox_->isChecked();
+                d.labelColor = wiredLabelColorBox_->isChecked();
+                d.labelSize = wiredLabelSizeBox_->isChecked();
+                d.labelLength = wiredLabelLengthBox_->isChecked();
+                setPartWiredDisplay(*p, d);
+                touched();
+                refreshWiredPreviews();
+            };
+            for (QCheckBox* b : {wiredMechBox_, wiredSchemBox_, wiredLabelColorBox_, wiredLabelSizeBox_, wiredLabelLengthBox_})
+                connect(b, &QCheckBox::toggled, this, write);
+            connect(wiredSideBox_, &QComboBox::currentIndexChanged, this, write);
+            for (QDoubleSpinBox* s : {wiredStraightBox_, wiredPitchBox_, wiredLengthBox_})
+                connect(s, &QDoubleSpinBox::valueChanged, this, write);
+        }
         auto* same = new QPushButton(QStringLiteral("Same as pin 1 for all"), group);
         same->setObjectName(QStringLiteral("wiresSameAll"));
         same->setToolTip(QStringLiteral("Every pin's wire the same size, unit, insulation and diameter as pin 1's "
@@ -1575,6 +1659,16 @@ void PartsLibraryDialog::buildUi() {
     paneScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     paneScroll->setWidget(right);
     split->addWidget(paneScroll);
+    // THE BORDERS THAT CAN BE DRAGGED, seen: a light line down between the list and the part, and between
+    // the drawings - a border that cannot be seen is one nobody knows is there to pull.
+    for (QSplitter* s : findChildren<QSplitter*>()) {
+        s->setHandleWidth(std::max(s->handleWidth(), 5));
+        s->setStyleSheet(QStringLiteral(
+            "QSplitter::handle:horizontal{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+            "stop:0 transparent,stop:0.4 transparent,stop:0.41 #d8dce2,stop:0.59 #d8dce2,stop:0.6 transparent,stop:1 transparent);}"
+            "QSplitter::handle:vertical{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            "stop:0 transparent,stop:0.4 transparent,stop:0.41 #d8dce2,stop:0.59 #d8dce2,stop:0.6 transparent,stop:1 transparent);}"));
+    }
     split->setStretchFactor(0, 1);
     split->setStretchFactor(1, 2);
 
@@ -1743,7 +1837,7 @@ void PartsLibraryDialog::showPart(const QString& id) {
     }
     // A component of a standard kind shows its symbol straight away; capturing one for the part
     // replaces it.
-    if (schemPreview_) schemPreview_->setDrawing(have ? partSchematicDrawing(*p) : QJsonArray());
+    if (schemPreview_) schemPreview_->setDrawing(have ? withWiredWires(*p, false, partSchematicDrawing(*p)) : QJsonArray());
     if (fanoutOppositePreview_) fanoutOppositePreview_->setDrawing(p ? p->fanoutOpposite : QJsonArray());
     // The part's own side goes into the box, and the pane then shows THAT side's drawing - which is the
     // point of recording it: a part opens on the side it is normally placed from.
@@ -2552,7 +2646,8 @@ void PartsLibraryDialog::insertIntoDrawing(bool mechanical) {
     // connector, so there is nothing to ask at the moment of placing.
     const QString contactId = p ? p->contactId() : QString();
     if (!p || !editor_) return;
-    const QJsonArray drawing = mechanical ? p->mechanical : partSchematicDrawing(*p);
+    // A wired connector goes down with its wires, when it is set to show them on that drawing.
+    const QJsonArray drawing = withWiredWires(*p, mechanical, mechanical ? p->mechanical : partSchematicDrawing(*p));
     if (drawing.isEmpty()) {
         if (summary_)
             summary_->setText(QStringLiteral("Nothing captured for that side yet"));
@@ -2820,6 +2915,94 @@ void PartsLibraryDialog::rebuildWires() {
     wiresTable_->resizeColumnsToContents();
     wiresTable_->setColumnWidth(1, std::max(wiresTable_->columnWidth(1), 110));
     wiresTable_->setColumnWidth(4, std::max(wiresTable_->columnWidth(4), 100));
+    // How they are shown, from the part.
+    if (wiredMechBox_) {
+        const bool was = syncing_;
+        syncing_ = true;
+        const WiredDisplay d = partWiredDisplay(*p);
+        wiredMechBox_->setChecked(d.mechanical);
+        wiredSideBox_->setCurrentIndex(d.flipSide ? 1 : 0);
+        wiredStraightBox_->setValue(d.straightMm);
+        wiredPitchBox_->setValue(d.pitchMm);
+        wiredLengthBox_->setValue(d.lengthMm);
+        wiredSchemBox_->setChecked(d.schematic);
+        wiredLabelColorBox_->setChecked(d.labelColor);
+        wiredLabelSizeBox_->setChecked(d.labelSize);
+        wiredLabelLengthBox_->setChecked(d.labelLength);
+        syncing_ = was;
+    }
+}
+
+void PartsLibraryDialog::refreshWiredPreviews() {
+    const LibraryPart* p = current();
+    if (!p) return;
+    if (mechPreview_ && p->hasMechanical()) mechPreview_->setEntities(markedMechanicalDrawing(*p));
+    if (schemPreview_) schemPreview_->setDrawing(withWiredWires(*p, false, partSchematicDrawing(*p)));
+}
+
+void PartsLibraryDialog::copyWireCells() {
+    if (!wiresTable_) return;
+    const QList<QTableWidgetSelectionRange> ranges = wiresTable_->selectedRanges();
+    if (ranges.isEmpty()) return;
+    // The block round everything picked, row by row, tab between the columns.
+    int top = INT_MAX, left = INT_MAX, bottom = -1, right = -1;
+    for (const auto& r : ranges) {
+        top = std::min(top, r.topRow());
+        left = std::min(left, r.leftColumn());
+        bottom = std::max(bottom, r.bottomRow());
+        right = std::max(right, r.rightColumn());
+    }
+    QStringList rows;
+    for (int r = top; r <= bottom; ++r) {
+        QStringList cells;
+        for (int c = left; c <= right; ++c) {
+            const QTableWidgetItem* it = wiresTable_->item(r, c);
+            cells << (it && it->isSelected() ? it->text() : QString());
+        }
+        rows << cells.join(QLatin1Char('\t'));
+    }
+    QGuiApplication::clipboard()->setText(rows.join(QLatin1Char('\n')));
+}
+
+void PartsLibraryDialog::pasteWireCells() {
+    if (!wiresTable_) return;
+    QString text = QGuiApplication::clipboard()->text();
+    if (text.endsWith(QLatin1Char('\n'))) text.chop(1);
+    if (text.isEmpty()) return;
+    const QStringList lines = text.split(QLatin1Char('\n'));
+    auto put = [this](int r, int c, const QString& value) {
+        if (c <= 0 || c >= wiresTable_->columnCount() || r < 0 || r >= wiresTable_->rowCount()) return;
+        QTableWidgetItem* it = wiresTable_->item(r, c);
+        if (!it) return;
+        QString v = value.trimmed();
+        if (c == 3) {   // the unit: AWG or mm2, whichever way it was written
+            const bool mm = v.startsWith(QStringLiteral("mm"), Qt::CaseInsensitive);
+            it->setData(Qt::UserRole, mm ? QStringLiteral("mm2") : QStringLiteral("AWG"));
+            v = mm ? QStringLiteral("mm²") : QStringLiteral("AWG");
+        }
+        it->setText(v);
+    };
+    {
+        const QSignalBlocker hush(wiresTable_);
+        const QList<QTableWidgetItem*> picked = wiresTable_->selectedItems();
+        if (lines.size() == 1 && !lines.front().contains(QLatin1Char('\t'))) {
+            // One value: into every picked cell.
+            for (QTableWidgetItem* it : picked) put(it->row(), it->column(), lines.front());
+        } else {
+            // A block: from the first picked cell, down and across.
+            int r0 = INT_MAX, c0 = INT_MAX;
+            for (QTableWidgetItem* it : picked) {
+                r0 = std::min(r0, it->row());
+                c0 = std::min(c0, it->column());
+            }
+            if (r0 == INT_MAX) { r0 = wiresTable_->currentRow(); c0 = wiresTable_->currentColumn(); }
+            for (int i = 0; i < lines.size(); ++i) {
+                const QStringList cells = lines[i].split(QLatin1Char('\t'));
+                for (int j = 0; j < cells.size(); ++j) put(r0 + i, c0 + j, cells[j]);
+            }
+        }
+    }
+    writeWires();
 }
 
 void PartsLibraryDialog::writeWires() {
@@ -2931,7 +3114,8 @@ void PartsLibraryDialog::mirrorFanoutFromOpposite(bool intoOpposite) {
 // The mechanical drawing only. A schematic symbol is a glyph on a circuit and a fanout is a picture of how
 // the wires break out; neither is placed by running a direction along a run.
 std::vector<Entity> PartsLibraryDialog::markedMechanicalDrawing(const LibraryPart& part) {
-    std::vector<Entity> shown = partDrawingEntities(part.mechanical);
+    // With a wired connector's wires, when it is set to show them.
+    std::vector<Entity> shown = partDrawingEntities(withWiredWires(part, true, part.mechanical));
     if (!showConnBtn_ || !showConnBtn_->isChecked()) return shown;
     Bounds ext;
     for (const Entity& e : shown) ext.expand(e.bounds());

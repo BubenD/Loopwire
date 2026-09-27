@@ -17,6 +17,7 @@ class QLabel;
 class QLineEdit;
 class QGroupBox;
 class QTableWidget;
+class QDoubleSpinBox;
 class QListWidget;
 class QAction;
 class QCheckBox;
@@ -232,6 +233,22 @@ private:
     QWidget* wiresHost_ = nullptr;
     QTableWidget* wiresTable_ = nullptr;
     QPushButton* wiresSameBtn_ = nullptr;
+    // How a wired connector's wires are shown: on the mechanical drawing and on the schematic.
+    QCheckBox* wiredMechBox_ = nullptr;
+    QComboBox* wiredSideBox_ = nullptr;
+    QDoubleSpinBox* wiredStraightBox_ = nullptr;
+    QDoubleSpinBox* wiredPitchBox_ = nullptr;
+    QDoubleSpinBox* wiredLengthBox_ = nullptr;
+    QCheckBox* wiredSchemBox_ = nullptr;
+    QCheckBox* wiredLabelColorBox_ = nullptr;
+    QCheckBox* wiredLabelSizeBox_ = nullptr;
+    QCheckBox* wiredLabelLengthBox_ = nullptr;
+    void refreshWiredPreviews();
+public:
+    // The picked cells of the wire table to the clipboard, and the clipboard into them (Ctrl+C / Ctrl+V).
+    void copyWireCells();
+    void pasteWireCells();
+private:
     void rebuildWires();
     void writeWires();
     std::vector<QAction*> placeWhat_;

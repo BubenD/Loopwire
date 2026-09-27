@@ -14434,12 +14434,18 @@ void MainWindow::openLibraryPartEditor(const QString& partId, LibraryPartDrawing
     libraryPartSessionModels_.insert(raw, part);
     addDocument(std::move(doc), QString());
     canvas_->fitView();
-    QTimer::singleShot(0, this, [this, raw] {
-        if (doc_ != raw || !canvas_) return;
-        canvas_->fitView();
-        canvas_->invalidateScene();
-        canvas_->update();
-    });
+    // THE WHOLE DRAWING IN VIEW, IN THE WHOLE WINDOW. The session's ribbon groups come in after the first fit
+    // and change how much room the canvas has - so it is fitted again once they have, and the window itself
+    // is brought forward (the library window has just stepped aside for it).
+    raise();
+    activateWindow();
+    for (const int ms : {0, 120, 400})
+        QTimer::singleShot(ms, this, [this, raw] {
+            if (doc_ != raw || !canvas_) return;
+            canvas_->fitView();
+            canvas_->invalidateScene();
+            canvas_->update();
+        });
     canvas_->invalidateScene();
     statusBar()->showMessage(
         QStringLiteral("Editing %1's %2 drawing — use Place and Modify, then Capture to save it back")
@@ -16789,8 +16795,10 @@ bool MainWindow::importPdfFile(const QString& path, QString* said) {
                              "lines went down as they are)")
                               .arg(placed.size())
                               .arg(QFileInfo(path).fileName()));
-    told << (wroteDxf ? tr("also written as %1").arg(QFileInfo(dxfPath).fileName())
-                      : tr("the DXF could not be written: %1").arg(dxfError));
+    // THE DXF WAS A STEP, NOT A RESULT: once the drawing is on the sheet (and saved as a block) the file it
+    // went through is not wanted beside the PDF, so it goes. The import never reads it back.
+    if (wroteDxf) QFile::remove(dxfPath);
+    else if (!dxfError.isEmpty()) told << tr("the DXF conversion reported: %1").arg(dxfError);
     const QString message = told.join(QStringLiteral(" — "));
     statusBar()->showMessage(message, 10000);
     if (said) *said = message;

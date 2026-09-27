@@ -2408,6 +2408,71 @@ int run_partspanel_tests() {
         }
     }
 
+    // ---- a connector says how it is mounted, and a wired one shows its wires on both drawings -------
+    {
+        bool mounting = false;
+        for (const PartField& f : partFields(PartKind::Connector))
+            if (f.key == QStringLiteral("mounting") && f.choices.contains(QStringLiteral("Cable plug")) &&
+                f.choices.contains(QStringLiteral("Panel receptacle")) && f.choices.size() == 4)
+                mounting = true;
+        check(mounting, "mounting: cable plug / cable receptacle / panel receptacle / panel plug");
+
+        LibraryPart part;
+        part.id = QStringLiteral("P-LEAD");
+        part.kind = PartKind::Connector;
+        part.params[QStringLiteral("pins")] = QStringLiteral("3");
+        setPartWired(part, true);
+        std::vector<PartPinWire> wires = partPinWires(part);
+        const char* colours[3] = {"Red", "Black", "White"};
+        for (int i = 0; i < 3; ++i) {
+            wires[static_cast<size_t>(i)].color = QString::fromLatin1(colours[i]);
+            wires[static_cast<size_t>(i)].size = QStringLiteral("26");
+        }
+        setPartPinWires(part, wires);
+        Entity body;
+        body.type = EntityType::Rect;
+        body.points = {{0, -5}, {20, -5}, {20, 5}, {0, 5}};
+        part.mechanical = partDrawingFromEntities({body});
+        part.outputs.push_back({Vec2{20, -4}, Vec2{20, 4}});
+        part.schematic = connectorSymbolFromData(part);
+        WiredDisplay d = partWiredDisplay(part);
+        check(partDrawingEntities(withWiredWires(part, true, part.mechanical)).size() == 1,
+              "wired show: nothing is added until it is asked for");
+        d.mechanical = true;
+        d.schematic = true;
+        d.lengthMm = 150.0;
+        setPartWiredDisplay(part, d);
+        const std::vector<Entity> mech = partDrawingEntities(withWiredWires(part, true, part.mechanical));
+        int leads = 0;
+        bool outward = true, longEnough = true;
+        for (const Entity& e : mech) {
+            if (!e.meta.contains(QStringLiteral("wiredLead"))) continue;
+            ++leads;
+            if (e.points.size() < 2) continue;
+            outward = outward && e.points.back().x > 100.0;       // away from the body, to the right
+            longEnough = longEnough && std::abs(e.points.back().x - 20.0 - 150.0) < 1.0;
+        }
+        std::printf("  wired show: %d lead(s) on the mechanical drawing\n", leads);
+        check(leads == 3 && outward && longEnough,
+              "wired show: a wire per pin fans out of the output face, away from the body, as long as asked");
+        const std::vector<Entity> schem = partDrawingEntities(withWiredWires(part, false, part.schematic));
+        QStringList labels;
+        for (const Entity& e : schem)
+            if (e.type == EntityType::Text && e.meta.contains(QStringLiteral("wiredLead")))
+                labels << e.meta.value(QStringLiteral("text")).toString();
+        std::printf("  wired show: schematic labels [%s]\n", qPrintable(labels.join(QStringLiteral(" | "))));
+        check(labels.size() == 3 && labels.value(0) == QStringLiteral("Red  26 AWG  150 mm"),
+              "wired show: above every lead on the schematic, the wire's colour, cross section and length");
+        d.labelLength = false;
+        setPartWiredDisplay(part, d);
+        const std::vector<Entity> schem2 = partDrawingEntities(withWiredWires(part, false, part.schematic));
+        QString first;
+        for (const Entity& e : schem2)
+            if (e.type == EntityType::Text && e.meta.contains(QStringLiteral("wiredLead")) && first.isEmpty())
+                first = e.meta.value(QStringLiteral("text")).toString();
+        check(first == QStringLiteral("Red  26 AWG"), "wired show: and only what is ticked");
+    }
+
     // ---- a connector that comes with its wires: a tick, and a row per pin saying what each wire is ----
     {
         const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_wired_lib.json"));
@@ -2461,6 +2526,15 @@ int run_partspanel_tests() {
                 check(table->item(2, 1)->text() == QStringLiteral("Red") && table->item(3, 1)->text() == QStringLiteral("Red") &&
                           table->item(0, 1)->text().isEmpty(),
                       "wired: a value given to one picked cell goes to every picked cell of its column");
+                // COPY AND PASTE: pin 2's colour copied, pasted into pin 1.
+                table->clearSelection();
+                table->setRangeSelected(QTableWidgetSelectionRange(1, 1, 1, 1), true);
+                dlg.copyWireCells();
+                table->clearSelection();
+                table->setRangeSelected(QTableWidgetSelectionRange(0, 1, 0, 1), true);
+                dlg.pasteWireCells();
+                check(table->item(0, 1)->text() == QStringLiteral("Red"), "wired: a cell copied and pasted into another");
+                table->item(0, 1)->setText(QString());   // back to blank, as the checks below expect
                 table->clearSelection();
                 table->item(1, 2)->setText(QStringLiteral("0.5"));
                 table->item(1, 3)->setData(Qt::UserRole, QStringLiteral("mm2"));

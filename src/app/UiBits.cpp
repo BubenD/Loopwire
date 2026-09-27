@@ -51,10 +51,14 @@ protected:
     }
     void paintEvent(QPaintEvent*) override {
         QPainter p(this);
+        // A LINE ACROSS, where one section ends and the next begins - so the border that is dragged can be
+        // seen - and the two short strokes of a handle in the middle of it.
+        p.setPen(QColor(0xd8, 0xdc, 0xe2));
+        p.drawLine(0, height() / 2, width(), height() / 2);
         p.setPen(QColor(0x7a, 0x84, 0x90));
         const int c = width() / 2;
-        p.drawLine(c - 16, 3, c + 16, 3);
-        p.drawLine(c - 16, 5, c + 16, 5);
+        p.drawLine(c - 16, 2, c + 16, 2);
+        p.drawLine(c - 16, height() - 3, c + 16, height() - 3);
     }
     void mousePressEvent(QMouseEvent* e) override {
         if (onPress_) onPress_();

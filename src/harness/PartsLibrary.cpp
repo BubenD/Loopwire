@@ -316,6 +316,150 @@ QStringList wireInsulationChoices() {
             QStringLiteral("PUR"),  QStringLiteral("Polyimide"), QStringLiteral("TPE")};
 }
 
+WiredDisplay partWiredDisplay(const LibraryPart& part) {
+    WiredDisplay d;
+    auto flag = [&](const char* key, bool dflt) {
+        const QString v = part.value(QLatin1String(key));
+        return v.isEmpty() ? dflt : v == QStringLiteral("1");
+    };
+    auto num = [&](const char* key, double dflt) {
+        bool ok = false;
+        const double v = part.value(QLatin1String(key)).toDouble(&ok);
+        return ok && v > 0.0 ? v : dflt;
+    };
+    d.mechanical = flag("wiredShowMech", false);
+    d.flipSide = part.value(QStringLiteral("wiredSide")) == QStringLiteral("toward");
+    d.straightMm = num("wiredStraight", d.straightMm);
+    d.pitchMm = num("wiredPitch", d.pitchMm);
+    d.lengthMm = num("wiredLength", d.lengthMm);
+    d.schematic = flag("wiredShowSchem", false);
+    d.labelColor = flag("wiredLabelColor", true);
+    d.labelSize = flag("wiredLabelSize", true);
+    d.labelLength = flag("wiredLabelLength", true);
+    return d;
+}
+
+void setPartWiredDisplay(LibraryPart& part, const WiredDisplay& d) {
+    auto flag = [&](const char* key, bool on) { part.params.insert(QLatin1String(key), on ? "1" : "0"); };
+    flag("wiredShowMech", d.mechanical);
+    part.params.insert(QStringLiteral("wiredSide"), d.flipSide ? QStringLiteral("toward") : QStringLiteral("away"));
+    part.params.insert(QStringLiteral("wiredStraight"), QString::number(d.straightMm));
+    part.params.insert(QStringLiteral("wiredPitch"), QString::number(d.pitchMm));
+    part.params.insert(QStringLiteral("wiredLength"), QString::number(d.lengthMm));
+    flag("wiredShowSchem", d.schematic);
+    flag("wiredLabelColor", d.labelColor);
+    flag("wiredLabelSize", d.labelSize);
+    flag("wiredLabelLength", d.labelLength);
+}
+
+QString leadColorHex(const QString& name) {
+    static const QHash<QString, QString> kHex = {
+        {QStringLiteral("white"), QStringLiteral("#f0f0f0")},  {QStringLiteral("brown"), QStringLiteral("#9a5b2e")},
+        {QStringLiteral("green"), QStringLiteral("#2ea043")},  {QStringLiteral("yellow"), QStringLiteral("#e3c400")},
+        {QStringLiteral("grey"), QStringLiteral("#9a9a9a")},   {QStringLiteral("gray"), QStringLiteral("#9a9a9a")},
+        {QStringLiteral("pink"), QStringLiteral("#ff8fc0")},   {QStringLiteral("blue"), QStringLiteral("#2f6fd6")},
+        {QStringLiteral("red"), QStringLiteral("#d63031")},    {QStringLiteral("violet"), QStringLiteral("#8e44ad")},
+        {QStringLiteral("purple"), QStringLiteral("#8e44ad")}, {QStringLiteral("orange"), QStringLiteral("#f0892a")},
+        {QStringLiteral("turquoise"), QStringLiteral("#20b2aa")}};
+    // "White/Blue" is a white wire with a blue stripe: drawn in its body colour.
+    const QString first = name.section(QLatin1Char('/'), 0, 0).trimmed().toLower();
+    return kHex.value(first);
+}
+
+QJsonArray withWiredWires(const LibraryPart& part, bool mechanical, const QJsonArray& drawing) {
+    if (part.kind != PartKind::Connector || !partIsWired(part) || drawing.isEmpty()) return drawing;
+    const WiredDisplay d = partWiredDisplay(part);
+    if (mechanical ? !d.mechanical : !d.schematic) return drawing;
+    const std::vector<PartPinWire> wires = partPinWires(part);
+    const int n = static_cast<int>(wires.size());
+    if (n <= 0) return drawing;
+    QJsonArray out = drawing;
+    const std::vector<Entity> ents = partDrawingEntities(drawing);
+    if (mechanical) {
+        // THE FACE THE WIRES LEAVE BY - the part's first output face, or its far end when none is marked -
+        // and which way is out of it: away from the body, unless it was asked to go the other way.
+        Bounds body;
+        for (const Entity& e : ents) body.expand(e.bounds());
+        if (!body.valid) return drawing;
+        Vec2 a, b;
+        if (!part.outputs.empty()) {
+            a = part.outputs.front().a;
+            b = part.outputs.front().b;
+        } else {
+            a = {body.max.x, body.min.y};
+            b = {body.max.x, body.max.y};
+        }
+        const Vec2 along = (b - a).normalized();
+        if (along.lengthSq() < 1e-12) return drawing;
+        Vec2 out1 = along.perp();
+        const Vec2 faceMid = (a + b) * 0.5;
+        if (dot(out1, faceMid - body.center()) < 0.0) out1 = out1 * -1.0;
+        if (d.flipSide) out1 = out1 * -1.0;
+        const double straight = std::max(0.0, d.straightMm);
+        const double spreadAt = straight * 2.0;
+        const double length = std::max(d.lengthMm, spreadAt + 1.0);
+        for (int i = 0; i < n; ++i) {
+            // Out of the face in pin order, pin 1 at the face's first end; then spread to the pitch.
+            const Vec2 start = a + (b - a) * ((i + 0.5) / n);
+            const Vec2 spread = faceMid + along * ((i - (n - 1) / 2.0) * d.pitchMm);
+            Entity w;
+            w.type = EntityType::Polyline;
+            w.layer = QStringLiteral("0");
+            w.color = leadColorHex(wires[static_cast<size_t>(i)].color);
+            w.points = {start, start + out1 * straight, spread + out1 * spreadAt, spread + out1 * length};
+            w.meta.insert(QStringLiteral("wiredLead"), wires[static_cast<size_t>(i)].pin);
+            out.append(w.toJson());
+        }
+        return out;
+    }
+    // THE SCHEMATIC: a lead out of every pin of the connector symbol, and above it what the wire is.
+    for (const Entity& e : ents) {
+        if (e.type != EntityType::Connector) continue;
+        const ConnectorSpec spec = connectorSpecFromMeta(e.meta);
+        const ConnectorGeometry g = connectorGeometry(e.a, spec);
+        const double pitch = spec.pitch > 0.0 ? spec.pitch : 2.54;
+        const double lead = std::max(20.0, 10.0 * pitch);
+        const double textH = std::max(1.0, pitch * 0.45);
+        for (size_t k = 0; k < g.pinEnd.size() && k < g.pinTip.size(); ++k) {
+            const int pin = static_cast<int>(k) + 1;
+            if (pin > n) break;
+            const PartPinWire& wire = wires[static_cast<size_t>(pin - 1)];
+            Vec2 dir = (g.pinEnd[k] - g.pinTip[k]).normalized();
+            if (dir.lengthSq() < 1e-12) dir = {1.0, 0.0};
+            const Vec2 from = g.pinEnd[k], to = from + dir * lead;
+            Entity l;
+            l.type = EntityType::Line;
+            l.layer = QStringLiteral("0");
+            l.color = leadColorHex(wire.color);
+            l.a = from;
+            l.b = to;
+            l.meta.insert(QStringLiteral("wiredLead"), pin);
+            out.append(l.toJson());
+            QStringList said;
+            if (d.labelColor && !wire.color.trimmed().isEmpty()) said << wire.color.trimmed();
+            if (d.labelSize && !wire.size.trimmed().isEmpty())
+                said << wire.size.trimmed() + (wire.unit == QStringLiteral("mm2") ? QStringLiteral(" mm²")
+                                                                                   : QStringLiteral(" AWG"));
+            if (d.labelLength && d.lengthMm > 0.0) said << QStringLiteral("%1 mm").arg(d.lengthMm, 0, 'g', 6);
+            if (said.isEmpty()) continue;
+            // Above the lead, in the middle of it, reading left to right whichever way the pin points.
+            Vec2 up = dir.perp();
+            if (up.y < 0.0 || (std::abs(up.y) < 1e-9 && up.x > 0.0)) up = up * -1.0;
+            Entity t;
+            t.type = EntityType::Text;
+            t.layer = QStringLiteral("0");
+            t.a = (from + to) * 0.5 + up * (textH * 0.35);
+            t.rotation = std::abs(dir.x) >= std::abs(dir.y) ? 0.0 : M_PI / 2.0;
+            t.meta.insert(QStringLiteral("text"), said.join(QStringLiteral("  ")));
+            t.meta.insert(QStringLiteral("size"), textH);
+            t.meta.insert(QStringLiteral("justify"), QStringLiteral("BC"));
+            t.meta.insert(QStringLiteral("wiredLead"), pin);
+            out.append(t.toJson());
+        }
+    }
+    return out;
+}
+
 std::vector<PartPinType> partPinTypes(const LibraryPart& part) {
     std::vector<PartPinType> out;
     const QString raw = part.value(QStringLiteral("pinTypes"));
@@ -524,6 +668,10 @@ std::vector<PartField> partFields(PartKind kind) {
                     num("pitch", "Pitch", "mm"),
                     text("shellSize", "Shell size"),
                     text("gender", "Gender"),
+                    // HOW IT IS MOUNTED: on the end of a cable or through a panel, and which half of the pair.
+                    choice("mounting", "Mounting",
+                           {QStringLiteral("Cable plug"), QStringLiteral("Cable receptacle"),
+                            QStringLiteral("Panel receptacle"), QStringLiteral("Panel plug")}),
                     choice("material", "Shell material", kMetals + kPolymers),
                     choice("plating", "Contact material", kMetals),
                     text("temp", "Temperature range", "C"),

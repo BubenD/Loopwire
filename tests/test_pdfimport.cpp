@@ -76,6 +76,12 @@ int run_pdfimport_tests() {
         const bool ok = win.importPdfFile(file, &said);
         std::printf("  pdf block: %s\n", qPrintable(said));
         check(ok, "block: the PDF imports");
+        {
+            QString dxfSide = file;
+            dxfSide.chop(4);
+            check(!QFile::exists(dxfSide + QStringLiteral(".dxf")),
+                  "block: the DXF it went through is not left beside the PDF");
+        }
         // AND IT LEAVES NOTHING BEHIND: no progress bar at the bottom, and the copy not left picked -
         // a big PDF's tens of thousands of picked lines were minutes of work for every panel.
         check(!win.findChild<QProgressBar*>(QStringLiteral("importProgress")),
