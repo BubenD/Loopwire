@@ -450,6 +450,31 @@ void setPartIncludesPins(LibraryPart& part, bool on);
 // The pin types it has, in the order they were entered.
 std::vector<PartPinType> partPinTypes(const LibraryPart& part);
 void setPartPinTypes(LibraryPart& part, const std::vector<PartPinType>& types);
+// ---- A connector that comes WITH ITS WIRES: a lead, a pigtail, an overmoulded cable end ----
+// Each pin's wire as the part is bought: its colour, its size (in AWG or mm2), its insulation and how thick
+// it is over the insulation. A wire is only kept when something is said about it.
+struct PartPinWire {
+    int pin = 0;             // 1..wayCount
+    QString color;           // "Red", "White/Blue" - as the maker names it
+    QString size;            // the conductor: "24", "0.25"
+    QString unit = QStringLiteral("AWG");   // "AWG" or "mm2"
+    QString insulation;      // "PTFE", "PVC", ...
+    QString od;              // outside diameter over the insulation, mm
+    bool empty() const {
+        return color.trimmed().isEmpty() && size.trimmed().isEmpty() && insulation.trimmed().isEmpty() &&
+               od.trimmed().isEmpty();
+    }
+};
+bool partIsWired(const LibraryPart& part);
+void setPartWired(LibraryPart& part, bool on);
+// One per pin, 1..wayCount (or further, when wires were described for more pins than it now has), with
+// whatever was said about each.
+std::vector<PartPinWire> partPinWires(const LibraryPart& part);
+void setPartPinWires(LibraryPart& part, const std::vector<PartPinWire>& wires);
+// What the wire columns offer: the usual colours and insulations (both can be typed over).
+QStringList wireColorChoices();
+QStringList wireInsulationChoices();
+
 // The gauge of every pin, 1..wayCount, worked out from the types' pin lists - what a schematic symbol
 // labels its pins with. A pin no type claims is left empty rather than guessed at.
 QStringList partPinGauges(const LibraryPart& part);

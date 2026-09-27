@@ -16,6 +16,7 @@ class QComboBox;
 class QLabel;
 class QLineEdit;
 class QGroupBox;
+class QTableWidget;
 class QListWidget;
 class QAction;
 class QCheckBox;
@@ -225,6 +226,13 @@ private:
     QVBoxLayout* pinTypesLay_ = nullptr;
     QPushButton* addPinTypeBtn_ = nullptr;
     void rebuildPinTypes();
+    // A connector that comes WITH ITS WIRES: the tick, and a row per pin saying what its wire is.
+    QGroupBox* wiresGroup_ = nullptr;
+    QCheckBox* wiredBox_ = nullptr;
+    QWidget* wiresHost_ = nullptr;
+    QTableWidget* wiresTable_ = nullptr;
+    void rebuildWires();
+    void writeWires();
     std::vector<QAction*> placeWhat_;
     void placeTicked();
     // The OTHER side's fanout - its own drawing now, not a live mirror of fanoutPreview_'s (see

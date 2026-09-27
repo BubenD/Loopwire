@@ -35,6 +35,8 @@
 #include <QInputDialog>
 #include <QGridLayout>
 #include <QGroupBox>
+#include <QHeaderView>
+#include <QTableWidget>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
@@ -1385,6 +1387,65 @@ void PartsLibraryDialog::buildUi() {
         cl->addWidget(addPinType, 0, Qt::AlignLeft);
         rv->addWidget(group);
     }
+    // COMES WITH ITS WIRES. A lead, a pigtail, an overmoulded cable end: the connector is bought with a wire
+    // already on every pin, and what those wires are - colour, size, insulation, how thick - is part of the
+    // part. Ticked, a row per pin says so.
+    {
+        auto* group = new QGroupBox(QStringLiteral("Wires"), right);
+        group->setObjectName(QStringLiteral("wiresGroup"));
+        wiresGroup_ = group;
+        auto* wl = new QVBoxLayout(group);
+        wiredBox_ = new QCheckBox(QStringLiteral("Wired — comes with wires fitted"), group);
+        wiredBox_->setObjectName(QStringLiteral("wiredBox"));
+        wiredBox_->setToolTip(QStringLiteral(
+            "Ticked, this connector is bought with a wire on each pin - a lead or a pigtail - and the table "
+            "below says what each wire is: its colour, its size in AWG or mm², its insulation and its "
+            "outside diameter."));
+        connect(wiredBox_, &QCheckBox::toggled, this, [this](bool on) {
+            if (syncing_) return;
+            if (LibraryPart* p = current()) {
+                setPartWired(*p, on);
+                touched();
+                rebuildWires();
+            }
+        });
+        wl->addWidget(wiredBox_);
+        wiresHost_ = new QWidget(group);
+        auto* hl = new QVBoxLayout(wiresHost_);
+        hl->setContentsMargins(0, 0, 0, 0);
+        wiresTable_ = new QTableWidget(0, 6, wiresHost_);
+        wiresTable_->setObjectName(QStringLiteral("wiresTable"));
+        wiresTable_->setHorizontalHeaderLabels({QStringLiteral("Pin"), QStringLiteral("Colour"),
+                                                QStringLiteral("Size"), QStringLiteral("Unit"),
+                                                QStringLiteral("Insulation"), QStringLiteral("OD (mm)")});
+        wiresTable_->verticalHeader()->setVisible(false);
+        wiresTable_->horizontalHeader()->setStretchLastSection(true);
+        wiresTable_->setMinimumHeight(160);
+        hl->addWidget(wiresTable_);
+        auto* same = new QPushButton(QStringLiteral("Same as pin 1 for all"), wiresHost_);
+        same->setObjectName(QStringLiteral("wiresSameAll"));
+        same->setToolTip(QStringLiteral("Every pin's wire the same size, unit, insulation and diameter as pin 1's "
+                                        "(colours are left as they are)"));
+        connect(same, &QPushButton::clicked, this, [this] {
+            LibraryPart* p = current();
+            if (!p) return;
+            std::vector<PartPinWire> wires = partPinWires(*p);
+            if (wires.empty()) return;
+            const PartPinWire first = wires.front();
+            for (PartPinWire& w : wires) {
+                w.size = first.size;
+                w.unit = first.unit;
+                w.insulation = first.insulation;
+                w.od = first.od;
+            }
+            setPartPinWires(*p, wires);
+            touched();
+            rebuildWires();
+        });
+        hl->addWidget(same, 0, Qt::AlignLeft);
+        wl->addWidget(wiresHost_);
+        rv->addWidget(group);
+    }
 
     rv->addWidget(draw, 2);
     split->addWidget(right);
@@ -2596,6 +2657,76 @@ void PartsLibraryDialog::refreshContactRow() {
     // And the pins it comes with, if it does: rebuilt from the part, because a form that remembers the last
     // part's rows is a form that quietly writes them onto this one.
     rebuildPinTypes();
+    rebuildWires();
+}
+
+void PartsLibraryDialog::rebuildWires() {
+    if (!wiresGroup_ || !wiresTable_) return;
+    const LibraryPart* p = current();
+    const bool isConnector = p && p->kind == PartKind::Connector;
+    wiresGroup_->setVisible(isConnector);
+    const bool wired = isConnector && partIsWired(*p);
+    {
+        const QSignalBlocker hush(wiredBox_);
+        wiredBox_->setChecked(wired);
+    }
+    wiresHost_->setVisible(wired);
+    const QSignalBlocker hush(wiresTable_);
+    wiresTable_->setRowCount(0);
+    if (!wired) return;
+    const std::vector<PartPinWire> wires = partPinWires(*p);
+    wiresTable_->setRowCount(static_cast<int>(wires.size()));
+    auto combo = [this](const QStringList& choices, const QString& now) {
+        auto* c = new QComboBox(wiresTable_);
+        c->setEditable(true);
+        c->addItem(QString());
+        c->addItems(choices);
+        c->setCurrentText(now);
+        connect(c, &QComboBox::currentTextChanged, this, [this](const QString&) { writeWires(); });
+        return c;
+    };
+    auto line = [this](const QString& now, const QString& hint) {
+        auto* e = new QLineEdit(now, wiresTable_);
+        e->setPlaceholderText(hint);
+        connect(e, &QLineEdit::editingFinished, this, [this] { writeWires(); });
+        return e;
+    };
+    for (int r = 0; r < static_cast<int>(wires.size()); ++r) {
+        const PartPinWire& w = wires[static_cast<size_t>(r)];
+        auto* pin = new QTableWidgetItem(QString::number(w.pin));
+        pin->setFlags(Qt::ItemIsEnabled);
+        pin->setTextAlignment(Qt::AlignCenter);
+        wiresTable_->setItem(r, 0, pin);
+        wiresTable_->setCellWidget(r, 1, combo(wireColorChoices(), w.color));
+        wiresTable_->setCellWidget(r, 2, line(w.size, QStringLiteral("24")));
+        auto* unit = new QComboBox(wiresTable_);
+        unit->addItem(QStringLiteral("AWG"), QStringLiteral("AWG"));
+        unit->addItem(QStringLiteral("mm²"), QStringLiteral("mm2"));
+        unit->setCurrentIndex(w.unit == QStringLiteral("mm2") ? 1 : 0);
+        connect(unit, &QComboBox::currentIndexChanged, this, [this](int) { writeWires(); });
+        wiresTable_->setCellWidget(r, 3, unit);
+        wiresTable_->setCellWidget(r, 4, combo(wireInsulationChoices(), w.insulation));
+        wiresTable_->setCellWidget(r, 5, line(w.od, QStringLiteral("1.2")));
+    }
+    wiresTable_->resizeColumnsToContents();
+}
+
+void PartsLibraryDialog::writeWires() {
+    LibraryPart* p = current();
+    if (!p || !wiresTable_ || syncing_) return;
+    std::vector<PartPinWire> wires;
+    for (int r = 0; r < wiresTable_->rowCount(); ++r) {
+        PartPinWire w;
+        w.pin = wiresTable_->item(r, 0) ? wiresTable_->item(r, 0)->text().toInt() : r + 1;
+        if (auto* c = qobject_cast<QComboBox*>(wiresTable_->cellWidget(r, 1))) w.color = c->currentText();
+        if (auto* e = qobject_cast<QLineEdit*>(wiresTable_->cellWidget(r, 2))) w.size = e->text();
+        if (auto* c = qobject_cast<QComboBox*>(wiresTable_->cellWidget(r, 3))) w.unit = c->currentData().toString();
+        if (auto* c = qobject_cast<QComboBox*>(wiresTable_->cellWidget(r, 4))) w.insulation = c->currentText();
+        if (auto* e = qobject_cast<QLineEdit*>(wiresTable_->cellWidget(r, 5))) w.od = e->text();
+        wires.push_back(w);
+    }
+    setPartPinWires(*p, wires);
+    touched();
 }
 
 void PartsLibraryDialog::editDrawing(LibraryPartDrawing kind) {

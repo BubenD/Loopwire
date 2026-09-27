@@ -9,6 +9,9 @@
 // panel is drawn from is the first thing to be able to say about it, so it is said with a tick per library.
 #include <QLayout>
 #include <QAbstractButton>
+#include <QGroupBox>
+#include <QTableWidget>
+#include <QCheckBox>
 #include "app/MainWindow.h"
 #include <QWidgetAction>
 #include "harness/Bom.h"
@@ -2400,6 +2403,84 @@ int run_partspanel_tests() {
             check(!panel->isColumnHidden(1),
                   "panelcols: and the description, which every line is read by, stays");
         }
+    }
+
+    // ---- a connector that comes with its wires: a tick, and a row per pin saying what each wire is ----
+    {
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_wired_lib.json"));
+        QFile::remove(libFile);
+        {
+            PartsLibrary lib;
+            LibraryPart part;
+            part.id = QStringLiteral("P-WIRED");
+            part.kind = PartKind::Connector;
+            part.description = QStringLiteral("Four-way lead");
+            part.params[QStringLiteral("pins")] = QStringLiteral("4");
+            lib.parts.push_back(part);
+            LibraryPart other;
+            other.id = QStringLiteral("P-HOSE");
+            other.kind = PartKind::Heatshrink;
+            other.description = QStringLiteral("Not a connector");
+            lib.parts.push_back(other);
+            lib.save(libFile);
+        }
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        PartsLibraryDialog dlg(&ed);
+        dlg.setLibraryPath(libFile);
+        dlg.selectPart(QStringLiteral("P-WIRED"));
+        dlg.show();
+        QApplication::processEvents();
+        auto* group = dlg.findChild<QGroupBox*>(QStringLiteral("wiresGroup"));
+        auto* wired = dlg.findChild<QCheckBox*>(QStringLiteral("wiredBox"));
+        auto* table = dlg.findChild<QTableWidget*>(QStringLiteral("wiresTable"));
+        check(group && wired && table && group->isVisibleTo(&dlg) && !wired->isChecked() && !table->isVisibleTo(&dlg),
+              "wired: a connector offers the tick, and the wires stay hidden until it is ticked");
+        if (group && wired && table) {
+            wired->setChecked(true);
+            QApplication::processEvents();
+            check(table->isVisibleTo(&dlg) && table->rowCount() == 4,
+                  "wired: ticked, the wires open - a row for each of its four pins");
+            auto* colour = qobject_cast<QComboBox*>(table->cellWidget(1, 1));
+            auto* size = qobject_cast<QLineEdit*>(table->cellWidget(1, 2));
+            auto* unit = qobject_cast<QComboBox*>(table->cellWidget(1, 3));
+            auto* insulation = qobject_cast<QComboBox*>(table->cellWidget(1, 4));
+            auto* od = qobject_cast<QLineEdit*>(table->cellWidget(1, 5));
+            check(colour && size && unit && insulation && od, "wired: colour, size, unit, insulation, diameter");
+            if (colour && size && unit && insulation && od) {
+                colour->setCurrentText(QStringLiteral("Red"));
+                size->setText(QStringLiteral("0.5"));
+                emit size->editingFinished();
+                unit->setCurrentIndex(unit->findData(QStringLiteral("mm2")));
+                insulation->setCurrentText(QStringLiteral("PTFE"));
+                od->setText(QStringLiteral("1.3"));
+                emit od->editingFinished();
+            }
+            check(dlg.saveLibrary(), "wired: the part saves");
+            PartsLibrary again;
+            check(again.load(libFile), "wired: and reads back");
+            const LibraryPart* p = again.byId(QStringLiteral("P-WIRED"));
+            if (p) {
+                const std::vector<PartPinWire> wires = partPinWires(*p);
+                check(partIsWired(*p) && wires.size() == 4, "wired: it is a wired connector with four pins");
+                if (wires.size() == 4) {
+                    const PartPinWire& w = wires[1];
+                    std::printf("  wired: pin %d %s %s %s %s %s\n", w.pin, qPrintable(w.color), qPrintable(w.size),
+                                qPrintable(w.unit), qPrintable(w.insulation), qPrintable(w.od));
+                    check(w.pin == 2 && w.color == QStringLiteral("Red") && w.size == QStringLiteral("0.5") &&
+                              w.unit == QStringLiteral("mm2") && w.insulation == QStringLiteral("PTFE") &&
+                              w.od == QStringLiteral("1.3") && wires[0].empty(),
+                          "wired: pin 2's wire is what was entered, and the others are left blank");
+                }
+            } else {
+                check(false, "wired: the part is in the library");
+            }
+            dlg.selectPart(QStringLiteral("P-HOSE"));
+            QApplication::processEvents();
+            check(!group->isVisibleTo(&dlg), "wired: something other than a connector does not offer it");
+        }
+        QFile::remove(libFile);
     }
 
     // ---- front and back are two drawings, and the one showing is the part's -------------------------

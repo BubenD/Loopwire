@@ -238,6 +238,84 @@ void setPartIncludesPins(LibraryPart& part, bool on) {
     else part.params.remove(QStringLiteral("includePins"));
 }
 
+// ---- A connector that comes with its wires ------------------------------------------------------
+
+bool partIsWired(const LibraryPart& part) {
+    const QString v = part.value(QStringLiteral("wired"));
+    return v == QStringLiteral("1") || v.compare(QStringLiteral("yes"), Qt::CaseInsensitive) == 0 ||
+           v.compare(QStringLiteral("true"), Qt::CaseInsensitive) == 0;
+}
+
+void setPartWired(LibraryPart& part, bool on) {
+    // Only the tick: what was said about the wires is kept either way, so taking the tick off by mistake
+    // and putting it back loses nothing.
+    if (on) part.params.insert(QStringLiteral("wired"), QStringLiteral("1"));
+    else part.params.remove(QStringLiteral("wired"));
+}
+
+std::vector<PartPinWire> partPinWires(const LibraryPart& part) {
+    QHash<int, PartPinWire> said;
+    int most = part.wayCount();
+    const QJsonDocument doc = QJsonDocument::fromJson(part.value(QStringLiteral("pinWires")).toUtf8());
+    for (const auto& v : doc.array()) {
+        const QJsonObject o = v.toObject();
+        PartPinWire w;
+        w.pin = o.value(QStringLiteral("pin")).toInt();
+        if (w.pin < 1) continue;
+        w.color = o.value(QStringLiteral("color")).toString();
+        w.size = o.value(QStringLiteral("size")).toString();
+        w.unit = o.value(QStringLiteral("unit")).toString(QStringLiteral("AWG"));
+        w.insulation = o.value(QStringLiteral("insulation")).toString();
+        w.od = o.value(QStringLiteral("od")).toString();
+        said.insert(w.pin, w);
+        most = std::max(most, w.pin);
+    }
+    std::vector<PartPinWire> out;
+    out.reserve(static_cast<size_t>(most));
+    for (int pin = 1; pin <= most; ++pin) {
+        PartPinWire w = said.value(pin);
+        w.pin = pin;
+        if (w.unit.isEmpty()) w.unit = QStringLiteral("AWG");
+        out.push_back(w);
+    }
+    return out;
+}
+
+void setPartPinWires(LibraryPart& part, const std::vector<PartPinWire>& wires) {
+    QJsonArray arr;
+    for (const PartPinWire& w : wires) {
+        if (w.pin < 1 || w.empty()) continue;
+        QJsonObject o;
+        o.insert(QStringLiteral("pin"), w.pin);
+        if (!w.color.trimmed().isEmpty()) o.insert(QStringLiteral("color"), w.color.trimmed());
+        if (!w.size.trimmed().isEmpty()) o.insert(QStringLiteral("size"), w.size.trimmed());
+        o.insert(QStringLiteral("unit"), w.unit == QStringLiteral("mm2") ? w.unit : QStringLiteral("AWG"));
+        if (!w.insulation.trimmed().isEmpty()) o.insert(QStringLiteral("insulation"), w.insulation.trimmed());
+        if (!w.od.trimmed().isEmpty()) o.insert(QStringLiteral("od"), w.od.trimmed());
+        arr.append(o);
+    }
+    if (arr.isEmpty()) part.params.remove(QStringLiteral("pinWires"));
+    else
+        part.params.insert(QStringLiteral("pinWires"),
+                           QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact)));
+}
+
+QStringList wireColorChoices() {
+    // DIN 47100 / IEC 60757 order, the one a wiring list is usually read in.
+    return {QStringLiteral("White"),  QStringLiteral("Brown"),  QStringLiteral("Green"),
+            QStringLiteral("Yellow"), QStringLiteral("Grey"),   QStringLiteral("Pink"),
+            QStringLiteral("Blue"),   QStringLiteral("Red"),    QStringLiteral("Black"),
+            QStringLiteral("Violet"), QStringLiteral("Orange"), QStringLiteral("Turquoise"),
+            QStringLiteral("Green/Yellow")};
+}
+
+QStringList wireInsulationChoices() {
+    return {QStringLiteral("PVC"),  QStringLiteral("PTFE"),      QStringLiteral("FEP"),
+            QStringLiteral("PFA"),  QStringLiteral("ETFE"),      QStringLiteral("XL-ETFE"),
+            QStringLiteral("XLPE"), QStringLiteral("Silicone"),  QStringLiteral("PE"),
+            QStringLiteral("PUR"),  QStringLiteral("Polyimide"), QStringLiteral("TPE")};
+}
+
 std::vector<PartPinType> partPinTypes(const LibraryPart& part) {
     std::vector<PartPinType> out;
     const QString raw = part.value(QStringLiteral("pinTypes"));
