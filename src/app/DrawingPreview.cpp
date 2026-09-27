@@ -141,6 +141,31 @@ void DrawingPreview::setMinimapAvailable(bool on) {
     if (mapBtn_) mapBtn_->setVisible(on);
 }
 
+void DrawingPreview::setFitButtonShown(bool on) {
+    // FIT, as a button: double-clicking the pane does the same, but nobody finds that by looking.
+    if (on && !fitBtn_) {
+        fitBtn_ = new QToolButton(this);
+        fitBtn_->setObjectName(QStringLiteral("previewFit"));
+        fitBtn_->setText(QStringLiteral("Fit"));
+        fitBtn_->setAutoRaise(true);
+        fitBtn_->setFocusPolicy(Qt::NoFocus);
+        fitBtn_->setToolTip(QStringLiteral("The whole drawing in view (the wheel zooms about the cursor)"));
+        fitBtn_->setStyleSheet(QStringLiteral("QToolButton{color:#8fb0d6;font-size:10px;padding:1px 4px;}"));
+        connect(fitBtn_, &QToolButton::clicked, this, [this] { fitToView(); });
+        placeCornerButtons();
+        fitBtn_->show();
+    }
+    if (fitBtn_) fitBtn_->setVisible(on);
+}
+
+void DrawingPreview::placeCornerButtons() {
+    if (mapBtn_) mapBtn_->move(width() - 44, 4 + 14);
+    if (fitBtn_) {
+        const int right = mapBtn_ && mapBtn_->isVisible() ? width() - 44 - 4 : width() - 6;
+        fitBtn_->move(right - fitBtn_->sizeHint().width(), 4 + 14);
+    }
+}
+
 void DrawingPreview::setMinimap(bool on) {
     minimap_ = on;
     if (mapBtn_ && mapBtn_->isChecked() != on) mapBtn_->setChecked(on);
@@ -149,7 +174,7 @@ void DrawingPreview::setMinimap(bool on) {
 
 void DrawingPreview::resizeEvent(QResizeEvent* e) {
     QWidget::resizeEvent(e);
-    if (mapBtn_) mapBtn_->move(width() - 44, 4 + 14);
+    placeCornerButtons();
 }
 
 void DrawingPreview::mousePressEvent(QMouseEvent* e) {

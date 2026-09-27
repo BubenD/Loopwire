@@ -65,7 +65,12 @@ public:
     QPointF portPoint(const Brick& b, int port) const;
     // The port under a point, as its brick and side, or an empty id.
     std::pair<QString, int> portAt(const QPointF& at) const;
+    // Zoomed and centred so every brick is in view - the Fit button.
     void fit();
+    // Centred on the bricks at the zoom it is at - what arranging or loading a design does.
+    void centreView();
+    // Back to the pane's own size, keeping the middle where it is.
+    void resetZoom();
     void deleteSelected();
     void moveSelection(double dCol, double dRow);
     void rotateSelection();
@@ -78,6 +83,8 @@ public:
     void duplicateSelection();
     // The middle of what is in view, on the grid.
     QPointF viewCentreGrid() const;
+    // How far the pane is zoomed: 1 is the pane's own size.
+    double zoom() const { return zoom_; }
 
 signals:
     void selectionChanged(const QString& current);
@@ -97,9 +104,16 @@ protected:
     void dropEvent(QDropEvent* e) override;
     void resizeEvent(QResizeEvent* e) override;
     void contextMenuEvent(QContextMenuEvent* e) override;
+    void wheelEvent(QWheelEvent* e) override;
 
 private:
     QRectF minimapRect() const;
+    // ZOOM, on the wheel, about the cursor. The pane is laid out in its own units and drawn scaled; a
+    // pointer position is turned into those units with L(), and the part of them in view is viewSize().
+    double zoom_ = 1.0;
+    QPointF L(const QPointF& screen) const { return screen / zoom_; }
+    QSizeF viewSize() const { return QSizeF(width(), height()) / zoom_; }
+    QToolButton* fitButton_ = nullptr;
     bool minimap_ = false;
     QToolButton* mapButton_ = nullptr;
     BrickDesign* d_;

@@ -55,6 +55,8 @@ public:
     // THE MAP: a button in the corner that turns on the whole drawing small, with the part in view
     // outlined on it; a click on the map goes there.
     void setMinimapAvailable(bool on);
+    // A small Fit button in the corner that brings the whole drawing back into view.
+    void setFitButtonShown(bool on);
     void setMinimap(bool on);
     bool minimap() const { return minimap_; }
     bool showsConnection() const { return showConn_; }
@@ -91,6 +93,8 @@ private:
     QRectF minimapRect() const;
     bool minimap_ = false;
     QToolButton* mapBtn_ = nullptr;
+    QToolButton* fitBtn_ = nullptr;
+    void placeCornerButtons();
     Bounds lastBounds_;
     double lastScale_ = 1.0;
     // The mapping the last paint used, so a click can be turned back into a point on the drawing

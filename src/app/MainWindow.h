@@ -85,6 +85,12 @@ public:
 
     // Open a .dwx or .dxf by path (used by File>Open and the command line).
     void openPath(const QString& path);
+    // THE LAST FIFTEEN DRAWINGS opened or saved, newest first - File > Open recent. Kept in the settings,
+    // so they are there the next time the application starts.
+    static constexpr int kRecentDrawings = 15;
+    static QStringList recentDrawings();
+    void rememberRecentDrawing(const QString& path);
+    void clearRecentDrawings();
     // Output: the model and the sheets, in a chosen order, onto a PDF or a printer. One entry point for
     // both, because a page is a page whichever device it lands on.
     void showOutput();
@@ -604,6 +610,8 @@ private:
     // canvas of its own colour, without a bespoke editing mode to get wrong.
     QHash<Document*, QString> blockEdits_;
     QColor normalCanvasColor_{"#1e2832"};
+    QMenu* recentMenu_ = nullptr;
+    void fillRecentMenu();
     QToolButton* saveBlockBtn_ = nullptr;
     QToolButton* cancelBlockBtn_ = nullptr;
     // Whether the Blocks window was open when a block edit started, so it can be put back.

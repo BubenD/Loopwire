@@ -12,6 +12,9 @@
 #include <QProgressBar>
 #include <QToolButton>
 #include <QElapsedTimer>
+#include <QMenu>
+#include <QFileInfo>
+#include "io/Dwx.h"
 #include <QImage>
 #include <QPainter>
 #include "render/EntityRenderer.h"
@@ -333,6 +336,49 @@ int run_pdfimport_tests() {
         check(framed && std::abs(o.x - 100) < 1e-6 && std::abs(o.y - 50) < 1e-6 && std::abs(ux.x) < 1e-6 &&
                   std::abs(ux.y - 2.0) < 1e-6 && std::abs(uy.x + 2.0) < 1e-6,
               "blockref: refitted to a bigger block, it keeps where it is, how it is turned and how big");
+    }
+
+    // THE LAST FIFTEEN DRAWINGS: one opened goes to the top of File > Open recent, the list stops at
+    // fifteen, and the menu offers each of them.
+    {
+        MainWindow::recentDrawings();   // touch the settings before clearing
+        const QString file = QDir::temp().filePath(QStringLiteral("edraw-recent-test.dwx"));
+        {
+            Document saved;
+            Entity l;
+            l.id = QStringLiteral("r1");
+            l.type = EntityType::Line;
+            l.a = {0, 0};
+            l.b = {10, 0};
+            saved.entities().push_back(l);
+            dwx::save(saved, file);
+        }
+        MainWindow win;
+        win.clearRecentDrawings();
+        win.openPath(file);
+        const QStringList after = MainWindow::recentDrawings();
+        check(!after.isEmpty() && QFileInfo(after.front()) == QFileInfo(file),
+              "recent: a drawing opened goes to the top of the list");
+        for (int i = 0; i < 20; ++i)
+            win.rememberRecentDrawing(QDir::temp().filePath(QStringLiteral("edraw-recent-%1.dwx").arg(i)));
+        win.rememberRecentDrawing(file);   // again: back to the top, not listed twice
+        const QStringList list = MainWindow::recentDrawings();
+        int times = 0;
+        for (const QString& p : list) times += QFileInfo(p) == QFileInfo(file) ? 1 : 0;
+        std::printf("  recent: %lld listed\n", static_cast<long long>(list.size()));
+        check(list.size() == MainWindow::kRecentDrawings && times == 1 && QFileInfo(list.front()) == QFileInfo(file),
+              "recent: fifteen at most, newest first, each once");
+        auto* menu = win.findChild<QMenu*>(QStringLiteral("recentMenu"));
+        bool offered = false, missingDisabled = false;
+        if (menu)
+            for (QAction* a : menu->actions()) {
+                if (QFileInfo(a->data().toString()) == QFileInfo(file)) offered = a->isEnabled();
+                if (a->data().toString().contains(QStringLiteral("edraw-recent-1"))) missingDisabled = !a->isEnabled();
+            }
+        check(menu && offered && missingDisabled,
+              "recent: the menu offers each - and one no longer on disk is shown but cannot be picked");
+        win.clearRecentDrawings();
+        QFile::remove(file);
     }
 
     Document unchanged;

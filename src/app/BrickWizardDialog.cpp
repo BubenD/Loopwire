@@ -43,6 +43,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <QWheelEvent>
 
 namespace Edraw_Desktop {
 
@@ -199,6 +200,15 @@ BrickCanvas::BrickCanvas(BrickDesign* design, QWidget* parent) : QWidget(parent)
     mapButton_->setStyleSheet(QStringLiteral("QToolButton{color:#8fb0d6;font-size:10px;padding:1px 4px;}"
                                              "QToolButton:checked{background:#2b6cb0;color:white;}"));
     connect(mapButton_, &QToolButton::toggled, this, [this](bool v) { setMinimap(v); });
+    // FIT: every brick in view, zoomed to fill the pane.
+    fitButton_ = new QToolButton(this);
+    fitButton_->setObjectName(QStringLiteral("brickFit"));
+    fitButton_->setText(QStringLiteral("Fit"));
+    fitButton_->setAutoRaise(true);
+    fitButton_->setFocusPolicy(Qt::NoFocus);
+    fitButton_->setToolTip(QStringLiteral("Zoom so every brick is in view (the wheel zooms about the cursor)"));
+    fitButton_->setStyleSheet(QStringLiteral("QToolButton{color:#8fb0d6;font-size:10px;padding:1px 4px;}"));
+    connect(fitButton_, &QToolButton::clicked, this, [this] { fit(); });
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
     setMinimumSize(420, 220);
@@ -283,6 +293,22 @@ void BrickCanvas::setMinimap(bool on) {
 void BrickCanvas::resizeEvent(QResizeEvent* e) {
     QWidget::resizeEvent(e);
     mapButton_->move(width() - mapButton_->sizeHint().width() - 6, 6);
+    fitButton_->move(mapButton_->x() - fitButton_->sizeHint().width() - 4, 6);
+}
+
+void BrickCanvas::wheelEvent(QWheelEvent* e) {
+    const double steps = e->angleDelta().y() / 120.0;
+    if (std::abs(steps) < 1e-9) {
+        QWidget::wheelEvent(e);
+        return;
+    }
+    const double next = std::clamp(zoom_ * std::pow(1.15, steps), 0.2, 4.0);
+    // About the cursor: whatever is under it stays under it.
+    const QPointF s = e->position();
+    origin_ += s / next - s / zoom_;
+    zoom_ = next;
+    update();
+    e->accept();
 }
 
 QRectF BrickCanvas::minimapRect() const {
@@ -291,8 +317,27 @@ QRectF BrickCanvas::minimapRect() const {
 
 QPointF BrickCanvas::viewCentreGrid() const {
     double c, r;
-    toGrid(QPointF(width() / 2.0, height() / 2.0), c, r);
+    toGrid(QPointF(viewSize().width() / 2.0, viewSize().height() / 2.0), c, r);
     return QPointF(c, r);
+}
+
+void BrickCanvas::centreView() {
+    if (d_->bricks.empty()) {
+        origin_ = QPointF(80.0, 70.0);
+        update();
+        return;
+    }
+    QRectF all;
+    for (const Brick& b : d_->bricks) all = all.isNull() ? brickRect(b) : all.united(brickRect(b));
+    origin_ += QPointF(viewSize().width() / 2.0, viewSize().height() / 2.0) - all.center();
+    update();
+}
+
+void BrickCanvas::resetZoom() {
+    const QPointF mid(width() / 2.0, height() / 2.0);
+    origin_ += mid / 1.0 - mid / zoom_;
+    zoom_ = 1.0;
+    update();
 }
 
 void BrickCanvas::fit() {
@@ -301,15 +346,14 @@ void BrickCanvas::fit() {
         update();
         return;
     }
-    double c0 = 1e9, c1 = -1e9, r0 = 1e9, r1 = -1e9;
-    for (const Brick& b : d_->bricks) {
-        c0 = std::min(c0, b.col);
-        c1 = std::max(c1, b.col);
-        r0 = std::min(r0, b.row);
-        r1 = std::max(r1, b.row);
-    }
-    const QPointF mid((c0 + c1) / 2.0 * stepX_, (r0 + r1) / 2.0 * stepY_);
-    origin_ = QPointF(width() / 2.0, height() / 2.0) - mid;
+    // Everything the bricks cover, in the pane's own units, with a margin; zoomed so that fills the pane
+    // (never past double size, which is all a handful of bricks needs), then centred.
+    QRectF all;
+    for (const Brick& b : d_->bricks) all = all.isNull() ? brickRect(b) : all.united(brickRect(b));
+    all = all.adjusted(-30, -30, 30, 30);
+    if (width() > 0 && height() > 0 && all.width() > 1 && all.height() > 1)
+        zoom_ = std::clamp(std::min(width() / all.width(), height() / all.height()), 0.2, 2.0);
+    origin_ += QPointF(viewSize().width() / 2.0, viewSize().height() / 2.0) - all.center();
     update();
 }
 
@@ -351,16 +395,18 @@ void BrickCanvas::paintEvent(QPaintEvent*) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
     p.fillRect(rect(), QColor(0x23, 0x2a, 0x33));
+    // Everything from here is in the pane's own units, drawn at the zoom.
+    p.scale(zoom_, zoom_);
     p.setPen(QPen(QColor(0x3c, 0x46, 0x52), 1.6));
     double c0, r0, c1, r1;
     toGrid(QPointF(0, 0), c0, r0);
-    toGrid(QPointF(width(), height()), c1, r1);
+    toGrid(QPointF(viewSize().width(), viewSize().height()), c1, r1);
     for (int c = int(std::floor(c0)); c <= int(std::ceil(c1)); ++c)
         for (int r = int(std::floor(r0)); r <= int(std::ceil(r1)); ++r) p.drawPoint(toScreen(c, r));
 
     if (d_->bricks.empty()) {
         p.setPen(QColor(0x8a, 0x93, 0xa0));
-        p.drawText(rect(), Qt::AlignCenter,
+        p.drawText(QRectF(QPointF(0, 0), viewSize()), Qt::AlignCenter,
                    QStringLiteral("Drag end parts, joints and specials here from the list on the left.\n"
                                   "Link them by dragging from a port - the dot on a brick's side - to "
                                   "another brick."));
@@ -443,9 +489,12 @@ void BrickCanvas::paintEvent(QPaintEvent*) {
 
     // THE MAP: every brick small, and the part in view outlined.
     if (minimap_ && !d_->bricks.empty()) {
+        // The map itself sits on the screen at its own size, whatever the zoom.
+        p.save();
+        p.resetTransform();
         QRectF all;
         for (const Brick& b : d_->bricks) all = all.isNull() ? brickRect(b) : all.united(brickRect(b));
-        all = all.united(QRectF(rect()));
+        all = all.united(QRectF(QPointF(0, 0), viewSize()));
         const QRectF m = minimapRect();
         p.setPen(QPen(QColor("#4a4e55"), 1));
         p.setBrush(QColor(30, 33, 38, 235));
@@ -462,7 +511,8 @@ void BrickCanvas::paintEvent(QPaintEvent*) {
         }
         p.setPen(QPen(QColor("#2bd0ff"), 1.4));
         p.setBrush(Qt::NoBrush);
-        p.drawRect(map(QRectF(rect())));
+        p.drawRect(map(QRectF(QPointF(0, 0), viewSize())));
+        p.restore();
     }
 
     // A ZONE being dragged out: blue left to right (wholly inside), green right to left (touching).
@@ -482,7 +532,7 @@ void BrickCanvas::paintEvent(QPaintEvent*) {
 void BrickCanvas::mousePressEvent(QMouseEvent* e) {
     setFocus(Qt::MouseFocusReason);
     shiftAlone_ = false;
-    pressAt_ = cursor_ = e->position();
+    pressAt_ = cursor_ = L(e->position());
     if (e->button() == Qt::MiddleButton) {
         drag_ = Drag::Pan;
         panFrom_ = origin_;
@@ -493,17 +543,17 @@ void BrickCanvas::mousePressEvent(QMouseEvent* e) {
     if (minimap_ && !d_->bricks.empty() && minimapRect().contains(e->position())) {
         QRectF all;
         for (const Brick& b : d_->bricks) all = all.isNull() ? brickRect(b) : all.united(brickRect(b));
-        all = all.united(QRectF(rect()));
+        all = all.united(QRectF(QPointF(0, 0), viewSize()));
         const QRectF in = minimapRect().adjusted(6, 6, -6, -6);
         const double s = std::min(in.width() / all.width(), in.height() / all.height());
         const QPointF at = all.center() + (e->position() - in.center()) / s;   // on the pane
-        origin_ += QPointF(width() / 2.0, height() / 2.0) - at;
+        origin_ += QPointF(viewSize().width() / 2.0, viewSize().height() / 2.0) - at;
         update();
         return;
     }
     const bool shift = e->modifiers() & Qt::ShiftModifier;
     // A PORT, aimed at on purpose, wins over any brick's body: a link starts there.
-    const auto port = portAt(e->position());
+    const auto port = portAt(L(e->position()));
     if (!port.first.isEmpty()) {
         dragId_ = port.first;
         dragPort_ = port.second;
@@ -511,7 +561,7 @@ void BrickCanvas::mousePressEvent(QMouseEvent* e) {
         update();
         return;
     }
-    const QString hit = brickAt(e->position());
+    const QString hit = brickAt(L(e->position()));
     if (!hit.isEmpty()) {
         if (e->modifiers() & Qt::ControlModifier) {
             // With Ctrl, a link from whichever port faces what it is let go on.
@@ -549,7 +599,7 @@ void BrickCanvas::mousePressEvent(QMouseEvent* e) {
         const Brick* a = d_->brick(l.a);
         const Brick* b = d_->brick(l.b);
         if (!a || !b) continue;
-        if (segDistance(e->position(), portPoint(*a, d_->portOn(l.a, l.b)),
+        if (segDistance(L(e->position()), portPoint(*a, d_->portOn(l.a, l.b)),
                         portPoint(*b, d_->portOn(l.b, l.a))) <= 5.0) {
             sel_.clear();
             selLink_ = {l.a, l.b};
@@ -566,13 +616,13 @@ void BrickCanvas::mousePressEvent(QMouseEvent* e) {
 }
 
 void BrickCanvas::mouseMoveEvent(QMouseEvent* e) {
-    cursor_ = e->position();
+    cursor_ = L(e->position());
     if (drag_ == Drag::Pan) {
-        origin_ = panFrom_ + (e->position() - pressAt_);
+        origin_ = panFrom_ + (L(e->position()) - pressAt_);
         update();
     } else if (drag_ == Drag::Move) {
-        const double dc = snapHalf((e->position().x() - pressAt_.x()) / stepX_);
-        const double dr = snapHalf((e->position().y() - pressAt_.y()) / stepY_);
+        const double dc = snapHalf((L(e->position()).x() - pressAt_.x()) / stepX_);
+        const double dr = snapHalf((L(e->position()).y() - pressAt_.y()) / stepY_);
         bool moved = false;
         for (auto it = startAt_.begin(); it != startAt_.end(); ++it)
             if (Brick* b = d_->brick(it.key())) {
@@ -592,8 +642,8 @@ void BrickCanvas::mouseMoveEvent(QMouseEvent* e) {
 
 void BrickCanvas::mouseReleaseEvent(QMouseEvent* e) {
     if (drag_ == Drag::Link) {
-        const QString target = brickAt(e->position());
-        const auto tport = portAt(e->position());
+        const QString target = brickAt(L(e->position()));
+        const auto tport = portAt(L(e->position()));
         const QString to = !tport.first.isEmpty() ? tport.first : target;
         if (!to.isEmpty() && to != dragId_) {
             // Let go ON a port, that port; anywhere else on the brick, the one facing the other.
@@ -607,7 +657,7 @@ void BrickCanvas::mouseReleaseEvent(QMouseEvent* e) {
             }
         }
     } else if (drag_ == Drag::Zone) {
-        const QRectF z = QRectF(pressAt_, e->position()).normalized();
+        const QRectF z = QRectF(pressAt_, L(e->position())).normalized();
         if (z.width() < 3.0 && z.height() < 3.0) {
             // A click on nothing lets go of what was picked.
             if (!zoneAdd_ && (!sel_.isEmpty() || !selLink_.first.isEmpty())) {
@@ -616,7 +666,7 @@ void BrickCanvas::mouseReleaseEvent(QMouseEvent* e) {
                 emit selectionChanged(QString());
             }
         } else {
-            const bool window = e->position().x() >= pressAt_.x();
+            const bool window = L(e->position()).x() >= pressAt_.x();
             QStringList got = zoneAdd_ ? sel_ : QStringList();
             for (const Brick& b : d_->bricks) {
                 const QRectF r = brickRect(b);
@@ -636,7 +686,7 @@ void BrickCanvas::mouseReleaseEvent(QMouseEvent* e) {
 
 void BrickCanvas::contextMenuEvent(QContextMenuEvent* e) {
     // The brick under the pointer is what the menu is for - picked, if it was not already.
-    const QString hit = brickAt(e->pos());
+    const QString hit = brickAt(L(QPointF(e->pos())));
     if (!hit.isEmpty() && !sel_.contains(hit)) {
         sel_ = {hit};
         selLink_ = {};
@@ -764,7 +814,7 @@ void BrickCanvas::dropEvent(QDropEvent* e) {
     const QStringList parts = what.split(QLatin1Char('|'));
     if (parts.size() != 2) return;
     double col, row;
-    toGrid(e->position(), col, row);
+    toGrid(L(e->position()), col, row);
     const QString id = d_->addBrick(brickTypeFromKey(parts[0]), partKindFromKey(parts[1]),
                                     std::round(col), snapHalf(row));
     e->acceptProposedAction();
@@ -1006,6 +1056,7 @@ void BrickWizardDialog::buildUi() {
     preview_ = new DrawingPreview(QStringLiteral("Preview"), middle_);
     preview_->setEmptyText(QStringLiteral("The drawing appears here as the bricks are linked"));
     preview_->setMinimapAvailable(true);
+    preview_->setFitButtonShown(true);
     // THE BILL, LIVE: every line of the drawing's bill of materials as it stands, the parts this
     // harness uses in bold - so what adding a part did is seen as it is done. Where it sits is chosen.
     bom_ = new QTableWidget(0, 5, this);
@@ -1518,7 +1569,7 @@ void BrickWizardDialog::rotateSelected() {
 
 void BrickWizardDialog::arrange() {
     arrangeBricks(design_);
-    canvas_->fit();
+    canvas_->centreView();
     designChanged();
     status_->setText(QStringLiteral("Arranged symmetrically"));
 }
@@ -2045,7 +2096,7 @@ bool BrickWizardDialog::loadFromDrawing(const QString& name) {
     currentName_ = name;
     harnessName_->setText(name);
     canvas_->setSelection({});
-    canvas_->fit();
+    canvas_->centreView();
     designChanged();
     refreshSaved();
     status_->setText(QStringLiteral("Opened \"%1\"").arg(name));

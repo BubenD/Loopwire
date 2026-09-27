@@ -1240,15 +1240,64 @@ std::vector<std::vector<Vec2>> trimPolylinePieces(const std::vector<Vec2>& pts,
     return result;
 }
 
+namespace {
+// How far a point is from a segment.
+double pointSegmentDistance(const Vec2& p, const Vec2& s1, const Vec2& s2) {
+    const Vec2 d = s2 - s1;
+    const double L2 = d.lengthSq();
+    const double t = L2 > 1e-18 ? std::clamp(dot(p - s1, d) / L2, 0.0, 1.0) : 0.0;
+    return distance(p, s1 + d * t);
+}
+} // namespace
+
+bool lineMeetsWithin(const Entity& line, const std::vector<Entity>& others, double tol) {
+    if (line.type != EntityType::Line) return objectCrosses(line, others);
+    if (objectCrosses(line, others)) return true;
+    if (tol <= 0.0) return false;
+    bool meets = false;
+    for (const Entity& e : others) {
+        if (!line.id.isEmpty() && e.id == line.id) continue;
+        if (isCurvedCutter(e)) continue;   // a ring is judged by the exact test above
+        forEachCutSegment(e, [&](const Vec2& p1, const Vec2& p2) {
+            if (meets) return;
+            meets = pointSegmentDistance(line.a, p1, p2) <= tol || pointSegmentDistance(line.b, p1, p2) <= tol ||
+                    pointSegmentDistance(p1, line.a, line.b) <= tol || pointSegmentDistance(p2, line.a, line.b) <= tol;
+        });
+        if (meets) return true;
+    }
+    return false;
+}
+
 bool trimLineQuick(Entity& line, const Vec2& pick, const std::vector<Entity>& others,
-                   std::optional<Entity>& extra) {
+                   std::optional<Entity>& extra, double touchTol, bool* erase) {
     extra.reset();
+    if (erase) *erase = false;
     if (line.type != EntityType::Line) return false;
     auto cuts = intersectionCuts(line, others);
-    if (cuts.empty()) return false;
 
     const Vec2 a = line.a, b = line.b, d = b - a;
     const double L2 = d.lengthSq();
+    if (L2 < 1e-12) return false;
+    // TOUCHING, within the tolerance. A boundary that ends a hair short of this line - an exploded
+    // polyline's corner seldom lands exactly - still cuts it at the foot of that end. And an end of THIS
+    // line on a boundary makes that end a boundary: the piece from it to a free end is then a piece
+    // that can be taken.
+    bool touchA = false, touchB = false;
+    if (touchTol > 0.0) {
+        for (const Entity& e : others) {
+            if (&e == &line || (!line.id.isEmpty() && e.id == line.id) || isCurvedCutter(e)) continue;
+            forEachCutSegment(e, [&](const Vec2& p1, const Vec2& p2) {
+                touchA = touchA || pointSegmentDistance(a, p1, p2) <= touchTol;
+                touchB = touchB || pointSegmentDistance(b, p1, p2) <= touchTol;
+                for (const Vec2& q : {p1, p2}) {
+                    const double t = dot(q - a, d) / L2;
+                    if (t <= 1e-6 || t >= 1.0 - 1e-6) continue;
+                    if (distance(q, a + d * t) <= touchTol) cuts.push_back({t, &e, false});
+                }
+            });
+        }
+    }
+    if (cuts.empty() && !touchA && !touchB) return false;
     const double tp = std::clamp(dot(pick - a, d) / L2, 0.0, 1.0);
     auto P = [&](double t) { return a + d * t; };
 
@@ -1261,6 +1310,18 @@ bool trimLineQuick(Entity& line, const Vec2& pick, const std::vector<Entity>& ot
         if (c.g <= tp && c.g > lo) { lo = c.g; hasLo = true; loCut = &c; }
         if (c.g >= tp && c.g < hi) { hi = c.g; hasHi = true; hiCut = &c; }
     }
+    // An end on a boundary is a boundary at that end, when nothing nearer the pick is.
+    if (touchA && !hasLo) { lo = 0.0; hasLo = true; }
+    if (touchB && !hasHi) { hi = 1.0; hasHi = true; }
+    // The piece that goes runs from one end to the other: nothing is left of the line.
+    const bool fromStart = hasLo && lo <= 1e-6;
+    const bool toEnd = hasHi && hi >= 1.0 - 1e-6;
+    if ((fromStart || !hasLo) && (toEnd || !hasHi) && (fromStart || toEnd)) {
+        if (erase) *erase = true;
+        return true;
+    }
+    if (fromStart && hasHi) { line.a = P(hi); return true; }   // from the touching start to the next cut
+    if (toEnd && hasLo) { line.b = P(lo); return true; }       // from the last cut to the touching end
     if (hasLo && hasHi && hi - lo > 1e-6) {
         // The piece between the two boundaries is what goes - including when they are the two
         // crossings of one circle, so everything inside the ring is removed and both ends of what is

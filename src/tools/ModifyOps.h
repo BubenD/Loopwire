@@ -103,8 +103,18 @@ bool trimCircleAt(Entity& e, const Vec2& pick, const std::vector<Entity>& cutter
 //
 // A split leaves the first piece in `line` and returns the second via `extra`. True if anything
 // changed.
+//
+// TOUCHING COUNTS, within `touchTol`: a boundary that stops a hair short of the line still cuts it where
+// it stops, and an END of the line sitting on a boundary is a boundary at that end - so the piece from
+// there to a free end can be taken, which for a line touching only at its end is the whole of it. That
+// is what an exploded polyline's short leftover past a corner needs. `erase` is set when nothing of the
+// line is left, and the caller removes it.
 bool trimLineQuick(Entity& line, const Vec2& pick, const std::vector<Entity>& others,
-                   std::optional<Entity>& extra);
+                   std::optional<Entity>& extra, double touchTol = 0.0, bool* erase = nullptr);
+
+// Whether a line meets any of `others` - crossing it, or touching it within `tol` (an end of one on the
+// other, or a near miss by less than `tol`).
+bool lineMeetsWithin(const Entity& line, const std::vector<Entity>& others, double tol);
 
 // The piece of a path BETWEEN two points that lie on it, taken out. `path` is a line, a polyline or a wire;
 // `p1` and `p2` are two points on it (each within `tol` of it), in either order. What comes back is what is

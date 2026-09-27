@@ -13057,12 +13057,17 @@ int Editor::trimPass(const Vec2& a, const Vec2& b, const std::vector<QString>& o
         };
         if (obj->type == EntityType::Line) {
             // Only objects the cut line crosses AND that meet the reference are trimmed.
+            // "Meets" includes touching within about a pixel, so a line an exploded polyline left ending
+            // on the reference - or a hair short of it - is cut as if it met it exactly.
+            const double touch = worldTolerance() * 0.25;
             auto x = segmentSegmentIntersection(a, b, obj->a, obj->b);
-            if (!x || !objectCrosses(*obj, refs)) continue;
+            if (!x || !lineMeetsWithin(*obj, refs, touch)) continue;
             std::optional<Entity> extra;
-            if (trimLineQuick(*obj, *x, joints, extra)) {
+            bool nothingLeft = false;
+            if (trimLineQuick(*obj, *x, joints, extra, touch, &nothingLeft)) {
                 ++count;
-                if (extra) additions.push_back(std::move(*extra));
+                if (nothingLeft) removals.push_back(id);
+                else if (extra) additions.push_back(std::move(*extra));
             }
         } else if (obj->type == EntityType::DoubleLine) {
             // One line of it, when that is what the fence crossed.
@@ -13788,13 +13793,24 @@ bool Editor::trimPickAt(const Vec2& pick, const std::vector<Entity>& boundaries,
         return trimRailPiece(*obj, rail, side, alongPick, boundaries, why);
     }
     if (obj->type == EntityType::Line) {
-        if (!objectCrosses(*obj, boundaries))
+        const double touch = worldTolerance() * 0.25;
+        if (!lineMeetsWithin(*obj, boundaries, touch))
             return say(QStringLiteral("Nothing crosses that line, so there is no boundary to trim it "
                                       "back to — select the object you want it to stop at."));
         std::optional<Entity> extra;
-        if (!trimLineQuick(*obj, pick, boundaries, extra))
+        bool nothingLeft = false;
+        if (!trimLineQuick(*obj, pick, boundaries, extra, touch, &nothingLeft))
             return say(QStringLiteral("There is no boundary between the point you picked and the ends "
                                       "of that line, so there is no piece to take off."));
+        if (nothingLeft) {
+            // Touching the boundary only at its end: the piece picked is the whole line.
+            const QString gone = obj->id;
+            auto& ents = doc_->entities();
+            ents.erase(std::remove_if(ents.begin(), ents.end(),
+                                      [&gone](const Entity& e) { return e.id == gone; }),
+                       ents.end());
+            return true;
+        }
         if (extra) addEntity(std::move(*extra));
         return true;
     }

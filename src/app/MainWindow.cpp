@@ -7191,6 +7191,11 @@ void MainWindow::buildMenus() {
     auto* fileMenu = new QMenu(this);
     fileMenu->addAction(QStringLiteral("&New drawing"), QKeySequence::New, this, [this] { newDrawing(); });
     fileMenu->addAction(QStringLiteral("&Open DWX/DXF..."), QKeySequence::Open, this, [this] { openDrawing(); });
+    // THE DRAWINGS WORKED ON LATELY, one click away rather than a walk through folders each time.
+    recentMenu_ = fileMenu->addMenu(QStringLiteral("Open &recent"));
+    recentMenu_->setObjectName(QStringLiteral("recentMenu"));
+    connect(recentMenu_, &QMenu::aboutToShow, this, [this] { fillRecentMenu(); });
+    fillRecentMenu();
     // IMPORT, alongside Export, and meaning the opposite of Open.
     //
     // Open replaces the drawing on screen; Import adds another drawing to it. Both are wanted and
@@ -16226,7 +16231,72 @@ bool MainWindow::saveDocument(int index, bool forceDialog) {
     docs_[index]->setDirty(false);
     updateActiveTabText();
     statusBar()->showMessage(QStringLiteral("Saved %1").arg(QFileInfo(path).fileName()));
+    rememberRecentDrawing(path);
     return true;
+}
+
+QStringList MainWindow::recentDrawings() {
+    return QSettings().value(QStringLiteral("recent/drawings")).toStringList();
+}
+
+void MainWindow::rememberRecentDrawing(const QString& path) {
+    if (path.isEmpty()) return;
+    const QString full = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+    QStringList list = recentDrawings();
+    // To the top, once: the same file by another spelling (case, slashes) is the same file on Windows.
+    list.erase(std::remove_if(list.begin(), list.end(),
+                              [&full](const QString& p) {
+                                  return QDir::cleanPath(p).compare(full, Qt::CaseInsensitive) == 0;
+                              }),
+               list.end());
+    list.prepend(full);
+    while (list.size() > kRecentDrawings) list.removeLast();
+    QSettings().setValue(QStringLiteral("recent/drawings"), list);
+    fillRecentMenu();
+}
+
+void MainWindow::clearRecentDrawings() {
+    QSettings().remove(QStringLiteral("recent/drawings"));
+    fillRecentMenu();
+}
+
+void MainWindow::fillRecentMenu() {
+    if (!recentMenu_) return;
+    recentMenu_->clear();
+    const QStringList list = recentDrawings();
+    if (list.isEmpty()) {
+        recentMenu_->addAction(QStringLiteral("(no drawings yet)"))->setEnabled(false);
+        return;
+    }
+    int n = 0;
+    for (const QString& path : list) {
+        ++n;
+        const QFileInfo fi(path);
+        const bool there = fi.exists();
+        // Numbered for the keyboard - &1 to &9, then the rest - named by the file, with its folder after it
+        // so two drawings of the same name in different places can be told apart.
+        const QString key = n <= 9 ? QStringLiteral("&%1").arg(n) : QString::number(n);
+        QString text = QStringLiteral("%1  %2    %3").arg(key, fi.fileName(), QDir::toNativeSeparators(fi.absolutePath()));
+        if (!there) text += QStringLiteral("  (not found)");
+        QAction* act = recentMenu_->addAction(text);
+        act->setToolTip(QDir::toNativeSeparators(path));
+        act->setData(path);
+        act->setEnabled(there);
+        connect(act, &QAction::triggered, this, [this, path] {
+            // Already open: go to its tab rather than opening it twice.
+            for (int i = 0; i < static_cast<int>(docPaths_.size()); ++i)
+                if (QDir::cleanPath(docPaths_[i]).compare(QDir::cleanPath(path), Qt::CaseInsensitive) == 0) {
+                    docTabs_->setCurrentIndex(i);
+                    activateIndex(i);
+                    rememberRecentDrawing(path);
+                    return;
+                }
+            openPath(path);
+        });
+    }
+    recentMenu_->setToolTipsVisible(true);
+    recentMenu_->addSeparator();
+    recentMenu_->addAction(QStringLiteral("&Clear the list"), this, [this] { clearRecentDrawings(); });
 }
 
 int MainWindow::saveAllDocuments() {
@@ -16542,6 +16612,7 @@ void MainWindow::openPath(const QString& path) {
     const int n = static_cast<int>(fresh->entities().size());
     addDocument(std::move(fresh), path); // opens in a new tab
     canvas_->fitView();
+    rememberRecentDrawing(path);
     statusBar()->showMessage(
         QStringLiteral("Opened %1 (%2 entities)").arg(QFileInfo(path).fileName()).arg(n));
 }

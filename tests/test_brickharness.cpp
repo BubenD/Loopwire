@@ -30,6 +30,7 @@
 #include <QTabWidget>
 #include <QToolButton>
 #include <QMenu>
+#include <QWheelEvent>
 #include "harness/Bom.h"
 #include "io/Dwx.h"
 #include <QDir>
@@ -958,6 +959,31 @@ void testRoundFive() {
     mouse(canvas, QEvent::MouseButtonRelease, QPointF(canvas->width() - 20.0, canvas->height() - 20.0));
     check(canvas->minimap() && canvas->viewCentreGrid() != before, "map: a click on it moves the view there");
     if (map) map->click();
+    // ZOOM, EACH PANE ON ITS OWN, and a Fit button on each that brings everything back into view.
+    {
+        auto* fitB = canvas->findChild<QToolButton*>(QStringLiteral("brickFit"));
+        auto* fitP = dlg.preview()->findChild<QToolButton*>(QStringLiteral("previewFit"));
+        check(fitB && fitP, "zoom: a Fit button on the pane and on the preview");
+        const double z0 = canvas->zoom();
+        const QPointF at(canvas->width() / 2.0, canvas->height() / 2.0);
+        for (int i = 0; i < 6; ++i) {
+            QWheelEvent wheel(at, canvas->mapToGlobal(at), QPoint(), QPoint(0, 120), Qt::NoButton, Qt::NoModifier,
+                              Qt::NoScrollPhase, false);
+            QApplication::sendEvent(canvas, &wheel);
+        }
+        std::printf("  zoom: pane %.2f -> %.2f, preview %.2f\n", z0, canvas->zoom(), dlg.preview()->zoom());
+        check(canvas->zoom() > z0 * 2.0 && std::abs(dlg.preview()->zoom() - 1.0) < 1e-9,
+              "zoom: the wheel zooms the pane, and only the pane");
+        if (fitB) fitB->click();
+        bool allIn = true;
+        for (const Brick& b : dlg.design().bricks) {
+            const QRectF r = canvas->brickRect(b);
+            const QRectF onScreen(r.topLeft() * canvas->zoom(), r.size() * canvas->zoom());
+            allIn = allIn && QRectF(canvas->rect()).contains(onScreen);
+        }
+        check(allIn, "zoom: Fit puts every brick in view");
+        canvas->resetZoom();   // the clicks below are aimed at the pane's own size
+    }
     // 7. The Auto buttons.
     dlg.design().connect(x, f);
     dlg.selectBrick(f);
@@ -1221,7 +1247,7 @@ void testDialogMore() {
     d.connect(fan, f1);
     d.connect(fan, f2);
     d.brick(fan)->run.wires = 6;
-    canvas->fit();
+    canvas->centreView();   // in view at the pane's own size - the clicks below are aimed at that
     canvas->update();
     QApplication::processEvents();
 

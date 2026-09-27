@@ -2002,6 +2002,42 @@ int run_editor_tests() {
         check(r && near(std::abs(r->b.y - r->a.y), 200.0), "trim-fence: reference is not trimmed");
     }
 
+    // --- AN EXPLODED POLYLINE'S LEFTOVERS TRIM. The reference ends ON the line (or a hair short of it,
+    //     as a corner that has been through an explode usually does), and the piece past it is its own
+    //     short line touching the reference only at its end. A fence across that piece takes it.
+    {
+        auto yAt = [](double x) { return -0.04 * x; };
+        auto run = [&](std::vector<Entity> ents) {
+            Document d; d.entities().clear();
+            for (auto& e : ents) d.entities().push_back(e);
+            Editor ed; ed.setDocument(&d); noSnap(ed); ed.setPixelTolerance(3);
+            ed.selectById("V");
+            ed.setTool(ToolId::Trim);
+            ed.onPointerPress({92, 20}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerMove({96, -15});
+            ed.onPointerPress({96, -15}, Qt::LeftButton, Qt::NoModifier);
+            return d.entities();
+        };
+        auto line = [](const char* id, Vec2 a, Vec2 b) {
+            Entity e; e.id = id; e.type = EntityType::Line; e.a = a; e.b = b; return e;
+        };
+        const Vec2 corner{90, yAt(90)};
+        {
+            const auto left = run({line("W", {0, 0}, corner), line("S", corner, {100, yAt(100)}),
+                                   line("V", corner, {90, -80})});
+            bool stubGone = true;
+            for (const auto& e : left) stubGone = stubGone && e.id != "S";
+            check(stubGone && left.size() == 2, "trim-touch: a leftover touching the reference only at its end goes");
+        }
+        {
+            const auto left = run({line("W", {0, 0}, {100, yAt(100)}), line("V", {90, yAt(90) - 1e-4}, {90, -80})});
+            double wEnd = -1;
+            for (const auto& e : left) if (e.id == "W") wEnd = std::max(e.a.x, e.b.x);
+            // At the foot of the reference's end - a few millionths off 90, since that end is not on the line.
+            check(std::abs(wEnd - 90.0) < 1e-3, "trim-touch: a reference a hair short of the line still cuts it");
+        }
+    }
+
     // --- Only the REFERENCE bounds a trim. Another object lying across the same line is not a
     //     boundary, however close it is: trimming to an object means trimming to THAT object.
     //     (It used to stop at any object on the sheet, which meant a second circle overlapping the
