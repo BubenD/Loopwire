@@ -24,6 +24,7 @@
 #include <QLineEdit>
 #include <QTabBar>
 #include <QToolButton>
+#include <QLabel>
 
 #include <cmath>
 #include <cstdio>
@@ -493,6 +494,28 @@ int run_mechmodelcanvas_tests() {
                     check(marks == 3, "library session: connect, near and far are seeded the same way "
                                        "a default model's are");
 
+                    // ON A PART the group is its connection point: called that, no "Scale by" (a part out
+                    // of the catalogue is the size it is), and a Remove all that takes every mark off.
+                    QLabel* title = nullptr;
+                    for (QLabel* l : win.findChildren<QLabel*>(QStringLiteral("ribbonGroupTitle")))
+                        if (l->text() == QStringLiteral("Connection point")) title = l;
+                    check(title != nullptr, "library session: the marks' group is called \"Connection point\"");
+                    bool scaleShown = false;
+                    for (QToolButton* b : win.findChildren<QToolButton*>())
+                        if (b->text() == QStringLiteral("Scale\nby") && b->isVisibleTo(&win)) scaleShown = true;
+                    check(!scaleShown, "library session: and it offers no \"Scale by\"");
+                    auto* removeAll = win.findChild<QToolButton*>(QStringLiteral("removeAllMarks"));
+                    check(removeAll && removeAll->isVisibleTo(&win) && removeAll->isEnabled(),
+                          "library session: a Remove all button is there to press");
+                    if (removeAll) {
+                        removeAll->click();
+                        QApplication::processEvents();
+                        int left = 0;
+                        for (const Entity& e : d->entities())
+                            if (!e.meta.value(QStringLiteral("modelAnchor")).toString().isEmpty()) ++left;
+                        check(left == 0, "library session: Remove all takes every mark off");
+                    }
+
                     // A drag on the canvas would move the mark and let Editor::changed read it back;
                     // driven directly here, the same way the default-model marks are tested above.
                     win.markMechModelConnectAt(Vec2{2.0, -5.0}, 0.0);
@@ -507,7 +530,8 @@ int run_mechmodelcanvas_tests() {
                 if (saved) {
                     check(!saved->mechanical.isEmpty(),
                           "library session: the mechanical drawing was saved back");
-                    check(saved->hasConnect && saved->hasNearPoint && saved->hasFarPoint,
+                    // Everything was removed, then the connection point alone put back: that is what saves.
+                    check(saved->hasConnect && !saved->hasNearPoint && !saved->hasFarPoint,
                           "library session: its marks round-tripped through the save too");
                 }
             }

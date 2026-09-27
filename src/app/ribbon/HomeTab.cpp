@@ -366,12 +366,26 @@ void MainWindow::buildHomeTab() {
         showMechModelMarksBtn_->setChecked(true);
         connect(showMechModelMarksBtn_, &QToolButton::clicked, this, [this] { toggleMechModelMarks(); });
         sg->addWidget(markScaleRefMechModelBtn_, 0, 6);
-        sg->addWidget(showMechModelMarksBtn_, 0, 7);
+        // EVERY MARK OFF AT ONCE: the connection point, both ends, the output faces (and, on a default
+        // model, what it is scaled by) - to start the marking again rather than take them off one by one.
+        sessionButton(clearMarksMechModelBtn_, tr("Remove\nall"), modelAnchorIcon(QColor("#e06c6c")),
+                      tr("Take every mark off - the connection point, the near and far points and the output "
+                         "faces - to mark the part again from the start"));
+        clearMarksMechModelBtn_->setObjectName(QStringLiteral("removeAllMarks"));
+        connect(clearMarksMechModelBtn_, &QToolButton::clicked, this, [this] { clearAllMechModelMarks(); });
+        sg->addWidget(clearMarksMechModelBtn_, 0, 7);
+        sg->addWidget(showMechModelMarksBtn_, 0, 8);
         mechModelSessionGroup_ = new QWidget(page);
         auto* hg = new QHBoxLayout(mechModelSessionGroup_);
         hg->setContentsMargins(0, 0, 0, 0);
         hg->setSpacing(0);
-        hg->addWidget(ribbonGroup(QStringLiteral("Default model"), session));
+        {
+            QWidget* group = ribbonGroup(QStringLiteral("Default model"), session);
+            // Retitled for what is being edited: "Connection point" on a library part - see
+            // updateMechanicalRibbonGroups.
+            mechModelGroupTitle_ = group->findChild<QLabel*>(QStringLiteral("ribbonGroupTitle"));
+            hg->addWidget(group);
+        }
         auto* rule = new QFrame(mechModelSessionGroup_);
         rule->setFrameShape(QFrame::VLine);
         rule->setStyleSheet(QStringLiteral("color:#b3afa6;"));

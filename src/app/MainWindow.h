@@ -677,6 +677,8 @@ private:
     QToolButton* markOutputMechModelBtn_ = nullptr;
     // WHICH OBJECT THE APP SCALES THE MODEL BY, marked on the drawing itself. See armMechModelScaleRef.
     QToolButton* markScaleRefMechModelBtn_ = nullptr;
+    QToolButton* clearMarksMechModelBtn_ = nullptr;   // "Remove all": every mark off at once
+    QLabel* mechModelGroupTitle_ = nullptr;           // "Default model", or "Connection point" on a part
     void armMechModelScaleRef();
     // THE EYE: the marks shown or put away. They are chrome over the part, and while the part itself is being
     // drawn they are in the way of seeing it - so they go, and come back, and the button shows which.
@@ -686,6 +688,7 @@ private:
     // Each mark can be TAKEN OFF as well as put on. A mark in the wrong place could only be moved, never removed,
     // so a part that turned out not to need one had to keep it - and a model is placed by its marks, so one that
     // should not be there is not a blemish, it is a part put down in the wrong place.
+    void clearAllMechModelMarks();
     void clearMechModelConnect();
     void clearMechModelAnchor(bool near);
     void clearMechModelScaleRef();

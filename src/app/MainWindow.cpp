@@ -4794,9 +4794,14 @@ void MainWindow::updateMechanicalRibbonGroups() {
         if (captureMechModelBtn_) captureMechModelBtn_->setVisible(false);
         if (cancelMechModelBtn_) cancelMechModelBtn_->setVisible(false);
         for (QToolButton* b : {markConnectMechModelBtn_, markNearMechModelBtn_, markFarMechModelBtn_,
-                               markOutputMechModelBtn_, markScaleRefMechModelBtn_,
+                               markOutputMechModelBtn_, markScaleRefMechModelBtn_, clearMarksMechModelBtn_,
                                showMechModelMarksBtn_})
             if (b) b->setVisible(!schematicDrawing);
+        // A PART OUT OF THE CATALOGUE IS THE SIZE IT IS: nothing on it is scaled to fit, so "Scale by" is not
+        // offered - and what the group holds is where the part connects, so that is what it is called.
+        if (markScaleRefMechModelBtn_ && libraryPartEdit) markScaleRefMechModelBtn_->setVisible(false);
+        if (mechModelGroupTitle_)
+            mechModelGroupTitle_->setText(libraryPartEdit ? tr("Connection point") : tr("Default model"));
         // Which leaves the group with the MARKS in it - and a schematic drawing has none, so on a schematic
         // session there is nothing left for the group to hold and it goes.
         if (mechModelSessionGroup_) mechModelSessionGroup_->setVisible(!schematicDrawing);
@@ -14595,6 +14600,23 @@ void MainWindow::toggleMechModelMarks() {
                             3000);
 }
 
+void MainWindow::clearAllMechModelMarks() {
+    if (!doc_) return;
+    const bool libraryMechSession = libraryPartEdits_.contains(doc_) &&
+                                    libraryPartEditKind_.value(doc_) == LibraryPartDrawing::Mechanical;
+    if (!mechModelEdits_.contains(doc_) && !libraryMechSession) return;
+    clearMechModelConnect();
+    clearMechModelAnchor(true);
+    clearMechModelAnchor(false);
+    clearMechModelOutputs();
+    if (!libraryMechSession) clearMechModelScaleRef();
+    canvas_->invalidateScene();
+    canvas_->update();
+    statusBar()->showMessage(tr("Every mark taken off - mark the connection point, the ends and the output faces "
+                                "again"),
+                             6000);
+}
+
 void MainWindow::clearMechModelConnect() {
     if (!doc_) return;
     const bool libraryMechSession = libraryPartEdits_.contains(doc_) &&
@@ -15150,6 +15172,7 @@ void MainWindow::activateIndex(int index) {
     // scaled to fit the bundle it is put on, and a part out of a catalogue is the size it is.
     if (markOutputMechModelBtn_) markOutputMechModelBtn_->setEnabled(anchorableModelEdit);
     if (markScaleRefMechModelBtn_) markScaleRefMechModelBtn_->setEnabled(editingMechModel);
+    if (clearMarksMechModelBtn_) clearMarksMechModelBtn_->setEnabled(anchorableModelEdit);
     if (showMechModelMarksBtn_) showMechModelMarksBtn_->setEnabled(anchorableModelEdit);
     if (cancelMechModelBtn_) cancelMechModelBtn_->setEnabled(anyModelEdit);
     for (QToolButton* b : tplSessionBtns_)
