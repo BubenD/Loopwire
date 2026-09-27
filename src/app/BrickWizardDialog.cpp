@@ -44,6 +44,10 @@
 #include <algorithm>
 #include <cmath>
 #include <QWheelEvent>
+#include <QMimeData>
+#include <QClipboard>
+#include <QGuiApplication>
+#include <QJsonDocument>
 
 namespace Edraw_Desktop {
 
@@ -733,6 +737,60 @@ void BrickCanvas::fillContextMenu(QMenu& menu) {
     menu.addAction(QStringLiteral("Delete\tDel"), this, [this] { deleteSelected(); });
 }
 
+namespace {
+constexpr char kBrickClipMime[] = "application/x-edraw-bricks";
+} // namespace
+
+void BrickCanvas::copySelection() {
+    if (sel_.isEmpty()) return;
+    // The picked bricks and the links between them, as a little design of their own.
+    BrickDesign part;
+    for (const QString& id : sel_)
+        if (const Brick* b = d_->brick(id)) part.bricks.push_back(*b);
+    for (const BrickLink& l : d_->links)
+        if (sel_.contains(l.a) && sel_.contains(l.b)) part.links.push_back(l);
+    const QByteArray json = QJsonDocument(part.toJson()).toJson(QJsonDocument::Compact);
+    auto* mime = new QMimeData;
+    mime->setData(QLatin1String(kBrickClipMime), json);
+    mime->setText(QStringLiteral("%1 brick(s)").arg(part.bricks.size()));
+    QGuiApplication::clipboard()->setMimeData(mime);
+    emit message(QStringLiteral("Copied %1 brick(s) - Ctrl+V to put them down").arg(part.bricks.size()));
+}
+
+void BrickCanvas::pasteClipboard() {
+    const QMimeData* mime = QGuiApplication::clipboard()->mimeData();
+    if (!mime || !mime->hasFormat(QLatin1String(kBrickClipMime))) return;
+    const BrickDesign part = BrickDesign::fromJson(QJsonDocument::fromJson(mime->data(QLatin1String(kBrickClipMime))).object());
+    if (part.bricks.empty()) return;
+    // Put down beside where they were, a step down and across, each a new brick with the same part and
+    // settings; the links between them come too.
+    QHash<QString, QString> newId;
+    QStringList made;
+    for (const Brick& src : part.bricks) {
+        const QString nid = d_->addBrick(src.type, src.kind, src.col + 1.0, src.row + 1.0);
+        Brick* nb = d_->brick(nid);
+        if (!nb) continue;
+        *nb = src;
+        nb->id = nid;
+        nb->col += 1.0;
+        nb->row += 1.0;
+        newId.insert(src.id, nid);
+        made << nid;
+    }
+    for (const BrickLink& l : part.links) {
+        if (!newId.contains(l.a) || !newId.contains(l.b)) continue;
+        d_->connect(newId.value(l.a), newId.value(l.b), nullptr, l.portA, l.portB);
+        for (BrickLink& nl : d_->links)
+            if (nl.a == newId.value(l.a) && nl.b == newId.value(l.b)) nl.wires = l.wires;
+    }
+    if (made.isEmpty()) return;
+    sel_ = made;
+    emit selectionChanged(selected());
+    emit designChanged();
+    emit message(QStringLiteral("Pasted %1 brick(s)").arg(made.size()));
+    update();
+}
+
 void BrickCanvas::duplicateSelection() {
     QStringList made;
     for (const QString& id : sel_) {
@@ -786,6 +844,14 @@ void BrickCanvas::keyPressEvent(QKeyEvent* e) {
     }
     if (e->key() == Qt::Key_R) {
         rotateSelection();
+        return;
+    }
+    if (e->matches(QKeySequence::Copy)) {
+        copySelection();
+        return;
+    }
+    if (e->matches(QKeySequence::Paste)) {
+        pasteClipboard();
         return;
     }
     double dc = 0.0, dr = 0.0;
@@ -1056,6 +1122,7 @@ void BrickWizardDialog::buildUi() {
     preview_ = new DrawingPreview(QStringLiteral("Preview"), middle_);
     preview_->setEmptyText(QStringLiteral("The drawing appears here as the bricks are linked"));
     preview_->setMinimapAvailable(true);
+    preview_->installEventFilter(this);   // Ctrl + wheel over a part scales it
     preview_->setFitButtonShown(true);
     // THE BILL, LIVE: every line of the drawing's bill of materials as it stands, the parts this
     // harness uses in bold - so what adding a part did is seen as it is done. Where it sits is chosen.
@@ -1165,6 +1232,42 @@ QWidget* BrickWizardDialog::buildEndPage() {
     balloon_ = new QCheckBox(QStringLiteral("Balloon"), page);
     balloon_->setObjectName(QStringLiteral("brickBalloon"));
     f->addRow(QString(), balloon_);
+    // HOW BIG THE PART IS DRAWN. Its faces grow and shrink with it, so the wires and cables come in where
+    // its faces now are. "A" works it out: as big as the bundle coming in wants, so the wires run straight
+    // in. Ctrl + the wheel over a part in the preview does the same by hand.
+    {
+        partScale_ = new QDoubleSpinBox(page);
+        partScale_->setObjectName(QStringLiteral("brickPartScale"));
+        partScale_->setRange(10.0, 1000.0);
+        partScale_->setDecimals(0);
+        partScale_->setSingleStep(5.0);
+        partScale_->setSuffix(QStringLiteral(" %"));
+        partScale_->setToolTip(QStringLiteral("How big the part is drawn - Ctrl + wheel over it in the preview "
+                                              "does the same"));
+        partScaleAuto_ = new QToolButton(page);
+        partScaleAuto_->setObjectName(QStringLiteral("brickPartScaleAuto"));
+        partScaleAuto_->setText(QStringLiteral("A"));
+        partScaleAuto_->setCheckable(true);
+        partScaleAuto_->setToolTip(QStringLiteral("Auto: as big as the wires and cables coming in want, so they "
+                                                  "run in with the fewest bends"));
+        partScaleAuto_->setStyleSheet(QStringLiteral("QToolButton{padding:1px 5px;font-weight:bold;}"
+                                                     "QToolButton:checked{background:#2b6cb0;color:white;}"));
+        auto* row = new QHBoxLayout;
+        row->setContentsMargins(0, 0, 0, 0);
+        row->addWidget(partScale_, 1);
+        row->addWidget(partScaleAuto_);
+        f->addRow(QStringLiteral("Part scale"), row);
+        connect(partScale_, &QDoubleSpinBox::valueChanged, this, [this](double) {
+            if (partScale_->signalsBlocked()) return;
+            // A figure typed in takes it over from Auto.
+            if (partScaleAuto_->isChecked()) {
+                const QSignalBlocker hush(partScaleAuto_);
+                partScaleAuto_->setChecked(false);
+            }
+            writeEnd();
+        });
+        connect(partScaleAuto_, &QToolButton::toggled, this, [this](bool) { writeEnd(); });
+    }
     bomState_ = new QLabel(page);
     bomState_->setObjectName(QStringLiteral("brickBomState"));
     bomState_->setWordWrap(true);
@@ -1639,6 +1742,13 @@ void BrickWizardDialog::loadPanel() {
         part_->setCurrentIndex(at >= 0 ? at : 0);
         if (name_->text() != b->name) name_->setText(b->name);
         balloon_->setChecked(b->balloon);
+        if (partScale_) {
+            const QSignalBlocker a(partScale_), c(partScaleAuto_);
+            partScaleAuto_->setChecked(b->autoScale);
+            // On Auto, the figure the drawing came to; otherwise the brick's own.
+            const double k = b->autoScale ? drawnScales_.value(b->id, b->scale) : b->scale;
+            partScale_->setValue(k * 100.0);
+        }
         // THE PART'S OWN FIGURES, straight out of the library.
         params_->setRowCount(0);
         const LibraryPart* p = b->libPart.isEmpty() ? nullptr : catalog_.byId(b->libPart);
@@ -1815,8 +1925,55 @@ void BrickWizardDialog::writeEnd() {
     b->libPart = part_->currentData().toString();
     b->name = name_->text();
     b->balloon = balloon_->isChecked();
+    if (partScale_) {
+        b->autoScale = partScaleAuto_->isChecked();
+        if (!b->autoScale) b->scale = std::clamp(partScale_->value() / 100.0, 0.1, 10.0);
+    }
     canvas_->update();
     refreshPreview();
+    // On Auto, the figure it came to.
+    if (partScale_ && b->autoScale) {
+        const QSignalBlocker hush(partScale_);
+        partScale_->setValue(drawnScales_.value(b->id, b->scale) * 100.0);
+    }
+}
+
+// CTRL + THE WHEEL OVER A PART IN THE PREVIEW scales that part - and the wires meet it where its faces now
+// are. The wheel on its own still zooms the preview.
+bool BrickWizardDialog::eventFilter(QObject* o, QEvent* e) {
+    if (o == preview_ && e->type() == QEvent::Wheel) {
+        auto* we = static_cast<QWheelEvent*>(e);
+        if (we->modifiers() & Qt::ControlModifier) {
+            const Vec2 at = preview_->worldAt(we->position());
+            QString hit;
+            double best = 1e300;
+            for (const Entity& en : preview_->entities()) {
+                const QString id = en.meta.value(QStringLiteral("brickId")).toString();
+                const Brick* b = design_.brick(id);
+                if (!b || b->type != BrickType::End) continue;
+                const Bounds bb = en.bounds();
+                if (!bb.valid || at.x < bb.min.x || at.x > bb.max.x || at.y < bb.min.y || at.y > bb.max.y) continue;
+                const double area = std::max(1e-9, bb.width() * bb.height());
+                if (area < best) {
+                    best = area;
+                    hit = id;
+                }
+            }
+            if (Brick* b = design_.brick(hit)) {
+                const double steps = we->angleDelta().y() / 120.0;
+                const double from = b->autoScale ? drawnScales_.value(b->id, b->scale) : b->scale;
+                b->autoScale = false;
+                b->scale = std::clamp(from * std::pow(1.1, steps), 0.1, 10.0);
+                canvas_->setSelected(b->id);
+                loadPanel();
+                refreshPreview();
+                status_->setText(QStringLiteral("%1 drawn at %2 %").arg(b->name.isEmpty() ? partKindName(b->kind) : b->name)
+                                     .arg(qRound(b->scale * 100.0)));
+                return true;
+            }
+        }
+    }
+    return QDialog::eventFilter(o, e);
 }
 
 void BrickWizardDialog::writeRun() {
@@ -1857,6 +2014,7 @@ void BrickWizardDialog::refreshPreview() {
     const BrickBuild built = buildBrickHarness(design_, &catalog_,
                                                [this](const QString& id) { return bomItemOf(id); });
     actual_ = built.actual;
+    drawnScales_ = built.scales;
     std::vector<Entity> ents = built.entities;
     const QStringList sel = canvas_->selection();
     for (Entity& e : ents)

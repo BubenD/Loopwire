@@ -875,6 +875,38 @@ void testRoundFive() {
               "transition: at both ends, the joined end as its end boot");
     }
 
+    // A BRICK'S PART DRAWN BIGGER OR SMALLER: its faces go with it, so what joins it meets it there - and on
+    // Auto, as big as the bundle coming in wants.
+    {
+        BrickDesign d;
+        const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString y = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        d.connect(x, c);
+        d.connect(c, y);
+        const BrickBuild plain = buildBrickHarness(d, nullptr);
+        const double face1 = plain.faces.value(QStringLiteral("%1:0").arg(x)).lengthMm;
+        d.brick(x)->scale = 2.0;
+        d.shapeCache.clear();
+        const BrickBuild big = buildBrickHarness(d, nullptr);
+        const double face2 = big.faces.value(QStringLiteral("%1:0").arg(x)).lengthMm;
+        std::printf("  scale: face %.2f at 100%%, %.2f at 200%%\n", face1, face2);
+        check(face1 > 0.0 && std::abs(face2 - 2.0 * face1) < 1e-6, "scale: the part drawn twice as big, its face with it");
+        d.brick(x)->scale = 1.0;
+        d.brick(x)->autoScale = true;
+        d.shapeCache.clear();
+        const BrickBuild autoB = buildBrickHarness(d, nullptr);
+        const double k = autoB.scales.value(x, 1.0);
+        const double face3 = autoB.faces.value(QStringLiteral("%1:0").arg(x)).lengthMm;
+        const double bundle = std::max(1, d.brick(c)->run.wires) * d.brick(c)->run.wireWidthMm;
+        std::printf("  scale: auto %.2f - face %.2f for a bundle %.2f wide\n", k, face3, bundle);
+        check(std::abs(k - 1.0) > 1e-6 && bundle > 0.0 && std::abs(face3 * d.faceFanPct / 100.0 - bundle) < 0.02 * bundle,
+              "scale: on Auto, the face is made the width of the bundle coming in");
+        // Saved and read back.
+        const BrickDesign back = BrickDesign::fromJson(d.toJson());
+        check(back.brick(x) && back.brick(x)->autoScale, "scale: Auto kept with the design");
+    }
+
     // 7 (round six). A FAN CONVERGES TO SO MANY WIRES.
     {
         BrickDesign d;
@@ -1250,6 +1282,26 @@ void testDialogMore() {
     canvas->centreView();   // in view at the pane's own size - the clicks below are aimed at that
     canvas->update();
     QApplication::processEvents();
+
+    // COPY AND PASTE: a brick with its part and settings, and the links between those picked.
+    {
+        d.brick(f1)->libPart = QStringLiteral("some-part");
+        d.brick(f1)->name = QStringLiteral("F1");
+        const size_t bricksWere = d.bricks.size(), linksWere = d.links.size();
+        canvas->setSelection({fan, f1});
+        canvas->copySelection();
+        canvas->pasteClipboard();
+        check(d.bricks.size() == bricksWere + 2 && d.links.size() == linksWere + 1,
+              "paste: the two bricks come back, and the link between them");
+        bool keptPart = false;
+        for (const QString& id : canvas->selection())
+            if (const Brick* b = d.brick(id); b && b->libPart == QStringLiteral("some-part")) keptPart = true;
+        check(keptPart, "paste: a pasted brick keeps its part");
+        for (const QString& id : canvas->selection()) d.removeBrick(id);
+        canvas->setSelection({});
+        d.brick(f1)->libPart.clear();
+        d.brick(f1)->name.clear();
+    }
 
     // A BLUE ZONE, left to right: only what is wholly inside - the two ferrules.
     const QRectF r1 = canvas->brickRect(*d.brick(f1)), r2 = canvas->brickRect(*d.brick(f2));

@@ -38,6 +38,8 @@ public:
     // Back to the whole drawing, filling the widget.
     void fitToView();
     double zoom() const { return zoom_; }
+    // The drawing's point under a point of the pane, as it was last painted.
+    Vec2 worldAt(const QPointF& at) const { return lastVt_.toWorld(at); }
 
     // Picking one object out of what is shown. Used to say which line of a part's drawing the harness
     // attaches to: with this on, a click takes the nearest object under it and nothing else - one line,

@@ -365,6 +365,8 @@ QJsonObject BrickDesign::toJson() const {
         QJsonObject o{{"id", b.id},        {"type", brickTypeKey(b.type)}, {"kind", partKindKey(b.kind)},
                       {"libPart", b.libPart}, {"name", b.name},         {"col", b.col},
                       {"row", b.row},      {"rot", b.rot},             {"balloon", b.balloon}};
+        if (std::abs(b.scale - 1.0) > 1e-9) o.insert(QStringLiteral("scale"), b.scale);
+        if (b.autoScale) o.insert(QStringLiteral("autoScale"), true);
         if (brickIsSpecial(b.type)) {
             const BrickRunSpec& r = b.run;
             QJsonArray labels;
@@ -428,6 +430,8 @@ BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
         b.row = bo.value(QStringLiteral("row")).toDouble();
         b.rot = bo.value(QStringLiteral("rot")).toInt();
         b.balloon = bo.value(QStringLiteral("balloon")).toBool();
+        b.scale = std::clamp(bo.value(QStringLiteral("scale")).toDouble(1.0), 0.05, 20.0);
+        b.autoScale = bo.value(QStringLiteral("autoScale")).toBool();
         const QJsonObject r = bo.value(QStringLiteral("run")).toObject();
         if (!r.isEmpty()) {
             BrickRunSpec& s = b.run;
@@ -813,7 +817,27 @@ BrickShape specialShape() {
     return s;
 }
 
+namespace {
+BrickShape endShapeAsDrawn(const Brick& b, const PartsCatalog* catalog);
+} // namespace
+
+// An end's shape at the size it is drawn: the drawing, its faces and its ends all scaled about its middle,
+// so what joins it meets it at the faces where they now are.
 BrickShape endShape(const Brick& b, const PartsCatalog* catalog) {
+    BrickShape s = endShapeAsDrawn(b, catalog);
+    const double k = std::clamp(b.scale, 0.05, 20.0);
+    if (std::abs(k - 1.0) < 1e-9) return s;
+    for (Entity& e : s.drawing) scaleEntity(e, Vec2{0.0, 0.0}, k);
+    for (Vec2& m : s.faceMid) m = m * k;
+    for (double& len : s.faceLen) len *= k;
+    s.half = s.half * k;
+    s.nearAt = s.nearAt * k;
+    s.farAt = s.farAt * k;
+    return s;
+}
+
+namespace {
+BrickShape endShapeAsDrawn(const Brick& b, const PartsCatalog* catalog) {
     BrickShape s;
     const LibraryPart* part = catalog && !b.libPart.isEmpty() ? catalog->byId(b.libPart) : nullptr;
     if (part && part->hasMechanical()) {
@@ -881,11 +905,13 @@ BrickShape endShape(const Brick& b, const PartsCatalog* catalog) {
     s.drawing.push_back(makeTextAt(Vec2{-hx, hy + 2.0}, b.name.isEmpty() ? partKindName(b.kind) : b.name, 3.0));
     return s;
 }
+} // namespace
 
 BrickShape BrickDesign::shapeOf(const Brick& b) const {
     if (b.type != BrickType::End) return specialShape();
     const QString key = partKindKey(b.kind) + QLatin1Char('|') + b.libPart + QLatin1Char('|') + b.name +
-                        QLatin1Char('|') + QString::number(reinterpret_cast<quintptr>(catalog));
+                        QLatin1Char('|') + QString::number(reinterpret_cast<quintptr>(catalog)) +
+                        QLatin1Char('|') + QString::number(b.scale, 'g', 10);
     const auto it = shapeCache.constFind(key);
     if (it != shapeCache.constEnd()) return it.value();
     const BrickShape s = endShape(b, catalog);
@@ -895,8 +921,49 @@ BrickShape BrickDesign::shapeOf(const Brick& b) const {
 
 BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* catalog,
                              const std::function<int(const QString& libPart)>& itemOf) {
+    // AUTO SCALE: an end left on Auto is made as big as what comes into it wants - the width of the
+    // bundle arriving at its face, over the share of the face a fan is spread across - so the wires run
+    // straight in rather than bending to meet a face too big or too small. Worked out on a first drawing
+    // at the size it is drawn, then drawn again at that size.
+    bool anyAuto = false;
+    for (const Brick& b : design.bricks) anyAuto = anyAuto || (b.type == BrickType::End && b.autoScale);
+    if (anyAuto) {
+        BrickDesign first = design;
+        first.shapeCache.clear();
+        for (Brick& b : first.bricks)
+            if (b.autoScale) {
+                b.autoScale = false;
+                b.scale = 1.0;
+            }
+        const BrickBuild probe = buildBrickHarness(first, catalog, itemOf);
+        BrickDesign sized = design;
+        sized.shapeCache.clear();
+        const double share = std::clamp(design.faceFanPct, 10.0, 100.0) / 100.0;
+        for (Brick& b : sized.bricks) {
+            if (!b.autoScale) continue;
+            b.autoScale = false;
+            double want = 0.0;
+            for (const BrickLink& l : design.links) {
+                if (l.a != b.id && l.b != b.id) continue;
+                const QString otherId = l.a == b.id ? l.b : l.a;
+                const Brick* other = design.brick(otherId);
+                if (!other || !brickIsSpecial(other->type)) continue;
+                const int port = design.portOn(b.id, otherId);
+                const BrickFace face = probe.faces.value(faceKey(b.id, std::max(0, port)));
+                // THE BUNDLE'S OWN WIDTH: its wires side by side. Not the width the drawing gave the run -
+                // that is sized off the face, and chasing it would chase the face's own size back.
+                const double width = std::max(1, other->run.wires) * std::max(0.1, other->run.wireWidthMm);
+                if (face.lengthMm > 1e-6) want = std::max(want, width / (face.lengthMm * share));
+            }
+            b.scale = want > 1e-6 ? std::clamp(want, 0.1, 10.0) : 1.0;
+        }
+        BrickBuild done = buildBrickHarness(sized, catalog, itemOf);
+        return done;
+    }
     BrickBuild out;
     MechDrawOptions opt;
+    for (const Brick& b : design.bricks)
+        if (b.type == BrickType::End) out.scales.insert(b.id, b.scale);
 
     // WHAT EACH END IS: its shape, unturned, with a port for every connection face.
     QHash<QString, BrickShape> shapes;

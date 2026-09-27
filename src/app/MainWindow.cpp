@@ -2514,6 +2514,56 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
                                       : QStringLiteral("Far point marked in green"),
                                  3000);
     });
+    // THE DRAWING OF A PART OR A DEFAULT MODEL MOVED, TURNED, SCALED OR MIRRORED AS A WHOLE: its marks go
+    // with it - the connection point and which way it runs, the near and far points, the output faces - so
+    // the part is still placed by the same places on it. Only when the whole drawing went: one line moved on
+    // its own is a correction to the drawing, not the part being moved.
+    connect(editor_, &Editor::selectionTransformed, this,
+            [this](const std::vector<QString>& ids, const std::function<Vec2(const Vec2&)>& map) {
+                if (!doc_ || !map) return;
+                const bool libraryMech = libraryPartEdits_.contains(doc_) &&
+                                         libraryPartEditKind_.value(doc_) == LibraryPartDrawing::Mechanical;
+                const bool modelMech = mechModelEdits_.contains(doc_) && !mechModelEditSchematic_.value(doc_, false);
+                if (!libraryMech && !modelMech) return;
+                const QSet<QString> moved(ids.begin(), ids.end());
+                int drawing = 0;
+                for (const Entity& e : doc_->entities()) {
+                    if (e.layer == QLatin1String(kMechModelGuideLayer)) continue;
+                    ++drawing;
+                    if (!moved.contains(e.id)) return;   // not the whole drawing
+                }
+                if (drawing == 0) return;
+                auto turned = [&map](const Vec2& at, double angle) {
+                    const Vec2 d = map(at + Vec2{std::cos(angle), std::sin(angle)}) - map(at);
+                    return std::atan2(d.y, d.x);
+                };
+                if (libraryMech) {
+                    LibraryPart& part = libraryPartSessionModels_[doc_];
+                    part.connectAngleRad = turned(part.connectPoint, part.connectAngleRad);
+                    part.connectPoint = map(part.connectPoint);
+                    part.nearPoint = map(part.nearPoint);
+                    part.farPoint = map(part.farPoint);
+                    for (MechOutputFace& f : part.outputs) {
+                        f.a = map(f.a);
+                        f.b = map(f.b);
+                    }
+                    addLibraryPartGuides(*doc_, part);
+                } else {
+                    MechModel& model = mechModelSessionModels_[doc_];
+                    model.connectAngleRad = turned(model.connectPoint, model.connectAngleRad);
+                    model.connectPoint = map(model.connectPoint);
+                    model.nearPoint = map(model.nearPoint);
+                    model.farPoint = map(model.farPoint);
+                    for (auto& f : model.outputs) {
+                        f.a = map(f.a);
+                        f.b = map(f.b);
+                    }
+                    addMechModelGuides(*doc_, model);
+                }
+                doc_->setDirty(true);
+                canvas_->invalidateScene();
+                canvas_->update();
+            });
     // One object marked as the one the app scales by - and only one, so marking another moves the mark
     // rather than adding a second. Two references would be two answers to a question with one answer.
     connect(editor_, &Editor::modelScaleRefPicked, this, [this](const QString& id) {

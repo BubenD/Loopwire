@@ -124,6 +124,11 @@ struct Brick {
     int rot = 0;                           // quarter turns clockwise on the pane
     bool balloon = false;
     BrickRunSpec run;                      // for a special
+    // HOW BIG AN END'S PART IS DRAWN, 1 = as drawn in the library. Its faces scale with it, so the wires
+    // and cables meet it where its faces now are. On Auto the drawing works it out: the part is made as
+    // big as the bundle coming into it wants, so the wires run in with as few bends as there can be.
+    double scale = 1.0;
+    bool autoScale = false;
 };
 
 struct BrickLink {
@@ -245,6 +250,7 @@ struct BrickBuild {
     std::vector<Entity> entities;           // every entity carries meta "brickId"
     QHash<QString, BrickActual> actual;     // by special id
     QHash<QString, BrickFace> faces;        // by "<end id>:<port>"
+    QHash<QString, double> scales;          // what each end was drawn at, by id - Auto's figure included
     QStringList problems;                   // what could not be drawn, and why
 };
 

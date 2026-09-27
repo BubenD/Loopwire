@@ -521,6 +521,19 @@ int run_mechmodelcanvas_tests() {
                     win.markMechModelConnectAt(Vec2{2.0, -5.0}, 0.0);
                     QApplication::processEvents();
 
+                    // THE WHOLE DRAWING MOVED: its connection point goes with it.
+                    ed->clearSelection();
+                    for (const Entity& e : d->entities())
+                        if (e.layer != QLatin1String(kMechModelGuideLayer)) ed->selectById(e.id, true);
+                    ed->setTool(ToolId::Move);
+                    ed->onPointerPress(Vec2{0.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+                    ed->onPointerRelease(Vec2{0.0, 0.0}, Qt::LeftButton);
+                    ed->onPointerMove(Vec2{10.0, 0.0});
+                    ed->onPointerPress(Vec2{10.0, 0.0}, Qt::LeftButton, Qt::NoModifier);
+                    ed->onPointerRelease(Vec2{10.0, 0.0}, Qt::LeftButton);
+                    ed->setTool(ToolId::Select);
+                    QApplication::processEvents();
+
                     win.saveMechModelBeingEdited(); // Save/Cancel are generalised to route by session kind
                     QApplication::processEvents();
                 }
@@ -533,6 +546,12 @@ int run_mechmodelcanvas_tests() {
                     // Everything was removed, then the connection point alone put back: that is what saves.
                     check(saved->hasConnect && !saved->hasNearPoint && !saved->hasFarPoint,
                           "library session: its marks round-tripped through the save too");
+                    std::printf("  library session: connection point saved at %.2f, %.2f\n", saved->connectPoint.x,
+                                saved->connectPoint.y);
+                    // Where it is ON THE PART: the save sets the drawing's left end on the origin, so a point that moved
+                    // with the drawing comes back where it was on it (2, -5) - left behind, it would be at -8.
+                    check(std::abs(saved->connectPoint.x - 2.0) < 1e-6 && std::abs(saved->connectPoint.y + 5.0) < 1e-6,
+                          "library session: moving the whole drawing took its connection point with it");
                 }
             }
         }

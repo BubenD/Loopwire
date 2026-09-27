@@ -81,6 +81,10 @@ public:
     // deleting what is picked - or fitting and the map, on nothing.
     void fillContextMenu(QMenu& menu);
     void duplicateSelection();
+    // COPY AND PASTE of bricks - their parts, settings and the links between them - through the clipboard,
+    // so a brick set up once is put down again, here or in another wizard.
+    void copySelection();
+    void pasteClipboard();
     // The middle of what is in view, on the grid.
     QPointF viewCentreGrid() const;
     // How far the pane is zoomed: 1 is the pane's own size.
@@ -265,6 +269,11 @@ private:
     QComboBox* part_ = nullptr;
     QLineEdit* name_ = nullptr;
     QCheckBox* balloon_ = nullptr;
+    // How big the part is drawn, and "A" - worked out so the wires come in with the fewest bends.
+    QDoubleSpinBox* partScale_ = nullptr;
+    QToolButton* partScaleAuto_ = nullptr;
+    QHash<QString, double> drawnScales_;   // what each end came to on the last drawing
+    bool eventFilter(QObject* o, QEvent* e) override;
     QLabel* bomState_ = nullptr;
     QPushButton* bomAdd_ = nullptr;
     QTableWidget* params_ = nullptr;

@@ -12188,6 +12188,15 @@ bool Editor::acceptCommandInput(const QString& text) {
             pushUndo();
             const double rad = -deg * M_PI / 180.0;   // clockwise, as typed
             for (Entity* e : sel) rotateEntity(*e, piv, rad);
+            {
+                std::vector<QString> ids;
+                for (Entity* e : sel) ids.push_back(e->id);
+                const double c = std::cos(rad), s = std::sin(rad);
+                emit selectionTransformed(ids, [piv, c, s](const Vec2& p) {
+                    const Vec2 d = p - piv;
+                    return piv + Vec2{d.x * c - d.y * s, d.x * s + d.y * c};
+                });
+            }
             modifyPts_.clear();
             moveTurn_ = 0.0;   // the move ended: nothing is carrying a turn any more
             shownCentres_.clear();
@@ -12679,12 +12688,29 @@ void Editor::handleModifyPress(const Vec2& p) {
             if (e->type == EntityType::Connector) dragAttachedWires(*e, delta, movingIds);
             translateEntity(*e, delta);
         }
+        {
+            const Vec2 base = modifyPts_[0];
+            const double c = std::cos(moveTurn_), s = std::sin(moveTurn_);
+            emit selectionTransformed(movingIds, [base, c, s, delta](const Vec2& p) {
+                const Vec2 d = p - base;
+                return base + Vec2{d.x * c - d.y * s, d.x * s + d.y * c} + delta;
+            });
+        }
         break;
     }
     case ToolId::Rotate: {
         const Vec2 piv = modifyPts_[0];
         const double ang = std::atan2(modifyPts_[1].y - piv.y, modifyPts_[1].x - piv.x);
         for (Entity* e : sel) rotateEntity(*e, piv, ang);
+        {
+            std::vector<QString> ids;
+            for (Entity* e : sel) ids.push_back(e->id);
+            const double c = std::cos(ang), s = std::sin(ang);
+            emit selectionTransformed(ids, [piv, c, s](const Vec2& p) {
+                const Vec2 d = p - piv;
+                return piv + Vec2{d.x * c - d.y * s, d.x * s + d.y * c};
+            });
+        }
         break;
     }
     case ToolId::Scale: {
@@ -12913,6 +12939,11 @@ void Editor::scaleSelection(const std::vector<Entity*>& sel, const Vec2& base, d
     // 2) Scale every selected entity uniformly about the base — connectors scale their
     //    structure parametrically (scaleEntity), wires/other geometry scale their points.
     for (Entity* e : sel) scaleEntity(*e, base, sf);
+    {
+        std::vector<QString> ids;
+        for (Entity* e : sel) ids.push_back(e->id);
+        emit selectionTransformed(ids, [base, sf](const Vec2& p) { return base + (p - base) * sf; });
+    }
 
     // 3) Re-snap each recorded wire point to its connector's NEW pin end so connections
     //    hold exactly (even if the connector's internal pin spacing scaled differently
@@ -18584,6 +18615,14 @@ void Editor::commitMirror(bool copy) {
         emit selectionChanged();
     } else {
         for (Entity* e : sel) mirrorEntity(*e, mirrorA_, mirrorB_);
+        std::vector<QString> ids;
+        for (Entity* e : sel) ids.push_back(e->id);
+        const Vec2 a = mirrorA_, u = (mirrorB_ - mirrorA_).normalized();
+        emit selectionTransformed(ids, [a, u](const Vec2& p) {
+            const Vec2 d = p - a;
+            const double along = d.x * u.x + d.y * u.y;
+            return a + u * (2.0 * along) - d;
+        });
     }
     doc_->setDirty(true);
     emit message(copy ? QStringLiteral("Mirrored (copy)") : QStringLiteral("Mirrored"));

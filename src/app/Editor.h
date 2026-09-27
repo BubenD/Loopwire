@@ -50,6 +50,9 @@ enum class ShrinkRouteMode { Sleeve, Cable, CableEnds, Transition };
 // and in-progress geometry. The CanvasWidget forwards input here and asks it to
 // paint overlays (previews, selection highlights, snap markers). Mirrors the
 // role of Edraw's global `state` plus its tool/command logic.
+// Where any point goes under a move, a turn, a scale or a mirror - see Editor::selectionTransformed.
+using PointMap = std::function<Vec2(const Vec2&)>;
+
 class Editor : public QObject {
     Q_OBJECT
 public:
@@ -1472,6 +1475,9 @@ public:
     double inputScale() const { return inputScale_; }
 
 signals:
+    // THE PICKED OBJECTS WERE MOVED, TURNED, SCALED OR MIRRORED: which ones, and where any point went. A model
+    // being drawn carries its marks - its connection point, its ends, its output faces - along the same way.
+    void selectionTransformed(const std::vector<QString>& ids, const Edraw_Desktop::PointMap& map);
     void changed();              // geometry/document mutated -> repaint + panels
     void overlayChanged();       // interactive preview/cursor moved -> repaint only (no panel rebuild)
     void selectionChanged();
