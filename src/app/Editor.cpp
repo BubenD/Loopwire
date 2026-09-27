@@ -1422,6 +1422,10 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
 
 Editor::Editor(QObject* parent) : QObject(parent) {
     hookSelectionCompanions();
+    hatchPreviewTimer_ = new QTimer(this);
+    hatchPreviewTimer_->setSingleShot(true);
+    hatchPreviewTimer_->setInterval(200);   // the cursor has stopped: now show what a click would fill
+    connect(hatchPreviewTimer_, &QTimer::timeout, this, [this] { computeHatchPreview(); });
     dragTimer_ = new QTimer(this);
     dragTimer_->setInterval(30); // animate the countdown + check the hold threshold
     connect(dragTimer_, &QTimer::timeout, this, [this] { onDragTick(); });
@@ -1591,6 +1595,9 @@ void Editor::setDocument(Document* doc) {
 }
 
 void Editor::setTool(ToolId t) {
+    hatchPreview_ = {};
+    if (hatchPreviewTimer_) hatchPreviewTimer_->stop();
+    hoverBlockId_.clear();
     if (t != ToolId::ModelConnectPoint) haveConnectFirst_ = false;
     if (t != ToolId::CenterLine) centerLineFirst_.clear();
     if (t != ToolId::ModelOutputLine) haveOutputFirst_ = false;
@@ -4391,6 +4398,36 @@ std::optional<Vec2> Editor::trackingAnchor() const {
 
 void Editor::onPointerMove(const Vec2& raw) {
     if (!doc_) return;
+    // Hatch Pick Points: what was shown belongs to where the cursor WAS. It goes, and comes back for
+    // the new place once the cursor has been still for a fifth of a second.
+    if (tool_ == ToolId::Hatch && hatchStyle_.boundary == HatchBoundary::PickPoints) {
+        if (hatchPreview_.valid) {
+            hatchPreview_ = {};
+            emit overlayChanged();
+        }
+        hatchPreviewTimer_->start();
+    }
+    // THE BLOCK UNDER THE CURSOR, lit grey: it is one object, and one a click on its lines would take.
+    // Only references are looked at, so a drawing of loose lines costs a walk and no measuring.
+    {
+        QString over;
+        if (tool_ == ToolId::Select && !pressed_ && !editing_ && !pastePlacing_) {
+            double best = worldTolerance();
+            for (const Entity& e : doc_->entities()) {
+                if (e.type != EntityType::BlockRef) continue;
+                if (const Layer* l = doc_->findLayer(e.layer); l && (!l->visible || l->locked)) continue;
+                const double d = distanceToEntity(e, raw);
+                if (d < best) {
+                    best = d;
+                    over = e.id;
+                }
+            }
+        }
+        if (over != hoverBlockId_) {
+            hoverBlockId_ = over;
+            emit overlayChanged();
+        }
+    }
     const std::optional<Vec2> anchor = trackingAnchor();
 
     std::vector<QString> ignore;
@@ -5028,10 +5065,9 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         // A cut only now removes the originals (kept visible until placed).
         if (!cutPending_.empty()) {
             auto& ents = doc_->entities();
-            ents.erase(std::remove_if(ents.begin(), ents.end(), [&](const Entity& e) {
-                           return std::find(cutPending_.begin(), cutPending_.end(), e.id) !=
-                                  cutPending_.end();
-                       }),
+            const QSet<QString> going(cutPending_.begin(), cutPending_.end());   // asked, not walked
+            ents.erase(std::remove_if(ents.begin(), ents.end(),
+                                      [&going](const Entity& e) { return going.contains(e.id); }),
                        ents.end());
             cutPending_.clear();
         }
@@ -5044,9 +5080,12 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         std::vector<Entity> copies;
         copies.reserve(clipboard_.size());
         QHash<QString, QString> oldToNew;
+        // A BIG PASTE GETS LONG IDS. The short ones are eight hex digits, and among tens of thousands
+        // pasted at once two coming out the same is an even bet - two lines one click would pick together.
+        const bool many = clipboard_.size() > 1000;
         for (Entity e : clipboard_) {
             const QString was = e.id;
-            e.id = uid();
+            e.id = many ? QUuid::createUuid().toString(QUuid::WithoutBraces) : uid();
             oldToNew.insert(was, e.id);
             if (pasteMirrorX_) mirrorEntity(e, clipboardBase_, {clipboardBase_.x, clipboardBase_.y + 1});
             if (pasteMirrorY_) mirrorEntity(e, clipboardBase_, {clipboardBase_.x + 1, clipboardBase_.y});
@@ -19323,7 +19362,101 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
 
 // ---- Overlay painting ------------------------------------------------------
 
+bool Editor::drawBigPasteGhost(QPainter& p, const ViewTransform& vt, const QColor& ghost) const {
+    // A clipboard of a few hundred objects is drawn afresh as it moves, as it always was. A big one is
+    // drawn ONCE, turned and mirrored as it will land, into a picture that is then moved with the
+    // cursor: while it is being placed only where it goes changes, and that is a move of the picture.
+    constexpr size_t kPictureFrom = 500;
+    if (clipboard_.size() < kPictureFrom) return false;
+    const qreal dpr = p.device() ? p.device()->devicePixelRatioF() : 1.0;
+    const double s = vt.scale();
+    const QString key = QStringLiteral("%1|%2|%3|%4|%5|%6|%7|%8|%9")
+                            .arg(clipStamp_)
+                            .arg(clipboard_.size())
+                            .arg(clipboard_.front().id, clipboard_.back().id)
+                            .arg(s, 0, 'g', 12)
+                            .arg(placeRot_, 0, 'g', 12)
+                            .arg(int(pasteMirrorX_) * 2 + int(pasteMirrorY_))
+                            .arg(dpr)
+                            .arg(ghost.name(QColor::HexArgb));
+    if (key != ghostKey_) {
+        ghostKey_ = key;
+        ghostImg_ = QImage();
+        std::vector<Entity> placed;
+        placed.reserve(clipboard_.size());
+        Bounds box;
+        for (Entity e : clipboard_) {
+            if (pasteMirrorX_) mirrorEntity(e, clipboardBase_, {clipboardBase_.x, clipboardBase_.y + 1});
+            if (pasteMirrorY_) mirrorEntity(e, clipboardBase_, {clipboardBase_.x + 1, clipboardBase_.y});
+            if (std::abs(placeRot_) > 1e-9) rotateEntity(e, clipboardBase_, placeRot_);
+            if (const Bounds b = e.bounds(); b.valid) box.expand(b);
+            placed.push_back(std::move(e));
+        }
+        if (!box.valid) return false;
+        const double pad = 8.0;
+        const double w = box.width() * s + 2 * pad, h = box.height() * s + 2 * pad;
+        // Zoomed in so far that the picture would be enormous: drawn as it always was instead.
+        if (w * dpr > 6000.0 || h * dpr > 6000.0) return false;
+        QImage img(QSize(qCeil(w * dpr), qCeil(h * dpr)), QImage::Format_ARGB32_Premultiplied);
+        img.setDevicePixelRatio(dpr);
+        img.fill(Qt::transparent);
+        ViewTransform gv = vt;
+        gv.view.x = -box.min.x * s + pad;
+        gv.view.y = box.max.y * s + pad;
+        QPainter ip(&img);
+        ip.setRenderHints(p.renderHints());
+        for (const Entity& e : placed) EntityRenderer::draw(ip, e, *doc_, gv, ghost);
+        ip.end();
+        ghostImg_ = img;
+        ghostAnchor_ = gv.toScreen(clipboardBase_);
+    }
+    if (ghostImg_.isNull()) return false;
+    p.drawImage(vt.toScreen(cursor_) - ghostAnchor_, ghostImg_);
+    return true;
+}
+
+void Editor::computeHatchPreview() {
+    hatchPreview_ = {};
+    if (!doc_ || tool_ != ToolId::Hatch || hatchStyle_.boundary != HatchBoundary::PickPoints) return;
+    // Worked out once per stop rather than per paint, so the tracer that follows a region round several
+    // separate objects can be let loose on a bigger drawing than before - but not an unbounded one: it
+    // grows with the square of the number of objects, and the click still traces whatever the size.
+    const bool allowTrace = doc_->entities().size() <= 1000;
+    const HatchRegion region = pickHatchRegion(cursor_, allowTrace);
+    if (region.ent) {
+        if (!hatchStyle_.manyJoints && region.ent->type == EntityType::Circle) {
+            hatchPreview_.circle = true;
+            hatchPreview_.centre = region.ent->center;
+            hatchPreview_.radius = region.ent->radius;
+        } else {
+            hatchPreview_.loop = boundaryPointsOf(*region.ent, hatchStyle_.manyJoints);
+        }
+        hatchPreview_.valid = true;
+    } else if (region.loop) {
+        hatchPreview_.loop = *region.loop;   // a region bounded by several separate objects
+        hatchPreview_.valid = true;
+    }
+    if (hatchPreview_.valid) emit overlayChanged();
+}
+
 void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
+    // The block under the cursor, in a soft grey over its box - not when it is already picked, which
+    // says more.
+    if (!hoverBlockId_.isEmpty() && tool_ == ToolId::Select &&
+        std::find(selected_.begin(), selected_.end(), hoverBlockId_) == selected_.end()) {
+        if (const Entity* hb = entityById(hoverBlockId_); hb && hb->points.size() >= 4) {
+            QPolygonF box;
+            for (const Vec2& c : hb->points) box << vt.toScreen(c);
+            p.save();
+            QPen gp(QColor(170, 170, 170, 150));
+            gp.setCosmetic(true);
+            gp.setWidthF(1.2);
+            p.setPen(gp);
+            p.setBrush(QColor(160, 160, 160, 38));
+            p.drawPolygon(box);
+            p.restore();
+        }
+    }
     if (rectPick_ && rectPickHaveFirst_) {
         // The window as it stands: from the corner already picked to the snapped cursor.
         const QPointF a = vt.toScreen(rectPickFirst_);
@@ -19577,12 +19710,14 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     if (pastePlacing_ && !clipboard_.empty()) {
         const Vec2 off = cursor_ - clipboardBase_;
         const QColor ghost = paperInk(paperInk(QColor(120, 200, 255, 170)));
-        for (Entity e : clipboard_) {
-            if (pasteMirrorX_) mirrorEntity(e, clipboardBase_, {clipboardBase_.x, clipboardBase_.y + 1});
-            if (pasteMirrorY_) mirrorEntity(e, clipboardBase_, {clipboardBase_.x + 1, clipboardBase_.y});
-            if (std::abs(placeRot_) > 1e-9) rotateEntity(e, clipboardBase_, placeRot_);
-            translateEntity(e, off);
-            EntityRenderer::draw(p, e, *doc_, vt, ghost);
+        if (!drawBigPasteGhost(p, vt, ghost)) {
+            for (Entity e : clipboard_) {
+                if (pasteMirrorX_) mirrorEntity(e, clipboardBase_, {clipboardBase_.x, clipboardBase_.y + 1});
+                if (pasteMirrorY_) mirrorEntity(e, clipboardBase_, {clipboardBase_.x + 1, clipboardBase_.y});
+                if (std::abs(placeRot_) > 1e-9) rotateEntity(e, clipboardBase_, placeRot_);
+                translateEntity(e, off);
+                EntityRenderer::draw(p, e, *doc_, vt, ghost);
+            }
         }
         const QPointF c = vt.toScreen(cursor_);
         QPen mp(paperInk(QColor("#ffd166")));
@@ -20746,27 +20881,22 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 p.restore();
             }
         };
-        // Live preview: on big drawings skip the O(n^2) multi-object tracer so the
-        // cursor stays smooth (the click still traces and fills the cell).
-        const bool allowTrace = doc_->entities().size() <= 80;
-        HatchRegion region = pickHatchRegion(cursor_, allowTrace);
-        if (region.ent) {
-            if (!hatchStyle_.manyJoints && region.ent->type == EntityType::Circle) {
+        // What was worked out when the cursor stopped - see computeHatchPreview.
+        if (hatchPreview_.valid) {
+            if (hatchPreview_.circle) {
                 p.save();
                 QPen hp(paperInk(QColor("#2bd0ff")));
                 hp.setCosmetic(true);
                 hp.setWidthF(1.6);
                 p.setPen(hp);
                 p.setBrush(QColor(80, 160, 255, 60));
-                const QPointF c = vt.toScreen(region.ent->center);
-                const double r = region.ent->radius * vt.scale();
+                const QPointF c = vt.toScreen(hatchPreview_.centre);
+                const double r = hatchPreview_.radius * vt.scale();
                 p.drawEllipse(c, r, r);
                 p.restore();
             } else {
-                previewLoop(boundaryPointsOf(*region.ent, hatchStyle_.manyJoints));
+                previewLoop(hatchPreview_.loop);
             }
-        } else if (region.loop) {
-            previewLoop(*region.loop); // region bounded by several separate objects
         }
     }
 

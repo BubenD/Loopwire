@@ -13,6 +13,7 @@
 
 #include <QElapsedTimer>
 #include <QHash>
+#include <QImage>
 #include <QJsonValue>
 #include <QObject>
 
@@ -1326,6 +1327,10 @@ public:
     };
     HatchStyle& hatchStyle() { return hatchStyle_; }
     const HatchStyle& hatchStyle() const { return hatchStyle_; }
+    // Whether Pick Points is showing the region under the cursor yet - it waits for the cursor to stop.
+    bool hatchPreviewShown() const { return hatchPreview_.valid; }
+    // The block reference the cursor is over, lit grey; empty when none.
+    QString hoveredBlock() const { return hoverBlockId_; }
 
     // Apply an edited connector spec to the currently selected connector.
     void applyConnectorSpecToSelection(const ConnectorSpec& spec);
@@ -2167,6 +2172,27 @@ private:
     std::vector<Vec2> dragPath_;  // freeform lasso path
     bool lassoWindowMode_ = true; // window vs crossing, fixed at lasso conversion
     QTimer* dragTimer_ = nullptr; // ticks during the hold for countdown + lasso promote
+    // HATCH PICK POINTS: the region under the cursor is worked out once the cursor has stopped for a
+    // moment, not on every paint - tracing the boundary is real work, and doing it on each mouse move
+    // made the cursor drag. The overlay draws what was last worked out.
+    QTimer* hatchPreviewTimer_ = nullptr;
+    struct HatchPreviewShape {
+        bool valid = false;
+        bool circle = false;
+        Vec2 centre;
+        double radius = 0.0;
+        std::vector<Vec2> loop;
+    };
+    HatchPreviewShape hatchPreview_;
+    void computeHatchPreview();
+    bool drawBigPasteGhost(QPainter& p, const ViewTransform& vt, const QColor& ghost) const;
+    // The block reference under the cursor, lit a soft grey so it is clear a click would take it.
+    QString hoverBlockId_;
+    // A BIG PASTE'S GHOST, drawn once and moved with the cursor: tens of thousands of objects drawn
+    // afresh on every mouse move made placing them crawl. Keyed on what the picture depends on.
+    mutable QImage ghostImg_;
+    mutable QString ghostKey_;
+    mutable QPointF ghostAnchor_;   // where the clipboard's base point is in the picture
     QElapsedTimer pressTimer_;    // time since pointer press (for the 0.2s hold)
 
     // Direct-edit drag state (move whole entity, or move a grip/joint).

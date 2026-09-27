@@ -11,6 +11,7 @@
 #include "app/MainWindow.h"
 #include <QProgressBar>
 #include <QToolButton>
+#include <QElapsedTimer>
 #include <QImage>
 #include <QPainter>
 #include "render/EntityRenderer.h"
@@ -162,6 +163,24 @@ int run_pdfimport_tests() {
         win.cancelBlockEdit();
         QApplication::processEvents();
 
+        // HOVERED, THE BLOCK IS LIT GREY: over one of its lines it is the block the cursor is on; off in
+        // empty space, it is not.
+        if (doc && ref) {
+            Editor* ed2 = win.findChild<Editor*>();
+            if (ed2) {
+                ed2->setTool(ToolId::Select);
+                Vec2 onLine{0.0, 0.0};
+                if (const auto content = blockRefContent(stem); content && !content->entities.empty()) {
+                    const Entity& first = content->entities.front();
+                    onLine = first.points.empty() ? first.a : first.points.front();
+                }
+                ed2->onPointerMove(onLine);
+                check(ed2->hoveredBlock() == ref->id, "block: hovered, the reference is the one lit");
+                ed2->onPointerMove(Vec2{5000.0, 5000.0});
+                check(ed2->hoveredBlock().isEmpty(), "block: and moved off it, nothing is lit");
+            }
+        }
+
         // THE HOME TAB'S EDIT BLOCK opens the picked block, the same as a double-click.
         if (doc && ref) {
             Editor* ed1 = win.findChild<Editor*>();
@@ -264,6 +283,31 @@ int run_pdfimport_tests() {
         QString dxf = file;
         dxf.chop(4);
         QFile::remove(dxf + QStringLiteral(".dxf"));
+    }
+
+    // HATCH PICK POINTS WAITS FOR THE CURSOR TO STOP: nothing is shown while it moves, and the region under
+    // it a fifth of a second after it stops.
+    {
+        Document hd;
+        hd.entities().clear();
+        Entity box;
+        box.id = QStringLiteral("hatch-box");
+        box.type = EntityType::Rect;
+        box.points = {{0, 0}, {100, 0}, {100, 60}, {0, 60}};
+        hd.entities().push_back(box);
+        Editor he;
+        he.setDocument(&hd);
+        he.setTool(ToolId::Hatch);
+        he.hatchStyle().boundary = Editor::HatchBoundary::PickPoints;
+        he.onPointerMove(Vec2{50, 30});
+        check(!he.hatchPreviewShown(), "hatch: nothing shown while the cursor is still moving");
+        QElapsedTimer wait;
+        wait.start();
+        while (!he.hatchPreviewShown() && wait.elapsed() < 1500) QApplication::processEvents(QEventLoop::AllEvents, 20);
+        std::printf("  hatch preview after %lld ms\n", static_cast<long long>(wait.elapsed()));
+        check(he.hatchPreviewShown() && wait.elapsed() >= 150, "hatch: and the region shows once it has stopped");
+        he.onPointerMove(Vec2{51, 30});
+        check(!he.hatchPreviewShown(), "hatch: moving again takes it away until the cursor stops again");
     }
 
     // A BLOCK REFERENCE KEEPS ITS PLACE when the block changes: turned a quarter, doubled and moved, then
