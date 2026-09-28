@@ -408,6 +408,13 @@ QString leadColorHex(const QString& name) {
     return kHex.value(first);
 }
 
+QString wireSwatchHex(const QString& name) {
+    const QString first = name.section(QLatin1Char('/'), 0, 0).trimmed().toLower();
+    if (first == QStringLiteral("black")) return QStringLiteral("#202020");
+    const QString hex = leadColorHex(first);
+    return hex.isEmpty() ? QStringLiteral("#808080") : hex;
+}
+
 QJsonArray withWiredWires(const LibraryPart& part, bool mechanical, const QJsonArray& drawing) {
     if (part.kind != PartKind::Connector || !partIsWired(part) || drawing.isEmpty()) return drawing;
     const WiredDisplay d = partWiredDisplay(part);

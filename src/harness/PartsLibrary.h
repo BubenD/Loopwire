@@ -512,6 +512,9 @@ void setPartWiredDisplay(LibraryPart& part, const WiredDisplay& d);
 QJsonArray withWiredWires(const LibraryPart& part, bool mechanical, const QJsonArray& drawing);
 // A wire colour's name as a colour to draw it in; empty (the layer's own) for black and for anything unknown.
 QString leadColorHex(const QString& name);
+// A wire colour as a swatch to show it by - black as black (not left to the layer), the body colour of a
+// striped "White/Blue". Grey for a name it does not know.
+QString wireSwatchHex(const QString& name);
 
 // The gauge of every pin, 1..wayCount, worked out from the types' pin lists - what a schematic symbol
 // labels its pins with. A pin no type claims is left empty rather than guessed at.

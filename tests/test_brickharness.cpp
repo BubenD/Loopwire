@@ -1292,6 +1292,8 @@ void testDialog() {
     if (auto* right = dlg.findChild<QPushButton*>(QStringLiteral("brickRight"))) right->click();
     check(near(dlg.design().brick(f1)->col, wasCol + 1.0), "wizard: the arrow buttons move the picked brick");
     dlg.arrange();
+    canvas->resetZoom();   // Symmetric fits the pane; the clicks below are aimed at its own size
+    canvas->centreView();
     check(near(dlg.design().brick(f1)->row, dlg.design().brick(x1)->row) &&
               dlg.design().brick(f1)->col > dlg.design().brick(x1)->col,
           "wizard: arranged, a single run is laid straight along the axis");
@@ -1399,6 +1401,8 @@ void testDialogMore() {
     check(d.brick(f1)->rot == (f1Rot + 1) % 4 && d.brick(fan)->rot == (fanRot + 1) % 4 && d.brick(x1)->rot == x1Rot,
           "rotate: the bar button turns what is picked a quarter");
     dlg.arrange();   // and arranging turns each to face what it is linked to again
+    canvas->resetZoom();   // Symmetric fits the pane; the clicks below are aimed at its own size
+    canvas->centreView();
     check(d.brick(f1)->rot == f1Rot && d.brick(fan)->rot == fanRot, "arrange: turns them back to face their links");
 
     // THE FANOUT'S WIRES PER PART: picking its link to a ferrule, and saying two.
@@ -1526,8 +1530,8 @@ void testRoundSix() {
         const double along = std::abs(fb.centre.x - fa.centre.x);
         const double across = std::abs(fb.centre.y - fa.centre.y);
         std::printf("  spread: faces %.1f along and %.1f across for a 300 mm run\n", along, across);
-        check(across > 1.0 && std::abs(along + across - 300.0) < 1.0,
-              "spread: the far part is as far along as the run's length less the climb across");
+        check(across > 1.0 && std::abs(along + across * (std::sqrt(2.0) - 1.0) - 300.0) < 1.0,
+              "spread: the far part is as far along as the run's length less the climb across, on the slant");
         const Entity r = runOf(b);
         bool forward = r.points.size() >= 2;
         for (size_t i = 1; i < r.points.size(); ++i)
@@ -1567,6 +1571,100 @@ void testRoundSix() {
     }
 }
 
+// ROUND SEVEN: routes with as few bends as there can be, designators that can be put away, and a transition
+// heatshrink with a width of its own that never goes below the cable's.
+void testRoundSeven() {
+    // A LEG ON THE SLANT into a part ahead: one bend, where the two lines meet.
+    {
+        const Vec2 u = Vec2{1.0, 1.0}.normalized();
+        const std::vector<Vec2> r = routeBetweenFaces({0, 0}, u, {150, 50}, {-1, 0}, 15.0);
+        std::printf("  bends: %d points on the slant into a part ahead\n", static_cast<int>(r.size()));
+        check(r.size() == 3 && std::abs(r[1].x - 50.0) < 1e-6 && std::abs(r[1].y - 50.0) < 1e-6,
+              "bends: a leg on the slant makes one bend into the part");
+        // Too close for that: across to the other's lead, never back on itself.
+        const std::vector<Vec2> t = routeBetweenFaces({0, 0}, u, {30, 50}, {-1, 0}, 15.0);
+        bool back = false;
+        for (size_t i = 1; i + 1 < t.size(); ++i)
+            if (t[i + 1].x < t[i].x - 1e-6 && t[i + 1].x > 30.0 + 15.0 + 1e-6) back = true;
+        check(!back && t.back().x == 30.0, "bends: too close, it goes across - no hook");
+    }
+    // LEVEL BUT FOR A HAIR: straight across, not a level shift of two bends.
+    {
+        const std::vector<Vec2> r = routeBetweenFaces({0, 0}, {1, 0}, {150, 1.5}, {-1, 0}, 15.0);
+        check(r.size() == 2, "bends: faces a millimetre and a half apart are joined straight");
+        const std::vector<Vec2> s = routeBetweenFaces({0, 0}, {1, 0}, {150, 20}, {-1, 0}, 15.0);
+        check(s.size() > 2, "bends: a real step across is still a level shift");
+    }
+    BrickDesign d;
+    const QString x0 = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+    const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+    const QString x1 = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+    d.brick(x0)->name = QStringLiteral("P1");
+    d.brick(x1)->name = QStringLiteral("P2");
+    d.connect(x0, c);
+    d.connect(c, x1);
+    d.brick(c)->run.stack = {QStringLiteral("wires"), QStringLiteral("cable")};
+    d.brick(c)->run.transitions = RunEnds::Both;
+    auto designators = [&d] {
+        int n = 0;
+        for (const Entity& e : buildBrickHarness(d, nullptr).entities)
+            if (e.meta.value(QStringLiteral("mechRole")).toString() == QStringLiteral("designator")) ++n;
+        return n;
+    };
+    check(designators() == 2, "designators: written in front of every part");
+    d.showDesignators = false;
+    check(designators() == 0, "designators: and put away when the eye is off");
+    check(!BrickDesign::fromJson(d.toJson()).showDesignators, "designators: off is kept with the design");
+    d.showDesignators = true;
+    auto bootOf = [&d, &c](double& body) {
+        for (const Entity& e : buildBrickHarness(d, nullptr).entities)
+            if (e.type == EntityType::TwistedPair && e.meta.value(QStringLiteral("brickId")).toString() == c) {
+                body = e.meta.value(QStringLiteral("twistBodyWidth")).toDouble();
+                return e.meta.contains(QStringLiteral("twistBootWidth"))
+                           ? e.meta.value(QStringLiteral("twistBootWidth")).toDouble()
+                           : -1.0;
+            }
+        return -2.0;
+    };
+    double body = 0.0;
+    check(bootOf(body) == -1.0, "transition: left alone, the drawing sizes it");
+    d.brick(c)->run.transitionWidthMm = 0.5;
+    const double held = bootOf(body);
+    std::printf("  transition: asked 0.5, drawn %.2f on a cable %.2f wide\n", held, body);
+    check(body > 0.5 && std::abs(held - body) < 1e-9, "transition: asked narrower than the cable, it is the cable's width");
+    d.brick(c)->run.transitionWidthMm = body + 4.0;
+    check(std::abs(bootOf(body) - (body + 4.0)) < 1e-9, "transition: wider, it is as wide as asked");
+    check(std::abs(BrickDesign::fromJson(d.toJson()).brick(c)->run.transitionWidthMm - (body + 4.0)) < 1e-9,
+          "transition: the width is kept with the design");
+    // THE WIZARD: the eye, the width field and the Symmetric button.
+    {
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        BrickWizardDialog dlg(&ed);
+        dlg.show();
+        dlg.design().bricks = d.bricks;
+        dlg.design().links = d.links;
+        dlg.selectBrick(c);
+        QApplication::processEvents();
+        auto* eye = dlg.findChild<QToolButton*>(QStringLiteral("brickShowDesignators"));
+        check(eye && eye->isChecked(), "wizard: an eye for the designators, on");
+        if (eye) eye->click();
+        check(!dlg.design().showDesignators, "wizard: pressed, the designators are put away");
+        auto* width = dlg.findChild<QDoubleSpinBox*>(QStringLiteral("brickTransitionWidth"));
+        auto* widthAuto = dlg.findChild<QToolButton*>(QStringLiteral("brickTransitionWidthAuto"));
+        check(width && widthAuto && width->isEnabled(), "wizard: a transition width, with an Auto");
+        if (width) {
+            width->setValue(0.0);   // turned right down: it stops at the cable
+            std::printf("  wizard: transition width turned down to %.2f\n", dlg.design().brick(c)->run.transitionWidthMm);
+            check(dlg.design().brick(c)->run.transitionWidthMm >= body - 1e-6,
+                  "wizard: turned below the cable, the width stops at the cable's");
+        }
+        auto* sym = dlg.findChild<QPushButton*>(QStringLiteral("brickArrange"));
+        check(sym && sym->text() == QStringLiteral("Symmetric"), "wizard: a Symmetric button");
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -1583,6 +1681,7 @@ int run_brickharness_tests() {
     testRoundFour();
     testRoundFive();
     testRoundSix();
+    testRoundSeven();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

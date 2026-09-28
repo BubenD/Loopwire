@@ -53,6 +53,7 @@
 #include <QMenu>
 #include <QObject>
 #include <QProcess>
+#include <QPointer>
 #include <QCloseEvent>
 #include <QSettings>
 #include <QStandardPaths>
@@ -1686,9 +1687,11 @@ void PartsLibraryDialog::buildUi() {
             QString tip = QStringLiteral("<b>%1</b><table cellspacing=0 cellpadding=1>").arg(standards[i].name.toHtmlEscaped());
             for (int k = 0; k < std::min<int>(20, standards[i].colors.size()); ++k) {
                 const QString name = standards[i].colors.at(k);
-                QString hex = leadColorHex(name);
-                if (hex.isEmpty()) hex = QStringLiteral("#202020");   // black, drawn in the layer's own
-                const QString stripe = leadColorHex(name.section(QLatin1Char('/'), 1, 1).trimmed());
+                const QString hex = wireSwatchHex(name);
+                // The stripe in its own colour - black included, which leadColorHex leaves to the layer and
+                // so came out as the body colour: White/Black showed as plain white.
+                const QString second = name.section(QLatin1Char('/'), 1, 1).trimmed();
+                const QString stripe = second.isEmpty() ? QString() : wireSwatchHex(second);
                 tip += QStringLiteral("<tr><td align=right>%1</td><td><span style='color:%2'>&#9608;&#9608;</span>"
                                       "<span style='color:%3'>%4</span></td><td>%5</td></tr>")
                            .arg(k + 1)
@@ -2035,6 +2038,7 @@ void PartsLibraryDialog::rebuildParamForm() {
     LibraryPart* p = current();
     if (!p) return;
     syncing_ = true;
+    QHash<QString, QWidget*> rows;   // each field's row, by its key
     for (const PartField& f : partFields(p->kind)) {
         QWidget* field = nullptr;
         // A cable's make-up is a LIST - so many pairs, so many singles, a coax, the screens, the
@@ -2265,10 +2269,30 @@ void PartsLibraryDialog::rebuildParamForm() {
                 break;
             }
         }
-        if (field) paramLay_->addWidget(rowHost(paramHost_, f.label, field, f.unit));
+        if (field) {
+            QWidget* row = rowHost(paramHost_, f.label, field, f.unit);
+            row->setObjectName(QStringLiteral("paramRow_") + f.key);
+            paramLay_->addWidget(row);
+            rows.insert(f.key, row);
+        }
     }
     paramLay_->addStretch(1);
     syncing_ = false;
+    // A Y-SPLIT SHOWS AN ENTRY FOR EACH LEG IT HAS: the Legs menu says how many, and only that many
+    // "Leg n entry" rows are offered - a two-legged split asked for a third leg's size.
+    if (p->kind == PartKind::YSplit) {
+        QList<QPointer<QWidget>> legRows;
+        for (int n = 1; n <= 3; ++n) legRows << QPointer<QWidget>(rows.value(QStringLiteral("leg%1").arg(n)));
+        auto showLegs = [legRows](const QString& said) {
+            bool ok = false;
+            const int legs = said.trimmed().toInt(&ok);
+            for (int n = 1; n <= legRows.size(); ++n)
+                if (QWidget* row = legRows[n - 1]) row->setVisible(!ok || n <= legs);
+        };
+        showLegs(p->value(QStringLiteral("legs")));
+        if (auto* legs = qobject_cast<QComboBox*>(paramWidgets_.value(QStringLiteral("legs"))))
+            connect(legs, &QComboBox::currentTextChanged, this, showLegs);
+    }
 }
 
 // The description, written from the parameters that are filled in.

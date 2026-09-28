@@ -394,6 +394,9 @@ struct TwistFrames {
     // separately where they are told to be: a cover over a loom is shrunk onto a connector at one
     // end and onto a breakout at the other, and those are not the same size.
     double bodyHalf = 0.0;
+    // HOW WIDE THE TRANSITION IS, half of it, when it is said (twistBootWidth) - never narrower than the
+    // cable it is fitted over. Below nought: as wide as it has always been drawn.
+    double bootHalf = -1.0;
     double bodyFace = 0.0, bodyFaceB = 0.0;
     double bodyShrink = 0.0, bodyShrinkB = 0.0;
     // AND HOW FAR THE BOOT REACHES back along the cable at each end: the transition heatshrink that
@@ -703,6 +706,9 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
         };
         f.bodyFace = faceOf(false);
         f.bodyFaceB = faceOf(true);
+        if (pair.meta.contains(QStringLiteral("twistBootWidth")) &&
+            pair.meta.value(QStringLiteral("twistBootWidth")).toDouble(0.0) > 1e-9)
+            f.bootHalf = std::max(f.bodyHalf, pair.meta.value(QStringLiteral("twistBootWidth")).toDouble() / 2.0);
         f.bodyShrink = shrinkOf(false);
         f.bodyShrinkB = shrinkOf(true);
         // THE TRANSITION HEATSHRINK AT EACH END, which only a cable has: a length of tubing over
@@ -1301,7 +1307,7 @@ QString twistKey(const Entity& e) {
     k += e.meta.value(QLatin1String("twistBody")).toString();
     for (const char* m : {"twistBodyWidth", "twistBodyFace", "twistBodyShrink",
                           "twistBodyFaceFinish", "twistBodyShrinkFinish", "twistBoot",
-                          "twistBootFinish"})
+                          "twistBootFinish", "twistBootWidth"})
         put(m);
     k += e.meta.value(QLatin1String("twistBodyTransition")).toBool(true) ? QLatin1String("|tr")
                                                                         : QLatin1String("|nt");
@@ -1521,7 +1527,8 @@ const TwistCached* twistCached(const Entity& pair) {
                     const double onCable = atFan + intoTheBody * reach;
                     // Wide enough to read as a part fitted over the cable, and wide enough to take
                     // the wires where they gather into it.
-                    const double mouth = std::max(f.bodyHalf * 1.25, spreadHalfAt(atFan));
+                    const double mouth = f.bootHalf > 0.0 ? f.bootHalf
+                                                          : std::max(f.bodyHalf * 1.25, spreadHalfAt(atFan));
                     std::vector<Vec2> run{posOn(atFan), posOn(onCable)};
                     std::vector<Vec2> boot = shrunkSleeveOutline(run, mouth, std::min(face, mouth),
                                                                  f.bodyHalf, shrink, 0.0);
@@ -1538,7 +1545,7 @@ const TwistCached* twistCached(const Entity& pair) {
                 auto endBootAt = [&](double atEnd, double reach, double face, double shrink,
                                      double intoTheBody) {
                     if (reach < 1e-6) return;
-                    const double wide = f.bodyHalf * 1.25;
+                    const double wide = f.bootHalf > 0.0 ? f.bootHalf : f.bodyHalf * 1.25;
                     const double free = f.endBootRecovered ? std::min(face, wide) : wide;
                     std::vector<Vec2> run{posOn(atEnd), posOn(atEnd + intoTheBody * reach)};
                     std::vector<Vec2> boot = shrunkSleeveOutline(

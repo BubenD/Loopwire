@@ -2496,6 +2496,9 @@ int run_partspanel_tests() {
             check(ws[4].color == QStringLiteral("Green/Yellow") && ws[5].color == QStringLiteral("Brown"),
                   "colour code: and a short code starts again past its last colour");
             check(!applyWireColorStandard(ws, 999), "colour code: a code there is not changes nothing");
+            check(wireSwatchHex(QStringLiteral("Black")) == QStringLiteral("#202020") &&
+                      wireSwatchHex(QStringLiteral("White/Black")) == leadColorHex(QStringLiteral("White")),
+                  "colour code: black has a swatch of its own, a striped wire its body colour");
         }
         const std::vector<Entity> schem = partDrawingEntities(withWiredWires(part, false, part.schematic));
         QStringList labels;
@@ -2548,6 +2551,12 @@ int run_partspanel_tests() {
             other.kind = PartKind::Heatshrink;
             other.description = QStringLiteral("Not a connector");
             lib.parts.push_back(other);
+            LibraryPart ysplit;
+            ysplit.id = QStringLiteral("P-YSPLIT");
+            ysplit.kind = PartKind::YSplit;
+            ysplit.description = QStringLiteral("Two-legged split");
+            ysplit.params[QStringLiteral("legs")] = QStringLiteral("2");
+            lib.parts.push_back(ysplit);
             lib.save(libFile);
         }
         Document doc;
@@ -2581,6 +2590,12 @@ int run_partspanel_tests() {
             check(codes && codes->isVisibleTo(&dlg) && tips &&
                       codes->itemData(1, Qt::ToolTipRole).toString().contains(QStringLiteral("White")),
                   "wired: a colour-code list on the tick's line, each code's colours shown on hover");
+            // White/Black: its stripe drawn black, not left white.
+            int milAt = codes ? codes->findText(QStringLiteral("MIL-STD-681 (numbered code)")) : -1;
+            const QString milTip = milAt >= 0 ? codes->itemData(milAt, Qt::ToolTipRole).toString() : QString();
+            const int wb = milTip.indexOf(QStringLiteral("White/Black"));
+            const QString wbRow = wb > 0 ? milTip.mid(milTip.lastIndexOf(QStringLiteral("<tr>"), wb), wb - milTip.lastIndexOf(QStringLiteral("<tr>"), wb)) : QString();
+            check(wbRow.contains(QStringLiteral("#202020")), "wired: White/Black shows its black stripe");
             check(table->columnCount() == 6 && table->item(1, 1) && table->item(1, 5),
                   "wired: colour, size, unit, insulation, diameter");
             if (table->item(1, 1) && table->item(3, 1)) {
@@ -2740,6 +2755,26 @@ int run_partspanel_tests() {
             dlg.selectPart(QStringLiteral("P-HOSE"));
             QApplication::processEvents();
             check(!group->isVisibleTo(&dlg), "wired: something other than a connector does not offer it");
+
+            // A Y-SPLIT SHOWS AN ENTRY PER LEG, as many as its Legs say.
+            dlg.selectPart(QStringLiteral("P-YSPLIT"));
+            QApplication::processEvents();
+            auto legRow = [&dlg](int n) {
+                for (QWidget* w : dlg.findChildren<QWidget*>(QStringLiteral("paramRow_leg%1").arg(n)))
+                    if (w->isVisibleTo(&dlg)) return true;
+                return false;
+            };
+            check(legRow(1) && legRow(2) && !legRow(3), "y-split: two legs, two leg entries");
+            QComboBox* legs = nullptr;
+            if (QWidget* row = [&dlg]() -> QWidget* {
+                    for (QWidget* w : dlg.findChildren<QWidget*>(QStringLiteral("paramRow_legs")))
+                        if (w->isVisibleTo(&dlg)) return w;
+                    return nullptr;
+                }())
+                legs = row->findChild<QComboBox*>();
+            if (legs) legs->setCurrentText(QStringLiteral("3"));
+            QApplication::processEvents();
+            check(legs && legRow(3), "y-split: three legs chosen, the third leg's entry appears");
         }
         QFile::remove(libFile);
     }

@@ -2238,12 +2238,12 @@ std::optional<QString> Editor::hitTest(const Vec2& world, const std::vector<QStr
         // place. So they are exempted from the lock, and only while the Select tool is the one asking:
         // every other tool keeps the lock exactly as it was, so a Trim or a Fillet never catches one by
         // mistake.
-        // An output face's bar is the same kind of thing - a mark to pick up, move or take away.
-        const bool anchorMarker = tool_ == ToolId::Select && (it->meta.contains(QStringLiteral("modelAnchor")) ||
-                                                              it->meta.contains(QStringLiteral("modelOutput")));
-        if (!anchorMarker)
-            if (const Layer* l = doc_->findLayer(it->layer); l && (!l->visible || l->locked))
-                continue;
+        //
+        // BUT ONLY WITH SHIFT HELD, which is markAt's business (see handleSelectPress): a plain click near a
+        // mark took the mark, and the part the marks sit on could hardly be clicked at all. A plain click is
+        // for the drawing; Shift+click is for its marks.
+        if (const Layer* l = doc_->findLayer(it->layer); l && (!l->visible || l->locked))
+            continue;
         if (!skip.empty() && std::find(skip.begin(), skip.end(), it->id) != skip.end()) continue;
         // A stretch of run that a break mark hides is not there to be clicked either: the drawing does
         // not show it, so a click in it belongs to the mark, or to nothing.
@@ -2265,9 +2265,10 @@ std::optional<QString> Editor::markAt(const Vec2& world) const {
         if (!it->meta.contains(QStringLiteral("modelAnchor")) && !it->meta.contains(QStringLiteral("modelOutput")))
             continue;
         if (const Layer* l = doc_->findLayer(it->layer); l && !l->visible) continue;
-        // A ring is caught anywhere inside it as well as on it.
+        // A ring is caught anywhere inside it as well as on it - the ring whose outline is nearest winning
+        // among rings one inside the other.
         double d = distanceToEntity(*it, world);
-        if (it->type == EntityType::Circle && distance(it->center, world) <= it->radius) d = 0.0;
+        if (it->type == EntityType::Circle && distance(it->center, world) <= it->radius) d *= 1e-3;
         if (d < best) {
             best = d;
             hit = it->id;

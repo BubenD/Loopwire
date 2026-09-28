@@ -439,10 +439,17 @@ int run_mechmodels_tests() {
         ed->setTool(ToolId::Select);
         ed->onPointerPress({60.0, 60.0}, Qt::LeftButton, Qt::NoModifier);
         ed->onPointerRelease({60.0, 60.0}, Qt::LeftButton);
+        bool plainPicked = false;
+        for (const QString& id : ed->selection())
+            if (farE && id == farE->id) plainPicked = true;
+        check(!plainPicked, "markers: a plain click does not pick a mark");
+        ed->onKey(Qt::Key_Escape, Qt::NoModifier);   // the plain click on the paper began a window: dropped
+        ed->onPointerPress({60.0, 60.0}, Qt::LeftButton, Qt::ShiftModifier);
+        ed->onPointerRelease({60.0, 60.0}, Qt::LeftButton);
         bool farPicked = false;
         for (const QString& id : ed->selection())
             if (farE && id == farE->id) farPicked = true;
-        check(farPicked, "markers: clicking Far with Select picks it up, lock and all");
+        check(farPicked, "markers: Shift+click on Far with Select picks it up, lock and all");
 
         ed->deleteSelected();
         QApplication::processEvents();
@@ -471,7 +478,7 @@ int run_mechmodels_tests() {
         // between the two radii, where the distance to each outline ties and the pick is a coin flip.)
         ed->setTool(ToolId::Select);
         const Vec2 between{10.0 + connE->radius + (nearE->radius - connE->radius) * 0.75, 5.0};
-        ed->onPointerPress(between, Qt::LeftButton, Qt::NoModifier);
+        ed->onPointerPress(between, Qt::LeftButton, Qt::ShiftModifier);
         ed->onPointerRelease(between, Qt::LeftButton);
         bool gotNear = false, gotConnect = false;
         for (const QString& id : ed->selection()) {
@@ -487,7 +494,7 @@ int run_mechmodels_tests() {
         // Dragging Connect (picked at the shared point, which favours the smaller/inner ring) moves it -
         // and the new position survives a later regeneration, which is the proof it reached the MODEL and
         // not just the entity on screen.
-        ed->onPointerPress({10.0, 5.0}, Qt::LeftButton, Qt::NoModifier);
+        ed->onPointerPress({10.0, 5.0}, Qt::LeftButton, Qt::ShiftModifier);
         ed->onPointerRelease({10.0, 5.0}, Qt::LeftButton);
         ed->onPointerPress({10.0, 5.0}, Qt::LeftButton, Qt::NoModifier);   // grab its centre grip
         ed->onPointerMove({90.0, 33.0});

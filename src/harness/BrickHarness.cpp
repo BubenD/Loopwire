@@ -390,6 +390,7 @@ QJsonObject BrickDesign::toJson() const {
                                                    {"bodyWidthMm", r.bodyWidthMm},
                                                    {"stack", QJsonArray::fromStringList(r.stack)},
                                                    {"transitions", endsKey(r.transitions)},
+                                                   {"transitionWidthMm", r.transitionWidthMm},
                                                    {"dimTotal", r.dimTotal},
                                                    {"dimFans", r.dimFans},
                                                    {"dimBetween", r.dimBetween},
@@ -411,13 +412,15 @@ QJsonObject BrickDesign::toJson() const {
         ls.append(QJsonObject{{"a", l.a}, {"b", l.b}, {"portA", l.portA}, {"portB", l.portB},
                               {"wires", l.wires}});
     return QJsonObject{{"format", "edraw-brick-harness"}, {"bricks", bs}, {"links", ls},
-                       {"dimFromFar", dimFromFar},        {"dimToFar", dimToFar}};
+                       {"dimFromFar", dimFromFar},        {"dimToFar", dimToFar},
+                       {"showDesignators", showDesignators}};
 }
 
 BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
     BrickDesign d;
     d.dimFromFar = o.value(QStringLiteral("dimFromFar")).toBool();
     d.dimToFar = o.value(QStringLiteral("dimToFar")).toBool();
+    d.showDesignators = o.value(QStringLiteral("showDesignators")).toBool(true);
     for (const QJsonValue v : o.value(QStringLiteral("bricks")).toArray()) {
         const QJsonObject bo = v.toObject();
         Brick b;
@@ -452,6 +455,7 @@ BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
                 if (s.stack.isEmpty()) s.stack << QStringLiteral("wires");
             }
             s.transitions = endsFromKey(r.value(QStringLiteral("transitions")).toString());
+            s.transitionWidthMm = std::max(0.0, r.value(QStringLiteral("transitionWidthMm")).toDouble(0.0));
             s.dimTotal = r.value(QStringLiteral("dimTotal")).toBool();
             s.dimFans = r.value(QStringLiteral("dimFans")).toBool();
             s.dimBetween = r.value(QStringLiteral("dimBetween")).toBool();
@@ -666,7 +670,10 @@ std::vector<Vec2> routeBetweenFaces(const Vec2& a, const Vec2& aOut, const Vec2&
 
     // FACING EACH OTHER.
     if (dot(u, w) < -0.999) {
-        if (std::abs(side) < 1e-6 && fwd > 0.0) return done();
+        // Level, or as near as makes no difference: straight across. A shift of a millimetre or two - two parts
+        // in one row whose faces sit a hair apart - was drawn as a level shift, and its two bends, each with
+        // its radius, came out as a pair of little hooks in the middle of a straight cable.
+        if (std::abs(side) < std::max(1e-6, std::min(3.0, fwd * 0.02)) && fwd > 0.0) return done();
         if (fwd > 0.0) {
             // A LEVEL SHIFT: straight out, across on the slant, straight in.
             const double deg = std::clamp(shiftDeg, 1.0, 90.0);
@@ -707,6 +714,19 @@ std::vector<Vec2> routeBetweenFaces(const Vec2& a, const Vec2& aOut, const Vec2&
         return done();
     }
 
+    // ON THE SLANT TO ONE ANOTHER (a Y-split's leg into a part): one bend where the two lines meet, when that
+    // is ahead of both; else out, straight across to the other's lead, and in - never a turn back on itself.
+    if (std::abs(dot(u, w)) >= 1e-3 && std::abs(cross(u, w)) > 1e-3) {
+        const double t = cross(d, w) / cross(u, w);
+        const double s = cross(d, u) / cross(u, w);
+        if (t >= lead - 1e-9 && s >= lead - 1e-9) {
+            path.push_back(a + u * t);
+            return done();
+        }
+        path.push_back(a + u * lead);
+        path.push_back(b + w * lead);
+        return done();
+    }
     const Vec2 p1 = a + u * lead;
     const Vec2 p4 = b + w * lead;
     path.push_back(p1);
@@ -1148,16 +1168,52 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         // - a short run would put one connector on top of the other. The run is drawn that much longer, and
         // its dimensions still say how long it really is (see stretchOf).
         constexpr double kRoomBetween = 60.0;
+        constexpr double kStraightIn = 40.0;   // straight into a part after the last bend
+        // Which way a face looks, turned as the brick is; a junction's is left to the run.
+        auto faceOutOf = [&](const FaceRef& f) {
+            const Brick* b = design.brick(f.node);
+            const auto it = shapes.constFind(f.node);
+            if (!b || b->type != BrickType::End || it == shapes.constEnd() || f.port < 0 ||
+                f.port >= it->ports())
+                return Vec2{0.0, 0.0};
+            return turnQuarters(it->faceOut[static_cast<size_t>(f.port)], b->rot).normalized();
+        };
         for (const Branch& br : branches) {
             if (br.a.node.isEmpty() || br.b.node.isEmpty()) continue;
             const double real = br.special->run.lengthMm;
             const Vec2 fa = faceAt(br.a);
             const Vec2 fb = faceAt(br.b);
-            const double across = std::abs((-gridOf(br.a.node).y * rowPitch + fa.y) -
-                                           (-gridOf(br.b.node).y * rowPitch + fb.y));
-            const double gap = std::max(real - across, kRoomBetween);
-            if (gap + across > real + 1e-6)
-                stretchOf.insert(br.special->id, std::max(stretchOf.value(br.special->id), gap + across - real));
+            const double dy = (-gridOf(br.b.node).y * rowPitch + fb.y) - (-gridOf(br.a.node).y * rowPitch + fa.y);
+            const double across = std::abs(dy);
+            // AS FEW BENDS AS THE LENGTH ALLOWS. A face that looks out on the slant - a Y-split's leg - toward
+            // the part: the run goes straight on out of it up to the other part's height and makes ONE bend
+            // into it, so the part is put where that one-bend run is the run's length. Put anywhere nearer, the
+            // wires ran on the slant past the part and came back to it in a hook.
+            // Along the harness, which way from a to b (as the layout below will put it).
+            const double ahead = gridOf(br.b.node).x - gridOf(br.a.node).x;
+            auto slanted = [&](const Vec2& u, double toward, double forward) {
+                return std::abs(u.x) > 0.1 && std::abs(u.y) > 0.1 && across > 1e-6 && std::abs(forward) > 1e-9 &&
+                       (u.y > 0.0) == (toward > 0.0) && (u.x > 0.0) == (forward > 0.0);
+            };
+            const Vec2 ua = faceOutOf(br.a), ub = faceOutOf(br.b);
+            const bool slantA = slanted(ua, dy, ahead), slantB = slanted(ub, -dy, -ahead);
+            double gap = 0.0, drawn = 0.0;
+            if (slantA || slantB) {
+                const Vec2 u = slantA ? ua : ub;
+                const double leg = across / std::abs(u.y);           // on the slant
+                const double legAlong = across * std::abs(u.x) / std::abs(u.y);
+                gap = std::max({real - leg + legAlong, legAlong + kStraightIn, kRoomBetween});
+                drawn = leg + gap - legAlong;
+            } else {
+                // Square out of both faces: out, across on the slant (45 degrees), and in - which is longer than
+                // the two straight legs by the slant's extra.
+                const double extra = across * (std::sqrt(2.0) - 1.0);
+                gap = std::max(real - extra, kRoomBetween);
+                const double slant = std::min(across, std::max(0.0, gap - 2.0 * kStraightIn));
+                drawn = gap - slant + std::hypot(slant, across);
+            }
+            if (drawn > real + 1e-6)
+                stretchOf.insert(br.special->id, std::max(stretchOf.value(br.special->id), drawn - real));
             edges[br.a.node] << Edge{br.b.node, gap, fa, fb};
             edges[br.b.node] << Edge{br.a.node, gap, fb, fa};
         }
@@ -1224,9 +1280,9 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         }
         Bounds bb;
         for (const Entity& e : body) bb.expand(e.bounds());
-        // THE DESIGNATOR, always, IN FRONT OF THE PART: past the end of it that faces away from the
-        // harness - the mating end of a connector - or above a joint, which has no such end.
-        {
+        // THE DESIGNATOR, IN FRONT OF THE PART: past the end of it that faces away from the harness - the
+        // mating end of a connector - or above a joint, which has no such end. Unless they are turned off.
+        if (design.showDesignators) {
             const QString said = b.name.isEmpty() ? partKindName(b.kind) : b.name;
             Entity t;
             if (shape.ports() == 1 && bb.valid) {
@@ -1672,6 +1728,9 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                     if (r.transitions != RunEnds::None) {
                         const double entry = std::min(bodyWidth, packed * (wires - 1) + ww);
                         run.meta.insert(QStringLiteral("twistBodyFace"), entry);
+                        // Its width as said - held at the cable's width if it is asked to be narrower.
+                        if (r.transitionWidthMm > 1e-9)
+                            run.meta.insert(QStringLiteral("twistBootWidth"), std::max(r.transitionWidthMm, bodyWidth));
                     }
                     run.meta.insert(QStringLiteral("twistBodyTransitionSides"),
                                     r.transitions == RunEnds::Start    ? QStringLiteral("start")
@@ -1695,6 +1754,8 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             act.fanStart = br.flipped ? fanB : fanA;
             act.fanFinish = br.flipped ? fanA : fanB;
             act.bodyWidth = bodyWidth;
+            act.transitionWidth = r.transitionWidthMm > 1e-9 ? std::max(r.transitionWidthMm, bodyWidth)
+                                                             : bodyWidth * 1.25;
             for (const Entity& e : made)
                 if (e.type == EntityType::TwistedPair) {
                     const TwistFigures fig = twistedPairFigures(e);

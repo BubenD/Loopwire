@@ -1044,10 +1044,27 @@ void BrickWizardDialog::buildUi() {
     }
     button("brickDelete", QStringLiteral("Delete"), QStringLiteral("Delete what is picked"),
            [this] { canvas_->deleteSelected(); });
-    button("brickArrange", QStringLiteral("Arrange"),
-           QStringLiteral("Lay the end parts out symmetrically: the most connected on the axis, the "
-                          "rest either side, every brick turned to face what it is linked to"),
+    // SYMMETRIC, in x and y, the bricks and the drawing alike: the parts laid out either side of the axis,
+    // each column the same step apart, and both panes brought round to show the whole of it.
+    button("brickArrange", QStringLiteral("Symmetric"),
+           QStringLiteral("Lay the bricks and the drawing out symmetrically in x and y: the most connected "
+                          "part on the axis, the rest evenly either side, every brick turned to face what it "
+                          "is linked to - then both panes fitted to show it all"),
            [this] { arrange(); });
+    // THE EYE: the designators on the drawing, or not.
+    showDesignators_ = new QToolButton(this);
+    showDesignators_->setObjectName(QStringLiteral("brickShowDesignators"));
+    showDesignators_->setCheckable(true);
+    showDesignators_->setChecked(true);
+    showDesignators_->setText(QStringLiteral("👁 Designators"));
+    showDesignators_->setToolTip(QStringLiteral("Show the designators (P1, X2 ...) on the drawing, or hide them"));
+    showDesignators_->setStyleSheet(QStringLiteral("QToolButton{padding:2px 6px;}"
+                                                   "QToolButton:checked{background:#2b6cb0;color:white;}"));
+    connect(showDesignators_, &QToolButton::toggled, this, [this](bool on) {
+        design_.showDesignators = on;
+        refreshPreview();
+    });
+    bar->addWidget(showDesignators_);
     bar->addSpacing(18);
     bar->addWidget(new QLabel(QStringLiteral("Dimensions from"), this));
     dimFrom_ = new QComboBox(this);
@@ -1449,8 +1466,13 @@ QWidget* BrickWizardDialog::buildRunPage() {
     transitions_->addItems({QStringLiteral("None"), QStringLiteral("Start"), QStringLiteral("Finish"),
                             QStringLiteral("Both")});
     form->addRow(QStringLiteral("Transition heatshrink"), transitions_);
+    // ITS WIDTH, which cannot be less than the cable it goes over: turned down past that, the field stops at
+    // the cable's width.
+    transitionWidth_ = spin("brickTransitionWidth", 0.0, 1000.0, 0.5, QStringLiteral(" mm"));
+    transitionWidth_->setToolTip(QStringLiteral("How wide the transition heatshrink is - never less than the cable"));
+    form->addRow(QStringLiteral("Transition width"), withAuto(transitionWidth_, "brickTransitionWidthAuto"));
     for (QDoubleSpinBox* s : {length_, wireWidth_, fanStart_, fanFinish_, knee_, fanKnee_, fanScale_,
-                              bodyScale_, bodyWidth_, trunk_})
+                              bodyScale_, bodyWidth_, trunk_, transitionWidth_})
         connect(s, &QDoubleSpinBox::valueChanged, this, [this, s](double) {
             // A figure typed in takes it over from Auto.
             if (QToolButton* a = autoOf_.value(s)) {
@@ -1465,7 +1487,12 @@ QWidget* BrickWizardDialog::buildRunPage() {
         loadLabels();   // the wires a label can go on
         loadNets();
     });
-    connect(transitions_, &QComboBox::currentIndexChanged, this, [this](int) { writeRun(); });
+    connect(transitions_, &QComboBox::currentIndexChanged, this, [this](int i) {
+        transitionWidth_->setEnabled(i != 0);
+        autoOf_.value(transitionWidth_)->setEnabled(i != 0);
+        writeRun();
+        showActuals();
+    });
 
     // THE WIRES AND THEIR NETS, numbered from the top down as the labels are. A net is picked from
     // the schematic's - those landing on the parts this run is linked to - or typed in.
@@ -1745,8 +1772,9 @@ void BrickWizardDialog::rotateSelected() {
 
 void BrickWizardDialog::arrange() {
     arrangeBricks(design_);
-    canvas_->centreView();
+    canvas_->fit();
     designChanged();
+    preview_->fitToView();
     status_->setText(QStringLiteral("Arranged symmetrically"));
 }
 
@@ -1850,7 +1878,7 @@ void BrickWizardDialog::loadPanel() {
     panel_->setCurrentIndex(2);
     const QSignalBlocker s1(wires_), s2(length_), s3(wireWidth_), s4(fanStart_), s5(fanFinish_),
         s6(knee_), s7(fanKnee_), s8(fanScale_), s9(transitions_), s10(bodyScale_), s11(bodyWidth_),
-        s12(dimTotal_), s13(dimFans_), s14(dimBetween_);
+        s12(dimTotal_), s13(dimFans_), s14(dimBetween_), s15(transitionWidth_);
     const BrickRunSpec& r = b->run;
     runKind_->setText(brickTypeName(b->type));
     wires_->setValue(r.wires);
@@ -1865,6 +1893,7 @@ void BrickWizardDialog::loadPanel() {
                                           {knee_, r.kneeRadiusMm, r.kneeRadiusMm < 0.0},
                                           {fanKnee_, r.fanKneeMm, r.fanKneeMm < 0.0},
                                           {bodyWidth_, r.bodyWidthMm, r.bodyWidthMm <= 1e-9},
+                                          {transitionWidth_, r.transitionWidthMm, r.transitionWidthMm <= 1e-9},
                                           {trunk_, double(r.trunkWires), r.trunkWires <= 0}}) {
         QToolButton* a = autoOf_.value(spinBox);
         const QSignalBlocker ba(a);
@@ -1892,6 +1921,8 @@ void BrickWizardDialog::loadPanel() {
                                   : r.transitions == RunEnds::Finish ? 2
                                   : r.transitions == RunEnds::Both   ? 3
                                                                      : 0);
+    transitionWidth_->setEnabled(r.transitions != RunEnds::None);
+    autoOf_.value(transitionWidth_)->setEnabled(r.transitions != RunEnds::None);
     dimTotal_->setChecked(r.dimTotal);
     dimFans_->setChecked(r.dimFans);
     dimBetween_->setChecked(r.dimBetween);
@@ -1921,7 +1952,15 @@ void BrickWizardDialog::showActuals() {
     const Brick* b = design_.brick(canvas_->selected());
     if (!b || !brickIsSpecial(b->type) || !actual_.contains(b->id)) return;
     const BrickActual a = actual_.value(b->id);
+    // The transition cannot be turned down below the cable it goes over: the field stops there.
+    {
+        const QSignalBlocker block(transitionWidth_);
+        transitionWidth_->setMinimum(std::max(0.0, a.bodyWidth));
+        if (!autoOf_.value(transitionWidth_)->isChecked())
+            transitionWidth_->setValue(std::max(transitionWidth_->value(), a.bodyWidth));
+    }
     for (auto [spinBox, value] : {std::pair<QDoubleSpinBox*, double>{fanStart_, a.fanStart},
+                                  {transitionWidth_, a.transitionWidth},
                                   {fanFinish_, a.fanFinish},
                                   {knee_, a.knee},
                                   {fanKnee_, a.fanKnee},
@@ -2102,6 +2141,10 @@ void BrickWizardDialog::writeRun() {
     r.fanScalePct = fanScale_->value();
     r.bodyScalePct = bodyScale_->value();
     r.bodyWidthMm = manual(bodyWidth_) ? bodyWidth_->value() : 0.0;
+    r.transitionWidthMm =
+        manual(transitionWidth_)
+            ? std::max(transitionWidth_->value(), actual_.contains(b->id) ? actual_.value(b->id).bodyWidth : 0.0)
+            : 0.0;
     r.trunkWires = manual(trunk_) ? static_cast<int>(std::lround(trunk_->value())) : 0;
     r.dimLinear = dimLinear_->isChecked();
     r.dimTrace = dimTrace_->isChecked();
@@ -2362,6 +2405,8 @@ bool BrickWizardDialog::loadFromDrawing(const QString& name) {
         const QSignalBlocker b1(dimFrom_), b2(dimTo_);
         dimFrom_->setCurrentIndex(design_.dimFromFar ? 1 : 0);
         dimTo_->setCurrentIndex(design_.dimToFar ? 1 : 0);
+        const QSignalBlocker b3(showDesignators_);
+        showDesignators_->setChecked(design_.showDesignators);
     }
     currentName_ = name;
     harnessName_->setText(name);

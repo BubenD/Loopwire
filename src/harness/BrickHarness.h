@@ -85,6 +85,9 @@ struct BrickRunSpec {
     // they go on. Only the outermost is seen - a braid under a heatshrink is not drawn.
     QStringList stack{QStringLiteral("wires")};
     RunEnds transitions = RunEnds::None;   // a transition heatshrink at the start, finish or both
+    // HOW WIDE THE TRANSITION HEATSHRINK IS; nought = as the drawing sizes it. Never narrower than the
+    // cable it goes over - a figure below that is drawn at the cable's width.
+    double transitionWidthMm = 0.0;
     // Dimensions: the whole run, each fan, and what is between the fans.
     bool dimTotal = false;
     bool dimFans = false;
@@ -168,6 +171,8 @@ struct BrickDesign {
     // its far point (the back of it).
     bool dimFromFar = false;
     bool dimToFar = false;
+    // WHETHER THE DESIGNATORS ARE WRITTEN on the drawing, in front of every part.
+    bool showDesignators = true;
 
     Brick* brick(const QString& id);
     const Brick* brick(const QString& id) const;
@@ -244,6 +249,7 @@ struct BrickActual {
     double fanKnee = 0.0;
     double bodyWidth = 0.0;
     double trunk = 0.0;
+    double transitionWidth = 0.0;   // the transition heatshrink, as drawn
 };
 
 struct BrickBuild {
