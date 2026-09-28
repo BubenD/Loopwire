@@ -364,7 +364,8 @@ QJsonObject BrickDesign::toJson() const {
     for (const Brick& b : bricks) {
         QJsonObject o{{"id", b.id},        {"type", brickTypeKey(b.type)}, {"kind", partKindKey(b.kind)},
                       {"libPart", b.libPart}, {"name", b.name},         {"col", b.col},
-                      {"row", b.row},      {"rot", b.rot},             {"balloon", b.balloon}};
+                      {"row", b.row},      {"rot", b.rot},             {"balloon", b.balloon},
+                      {"showDesignator", b.showDesignator}, {"designatorHeightMm", b.designatorHeightMm}};
         if (std::abs(b.scale - 1.0) > 1e-9) o.insert(QStringLiteral("scale"), b.scale);
         if (b.autoScale) o.insert(QStringLiteral("autoScale"), true);
         if (brickIsSpecial(b.type)) {
@@ -412,15 +413,13 @@ QJsonObject BrickDesign::toJson() const {
         ls.append(QJsonObject{{"a", l.a}, {"b", l.b}, {"portA", l.portA}, {"portB", l.portB},
                               {"wires", l.wires}});
     return QJsonObject{{"format", "edraw-brick-harness"}, {"bricks", bs}, {"links", ls},
-                       {"dimFromFar", dimFromFar},        {"dimToFar", dimToFar},
-                       {"showDesignators", showDesignators}};
+                       {"dimFromFar", dimFromFar},        {"dimToFar", dimToFar}};
 }
 
 BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
     BrickDesign d;
     d.dimFromFar = o.value(QStringLiteral("dimFromFar")).toBool();
     d.dimToFar = o.value(QStringLiteral("dimToFar")).toBool();
-    d.showDesignators = o.value(QStringLiteral("showDesignators")).toBool(true);
     for (const QJsonValue v : o.value(QStringLiteral("bricks")).toArray()) {
         const QJsonObject bo = v.toObject();
         Brick b;
@@ -433,6 +432,8 @@ BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
         b.row = bo.value(QStringLiteral("row")).toDouble();
         b.rot = bo.value(QStringLiteral("rot")).toInt();
         b.balloon = bo.value(QStringLiteral("balloon")).toBool();
+        b.showDesignator = bo.value(QStringLiteral("showDesignator")).toBool(false);
+        b.designatorHeightMm = std::clamp(bo.value(QStringLiteral("designatorHeightMm")).toDouble(3.5), 0.5, 50.0);
         b.scale = std::clamp(bo.value(QStringLiteral("scale")).toDouble(1.0), 0.05, 20.0);
         b.autoScale = bo.value(QStringLiteral("autoScale")).toBool();
         const QJsonObject r = bo.value(QStringLiteral("run")).toObject();
@@ -569,6 +570,40 @@ void arrangeBricks(BrickDesign& design) {
             }
         }
         rowBase += tallest + 1.0;
+    }
+
+    // THE PARTS NOT LINKED YET are laid out symmetrically too: each column of them - in the order they are
+    // in, left where they are along the harness - spread evenly either side of one axis. Three connectors
+    // put down before any cable was drawn stayed where they had been dropped, and Symmetric did nothing.
+    {
+        std::map<long long, QStringList> byCol;
+        int loose = 0;
+        for (const Brick& b : design.bricks)
+            if (b.type == BrickType::End && !joined.contains(b.id)) {
+                byCol[std::llround(b.col * 2.0)] << b.id;
+                ++loose;
+            }
+        if (loose > 0) {
+            int tallest = 1;
+            for (auto& [c, ids] : byCol) {
+                std::stable_sort(ids.begin(), ids.end(), [&](const QString& x, const QString& y) {
+                    return design.brick(x)->row < design.brick(y)->row;
+                });
+                tallest = std::max(tallest, static_cast<int>(ids.size()));
+            }
+            // Where nothing has been arranged yet, about where the parts already are; otherwise below.
+            double axis = rowBase + (tallest - 1) / 2.0;
+            if (rowBase == 0.0) {
+                double sum = 0.0;
+                for (auto& [c, ids] : byCol)
+                    for (const QString& id : ids) sum += design.brick(id)->row;
+                axis = std::round(sum / loose * 2.0) / 2.0;
+            }
+            for (auto& [c, ids] : byCol) {
+                const int n = static_cast<int>(ids.size());
+                for (int i = 0; i < n; ++i) design.brick(ids[i])->row = axis + (i - (n - 1) / 2.0) * 2.0;
+            }
+        }
     }
 
     // Each special halfway between its ends - or a step out from its one end.
@@ -1281,22 +1316,24 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         Bounds bb;
         for (const Entity& e : body) bb.expand(e.bounds());
         // THE DESIGNATOR, IN FRONT OF THE PART: past the end of it that faces away from the harness - the
-        // mating end of a connector - or above a joint, which has no such end. Unless they are turned off.
-        if (design.showDesignators) {
+        // mating end of a connector - or above a joint, which has no such end. Only where the part's eye is on,
+        // at the height it says.
+        if (b.showDesignator) {
             const QString said = b.name.isEmpty() ? partKindName(b.kind) : b.name;
+            const double tall = std::max(0.5, b.designatorHeightMm);
             Entity t;
             if (shape.ports() == 1 && bb.valid) {
                 const Vec2 out1 = turnQuarters(shape.faceOut[0], b.rot);
                 const Vec2 c = (bb.min + bb.max) * 0.5;
                 const double reach = std::abs(out1.x) * (bb.max.x - bb.min.x) / 2.0 +
                                      std::abs(out1.y) * (bb.max.y - bb.min.y) / 2.0;
-                t = makeTextAt(c - out1 * (reach + 3.0), said, 3.5);
+                t = makeTextAt(c - out1 * (reach + 3.0), said, tall);
                 t.meta.insert(QStringLiteral("justify"),
                               std::abs(out1.x) >= std::abs(out1.y)
                                   ? (out1.x > 0.0 ? QStringLiteral("MR") : QStringLiteral("ML"))
                                   : (out1.y > 0.0 ? QStringLiteral("TC") : QStringLiteral("BC")));
             } else {
-                t = makeTextAt(bb.valid ? Vec2{(bb.min.x + bb.max.x) / 2.0, bb.max.y + 2.0} : at, said, 3.5);
+                t = makeTextAt(bb.valid ? Vec2{(bb.min.x + bb.max.x) / 2.0, bb.max.y + 2.0} : at, said, tall);
                 t.meta.insert(QStringLiteral("justify"), QStringLiteral("BC"));
             }
             t.meta.insert(QStringLiteral("mechRole"), QStringLiteral("designator"));

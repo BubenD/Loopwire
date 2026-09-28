@@ -304,7 +304,8 @@ private:
     QListWidget* stack_ = nullptr;
     QComboBox* transitions_ = nullptr;
     QDoubleSpinBox* transitionWidth_ = nullptr;   // never below the cable's width
-    QToolButton* showDesignators_ = nullptr;      // the eye: designators on the drawing or not
+    QToolButton* showDesignator_ = nullptr;       // the eye on the Designator line: written on the drawing or not
+    QDoubleSpinBox* designatorHeight_ = nullptr;  // how tall its letters are
     QCheckBox* dimTotal_ = nullptr;
     QCheckBox* dimFans_ = nullptr;
     QCheckBox* dimBetween_ = nullptr;

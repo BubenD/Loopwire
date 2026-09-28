@@ -638,6 +638,7 @@ void testRoundFour() {
         BrickDesign d;
         const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
         d.brick(x)->name = QStringLiteral("X7");
+        d.brick(x)->showDesignator = true;
         const QString r = d.addBrick(BrickType::Run, PartKind::Wire, 1, 0);
         d.connect(x, r);
         const BrickBuild b = buildBrickHarness(d, nullptr);
@@ -650,7 +651,7 @@ void testRoundFour() {
         }
         check(des && des->meta.value(QStringLiteral("text")).toString() == QLatin1String("X7") && part.valid &&
                   des->a.x < part.min.x,
-              "designator: always written, in front of the part - past its end away from the harness");
+              "designator: its eye on, written in front of the part - past its end away from the harness");
     }
 
     // 3. TWO CONNECTORS ON THE SAME SIDE OF A CABLE are both joined to it.
@@ -1611,11 +1612,23 @@ void testRoundSeven() {
             if (e.meta.value(QStringLiteral("mechRole")).toString() == QStringLiteral("designator")) ++n;
         return n;
     };
-    check(designators() == 2, "designators: written in front of every part");
-    d.showDesignators = false;
-    check(designators() == 0, "designators: and put away when the eye is off");
-    check(!BrickDesign::fromJson(d.toJson()).showDesignators, "designators: off is kept with the design");
-    d.showDesignators = true;
+    check(designators() == 0, "designators: not written until a part's eye is on");
+    d.brick(x0)->showDesignator = true;
+    d.brick(x0)->designatorHeightMm = 6.0;
+    check(designators() == 1, "designators: written for the part whose eye is on, and only that one");
+    double tall = 0.0;
+    for (const Entity& e : buildBrickHarness(d, nullptr).entities)
+        if (e.meta.value(QStringLiteral("mechRole")).toString() == QStringLiteral("designator"))
+            tall = e.meta.value(QStringLiteral("size")).toDouble(e.meta.value(QStringLiteral("height")).toDouble());
+    std::printf("  designators: written %.2f tall\n", tall);
+    check(std::abs(tall - 6.0) < 1e-9, "designators: at the height the part says");
+    {
+        const BrickDesign back = BrickDesign::fromJson(d.toJson());
+        check(back.brick(x0)->showDesignator && !back.brick(x1)->showDesignator &&
+                  std::abs(back.brick(x0)->designatorHeightMm - 6.0) < 1e-9,
+              "designators: the eye and the height are kept with the design");
+    }
+    d.brick(x0)->showDesignator = false;
     auto bootOf = [&d, &c](double& body) {
         for (const Entity& e : buildBrickHarness(d, nullptr).entities)
             if (e.type == EntityType::TwistedPair && e.meta.value(QStringLiteral("brickId")).toString() == c) {
@@ -1647,10 +1660,22 @@ void testRoundSeven() {
         dlg.design().links = d.links;
         dlg.selectBrick(c);
         QApplication::processEvents();
-        auto* eye = dlg.findChild<QToolButton*>(QStringLiteral("brickShowDesignators"));
-        check(eye && eye->isChecked(), "wizard: an eye for the designators, on");
+        check(!dlg.findChild<QToolButton*>(QStringLiteral("brickShowDesignators")),
+              "wizard: no eye for every designator at once on the bar");
+        dlg.selectBrick(x0);
+        QApplication::processEvents();
+        auto* eye = dlg.findChild<QToolButton*>(QStringLiteral("brickShowDesignator"));
+        auto* height = dlg.findChild<QDoubleSpinBox*>(QStringLiteral("brickDesignatorHeight"));
+        auto* name = dlg.findChild<QLineEdit*>(QStringLiteral("brickName"));
+        check(eye && height && name && !eye->isChecked() &&
+                  std::abs(eye->mapTo(&dlg, QPoint(0, 0)).y() - name->mapTo(&dlg, QPoint(0, 0)).y()) < 12,
+              "wizard: the eye is on the part's Designator line, off to begin with");
         if (eye) eye->click();
-        check(!dlg.design().showDesignators, "wizard: pressed, the designators are put away");
+        if (height) height->setValue(5.0);
+        check(dlg.design().brick(x0)->showDesignator && std::abs(dlg.design().brick(x0)->designatorHeightMm - 5.0) < 1e-9,
+              "wizard: pressed, that part's designator is written, as tall as asked");
+        dlg.selectBrick(c);
+        QApplication::processEvents();
         auto* width = dlg.findChild<QDoubleSpinBox*>(QStringLiteral("brickTransitionWidth"));
         auto* widthAuto = dlg.findChild<QToolButton*>(QStringLiteral("brickTransitionWidthAuto"));
         check(width && widthAuto && width->isEnabled(), "wizard: a transition width, with an Auto");
@@ -1662,6 +1687,19 @@ void testRoundSeven() {
         }
         auto* sym = dlg.findChild<QPushButton*>(QStringLiteral("brickArrange"));
         check(sym && sym->text() == QStringLiteral("Symmetric"), "wizard: a Symmetric button");
+    }
+    // SYMMETRIC WITH NOTHING LINKED YET: one connector on the left, two on the right, dropped anywhere - the two
+    // are put the same distance either side of the one.
+    {
+        BrickDesign s;
+        const QString p1 = s.addBrick(BrickType::End, PartKind::Connector, 0, 3.0);
+        const QString p2 = s.addBrick(BrickType::End, PartKind::Connector, 6, 0.0);
+        const QString p3 = s.addBrick(BrickType::End, PartKind::Connector, 6, 4.5);
+        arrangeBricks(s);
+        const double r1 = s.brick(p1)->row, r2 = s.brick(p2)->row, r3 = s.brick(p3)->row;
+        std::printf("  symmetric: rows %.1f / %.1f, %.1f\n", r1, r2, r3);
+        check(std::abs((r2 + r3) / 2.0 - r1) < 1e-9 && r3 - r2 > 1.0 && s.brick(p2)->col == 6.0,
+              "symmetric: parts not linked yet are spread evenly either side of one axis, in their columns");
     }
 }
 

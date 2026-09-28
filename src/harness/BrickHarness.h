@@ -126,6 +126,10 @@ struct Brick {
     double row = 0.0;                      // across it; down the pane is +
     int rot = 0;                           // quarter turns clockwise on the pane
     bool balloon = false;
+    // THE DESIGNATOR ON THE DRAWING, part by part: written in front of the part or not (off unless asked
+    // for), and how tall its letters are.
+    bool showDesignator = false;
+    double designatorHeightMm = 3.5;
     BrickRunSpec run;                      // for a special
     // HOW BIG AN END'S PART IS DRAWN, 1 = as drawn in the library. Its faces scale with it, so the wires
     // and cables meet it where its faces now are. On Auto the drawing works it out: the part is made as
@@ -171,8 +175,6 @@ struct BrickDesign {
     // its far point (the back of it).
     bool dimFromFar = false;
     bool dimToFar = false;
-    // WHETHER THE DESIGNATORS ARE WRITTEN on the drawing, in front of every part.
-    bool showDesignators = true;
 
     Brick* brick(const QString& id);
     const Brick* brick(const QString& id) const;

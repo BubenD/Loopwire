@@ -1051,20 +1051,6 @@ void BrickWizardDialog::buildUi() {
                           "part on the axis, the rest evenly either side, every brick turned to face what it "
                           "is linked to - then both panes fitted to show it all"),
            [this] { arrange(); });
-    // THE EYE: the designators on the drawing, or not.
-    showDesignators_ = new QToolButton(this);
-    showDesignators_->setObjectName(QStringLiteral("brickShowDesignators"));
-    showDesignators_->setCheckable(true);
-    showDesignators_->setChecked(true);
-    showDesignators_->setText(QStringLiteral("👁 Designators"));
-    showDesignators_->setToolTip(QStringLiteral("Show the designators (P1, X2 ...) on the drawing, or hide them"));
-    showDesignators_->setStyleSheet(QStringLiteral("QToolButton{padding:2px 6px;}"
-                                                   "QToolButton:checked{background:#2b6cb0;color:white;}"));
-    connect(showDesignators_, &QToolButton::toggled, this, [this](bool on) {
-        design_.showDesignators = on;
-        refreshPreview();
-    });
-    bar->addWidget(showDesignators_);
     bar->addSpacing(18);
     bar->addWidget(new QLabel(QStringLiteral("Dimensions from"), this));
     dimFrom_ = new QComboBox(this);
@@ -1271,7 +1257,33 @@ QWidget* BrickWizardDialog::buildEndPage() {
     name_ = new QLineEdit(page);
     name_->setObjectName(QStringLiteral("brickName"));
     name_->setPlaceholderText(QStringLiteral("X1"));
-    f->addRow(QStringLiteral("Designator"), name_);
+    // THE DESIGNATOR LINE: the name, how tall it is written, and an eye for whether it is written on the
+    // drawing at all - off until it is asked for.
+    {
+        auto* row = new QHBoxLayout;
+        row->setContentsMargins(0, 0, 0, 0);
+        row->setSpacing(3);
+        row->addWidget(name_, 1);
+        designatorHeight_ = new QDoubleSpinBox(page);
+        designatorHeight_->setObjectName(QStringLiteral("brickDesignatorHeight"));
+        designatorHeight_->setRange(0.5, 50.0);
+        designatorHeight_->setSingleStep(0.5);
+        designatorHeight_->setDecimals(1);
+        designatorHeight_->setSuffix(QStringLiteral(" mm"));
+        designatorHeight_->setValue(3.5);
+        designatorHeight_->setToolTip(QStringLiteral("How tall the designator is written on the drawing"));
+        row->addWidget(designatorHeight_);
+        showDesignator_ = new QToolButton(page);
+        showDesignator_->setObjectName(QStringLiteral("brickShowDesignator"));
+        showDesignator_->setCheckable(true);
+        showDesignator_->setChecked(false);
+        showDesignator_->setText(QStringLiteral("👁"));
+        showDesignator_->setToolTip(QStringLiteral("Write this designator on the drawing (lit) or not"));
+        showDesignator_->setStyleSheet(QStringLiteral("QToolButton{padding:1px 5px;}"
+                                                      "QToolButton:checked{background:#2b6cb0;color:white;}"));
+        row->addWidget(showDesignator_);
+        f->addRow(QStringLiteral("Designator"), row);
+    }
     balloon_ = new QCheckBox(QStringLiteral("Balloon"), page);
     balloon_->setObjectName(QStringLiteral("brickBalloon"));
     f->addRow(QString(), balloon_);
@@ -1354,6 +1366,11 @@ QWidget* BrickWizardDialog::buildEndPage() {
     });
     connect(name_, &QLineEdit::textEdited, this, [this](const QString&) { writeEnd(); });
     connect(balloon_, &QCheckBox::toggled, this, [this](bool) { writeEnd(); });
+    connect(showDesignator_, &QToolButton::toggled, this, [this](bool on) {
+        designatorHeight_->setEnabled(on);
+        writeEnd();
+    });
+    connect(designatorHeight_, &QDoubleSpinBox::valueChanged, this, [this](double) { writeEnd(); });
     connect(bomAdd_, &QPushButton::clicked, this, [this] {
         const Brick* b = design_.brick(canvas_->selected());
         if (!b || b->libPart.isEmpty()) return;
@@ -1829,7 +1846,10 @@ void BrickWizardDialog::loadPanel() {
     }
     if (b->type == BrickType::End) {
         panel_->setCurrentIndex(1);
-        const QSignalBlocker b1(part_), b2(name_), b3(balloon_);
+        const QSignalBlocker b1(part_), b2(name_), b3(balloon_), b4(showDesignator_), b5(designatorHeight_);
+        showDesignator_->setChecked(b->showDesignator);
+        designatorHeight_->setValue(b->designatorHeightMm);
+        designatorHeight_->setEnabled(b->showDesignator);
         endKind_->setText(partKindName(b->kind) +
                           (brickKindIsJoint(b->kind) ? QStringLiteral(" (a joint: a face each side)")
                                                      : QString()));
@@ -2045,6 +2065,8 @@ void BrickWizardDialog::writeEnd() {
     b->libPart = part_->currentData().toString();
     b->name = name_->text();
     b->balloon = balloon_->isChecked();
+    b->showDesignator = showDesignator_->isChecked();
+    b->designatorHeightMm = designatorHeight_->value();
     if (partScale_) {
         b->autoScale = partScaleAuto_->isChecked();
         if (!b->autoScale) b->scale = std::clamp(partScale_->value() / 100.0, 0.1, 10.0);
@@ -2405,8 +2427,6 @@ bool BrickWizardDialog::loadFromDrawing(const QString& name) {
         const QSignalBlocker b1(dimFrom_), b2(dimTo_);
         dimFrom_->setCurrentIndex(design_.dimFromFar ? 1 : 0);
         dimTo_->setCurrentIndex(design_.dimToFar ? 1 : 0);
-        const QSignalBlocker b3(showDesignators_);
-        showDesignators_->setChecked(design_.showDesignators);
     }
     currentName_ = name;
     harnessName_->setText(name);
