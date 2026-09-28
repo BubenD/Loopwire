@@ -293,6 +293,9 @@ private:
     QDoubleSpinBox* wireWidth_ = nullptr;
     QDoubleSpinBox* fanStart_ = nullptr;
     QDoubleSpinBox* fanFinish_ = nullptr;
+    // WHETHER THERE IS A FAN at each end at all: off, the wires go in as the bundle (fan length nought).
+    QToolButton* fanStartOn_ = nullptr;
+    QToolButton* fanFinishOn_ = nullptr;
     QDoubleSpinBox* knee_ = nullptr;
     QDoubleSpinBox* fanKnee_ = nullptr;
     QDoubleSpinBox* fanScale_ = nullptr;

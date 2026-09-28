@@ -1503,6 +1503,70 @@ void testDialogMore() {
 
 } // namespace
 
+// ROUND SIX: parts on other rows spread out along the harness by what is left of the run's length, and a
+// run's end with no fan goes into its part as the bundle.
+void testRoundSix() {
+    BrickDesign d;
+    const QString x0 = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+    const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+    const QString x1 = d.addBrick(BrickType::End, PartKind::Connector, 2, 1);
+    QString why;
+    check(d.connect(x0, c, &why) && d.connect(c, x1, &why), "spread: two connectors a row apart, on one cable");
+    d.brick(c)->run.lengthMm = 300.0;
+    auto runOf = [&c](const BrickBuild& b) {
+        for (const Entity& e : b.entities)
+            if (e.type == EntityType::TwistedPair && e.meta.value(QStringLiteral("brickId")).toString() == c)
+                return e;
+        return Entity{};
+    };
+    {
+        const BrickBuild b = buildBrickHarness(d, nullptr);
+        const BrickFace fa = b.faces.value(QStringLiteral("%1:0").arg(x0));
+        const BrickFace fb = b.faces.value(QStringLiteral("%1:0").arg(x1));
+        const double along = std::abs(fb.centre.x - fa.centre.x);
+        const double across = std::abs(fb.centre.y - fa.centre.y);
+        std::printf("  spread: faces %.1f along and %.1f across for a 300 mm run\n", along, across);
+        check(across > 1.0 && std::abs(along + across - 300.0) < 1.0,
+              "spread: the far part is as far along as the run's length less the climb across");
+        const Entity r = runOf(b);
+        bool forward = r.points.size() >= 2;
+        for (size_t i = 1; i < r.points.size(); ++i)
+            if (r.points[i].x < r.points[i - 1].x - 1e-6) forward = false;
+        check(forward, "spread: the wires never turn back to reach it");
+        check(r.meta.value(QStringLiteral("twistSpread")).toString() == QStringLiteral("both"),
+              "fan: by default the run fans at both parts");
+    }
+    {
+        d.brick(c)->run.fanFinishMm = 0.0;
+        const Entity r = runOf(buildBrickHarness(d, nullptr));
+        check(r.meta.value(QStringLiteral("twistSpread")).toString() == QStringLiteral("start") &&
+                  r.meta.value(QStringLiteral("twistEndsFinish")).toDouble() == 0.0,
+              "fan: with no fan at the finish, the wires go into that part as the bundle");
+        d.brick(c)->run.fanFinishMm = -1.0;
+    }
+    // THE FAN BUTTON beside the "A".
+    {
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        BrickWizardDialog dlg(&ed);
+        dlg.show();
+        dlg.design().bricks = d.bricks;
+        dlg.design().links = d.links;
+        dlg.selectBrick(c);
+        QApplication::processEvents();
+        auto* on = dlg.findChild<QToolButton*>(QStringLiteral("brickFanFinishOn"));
+        auto* len = dlg.findChild<QDoubleSpinBox*>(QStringLiteral("brickFanFinish"));
+        check(on && on->isChecked() && len && len->isEnabled(), "fan: a Fan button beside the finish length, lit");
+        if (on) on->click();
+        check(dlg.design().brick(c)->run.fanFinishMm == 0.0 && len && !len->isEnabled(),
+              "fan: off, the run has no fan at that end and the length is not asked for");
+        if (on) on->click();
+        check(dlg.design().brick(c)->run.fanFinishMm < 0.0 && len && len->isEnabled(),
+              "fan: on again, the fan is back and the drawing sizes it");
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -1518,6 +1582,7 @@ int run_brickharness_tests() {
     testRoundThree();
     testRoundFour();
     testRoundFive();
+    testRoundSix();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

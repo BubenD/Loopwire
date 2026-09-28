@@ -48,6 +48,7 @@
 #include <QDialogButtonBox>
 #include <QClipboard>
 #include <QGuiApplication>
+#include <QScreen>
 #include <QDrag>
 #include <QMimeData>
 #include <QDateTime>
@@ -2133,6 +2134,26 @@ Bounds mechModelBounds(const Document& doc) {
     return out;
 }
 
+// THE ENTRY FACES AS THEY ARE ON THE SHEET: a face's bar moved is the face moved, and a bar deleted is a face
+// no longer marked. Read back in their order, so the numbers the generator hands branches out by hold.
+std::vector<MechOutputFace> outputFacesOnSheet(const Document& doc, const std::vector<MechOutputFace>& had) {
+    std::vector<std::pair<int, MechOutputFace>> seen;
+    for (const Entity& e : doc.entities()) {
+        if (e.layer != QLatin1String(kMechModelGuideLayer) || !e.meta.contains(QStringLiteral("modelOutput")))
+            continue;
+        seen.push_back({e.meta.value(QStringLiteral("modelOutput")).toInt(), MechOutputFace{e.a, e.b}});
+    }
+    // No bars at all while faces are marked: the guides are not on the sheet (yet) - nothing to read back.
+    bool anyGuide = false;
+    for (const Entity& e : doc.entities())
+        if (e.layer == QLatin1String(kMechModelGuideLayer)) anyGuide = true;
+    if (!anyGuide) return had;
+    std::stable_sort(seen.begin(), seen.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
+    std::vector<MechOutputFace> out;
+    for (const auto& s : seen) out.push_back(s.second);
+    return out;
+}
+
 void addMechModelGuides(Document& doc, const MechModel& model) {
     doc.entities().erase(
         std::remove_if(doc.entities().begin(), doc.entities().end(), [](const Entity& e) {
@@ -2453,6 +2474,7 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
             if (!sawNear) model.hasNearPoint = false;
             if (!sawFar) model.hasFarPoint = false;
             if (!sawConnect) model.hasConnect = false;
+            model.outputs = outputFacesOnSheet(*doc_, model.outputs);
             // Redrawn rather than left as they are: a marker dropped onto another one has to restagger
             // to the two-ring size right away, and a deleted marker's ring has to actually disappear.
             addMechModelGuides(*doc_, model);
@@ -2479,6 +2501,7 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
             if (!sawNear) part.hasNearPoint = false;
             if (!sawFar) part.hasFarPoint = false;
             if (!sawConnect) part.hasConnect = false;
+            part.outputs = outputFacesOnSheet(*doc_, part.outputs);
             addLibraryPartGuides(*doc_, part);
         }
     });
@@ -2528,6 +2551,9 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
                 const QSet<QString> moved(ids.begin(), ids.end());
                 int drawing = 0;
                 for (const Entity& e : doc_->entities()) {
+                    // Marks picked with the drawing moved themselves, and are read back from where they went
+                    // - carried along here as well they would go twice as far.
+                    if (e.layer == QLatin1String(kMechModelGuideLayer) && moved.contains(e.id)) return;
                     if (e.layer == QLatin1String(kMechModelGuideLayer)) continue;
                     ++drawing;
                     if (!moved.contains(e.id)) return;   // not the whole drawing
@@ -4499,6 +4525,12 @@ void MainWindow::buildRibbon() {
     ribbon_ = new QTabWidget(this);
     ribbon_->setDocumentMode(true);
     ribbon_->setFixedHeight(150); // taller: larger icons + room for the 4-row hatch fields
+    // THE RIBBON NEVER MAKES THE WINDOW WIDER THAN THE SCREEN. Left to its own minimum it asked for the width
+    // of its widest tab - and a part-editing session adds its groups to Home, which made that wider than the
+    // display: the window grew past the right-hand edge and took Capture and Cancel (in the ribbon's corner)
+    // off the screen with it. With a floor of its own, a tab too long for the window is cut at the end
+    // instead, and the corner is always in view.
+    ribbon_->setMinimumWidth(320);
     // The ribbon's colours, scoped to the ribbon and its children. background-color rather than the
     // `background` shorthand, so it reliably wins over the application sheet's QWidget rule.
     ribbon_->setStyleSheet(ribbonStyleSheet());
@@ -14441,6 +14473,24 @@ void MainWindow::openMechModelEditor(MechModelKind kind, const QString& name, bo
         6000);
 }
 
+// THE WHOLE WINDOW ON THE SCREEN IT IS ON: a window that has grown past the edge - or was left there - is
+// pulled back inside, so nothing along its edges (a session's Capture and Cancel) is out of reach.
+void MainWindow::keepWindowOnScreen() {
+    if (isMaximized() || isFullScreen() || isMinimized()) return;
+    QScreen* s = screen() ? screen() : QGuiApplication::primaryScreen();
+    if (!s) return;
+    const QRect room = s->availableGeometry();
+    const QRect frame = frameGeometry();
+    if (room.contains(frame)) return;
+    const QSize chrome = frame.size() - size();
+    const QSize fits(std::min(width(), room.width() - chrome.width()),
+                     std::min(height(), room.height() - chrome.height()));
+    resize(fits.expandedTo(minimumSize()));
+    const QRect now = frameGeometry();
+    move(std::clamp(now.left(), room.left(), std::max(room.left(), room.right() + 1 - now.width())),
+         std::clamp(now.top(), room.top(), std::max(room.top(), room.bottom() + 1 - now.height())));
+}
+
 void MainWindow::openLibraryPartEditor(const QString& partId, LibraryPartDrawing kind) {
     // Reached into the library dialog's OWN catalog, not a fresh independent one - that dialog stays
     // open (hidden, not closed) for the life of the session, the same as the models manager does for
@@ -14507,6 +14557,7 @@ void MainWindow::openLibraryPartEditor(const QString& partId, LibraryPartDrawing
     for (const int ms : {0, 120, 400})
         QTimer::singleShot(ms, this, [this, raw] {
             if (doc_ != raw || !canvas_) return;
+            keepWindowOnScreen();
             canvas_->fitView();
             canvas_->invalidateScene();
             canvas_->update();

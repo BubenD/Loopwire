@@ -318,6 +318,39 @@ QStringList wireColorChoices() {
             QStringLiteral("Green/Yellow")};
 }
 
+const std::vector<WireColorStandard>& wireColorStandards() {
+    auto list = [](const char* s) { return QString::fromLatin1(s).split(QLatin1Char(',')); };
+    static const std::vector<WireColorStandard> kCodes = {
+        {QStringLiteral("DIN 47100 / IEC 60757"),
+         list("White,Brown,Green,Yellow,Grey,Pink,Blue,Red,Black,Violet,Grey/Pink,Red/Blue,White/Green,"
+              "Brown/Green,White/Yellow,Yellow/Brown,White/Grey,Grey/Brown,White/Pink,Pink/Brown")},
+        {QStringLiteral("MIL-STD-681 (numbered code)"),
+         list("Black,Brown,Red,Orange,Yellow,Green,Blue,Violet,Grey,White,White/Black,White/Brown,White/Red,"
+              "White/Orange,White/Yellow,White/Green,White/Blue,White/Violet,White/Grey,Black/Brown")},
+        {QStringLiteral("MIL-DTL-27500 (cable cores)"),
+         list("White,Blue,Orange,Green,Red,Black,Yellow,Violet,Grey,Brown")},
+        {QStringLiteral("IEC 60062 (resistor code)"),
+         list("Brown,Red,Orange,Yellow,Green,Blue,Violet,Grey,White,Black")},
+        {QStringLiteral("TIA-568 / ISO/IEC 11801 (pairs)"),
+         list("White/Blue,Blue/White,White/Orange,Orange/White,White/Green,Green/White,White/Brown,Brown/White,"
+              "White/Grey,Grey/White,Red/Blue,Blue/Red,Red/Orange,Orange/Red,Red/Green,Green/Red,Red/Brown,"
+              "Brown/Red,Red/Grey,Grey/Red")},
+        {QStringLiteral("IEC 60445 (power, L1 L2 L3 N PE)"), list("Brown,Black,Grey,Blue,Green/Yellow")},
+        {QStringLiteral("NEC / US power (L1 L2 L3 N G)"), list("Black,Red,Blue,White,Green")},
+    };
+    return kCodes;
+}
+
+bool applyWireColorStandard(std::vector<PartPinWire>& wires, int standard) {
+    const auto& codes = wireColorStandards();
+    if (standard < 0 || standard >= static_cast<int>(codes.size())) return false;
+    const QStringList& c = codes[static_cast<size_t>(standard)].colors;
+    if (c.isEmpty()) return false;
+    for (PartPinWire& w : wires)
+        if (w.pin >= 1) w.color = c.at((w.pin - 1) % c.size());
+    return true;
+}
+
 QStringList wireInsulationChoices() {
     return {QStringLiteral("PVC"),  QStringLiteral("PTFE"),      QStringLiteral("FEP"),
             QStringLiteral("PFA"),  QStringLiteral("ETFE"),      QStringLiteral("XL-ETFE"),
@@ -385,15 +418,48 @@ QJsonArray withWiredWires(const LibraryPart& part, bool mechanical, const QJsonA
     QJsonArray out = drawing;
     const std::vector<Entity> ents = partDrawingEntities(drawing);
     if (mechanical) {
-        // THE FACE THE WIRES LEAVE BY - the part's first output face, or its far end when none is marked -
-        // and which way is out of it: away from the body, unless it was asked to go the other way.
+        // WHICH WAY THE HARNESS GOES FROM THE PART - the connector's own direction, as its marks say it: the
+        // way it runs from its connection point, or from its far point to its near point. Only when it has
+        // neither is it guessed, as out of the face away from the middle of the drawing.
         Bounds body;
         for (const Entity& e : ents) body.expand(e.bounds());
         if (!body.valid) return drawing;
+        Vec2 dir{0.0, 0.0};
+        if (part.hasConnect) dir = Vec2{std::cos(part.connectAngleRad), std::sin(part.connectAngleRad)};
+        else if (part.hasNearPoint && part.hasFarPoint) dir = (part.nearPoint - part.farPoint).normalized();
+        const bool haveDir = dir.lengthSq() > 1e-12;
+        // THE ENTRY FACE the fan fits in: the part's first output face; else across the end of the part the
+        // harness leaves by, as wide as the drawing is there; else its right-hand end.
         Vec2 a, b;
         if (!part.outputs.empty()) {
             a = part.outputs.front().a;
             b = part.outputs.front().b;
+        } else if (haveDir) {
+            const Vec2 across = dir.perp();
+            double endAt = -1e300, lo = 1e300, hi = -1e300, from = 1e300;
+            std::vector<Vec2> pts;
+            for (const Entity& e : ents) {
+                const Bounds eb = e.bounds();
+                if (!eb.valid) continue;
+                for (const Vec2& c : {eb.min, eb.max, Vec2{eb.min.x, eb.max.y}, Vec2{eb.max.x, eb.min.y}}) {
+                    pts.push_back(c);
+                    endAt = std::max(endAt, dot(c, dir));
+                    from = std::min(from, dot(c, dir));
+                }
+            }
+            // What is within the last tenth of the part is its end.
+            const double near = endAt - std::max(1e-6, (endAt - from) * 0.1);
+            for (const Vec2& c : pts)
+                if (dot(c, dir) >= near) {
+                    lo = std::min(lo, dot(c, across));
+                    hi = std::max(hi, dot(c, across));
+                }
+            if (hi - lo < 1e-6) {
+                lo = -1.0;
+                hi = 1.0;
+            }
+            a = dir * endAt + across * lo;
+            b = dir * endAt + across * hi;
         } else {
             a = {body.max.x, body.min.y};
             b = {body.max.x, body.max.y};
@@ -402,7 +468,8 @@ QJsonArray withWiredWires(const LibraryPart& part, bool mechanical, const QJsonA
         if (along.lengthSq() < 1e-12) return drawing;
         Vec2 out1 = along.perp();
         const Vec2 faceMid = (a + b) * 0.5;
-        if (dot(out1, faceMid - body.center()) < 0.0) out1 = out1 * -1.0;
+        // Out of the face, the way the harness goes - away from the body, never back through it.
+        if (haveDir ? dot(out1, dir) < 0.0 : dot(out1, faceMid - body.center()) < 0.0) out1 = out1 * -1.0;
         if (d.flipSide) out1 = out1 * -1.0;
         const double straight = std::max(0.0, d.straightMm);
         const double spreadAt = straight * 2.0;

@@ -2456,6 +2456,47 @@ int run_partspanel_tests() {
         std::printf("  wired show: %d lead(s) on the mechanical drawing\n", leads);
         check(leads == 3 && outward && longEnough,
               "wired show: a wire per pin fans out of the output face, away from the body, as long as asked");
+        // NO FACE MARKED, the connector runs LEFT from its connection point: the fan fits the left-hand end of
+        // the part and the wires go away from it to the left - not out of the right-hand end, through nothing.
+        {
+            LibraryPart left = part;
+            left.outputs.clear();
+            left.hasConnect = true;
+            left.connectPoint = Vec2{0, 0};
+            left.connectAngleRad = M_PI;
+            bool away = true, fitted = true;
+            int n = 0;
+            for (const Entity& e : partDrawingEntities(withWiredWires(left, true, left.mechanical))) {
+                if (!e.meta.contains(QStringLiteral("wiredLead")) || e.points.size() < 2) continue;
+                ++n;
+                away = away && e.points.back().x < -100.0;
+                fitted = fitted && std::abs(e.points.front().x) < 1e-6 && std::abs(e.points.front().y) <= 5.0;
+            }
+            check(n == 3 && away && fitted,
+                  "wired show: the fan fits the entry face and the wires go away from the connector's direction");
+        }
+        // COLOURED BY A CODE: pin 1 first, and a code shorter than the pins starts again.
+        {
+            const auto& codes = wireColorStandards();
+            int din = -1, power = -1;
+            for (size_t i = 0; i < codes.size(); ++i) {
+                if (codes[i].name.startsWith(QStringLiteral("DIN"))) din = static_cast<int>(i);
+                if (codes[i].name.startsWith(QStringLiteral("IEC 60445"))) power = static_cast<int>(i);
+            }
+            bool mil = false;
+            for (const auto& s : codes) mil = mil || s.name.startsWith(QStringLiteral("MIL"));
+            check(din >= 0 && power >= 0 && mil && codes.size() >= 5,
+                  "colour code: DIN / IEC, MIL-STD and other codes to choose from");
+            std::vector<PartPinWire> ws(7);
+            for (int i = 0; i < 7; ++i) ws[static_cast<size_t>(i)].pin = i + 1;
+            check(applyWireColorStandard(ws, din) && ws[0].color == QStringLiteral("White") &&
+                      ws[1].color == QStringLiteral("Brown") && ws[2].color == QStringLiteral("Green"),
+                  "colour code: DIN 47100 colours the wires white, brown, green ...");
+            applyWireColorStandard(ws, power);
+            check(ws[4].color == QStringLiteral("Green/Yellow") && ws[5].color == QStringLiteral("Brown"),
+                  "colour code: and a short code starts again past its last colour");
+            check(!applyWireColorStandard(ws, 999), "colour code: a code there is not changes nothing");
+        }
         const std::vector<Entity> schem = partDrawingEntities(withWiredWires(part, false, part.schematic));
         QStringList labels;
         for (const Entity& e : schem)
@@ -2532,6 +2573,14 @@ int run_partspanel_tests() {
             check(same && same->isVisibleTo(&dlg) && std::abs(same->mapTo(&dlg, QPoint(0, 0)).y() -
                                                               wired->mapTo(&dlg, QPoint(0, 0)).y()) < 12,
                   "wired: \"Same as pin 1 for all\" is on the line with the tick");
+            // COLOURS BY A CODE, from a list whose every entry shows its colours when hovered.
+            auto* codes = dlg.findChild<QComboBox*>(QStringLiteral("wiresColorCode"));
+            bool tips = codes && codes->count() > 5;
+            for (int i = 1; codes && i < codes->count(); ++i)
+                tips = tips && codes->itemData(i, Qt::ToolTipRole).toString().contains(QStringLiteral("<tr>"));
+            check(codes && codes->isVisibleTo(&dlg) && tips &&
+                      codes->itemData(1, Qt::ToolTipRole).toString().contains(QStringLiteral("White")),
+                  "wired: a colour-code list on the tick's line, each code's colours shown on hover");
             check(table->columnCount() == 6 && table->item(1, 1) && table->item(1, 5),
                   "wired: colour, size, unit, insulation, diameter");
             if (table->item(1, 1) && table->item(3, 1)) {

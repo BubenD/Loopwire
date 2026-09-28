@@ -534,6 +534,38 @@ int run_mechmodelcanvas_tests() {
                     ed->setTool(ToolId::Select);
                     QApplication::processEvents();
 
+                    // SHIFT + CLICK PICKS A MARK - a point or an entry face - not the drawing under it, and
+                    // a picked face can be deleted like anything else.
+                    {
+                        emit ed->modelOutputPicked(Vec2{20.0, -3.0}, Vec2{20.0, 3.0});
+                        QApplication::processEvents();
+                        auto markOf = [d](const char* key) {
+                            for (const Entity& e : d->entities())
+                                if (e.meta.contains(QLatin1String(key))) return e;
+                            return Entity{};
+                        };
+                        const Entity connect = markOf("modelAnchor");
+                        const Entity bar = markOf("modelOutput");
+                        check(!connect.id.isEmpty() && !bar.id.isEmpty(), "shift pick: a point and a face on the part");
+                        ed->clearSelection();
+                        ed->onPointerPress(connect.center, Qt::LeftButton, Qt::ShiftModifier);
+                        ed->onPointerRelease(connect.center, Qt::LeftButton);
+                        ed->onPointerPress(lerp(bar.a, bar.b, 0.5), Qt::LeftButton, Qt::ShiftModifier);
+                        ed->onPointerRelease(lerp(bar.a, bar.b, 0.5), Qt::LeftButton);
+                        const auto& sel = ed->selection();
+                        std::printf("  shift pick: %d picked\n", static_cast<int>(sel.size()));
+                        check(sel.size() == 2 && std::find(sel.begin(), sel.end(), connect.id) != sel.end() &&
+                                  std::find(sel.begin(), sel.end(), bar.id) != sel.end(),
+                              "shift pick: Shift+click takes the point and the face, not the drawing");
+                        ed->clearSelection();
+                        ed->onPointerPress(lerp(bar.a, bar.b, 0.5), Qt::LeftButton, Qt::ShiftModifier);
+                        ed->onPointerRelease(lerp(bar.a, bar.b, 0.5), Qt::LeftButton);
+                        ed->deleteSelected();
+                        QApplication::processEvents();
+                        check(markOf("modelOutput").id.isEmpty() && !markOf("modelAnchor").id.isEmpty(),
+                              "shift pick: Delete takes the picked face off and leaves the point");
+                    }
+
                     win.saveMechModelBeingEdited(); // Save/Cancel are generalised to route by session kind
                     QApplication::processEvents();
                 }
@@ -546,6 +578,7 @@ int run_mechmodelcanvas_tests() {
                     // Everything was removed, then the connection point alone put back: that is what saves.
                     check(saved->hasConnect && !saved->hasNearPoint && !saved->hasFarPoint,
                           "library session: its marks round-tripped through the save too");
+                    check(saved->outputs.empty(), "library session: the face deleted on the sheet is not saved");
                     std::printf("  library session: connection point saved at %.2f, %.2f\n", saved->connectPoint.x,
                                 saved->connectPoint.y);
                     // Where it is ON THE PART: the save sets the drawing's left end on the origin, so a point that moved

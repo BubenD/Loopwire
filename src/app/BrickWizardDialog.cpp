@@ -1400,10 +1400,39 @@ QWidget* BrickWizardDialog::buildRunPage() {
         });
         return row;
     };
-    fanStart_ = spin("brickFanStart", 0.0, 1000.0, 1.0, QStringLiteral(" mm"));
-    form->addRow(QStringLiteral("Fan length, start"), withAuto(fanStart_, "brickFanStartAuto"));
-    fanFinish_ = spin("brickFanFinish", 0.0, 1000.0, 1.0, QStringLiteral(" mm"));
-    form->addRow(QStringLiteral("Fan length, finish"), withAuto(fanFinish_, "brickFanFinishAuto"));
+    // A FAN OR NONE, beside the "A": lit, the wires spread across the face of the part at that end; off,
+    // they go into it as the bundle they are, and the length is not asked for.
+    auto withFan = [this](QWidget* row, QDoubleSpinBox* s, const char* name) {
+        auto* f = new QToolButton(row);
+        f->setObjectName(QLatin1String(name));
+        f->setText(QStringLiteral("Fan"));
+        f->setCheckable(true);
+        f->setChecked(true);
+        f->setToolTip(QStringLiteral("A fan at this end: lit, the wires spread across the part's face - "
+                                     "off, they go in as the bundle"));
+        f->setStyleSheet(QStringLiteral("QToolButton{padding:1px 4px;}"
+                                        "QToolButton:checked{background:#2f855a;color:white;}"));
+        row->layout()->addWidget(f);
+        connect(f, &QToolButton::toggled, this, [this, s](bool on) {
+            s->setEnabled(on);
+            if (QToolButton* a = autoOf_.value(s)) a->setEnabled(on);
+            writeRun();
+            showActuals();
+        });
+        return f;
+    };
+    fanStart_ = spin("brickFanStart", 0.5, 1000.0, 1.0, QStringLiteral(" mm"));
+    {
+        QWidget* row = withAuto(fanStart_, "brickFanStartAuto");
+        fanStartOn_ = withFan(row, fanStart_, "brickFanStartOn");
+        form->addRow(QStringLiteral("Fan length, start"), row);
+    }
+    fanFinish_ = spin("brickFanFinish", 0.5, 1000.0, 1.0, QStringLiteral(" mm"));
+    {
+        QWidget* row = withAuto(fanFinish_, "brickFanFinishAuto");
+        fanFinishOn_ = withFan(row, fanFinish_, "brickFanFinishOn");
+        form->addRow(QStringLiteral("Fan length, finish"), row);
+    }
     knee_ = spin("brickKnee", 0.0, 1000.0, 1.0, QStringLiteral(" mm"));
     form->addRow(QStringLiteral("Bend radius, body"), withAuto(knee_, "brickKneeAuto"));
     fanKnee_ = spin("brickFanKnee", 0.0, 1000.0, 0.5, QStringLiteral(" mm"));
@@ -1842,6 +1871,14 @@ void BrickWizardDialog::loadPanel() {
         a->setChecked(isAuto);
         if (!isAuto) spinBox->setValue(value);
     }
+    for (auto [on, spinBox, value] : {std::tuple<QToolButton*, QDoubleSpinBox*, double>{fanStartOn_, fanStart_, r.fanStartMm},
+                                      {fanFinishOn_, fanFinish_, r.fanFinishMm}}) {
+        const bool fan = value != 0.0;
+        const QSignalBlocker bo(on);
+        on->setChecked(fan);
+        spinBox->setEnabled(fan);
+        autoOf_.value(spinBox)->setEnabled(fan);
+    }
     {
         const QSignalBlocker d1(dimLinear_), d2(dimTrace_), d3(dimSingle_);
         dimLinear_->setChecked(r.dimLinear);
@@ -2058,8 +2095,8 @@ void BrickWizardDialog::writeRun() {
     r.lengthMm = length_->value();
     r.wireWidthMm = wireWidth_->value();
     auto manual = [this](QDoubleSpinBox* s) { return !autoOf_.value(s)->isChecked(); };
-    r.fanStartMm = manual(fanStart_) ? fanStart_->value() : -1.0;
-    r.fanFinishMm = manual(fanFinish_) ? fanFinish_->value() : -1.0;
+    r.fanStartMm = !fanStartOn_->isChecked() ? 0.0 : manual(fanStart_) ? fanStart_->value() : -1.0;
+    r.fanFinishMm = !fanFinishOn_->isChecked() ? 0.0 : manual(fanFinish_) ? fanFinish_->value() : -1.0;
     r.kneeRadiusMm = manual(knee_) ? knee_->value() : -1.0;
     r.fanKneeMm = manual(fanKnee_) ? fanKnee_->value() : -1.0;
     r.fanScalePct = fanScale_->value();

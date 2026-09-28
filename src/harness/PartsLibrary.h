@@ -479,6 +479,16 @@ std::vector<PartPinWire> partPinWires(const LibraryPart& part);
 void setPartPinWires(LibraryPart& part, const std::vector<PartPinWire>& wires);
 // What the wire columns offer: the usual colours and insulations (both can be typed over).
 QStringList wireColorChoices();
+// THE COLOUR CODES a wired connector's wires can be coloured by, pin 1 first: each a name and the colours in
+// order ("White/Blue" a white wire with a blue stripe). A connector with more pins than a code has colours
+// starts the code again.
+struct WireColorStandard {
+    QString name;
+    QStringList colors;
+};
+const std::vector<WireColorStandard>& wireColorStandards();
+// Every wire coloured by that code, by its pin; false for a code there is not.
+bool applyWireColorStandard(std::vector<PartPinWire>& wires, int standard);
 QStringList wireInsulationChoices();
 
 // HOW A WIRED CONNECTOR'S WIRES ARE SHOWN. On the mechanical drawing: fanned out of its output face, to one

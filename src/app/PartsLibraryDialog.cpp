@@ -1675,6 +1675,48 @@ void PartsLibraryDialog::buildUi() {
             rebuildWires();
         });
         wiresSameBtn_ = same;
+        // COLOURED BY A CODE: every wire at once, by its pin. Hovering a code in the list shows its first
+        // twenty colours, so it can be told apart before it is chosen.
+        auto* codes = new QComboBox(group);
+        codes->setObjectName(QStringLiteral("wiresColorCode"));
+        codes->setToolTip(QStringLiteral("Colour every wire by a colour code, pin 1 first"));
+        codes->addItem(QStringLiteral("Colours by code…"));
+        const auto& standards = wireColorStandards();
+        for (size_t i = 0; i < standards.size(); ++i) {
+            QString tip = QStringLiteral("<b>%1</b><table cellspacing=0 cellpadding=1>").arg(standards[i].name.toHtmlEscaped());
+            for (int k = 0; k < std::min<int>(20, standards[i].colors.size()); ++k) {
+                const QString name = standards[i].colors.at(k);
+                QString hex = leadColorHex(name);
+                if (hex.isEmpty()) hex = QStringLiteral("#202020");   // black, drawn in the layer's own
+                const QString stripe = leadColorHex(name.section(QLatin1Char('/'), 1, 1).trimmed());
+                tip += QStringLiteral("<tr><td align=right>%1</td><td><span style='color:%2'>&#9608;&#9608;</span>"
+                                      "<span style='color:%3'>%4</span></td><td>%5</td></tr>")
+                           .arg(k + 1)
+                           .arg(hex)
+                           .arg(stripe.isEmpty() ? hex : stripe)
+                           .arg(stripe.isEmpty() ? QStringLiteral("&#9608;") : QStringLiteral("&#9612;"))
+                           .arg(name.toHtmlEscaped());
+            }
+            tip += QStringLiteral("</table>");
+            codes->addItem(standards[i].name);
+            codes->setItemData(codes->count() - 1, tip, Qt::ToolTipRole);
+        }
+        connect(codes, &QComboBox::activated, this, [this, codes](int index) {
+            const int standard = index - 1;
+            {
+                const QSignalBlocker hush(codes);
+                codes->setCurrentIndex(0);
+            }
+            LibraryPart* p = current();
+            if (!p || standard < 0) return;
+            std::vector<PartPinWire> wires = partPinWires(*p);
+            if (!applyWireColorStandard(wires, standard)) return;
+            setPartPinWires(*p, wires);
+            touched();
+            rebuildWires();
+        });
+        wiresCodeBox_ = codes;
+        tickRow->addWidget(codes);
         tickRow->addWidget(same);
         wl->addWidget(wiresHost_);
         rv->addWidget(group);
@@ -3003,6 +3045,7 @@ void PartsLibraryDialog::rebuildWires() {
     }
     wiresHost_->setVisible(wired);
     if (wiresSameBtn_) wiresSameBtn_->setVisible(wired);
+    if (wiresCodeBox_) wiresCodeBox_->setVisible(wired);
     const QSignalBlocker hush(wiresTable_);
     wiresTable_->setRowCount(0);
     if (!wired) return;

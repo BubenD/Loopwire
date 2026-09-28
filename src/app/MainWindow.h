@@ -238,6 +238,7 @@ public:
     // struct, with its own lifecycle (the part lives in a PartsLibraryDialog's own catalog_, not a
     // single well-known file).
     void openLibraryPartEditor(const QString& partId, LibraryPartDrawing kind);
+    void keepWindowOnScreen();
     // Capture: take what is drawn on that canvas as the model and close the session. Public for the same
     // reason - what the ribbon's own Capture button does is worth being able to ask for directly. Cancel
     // likewise: the two ways a session ends are the two things a test of one has to be able to do.

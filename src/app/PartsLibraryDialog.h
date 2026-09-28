@@ -233,6 +233,7 @@ private:
     QWidget* wiresHost_ = nullptr;
     QTableWidget* wiresTable_ = nullptr;
     QPushButton* wiresSameBtn_ = nullptr;
+    QComboBox* wiresCodeBox_ = nullptr;   // colour every wire by a colour code
     // How a wired connector's wires are shown: on the mechanical drawing and on the schematic.
     QCheckBox* wiredMechBox_ = nullptr;
     QComboBox* wiredSideBox_ = nullptr;

@@ -1125,23 +1125,41 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
     {
         struct Edge {
             QString to;
-            double len;
+            double gap;       // along the harness, from the one face to the other
+            Vec2 fromFace;    // where the face is on this node, from its centre (turned)
+            Vec2 toFace;      // and on the other
         };
         QHash<QString, QList<Edge>> edges;
-        // ROOM TO SEE: two parts facing each other are never drawn closer than their bodies and the fans
-        // between them need - a short run would put one connector on top of the other. The run is drawn
-        // that much longer, and its dimensions still say how long it really is (see stretchOf).
-        auto halfAlong = [&shapes](const QString& node) {
-            const auto it = shapes.constFind(node);
-            return it == shapes.constEnd() ? 0.0 : std::max(it->half.x, it->half.y);
+        // Where a face is on its part, from the part's centre, turned as the brick is; a junction is a point.
+        auto faceAt = [&](const FaceRef& f) {
+            const Brick* b = design.brick(f.node);
+            const auto it = shapes.constFind(f.node);
+            if (!b || b->type != BrickType::End || it == shapes.constEnd() || f.port < 0 ||
+                f.port >= it->ports())
+                return Vec2{0.0, 0.0};
+            return turnQuarters(it->faceMid[static_cast<size_t>(f.port)], b->rot);
         };
+        // A RUN'S LENGTH IS FROM FACE TO FACE, and it goes across the harness as well as along it: a run
+        // to a part a row or two away climbs that far, so only what is left of its length is laid along
+        // the harness. Measured from the centres, the parts on the far rows came in level with where they
+        // started from and the wires had to turn back to reach them.
+        //
+        // ROOM TO SEE: two parts facing each other are never drawn closer than the fans between them need
+        // - a short run would put one connector on top of the other. The run is drawn that much longer, and
+        // its dimensions still say how long it really is (see stretchOf).
+        constexpr double kRoomBetween = 60.0;
         for (const Branch& br : branches) {
             if (br.a.node.isEmpty() || br.b.node.isEmpty()) continue;
             const double real = br.special->run.lengthMm;
-            const double len = std::max(real, halfAlong(br.a.node) + halfAlong(br.b.node) + 60.0);
-            if (len > real) stretchOf.insert(br.special->id, std::max(stretchOf.value(br.special->id), len - real));
-            edges[br.a.node] << Edge{br.b.node, len};
-            edges[br.b.node] << Edge{br.a.node, len};
+            const Vec2 fa = faceAt(br.a);
+            const Vec2 fb = faceAt(br.b);
+            const double across = std::abs((-gridOf(br.a.node).y * rowPitch + fa.y) -
+                                           (-gridOf(br.b.node).y * rowPitch + fb.y));
+            const double gap = std::max(real - across, kRoomBetween);
+            if (gap + across > real + 1e-6)
+                stretchOf.insert(br.special->id, std::max(stretchOf.value(br.special->id), gap + across - real));
+            edges[br.a.node] << Edge{br.b.node, gap, fa, fb};
+            edges[br.b.node] << Edge{br.a.node, gap, fb, fa};
         }
         QStringList nodes;
         for (const Brick& b : design.bricks)
@@ -1165,7 +1183,9 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                     if (xOf.contains(e.to)) continue;
                     const double dc = gridOf(e.to).x - gridOf(n).x;
                     const double sign = dc > 1e-9 ? 1.0 : dc < -1e-9 ? -1.0 : 0.0;
-                    xOf.insert(e.to, xOf.value(n) + sign * e.len);
+                    // Face to face along the harness; one above the other, centre over centre.
+                    xOf.insert(e.to, sign == 0.0 ? xOf.value(n)
+                                                 : xOf.value(n) + e.fromFace.x + sign * e.gap - e.toFace.x);
                     queue.push_back(e.to);
                 }
             }
@@ -1554,6 +1574,13 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             spreadA = side == 0 && !isSub && !br.freeStart && (!jA || told);
             spreadB = side == 1 && !loose && !isTrunk && (!jB || told);
         }
+        // NO FAN AT AN END (its fan length nought, the wizard's Fan button off): the wires go into the part
+        // as the bundle they are, not spread across its face. In the special's own terms - start and
+        // finish turned round where the branch was built the other way.
+        const double fanSpecA = br.flipped ? r.fanFinishMm : r.fanStartMm;
+        const double fanSpecB = br.flipped ? r.fanStartMm : r.fanFinishMm;
+        if (fanSpecA == 0.0) spreadA = false;
+        if (fanSpecB == 0.0) spreadB = false;
         // Where it does not spread its wires are packed - except where a fan goes into a cable, which
         // it enters across the drawing's share of the cable's width (the junction's landing).
         const bool intoCableA = jA && s.type != BrickType::Run;
@@ -1563,11 +1590,11 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         if (!spreadB && !loose && !intoCableB) lb.lane = packed;
         else if (spreadB && jB) lb.lane = std::max(lb.lane, packed * 2.0);
         const double fanA = !spreadA ? 0.0
-                            : r.fanStartMm >= 0.0 ? r.fanStartMm
-                                                  : std::max(kWiresRunEnd, la.lane * (wires - 1) / 2.0);
+                            : fanSpecA >= 0.0 ? fanSpecA
+                                              : std::max(kWiresRunEnd, la.lane * (wires - 1) / 2.0);
         const double fanB = !spreadB ? 0.0
-                            : r.fanFinishMm >= 0.0 ? r.fanFinishMm
-                                                   : std::max(kWiresRunEnd, lb.lane * (wires - 1) / 2.0);
+                            : fanSpecB >= 0.0 ? fanSpecB
+                                              : std::max(kWiresRunEnd, lb.lane * (wires - 1) / 2.0);
         const double lead = std::max({fanA, fanB, 10.0}) + std::max(0.0, r.kneeRadiusMm) + 5.0;
         std::vector<Vec2> route;
         if (isTrunk && br.freeStart) route = {splitAt[i], splitAt[i] + splitDir[i] * r.lengthMm};
@@ -1665,8 +1692,8 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         // WHAT AUTO CAME TO, on the special's first run, so the window can show it.
         if (!out.actual.contains(s.id) && !isSub) {
             BrickActual act;
-            act.fanStart = fanA;
-            act.fanFinish = fanB;
+            act.fanStart = br.flipped ? fanB : fanA;
+            act.fanFinish = br.flipped ? fanA : fanB;
             act.bodyWidth = bodyWidth;
             for (const Entity& e : made)
                 if (e.type == EntityType::TwistedPair) {

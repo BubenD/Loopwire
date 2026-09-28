@@ -2238,7 +2238,9 @@ std::optional<QString> Editor::hitTest(const Vec2& world, const std::vector<QStr
         // place. So they are exempted from the lock, and only while the Select tool is the one asking:
         // every other tool keeps the lock exactly as it was, so a Trim or a Fillet never catches one by
         // mistake.
-        const bool anchorMarker = tool_ == ToolId::Select && it->meta.contains(QStringLiteral("modelAnchor"));
+        // An output face's bar is the same kind of thing - a mark to pick up, move or take away.
+        const bool anchorMarker = tool_ == ToolId::Select && (it->meta.contains(QStringLiteral("modelAnchor")) ||
+                                                              it->meta.contains(QStringLiteral("modelOutput")));
         if (!anchorMarker)
             if (const Layer* l = doc_->findLayer(it->layer); l && (!l->visible || l->locked))
                 continue;
@@ -2248,6 +2250,28 @@ std::optional<QString> Editor::hitTest(const Vec2& world, const std::vector<QStr
         if (hiddenHere && !it->id.isEmpty() && it->type != EntityType::LengthBreak) continue;
         const double d = distanceToEntity(*it, world);
         if (d < best) { best = d; hit = it->id; }
+    }
+    return hit;
+}
+
+std::optional<QString> Editor::markAt(const Vec2& world) const {
+    if (!doc_) return std::nullopt;
+    // A little more reach than a line gets: a mark is small, and it is what is being aimed at.
+    double best = worldTolerance() * 1.5;
+    std::optional<QString> hit;
+    const auto& ents = doc_->entities();
+    for (auto it = ents.rbegin(); it != ents.rend(); ++it) {
+        if (it->id.isEmpty()) continue;
+        if (!it->meta.contains(QStringLiteral("modelAnchor")) && !it->meta.contains(QStringLiteral("modelOutput")))
+            continue;
+        if (const Layer* l = doc_->findLayer(it->layer); l && !l->visible) continue;
+        // A ring is caught anywhere inside it as well as on it.
+        double d = distanceToEntity(*it, world);
+        if (it->type == EntityType::Circle && distance(it->center, world) <= it->radius) d = 0.0;
+        if (d < best) {
+            best = d;
+            hit = it->id;
+        }
     }
     return hit;
 }
@@ -2483,6 +2507,21 @@ void Editor::handleSelectPress(const Vec2& p, const Vec2& raw, Qt::KeyboardModif
     // Nothing was grabbed, so this click is going somewhere else: the cell selection goes now. Either the
     // table branch below picks a cell again, or the click was elsewhere and there is no cell picked.
     clearCellSelection();
+
+    // (c2) SHIFT + A CLICK ON A MARK - a connection, near or far point, or an entry face - picks the MARK, not
+    // the drawing under it. The part's drawing is one grouped object, so a plain click near a mark took the
+    // whole part and the mark could not be reached; with Shift held it is the marks that are looked for first,
+    // and each click adds one (or takes it back off), ready to move or delete.
+    if (shift && tool_ == ToolId::Select) {
+        if (const std::optional<QString> mark = markAt(p)) {
+            auto at = std::find(selected_.begin(), selected_.end(), *mark);
+            if (at != selected_.end()) selected_.erase(at);
+            else selected_.push_back(*mark);
+            emit message(QStringLiteral("Mark picked — Move or Delete it; Shift+click another to add it"));
+            emit selectionChanged();
+            return;
+        }
+    }
 
     // (d) Click on an entity body -> select only (Shift removes). Dragging the body
     // does NOT move the object — moving requires the Move command (or a grip).

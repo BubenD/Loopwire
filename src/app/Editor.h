@@ -1569,6 +1569,9 @@ private:
     // second pick of a two-object command finds the OTHER object where both meet at a joint.
     // Refuse, out loud and on the drawing.
     void refuseAt(const Vec2& where, const QString& why);
+    // The placement mark (a connection, near or far point, an entry face) nearest the point, if one is in
+    // reach - what Shift+click picks.
+    std::optional<QString> markAt(const Vec2& world) const;
     std::optional<QString> hitTest(const Vec2& world,
                                    const std::vector<QString>& skip = {}) const;
     std::vector<Entity*> selectedEntities();
