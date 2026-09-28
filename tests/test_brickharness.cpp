@@ -1042,6 +1042,32 @@ void testRoundFive() {
         check(allIn, "zoom: Fit puts every brick in view");
         canvas->resetZoom();   // the clicks below are aimed at the pane's own size
     }
+    // THE PREVIEW STAYS PUT when the drawing changes - choosing a part that is bigger or smaller changes the
+    // drawing's extent, and a refit to it made the whole drawing jump to the middle.
+    {
+        auto line = [](Vec2 a, Vec2 b) {
+            Entity l;
+            l.type = EntityType::Line;
+            l.a = a;
+            l.b = b;
+            return l;
+        };
+        DrawingPreview kept(QStringLiteral("kept"));
+        kept.setKeepView(true);
+        kept.resize(400, 300);
+        kept.setEntities({line({0, 0}, {100, 0}), line({0, 0}, {0, 50})});
+        kept.grab();
+        const QPointF at(120.0, 140.0);
+        const Vec2 w0 = kept.worldAt(at);
+        kept.setEntities({line({0, 0}, {100, 0}), line({0, 0}, {0, 50}), line({100, 0}, {400, 200})});
+        kept.grab();
+        const Vec2 w1 = kept.worldAt(at);
+        std::printf("  preview: point under the cursor (%.2f, %.2f) -> (%.2f, %.2f)\n", w0.x, w0.y, w1.x, w1.y);
+        check(distance(w0, w1) < 1e-6, "preview: a bigger drawing does not move what is already shown");
+        kept.fitToView();
+        kept.grab();
+        check(distance(w0, kept.worldAt(at)) > 1.0, "preview: and Fit still fits the new drawing");
+    }
     // 7. The Auto buttons.
     dlg.design().connect(x, f);
     dlg.selectBrick(f);

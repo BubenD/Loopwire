@@ -29,6 +29,10 @@ public:
 
     void setDrawing(const QJsonArray& drawing);
     void setEntities(const std::vector<Entity>& ents);
+    // KEEP THE VIEW: new entities are drawn where the old ones were, at the same scale, rather than the
+    // view being fitted to them afresh - for a preview that is rebuilt as the user edits, where a refit on
+    // every change makes the drawing jump. Fit (the button, a double-click) still fits.
+    void setKeepView(bool on) { keepView_ = on; }
     void setCaption(const QString& caption);
     QString caption() const { return caption_; }
     bool isEmpty() const { return ents_.empty(); }
@@ -103,6 +107,8 @@ private:
     // rather than the transform being worked out twice from two different places.
     ViewTransform lastVt_;
     bool lastVtValid_ = false;
+    bool keepView_ = false;
+    bool holdView_ = false;   // the next paint keeps the last paint's mapping
 };
 
 } // namespace Edraw_Desktop

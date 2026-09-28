@@ -80,6 +80,7 @@ void DrawingPreview::setDrawing(const QJsonArray& drawing) {
 }
 
 void DrawingPreview::setEntities(const std::vector<Entity>& ents) {
+    holdView_ = keepView_ && lastVtValid_ && !ents_.empty() && !ents.empty();
     ents_ = ents;
     update();
 }
@@ -97,6 +98,7 @@ void DrawingPreview::setEmptyText(const QString& text) {
 void DrawingPreview::fitToView() {
     zoom_ = 1.0;
     pan_ = QPointF(0.0, 0.0);
+    holdView_ = false;
     update();
 }
 
@@ -107,7 +109,8 @@ void DrawingPreview::wheelEvent(QWheelEvent* e) {
         return;
     }
     const double factor = std::pow(1.2, steps);
-    const double next = std::clamp(zoom_ * factor, 1.0, 80.0);
+    // Out no further than the whole drawing - unless a kept view already shows more than that.
+    const double next = std::clamp(zoom_ * factor, std::min(1.0, zoom_), 80.0);
     // Zoom about the cursor, so whatever is under it stays under it - the whole point of scrolling to
     // look at a title block rather than re-finding it after every step.
     const QPointF c(width() / 2.0, height() / 2.0);
@@ -115,7 +118,10 @@ void DrawingPreview::wheelEvent(QWheelEvent* e) {
     const double applied = next / zoom_;
     pan_ = (pan_ + c - at) * applied + at - c;
     zoom_ = next;
-    if (zoom_ <= 1.0 + 1e-9) pan_ = QPointF(0.0, 0.0);   // fully out means fitted again
+    if (zoom_ <= 1.0 + 1e-9 && steps < 0.0 && zoom_ * 1.2 > 1.0) {   // fully out means fitted again
+        zoom_ = 1.0;
+        pan_ = QPointF(0.0, 0.0);
+    }
     update();
     e->accept();
 }
@@ -307,6 +313,14 @@ void DrawingPreview::paintEvent(QPaintEvent*) {
     const double h = std::max(1e-6, b.max.y - b.min.y);
     const QRect box = r.adjusted(10, 18, -10, -10);
     const double fit = std::min(box.width() / w, box.height() / h) * 0.9;
+    // A kept view: the zoom and pan that put the new drawing exactly where the last one was drawn.
+    if (holdView_ && lastVtValid_ && lastScale_ > 0.0) {
+        holdView_ = false;
+        zoom_ = lastScale_ / fit;
+        const double cx = (b.min.x + b.max.x) / 2.0, cy = (b.min.y + b.max.y) / 2.0;
+        pan_ = QPointF(lastVt_.view.x - box.center().x() + cx * lastScale_,
+                       lastVt_.view.y - box.center().y() - cy * lastScale_);
+    }
     const double scale = fit * zoom_;
     ViewTransform vt;
     vt.view.scale = scale;

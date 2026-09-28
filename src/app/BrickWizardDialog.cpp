@@ -1132,6 +1132,7 @@ void BrickWizardDialog::buildUi() {
     preview_ = new DrawingPreview(QStringLiteral("Preview"), middle_);
     preview_->setEmptyText(QStringLiteral("The drawing appears here as the bricks are linked"));
     preview_->setMinimapAvailable(true);
+    preview_->setKeepView(true);   // choosing a part must not make the drawing jump
     preview_->installEventFilter(this);   // Ctrl + wheel over a part scales it
     preview_->setFitButtonShown(true);
     // THE BILL, LIVE: every line of the drawing's bill of materials as it stands, the parts this
