@@ -921,10 +921,10 @@ BrickShape BrickDesign::shapeOf(const Brick& b) const {
 
 BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* catalog,
                              const std::function<int(const QString& libPart)>& itemOf) {
-    // AUTO SCALE: an end left on Auto is made as big as what comes into it wants - the width of the
-    // bundle arriving at its face, over the share of the face a fan is spread across - so the wires run
-    // straight in rather than bending to meet a face too big or too small. Worked out on a first drawing
-    // at the size it is drawn, then drawn again at that size.
+    // AUTO SCALE: an end left on Auto is made the size of the drawing's usual entry - its entry faces as
+    // long, on average, as the entry faces of all the parts on the drawing - so the parts read at one size
+    // and the wires meet faces alike. The whole part scales, its near and far points and its faces with it.
+    // Worked out on a first drawing, then drawn again at that size.
     bool anyAuto = false;
     for (const Brick& b : design.bricks) anyAuto = anyAuto || (b.type == BrickType::End && b.autoScale);
     if (anyAuto) {
@@ -938,24 +938,27 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         const BrickBuild probe = buildBrickHarness(first, catalog, itemOf);
         BrickDesign sized = design;
         sized.shapeCache.clear();
-        const double share = std::clamp(design.faceFanPct, 10.0, 100.0) / 100.0;
+        // The drawing's usual entry: the mean length of every entry face of every part on it.
+        double sum = 0.0;
+        int count = 0;
+        for (auto it = probe.faces.cbegin(); it != probe.faces.cend(); ++it)
+            if (it.value().lengthMm > 1e-6) {
+                sum += it.value().lengthMm;
+                ++count;
+            }
+        const double mean = count > 0 ? sum / count : 0.0;
         for (Brick& b : sized.bricks) {
             if (!b.autoScale) continue;
             b.autoScale = false;
-            double want = 0.0;
-            for (const BrickLink& l : design.links) {
-                if (l.a != b.id && l.b != b.id) continue;
-                const QString otherId = l.a == b.id ? l.b : l.a;
-                const Brick* other = design.brick(otherId);
-                if (!other || !brickIsSpecial(other->type)) continue;
-                const int port = design.portOn(b.id, otherId);
-                const BrickFace face = probe.faces.value(faceKey(b.id, std::max(0, port)));
-                // THE BUNDLE'S OWN WIDTH: its wires side by side. Not the width the drawing gave the run -
-                // that is sized off the face, and chasing it would chase the face's own size back.
-                const double width = std::max(1, other->run.wires) * std::max(0.1, other->run.wireWidthMm);
-                if (face.lengthMm > 1e-6) want = std::max(want, width / (face.lengthMm * share));
-            }
-            b.scale = want > 1e-6 ? std::clamp(want, 0.1, 10.0) : 1.0;
+            // This part's own entries, at the size it was first drawn.
+            double own = 0.0;
+            int n = 0;
+            for (auto it = probe.faces.cbegin(); it != probe.faces.cend(); ++it)
+                if (it.key().startsWith(b.id + QLatin1Char(':')) && it.value().lengthMm > 1e-6) {
+                    own += it.value().lengthMm;
+                    ++n;
+                }
+            b.scale = (n > 0 && mean > 1e-6) ? std::clamp(mean / (own / n), 0.1, 10.0) : 1.0;
         }
         BrickBuild done = buildBrickHarness(sized, catalog, itemOf);
         return done;
@@ -1118,15 +1121,25 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
     // columns of the pane - two runs of different lengths to one connector put their far ends at
     // different distances from it. Across the harness, the rows of the pane stand.
     QHash<QString, double> xOf;
+    QHash<QString, double> stretchOf;   // how much longer a run is drawn than it is, for room to see it
     {
         struct Edge {
             QString to;
             double len;
         };
         QHash<QString, QList<Edge>> edges;
+        // ROOM TO SEE: two parts facing each other are never drawn closer than their bodies and the fans
+        // between them need - a short run would put one connector on top of the other. The run is drawn
+        // that much longer, and its dimensions still say how long it really is (see stretchOf).
+        auto halfAlong = [&shapes](const QString& node) {
+            const auto it = shapes.constFind(node);
+            return it == shapes.constEnd() ? 0.0 : std::max(it->half.x, it->half.y);
+        };
         for (const Branch& br : branches) {
             if (br.a.node.isEmpty() || br.b.node.isEmpty()) continue;
-            const double len = br.special->run.lengthMm;
+            const double real = br.special->run.lengthMm;
+            const double len = std::max(real, halfAlong(br.a.node) + halfAlong(br.b.node) + 60.0);
+            if (len > real) stretchOf.insert(br.special->id, std::max(stretchOf.value(br.special->id), len - real));
             edges[br.a.node] << Edge{br.b.node, len};
             edges[br.b.node] << Edge{br.a.node, len};
         }
@@ -1647,7 +1660,8 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             made.push_back(run);
         }
 
-        const double total = routeLength(route);
+        // How long it REALLY is: drawn longer only for room to see, the dimensions say the real figure.
+        const double total = stretchOf.contains(s.id) ? s.run.lengthMm : routeLength(route);
         // WHAT AUTO CAME TO, on the special's first run, so the window can show it.
         if (!out.actual.contains(s.id) && !isSub) {
             BrickActual act;

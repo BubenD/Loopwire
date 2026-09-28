@@ -399,6 +399,16 @@ void BrickCanvas::paintEvent(QPaintEvent*) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
     p.fillRect(rect(), QColor(0x23, 0x2a, 0x33));
+    // WHAT THIS PANE IS, in its top left corner - at the screen's size, whatever the zoom.
+    {
+        QFont f = font();
+        f.setPixelSize(11);
+        f.setBold(true);
+        p.setFont(f);
+        p.setPen(QColor(0x8f, 0xb0, 0xd6));
+        p.drawText(QPointF(8, 16), QStringLiteral("Brick pane"));
+        p.setFont(font());
+    }
     // Everything from here is in the pane's own units, drawn at the zoom.
     p.scale(zoom_, zoom_);
     p.setPen(QPen(QColor(0x3c, 0x46, 0x52), 1.6));
@@ -1152,7 +1162,22 @@ void BrickWizardDialog::buildUi() {
         bl->addLayout(row);
         connect(rm, &QPushButton::clicked, this, [this] { removeFromBom(bom_->currentRow()); });
     }
-    connect(canvas_, &BrickCanvas::selectionChanged, this, [this](const QString&) {
+    connect(canvas_, &BrickCanvas::selectionChanged, this, [this](const QString& now) {
+        // Matching a part to another: the brick just clicked is the other one.
+        if (!matchSource_.isEmpty() && !now.isEmpty() && now != matchSource_) {
+            const QString source = matchSource_;
+            matchSource_.clear();
+            if (partScaleMatch_) {
+                const QSignalBlocker hush(partScaleMatch_);
+                partScaleMatch_->setChecked(false);
+            }
+            const bool done = scalePartToMatch(source, now);
+            canvas_->setSelected(source);
+            loadPanel();
+            refreshPreview();
+            if (!done) status_->setText(QStringLiteral("That brick has no entry face to match"));
+            return;
+        }
         loadPanel();
         refreshPreview();
     });
@@ -1252,10 +1277,28 @@ QWidget* BrickWizardDialog::buildEndPage() {
                                                   "run in with the fewest bends"));
         partScaleAuto_->setStyleSheet(QStringLiteral("QToolButton{padding:1px 5px;font-weight:bold;}"
                                                      "QToolButton:checked{background:#2b6cb0;color:white;}"));
+        partScaleMatch_ = new QToolButton(page);
+        partScaleMatch_->setObjectName(QStringLiteral("brickPartScaleMatch"));
+        partScaleMatch_->setText(QStringLiteral("Match…"));
+        partScaleMatch_->setCheckable(true);
+        partScaleMatch_->setToolTip(QStringLiteral("Scale this part to another: press, then click the other brick - "
+                                                   "this part's entry face is made as long as that one's nearest"));
+        partScaleMatch_->setStyleSheet(QStringLiteral("QToolButton{padding:1px 5px;}"
+                                                      "QToolButton:checked{background:#2b6cb0;color:white;}"));
+        connect(partScaleMatch_, &QToolButton::toggled, this, [this](bool on) {
+            matchSource_ = on ? canvas_->selected() : QString();
+            if (on && matchSource_.isEmpty()) {
+                const QSignalBlocker hush(partScaleMatch_);
+                partScaleMatch_->setChecked(false);
+                return;
+            }
+            status_->setText(on ? QStringLiteral("Click the brick to scale this part to") : QString());
+        });
         auto* row = new QHBoxLayout;
         row->setContentsMargins(0, 0, 0, 0);
         row->addWidget(partScale_, 1);
         row->addWidget(partScaleAuto_);
+        row->addWidget(partScaleMatch_);
         f->addRow(QStringLiteral("Part scale"), row);
         connect(partScale_, &QDoubleSpinBox::valueChanged, this, [this](double) {
             if (partScale_->signalsBlocked()) return;
@@ -1938,6 +1981,36 @@ void BrickWizardDialog::writeEnd() {
     }
 }
 
+bool BrickWizardDialog::scalePartToMatch(const QString& id, const QString& other) {
+    Brick* b = design_.brick(id);
+    if (!b || b->type != BrickType::End || id == other) return false;
+    if (lastFaces_.isEmpty()) refreshPreview();
+    // The two faces nearest each other: this part's, and the other's.
+    const BrickFace* mine = nullptr;
+    const BrickFace* theirs = nullptr;
+    double best = 1e300;
+    for (auto a = lastFaces_.cbegin(); a != lastFaces_.cend(); ++a) {
+        if (!a.key().startsWith(id + QLatin1Char(':'))) continue;
+        for (auto o = lastFaces_.cbegin(); o != lastFaces_.cend(); ++o) {
+            if (!o.key().startsWith(other + QLatin1Char(':'))) continue;
+            const double d = distance(a.value().centre, o.value().centre);
+            if (d < best) {
+                best = d;
+                mine = &a.value();
+                theirs = &o.value();
+            }
+        }
+    }
+    if (!mine || !theirs || mine->lengthMm <= 1e-6 || theirs->lengthMm <= 1e-6) return false;
+    const double now = b->autoScale ? drawnScales_.value(b->id, b->scale) : b->scale;
+    b->autoScale = false;
+    b->scale = std::clamp(now * theirs->lengthMm / mine->lengthMm, 0.1, 10.0);
+    status_->setText(QStringLiteral("Scaled to %1 % - its entry as long as the other's (%2 mm)")
+                         .arg(qRound(b->scale * 100.0))
+                         .arg(theirs->lengthMm, 0, 'f', 1));
+    return true;
+}
+
 // CTRL + THE WHEEL OVER A PART IN THE PREVIEW scales that part - and the wires meet it where its faces now
 // are. The wheel on its own still zooms the preview.
 bool BrickWizardDialog::eventFilter(QObject* o, QEvent* e) {
@@ -2015,6 +2088,7 @@ void BrickWizardDialog::refreshPreview() {
                                                [this](const QString& id) { return bomItemOf(id); });
     actual_ = built.actual;
     drawnScales_ = built.scales;
+    lastFaces_ = built.faces;
     std::vector<Entity> ents = built.entities;
     const QStringList sel = canvas_->selection();
     for (Entity& e : ents)

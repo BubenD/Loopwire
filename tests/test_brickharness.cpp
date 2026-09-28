@@ -892,16 +892,40 @@ void testRoundFive() {
         const double face2 = big.faces.value(QStringLiteral("%1:0").arg(x)).lengthMm;
         std::printf("  scale: face %.2f at 100%%, %.2f at 200%%\n", face1, face2);
         check(face1 > 0.0 && std::abs(face2 - 2.0 * face1) < 1e-6, "scale: the part drawn twice as big, its face with it");
+        // AUTO: the part made the drawing's usual entry size - here the other end is drawn at 200 %, so the
+        // entries are 20 and 40 and the mean is 30.
         d.brick(x)->scale = 1.0;
         d.brick(x)->autoScale = true;
+        d.brick(y)->scale = 2.0;
         d.shapeCache.clear();
         const BrickBuild autoB = buildBrickHarness(d, nullptr);
         const double k = autoB.scales.value(x, 1.0);
         const double face3 = autoB.faces.value(QStringLiteral("%1:0").arg(x)).lengthMm;
-        const double bundle = std::max(1, d.brick(c)->run.wires) * d.brick(c)->run.wireWidthMm;
-        std::printf("  scale: auto %.2f - face %.2f for a bundle %.2f wide\n", k, face3, bundle);
-        check(std::abs(k - 1.0) > 1e-6 && bundle > 0.0 && std::abs(face3 * d.faceFanPct / 100.0 - bundle) < 0.02 * bundle,
-              "scale: on Auto, the face is made the width of the bundle coming in");
+        std::printf("  scale: auto %.2f - face %.2f, the entries on the drawing averaging 30\n", k, face3);
+        check(std::abs(face3 - 30.0) < 0.3, "scale: on Auto, the part's entry is the drawing's mean entry size");
+        d.brick(y)->scale = 1.0;
+        // ROOM TO SEE: two connectors facing each other on a very short run are still drawn apart, and the
+        // run's length is still what its dimension says.
+        {
+            d.brick(x)->autoScale = false;
+            d.brick(c)->run.lengthMm = 5.0;
+            d.brick(c)->run.dimTotal = true;
+            d.shapeCache.clear();
+            const BrickBuild tight = buildBrickHarness(d, nullptr);
+            const BrickFace fa = tight.faces.value(QStringLiteral("%1:0").arg(x));
+            const BrickFace fb = tight.faces.value(QStringLiteral("%1:0").arg(y));
+            const double gap = distance(fa.centre, fb.centre);
+            double said = -1.0;
+            for (const Entity& e : tight.entities)
+                if (e.meta.value(QStringLiteral("brickDim")).toString() == QStringLiteral("total"))
+                    said = e.meta.value(QStringLiteral("brickMeasured")).toDouble();
+            std::printf("  spacing: faces %.1f apart for a 5 mm run, dimension says %.1f\n", gap, said);
+            check(gap > 40.0, "spacing: connectors on a short run are drawn apart, with room to see");
+            check(said >= 0.0 && said < 40.0, "spacing: and the dimension still gives the run's own length");
+            d.brick(c)->run.lengthMm = 150.0;
+            d.brick(c)->run.dimTotal = false;
+            d.brick(x)->autoScale = true;
+        }
         // Saved and read back.
         const BrickDesign back = BrickDesign::fromJson(d.toJson());
         check(back.brick(x) && back.brick(x)->autoScale, "scale: Auto kept with the design");
@@ -996,6 +1020,8 @@ void testRoundFive() {
         auto* fitB = canvas->findChild<QToolButton*>(QStringLiteral("brickFit"));
         auto* fitP = dlg.preview()->findChild<QToolButton*>(QStringLiteral("previewFit"));
         check(fitB && fitP, "zoom: a Fit button on the pane and on the preview");
+        check(fitP && pmap && !fitP->geometry().intersects(pmap->geometry()),
+              "zoom: the preview's Fit stands beside its Map, not over it");
         const double z0 = canvas->zoom();
         const QPointF at(canvas->width() / 2.0, canvas->height() / 2.0);
         for (int i = 0; i < 6; ++i) {
@@ -1282,6 +1308,20 @@ void testDialogMore() {
     canvas->centreView();   // in view at the pane's own size - the clicks below are aimed at that
     canvas->update();
     QApplication::processEvents();
+
+    // SCALED TO ANOTHER PART: the ferrule's entry made as long as the connector's.
+    {
+        check(dlg.scalePartToMatch(f1, x1), "match: a part scaled to another brick");
+        const BrickBuild b = buildBrickHarness(d, nullptr);
+        double fl = 0.0, xl = 0.0;
+        for (auto it = b.faces.cbegin(); it != b.faces.cend(); ++it) {
+            if (it.key().startsWith(f1 + QLatin1Char(':'))) fl = it.value().lengthMm;
+            if (it.key().startsWith(x1 + QLatin1Char(':'))) xl = it.value().lengthMm;
+        }
+        std::printf("  match: ferrule entry %.2f, connector entry %.2f\n", fl, xl);
+        check(xl > 0.0 && std::abs(fl - xl) < 0.02 * xl, "match: its entry now as long as the other's");
+        d.brick(f1)->scale = 1.0;
+    }
 
     // COPY AND PASTE: a brick with its part and settings, and the links between those picked.
     {

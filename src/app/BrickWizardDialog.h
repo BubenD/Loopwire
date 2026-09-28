@@ -273,6 +273,15 @@ private:
     QDoubleSpinBox* partScale_ = nullptr;
     QToolButton* partScaleAuto_ = nullptr;
     QHash<QString, double> drawnScales_;   // what each end came to on the last drawing
+    QHash<QString, BrickFace> lastFaces_;  // every entry face on the last drawing
+    // SCALE TO ANOTHER PART: pressed, the next brick clicked is the one this part is sized to - its entry
+    // face made as long as that brick's nearest one.
+    QToolButton* partScaleMatch_ = nullptr;
+    QString matchSource_;
+public:
+    // Size `id`'s part so its entry face nearest `other` is as long as `other`'s nearest entry face.
+    bool scalePartToMatch(const QString& id, const QString& other);
+private:
     bool eventFilter(QObject* o, QEvent* e) override;
     QLabel* bomState_ = nullptr;
     QPushButton* bomAdd_ = nullptr;

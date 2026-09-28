@@ -159,11 +159,15 @@ void DrawingPreview::setFitButtonShown(bool on) {
 }
 
 void DrawingPreview::placeCornerButtons() {
-    if (mapBtn_) mapBtn_->move(width() - 44, 4 + 14);
-    if (fitBtn_) {
-        const int right = mapBtn_ && mapBtn_->isVisible() ? width() - 44 - 4 : width() - 6;
-        fitBtn_->move(right - fitBtn_->sizeHint().width(), 4 + 14);
+    // Map at the right, Fit just to the left of it - asked whether the map is HIDDEN rather than visible,
+    // since before the pane is first shown nothing on it counts as visible and Fit landed on top of Map.
+    int right = width() - 6;
+    if (mapBtn_) {
+        const int w = std::max(mapBtn_->sizeHint().width(), 38);
+        mapBtn_->move(right - w, 4 + 14);
+        if (!mapBtn_->isHidden()) right -= w + 4;
     }
+    if (fitBtn_) fitBtn_->move(right - fitBtn_->sizeHint().width(), 4 + 14);
 }
 
 void DrawingPreview::setMinimap(bool on) {
