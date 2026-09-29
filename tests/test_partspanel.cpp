@@ -2711,6 +2711,38 @@ int run_partspanel_tests() {
                     check(!group->property("folded").toBool(), "fold: and opens again");
                 }
             }
+            // A GROUP OF THE PARTS LIST FOLDED is remembered: the library opened again, it is still folded, and
+            // the others are still open.
+            {
+                QSettings().remove(QStringLiteral("partsLibrary/treeFolded"));
+                auto headOf = [](QWidget& w, const QString& kind) -> QTreeWidgetItem* {
+                    for (QTreeWidget* t : w.findChildren<QTreeWidget*>())
+                        for (int i = 0; i < t->topLevelItemCount(); ++i)
+                            if (t->topLevelItem(i)->data(0, Qt::UserRole + 1).toString() == kind)
+                                return t->topLevelItem(i);
+                    return nullptr;
+                };
+                const QString conn = partKindName(PartKind::Connector);
+                const QString hose = partKindName(PartKind::Heatshrink);
+                QTreeWidgetItem* head = headOf(dlg, conn);
+                check(head && head->isExpanded(), "fold group: the connectors open to begin with");
+                if (head) head->setExpanded(false);
+                QApplication::processEvents();
+                {
+                    PartsLibraryDialog again(&ed);
+                    again.setLibraryPath(libFile);
+                    QApplication::processEvents();
+                    QTreeWidgetItem* c2 = headOf(again, conn);
+                    QTreeWidgetItem* h2 = headOf(again, hose);
+                    check(c2 && !c2->isExpanded() && h2 && h2->isExpanded(),
+                          "fold group: opened again, the folded group is still folded and the rest open");
+                    again.reloadTreeForTest();
+                    c2 = headOf(again, conn);
+                    check(c2 && !c2->isExpanded(), "fold group: and the list rebuilt keeps it folded");
+                }
+                if ((head = headOf(dlg, conn))) head->setExpanded(true);
+                QSettings().remove(QStringLiteral("partsLibrary/treeFolded"));
+            }
             // N/A: the schematic does not apply - its pane stands down and the list says so.
             {
                 auto* na = dlg.findChild<QPushButton*>(QStringLiteral("naButton_schematic"));

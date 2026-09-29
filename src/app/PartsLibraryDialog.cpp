@@ -780,6 +780,27 @@ void PartsLibraryDialog::buildUi() {
     connect(filter_, &QLineEdit::textChanged, this, [this] { reloadTree(); });
     lv->addWidget(filter_);
     tree_ = new QTreeWidget(left);
+    // A KIND FOLDED IS REMEMBERED: folded in the list, it opens folded the next time - as the Options say
+    // (remembered, always open, or always folded). Written as it happens, not only when the window closes,
+    // so a program that is closed any other way still keeps it.
+    auto rememberFolds = [this] {
+        if (syncing_) return;
+        const QString mode = QSettings().value(QStringLiteral("partsLibrary/foldMode"),
+                                               QStringLiteral("remember")).toString();
+        if (mode != QLatin1String("remember")) return;
+        if (filter_ && !filter_->text().trimmed().isEmpty()) return;   // a search opens everything
+        QStringList folded = QSettings().value(QStringLiteral("partsLibrary/treeFolded")).toStringList();
+        for (int i = 0; i < tree_->topLevelItemCount(); ++i) {
+            const QTreeWidgetItem* head = tree_->topLevelItem(i);
+            const QString kind = head->data(0, Qt::UserRole + 1).toString();
+            if (kind.isEmpty()) continue;
+            folded.removeAll(kind);
+            if (!head->isExpanded()) folded << kind;
+        }
+        QSettings().setValue(QStringLiteral("partsLibrary/treeFolded"), folded);
+    };
+    connect(tree_, &QTreeWidget::itemCollapsed, this, [rememberFolds](QTreeWidgetItem*) { rememberFolds(); });
+    connect(tree_, &QTreeWidget::itemExpanded, this, [rememberFolds](QTreeWidgetItem*) { rememberFolds(); });
     // Two narrow columns of signs: has a schematic symbol, has a mechanical drawing. Which parts are
     // finished and which are still just a row of numbers is the thing one most wants to see down a
     // library list, and a tooltip only says it one part at a time.
@@ -1879,8 +1900,20 @@ void PartsLibraryDialog::reloadTree() {
     if (!tree_) return;
     const QString keep = currentId_;
     syncing_ = true;
+    // Rebuilt while open (a save, a new part), the kinds keep the folds they have now; the Options decide only
+    // how the list first opens.
+    QHash<QString, bool> wasFolded;
+    for (int i = 0; i < tree_->topLevelItemCount(); ++i) {
+        const QTreeWidgetItem* head = tree_->topLevelItem(i);
+        wasFolded.insert(head->data(0, Qt::UserRole + 1).toString(), !head->isExpanded());
+    }
+    const bool firstBuild = !treeBuilt_;
+    treeBuilt_ = true;
     tree_->clear();
     const QString needle = filter_ ? filter_->text().trimmed() : QString();
+    const QString foldMode = QSettings().value(QStringLiteral("partsLibrary/foldMode"),
+                                               QStringLiteral("remember")).toString();
+    const QStringList foldedKinds = QSettings().value(QStringLiteral("partsLibrary/treeFolded")).toStringList();
     for (PartKind k : allPartKinds()) {
         const std::vector<const LibraryPart*> parts = catalog_.ofKind(k);
         std::vector<const LibraryPart*> shown;
@@ -1894,6 +1927,7 @@ void PartsLibraryDialog::reloadTree() {
         if (shown.empty()) continue; // a kind with nothing in it is not listed
         auto* head = new QTreeWidgetItem(tree_);
         head->setText(0, QStringLiteral("%1  (%2)").arg(partKindName(k)).arg(shown.size()));
+        head->setData(0, Qt::UserRole + 1, partKindName(k));   // which kind, for remembering it folded
         head->setFirstColumnSpanned(false);
         QFont f = head->font(0);
         f.setBold(true);
@@ -1916,7 +1950,15 @@ void PartsLibraryDialog::reloadTree() {
             it->setToolTip(0, whole);
             it->setToolTip(1, whole);
         }
-        head->setExpanded(true);
+        // Open, unless it was left folded (or the Options fold every kind); a search always shows what it found.
+        const QString kind = partKindName(k);
+        const bool folded =
+            needle.isEmpty() &&
+            (!firstBuild && wasFolded.contains(kind)
+                 ? wasFolded.value(kind)
+                 : foldMode == QLatin1String("folded") ||
+                       (foldMode == QLatin1String("remember") && foldedKinds.contains(kind)));
+        head->setExpanded(!folded);
     }
     syncing_ = false;
     if (!keep.isEmpty()) selectPart(keep);

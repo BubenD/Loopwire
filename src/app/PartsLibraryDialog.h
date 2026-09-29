@@ -181,6 +181,7 @@ private:
     QString path_;
     QString currentId_;
     bool syncing_ = false;
+    bool treeBuilt_ = false;   // the parts list has been filled once: after that it keeps its folds
     // A capture waiting on a selection: which part it is for, and which of its two drawings. Empty
     // when no capture is in hand.
     QString capturingPart_;

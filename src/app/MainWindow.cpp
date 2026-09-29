@@ -8932,14 +8932,14 @@ void MainWindow::showOptions(const QString& page) {
     // THE PARTS LIBRARY'S SECTIONS, folded: remembered for next time, or always opened, or always folded.
     auto* foldMode = new QComboBox(drw);
     foldMode->setObjectName(QStringLiteral("optPartsFoldMode"));
-    foldMode->addItem(QStringLiteral("Remember folded sections"), QStringLiteral("remember"));
+    foldMode->addItem(QStringLiteral("Remember folded sections and groups"), QStringLiteral("remember"));
     foldMode->addItem(QStringLiteral("Always open"), QStringLiteral("open"));
     foldMode->addItem(QStringLiteral("Always folded"), QStringLiteral("folded"));
     foldMode->setCurrentIndex(std::max(0, foldMode->findData(QSettings().value(QStringLiteral("partsLibrary/foldMode"),
                                                                                QStringLiteral("remember")))));
-    foldMode->setToolTip(QStringLiteral("What the parts library's sections do when it opens: as they were left, all "
-                                        "open, or all folded to their titles"));
-    dwf->addRow(QStringLiteral("Parts library sections"), foldMode);
+    foldMode->setToolTip(QStringLiteral("What the parts library's sections, and the groups of its parts list, do when "
+                                        "it opens: as they were left, all open, or all folded to their titles"));
+    dwf->addRow(QStringLiteral("Parts library folding"), foldMode);
     tabs->addTab(drw, QStringLiteral("Drawing"));
 
     // ===== Units =====
