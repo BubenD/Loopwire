@@ -721,7 +721,11 @@ QString dragPartOnDrawing(BrickDesign& d, const BrickBuild& built, const QString
         const double k = std::sqrt(2.0) - 1.0;
         const double before = std::abs(was.x - from.x) + std::abs(was.y - from.y) * k;
         const double after = std::abs(now.x - from.x) + std::abs(now.y - from.y) * k;
-        s->run.lengthMm = std::max(1.0, std::round(s->run.lengthMm + after - before));
+        // NEVER SHORTER THAN THE DRAWING CAN SHOW: two parts are kept far enough apart for the fans between them
+        // (kBrickRoomBetween), so a part dragged closer than that stops there - and so does the length. Below it the
+        // run was still drawn at that room while its brick said one millimetre.
+        const double least = (brickIsBridge(*s) ? 0.0 : kBrickRoomBetween) + std::abs(now.y - from.y) * k;
+        s->run.lengthMm = std::max({1.0, std::round(least), std::round(s->run.lengthMm + after - before)});
         p->drawDyMm += dy;
         (void)pf;
         return sid;
@@ -1619,7 +1623,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         // ROOM TO SEE: two parts facing each other are never drawn closer than the fans between them need
         // - a short run would put one connector on top of the other. The run is drawn that much longer, and
         // its dimensions still say how long it really is (see stretchOf).
-        constexpr double kRoomBetween = 60.0;
+        constexpr double kRoomBetween = kBrickRoomBetween;
         constexpr double kStraightIn = 40.0;   // straight into a part after the last bend
         // Which way a face looks, turned as the brick is; a junction's is left to the run.
         auto faceOutOf = [&](const FaceRef& f) {
@@ -2181,8 +2185,6 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         const double fanSpecA = br.flipped ? r.fanFinishMm : r.fanStartMm;
         const double fanSpecB = br.flipped ? r.fanStartMm : r.fanFinishMm;
         if (fanSpecA == 0.0) spreadA = false;
-        // ONE WIRE HAS NO FAN: nothing to spread, and no tail of fan left sticking out of the part.
-        if (wires == 1) spreadA = spreadB = false;
         if (fanSpecB == 0.0) spreadB = false;
         // Where it does not spread its wires are packed - except where a fan goes into a cable, which
         // it enters across the drawing's share of the cable's width (the junction's landing).
@@ -2199,8 +2201,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                             : fanSpecB >= 0.0 ? fanSpecB
                                               : std::max(kWiresRunEnd, lb.lane * (wires - 1) / 2.0);
         // Out of a fan a bridge wire turns at once: no straight lead of its own there.
-        const double lead = bridgeOut || wires == 1 ? 3.0
-                                                    : std::max({fanA, fanB, 10.0}) + std::max(0.0, r.kneeRadiusMm) + 5.0;
+        const double lead = bridgeOut ? 3.0 : std::max({fanA, fanB, 10.0}) + std::max(0.0, r.kneeRadiusMm) + 5.0;
         std::vector<Vec2> route;
         if (isTrunk && br.freeStart) route = {splitAt[i], splitAt[i] + splitDir[i] * r.lengthMm};
         else if (isTrunk) route = {la.centre, splitAt[i]};

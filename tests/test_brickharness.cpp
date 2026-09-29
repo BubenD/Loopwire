@@ -2280,6 +2280,16 @@ void testRoundTen() {
         const double y0 = after.faces.value(QStringLiteral("%1:0").arg(x0)).centre.y;
         check(y1 < y0 - 30.0, "drag: and the drawing puts it there");
         check(std::abs(BrickDesign::fromJson(d.toJson()).brick(x1)->drawDyMm + 40.0) < 1e-9, "drag: kept with the design");
+        // DRAGGED RIGHT UP TO THE OTHER PART: the length stops at what the drawing can show, not one millimetre.
+        {
+            BrickDesign e = d;
+            e.brick(x1)->drawDyMm = 0.0;
+            const BrickBuild near = buildBrickHarness(e, nullptr);
+            dragPartOnDrawing(e, near, x1, -200.0, 0.0);   // to within a few mm of it, not out past it
+            std::printf("  drag: pushed right up to its other part, the run stops at %.0f\n", e.brick(r)->run.lengthMm);
+            check(std::abs(e.brick(r)->run.lengthMm - kBrickRoomBetween) < 1e-9,
+                  "drag: pushed past what can be drawn, the length stops there with the part - the brick says what is drawn");
+        }
     }
     // THE BRIDGE WIRE PICKS ITS WIRE: the cable's wires by net, and its shield when it has a braid.
     {

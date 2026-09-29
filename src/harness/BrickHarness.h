@@ -256,6 +256,8 @@ std::vector<Vec2> routeBetweenFaces(const Vec2& a, const Vec2& aOut, const Vec2&
 // part linked to a special whose other end is on a part is put at the special's length from it; moving the
 // part changes the length; changing the length pulls or pushes the part - and everything beyond it - along.
 constexpr double kBrickMmPerCol = 75.0;
+// The least room the drawing keeps between two parts facing each other along a run - for the fans between them.
+constexpr double kBrickRoomBetween = 60.0;
 // The one part each side of a special, when it runs from one part to one part.
 bool specialOneToOne(const BrickDesign& d, const QString& special, QString* start, QString* finish);
 // `end` (linked to `special`) put as far along from the special's other part as the special is long, on the
