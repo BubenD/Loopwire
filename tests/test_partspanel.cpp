@@ -2517,6 +2517,60 @@ int run_partspanel_tests() {
                       tiedConnectorsOf(lib, QStringLiteral("PIN")).isEmpty(),
                   "contacts: one untied, off at both ends, the other still tied");
         }
+        // OPEN: from a connector to its contact and back - the part picked and shown, its folded group opened.
+        {
+            const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_open_tie_lib.json"));
+            QFile::remove(libFile);
+            {
+                PartsLibrary lib;
+                LibraryPart conn;
+                conn.id = QStringLiteral("OPEN-CONN");
+                conn.kind = PartKind::Connector;
+                conn.description = QStringLiteral("Housing to open from");
+                LibraryPart pin;
+                pin.id = QStringLiteral("OPEN-PIN");
+                pin.kind = PartKind::ContactPin;
+                pin.description = QStringLiteral("Contact to open");
+                lib.parts = {conn, pin};
+                addContactTie(lib, QStringLiteral("OPEN-CONN"), QStringLiteral("OPEN-PIN"));
+                lib.save(libFile);
+            }
+            Document doc;
+            Editor ed;
+            ed.setDocument(&doc);
+            PartsLibraryDialog dlg(&ed);
+            dlg.setLibraryPath(libFile);
+            dlg.selectPart(QStringLiteral("OPEN-CONN"));
+            dlg.show();
+            QApplication::processEvents();
+            auto* list = dlg.findChild<QListWidget*>(QStringLiteral("contactTies"));
+            auto* open = dlg.findChild<QPushButton*>(QStringLiteral("contactTieOpen"));
+            QTreeWidget* tree = nullptr;
+            for (QTreeWidget* t : dlg.findChildren<QTreeWidget*>()) tree = t;
+            // Its group folded, to be opened by going there.
+            if (tree)
+                for (int i = 0; i < tree->topLevelItemCount(); ++i)
+                    if (tree->topLevelItem(i)->text(0).startsWith(QStringLiteral("Connector contacts")))
+                        tree->topLevelItem(i)->setExpanded(false);
+            if (list && list->count() > 0) list->setCurrentRow(0);
+            if (open) open->click();
+            QApplication::processEvents();
+            QTreeWidgetItem* cur = tree ? tree->currentItem() : nullptr;
+            check(open && cur && cur->data(0, Qt::UserRole).toString() == QStringLiteral("OPEN-PIN") && cur->parent() &&
+                      cur->parent()->isExpanded(),
+                  "open: from the connector, Open goes to its contact and opens its group");
+            list = dlg.findChild<QListWidget*>(QStringLiteral("contactTies"));
+            check(list && list->isVisibleTo(&dlg) && list->count() == 1 &&
+                      list->item(0)->data(Qt::UserRole).toString() == QStringLiteral("OPEN-CONN"),
+                  "open: on the contact, the list shows the connector it goes in");
+            if (list && list->count() > 0) emit list->itemDoubleClicked(list->item(0));
+            QApplication::processEvents();
+            cur = tree ? tree->currentItem() : nullptr;
+            check(cur && cur->data(0, Qt::UserRole).toString() == QStringLiteral("OPEN-CONN"),
+                  "open: and double-clicking it goes back to the connector");
+            QSettings().remove(QStringLiteral("partsLibrary/treeFolded"));
+            QFile::remove(libFile);
+        }
         // COLOURED BY A CODE: pin 1 first, and a code shorter than the pins starts again.
         {
             const auto& codes = wireColorStandards();

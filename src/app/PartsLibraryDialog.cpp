@@ -1644,21 +1644,45 @@ void PartsLibraryDialog::buildUi() {
         contactList_->setMaximumHeight(72);
         contactList_->setToolTip(QStringLiteral("Every contact tied to this connector"));
         cl->addWidget(contactList_);
-        connect(addTie, &QPushButton::clicked, this, [this] {
+        // From either end: on a connector the other is a contact, on a contact the other is a connector.
+        auto isContactPart = [](const LibraryPart* p) {
+            return p && (p->kind == PartKind::ContactPin || p->kind == PartKind::Crimp);
+        };
+        connect(addTie, &QPushButton::clicked, this, [this, isContactPart] {
             LibraryPart* p = current();
             const QString other = contactBox_->currentData().toString();
-            if (!p || p->kind != PartKind::Connector || other.isEmpty()) return;
-            addContactTie(catalog_.active(), p->id, other);
+            if (!p || other.isEmpty()) return;
+            if (p->kind == PartKind::Connector) addContactTie(catalog_.active(), p->id, other);
+            else if (isContactPart(p)) addContactTie(catalog_.active(), other, p->id);
+            else return;
             touched();
             refreshContactChoice();
         });
-        connect(rmTie, &QPushButton::clicked, this, [this] {
+        connect(rmTie, &QPushButton::clicked, this, [this, isContactPart] {
             LibraryPart* p = current();
             QListWidgetItem* it = contactList_->currentItem();
             if (!p || !it) return;
-            removeContactTie(catalog_.active(), p->id, it->data(Qt::UserRole).toString());
+            const QString other = it->data(Qt::UserRole).toString();
+            if (isContactPart(p)) removeContactTie(catalog_.active(), other, p->id);
+            else removeContactTie(catalog_.active(), p->id, other);
             touched();
             refreshContactChoice();
+        });
+        // OPEN: go to the part - the one picked in the list below, or else the one in the menu. From a connector
+        // that is its contact, from a contact its connector.
+        auto* openTie = new QPushButton(QStringLiteral("Open"), contactRow);
+        openTie->setObjectName(QStringLiteral("contactTieOpen"));
+        openTie->setToolTip(QStringLiteral("Go to the part: the one picked in the list below, or the one in the menu"));
+        crl->addWidget(openTie);
+        connect(openTie, &QPushButton::clicked, this, [this] {
+            QString id;
+            if (QListWidgetItem* it = contactList_->currentItem(); it && contactList_->isVisible())
+                id = it->data(Qt::UserRole).toString();
+            if (id.isEmpty()) id = contactBox_->currentData().toString();
+            if (!id.isEmpty()) openPart(id);
+        });
+        connect(contactList_, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem* it) {
+            if (it) openPart(it->data(Qt::UserRole).toString());
         });
         // THE PIN TYPES: a size, the conductor it takes and in which unit, its rating, and WHICH PINS are
         // that type. The last of those is what lets a schematic label each pin with its own size instead of
@@ -2187,6 +2211,37 @@ void PartsLibraryDialog::selectPart(const QString& id) {
             }
     }
     showPart(id); // not in the list (filtered out): still show it
+}
+
+void PartsLibraryDialog::openPart(const QString& id) {
+    if (!tree_ || id.isEmpty()) return;
+    // Shown in the list even when Show was on another library, or a search was hiding it.
+    bool found = false;
+    for (int i = 0; i < tree_->topLevelItemCount() && !found; ++i) {
+        const QTreeWidgetItem* head = tree_->topLevelItem(i);
+        for (int j = 0; j < head->childCount(); ++j)
+            if (head->child(j)->data(0, Qt::UserRole).toString() == id) found = true;
+    }
+    if (!found) {
+        if (showLibBox_) showLibBox_->setCurrentIndex(0);
+        if (filter_) filter_->clear();
+        reloadTree();
+    }
+    for (int i = 0; i < tree_->topLevelItemCount(); ++i) {
+        QTreeWidgetItem* head = tree_->topLevelItem(i);
+        for (int j = 0; j < head->childCount(); ++j) {
+            QTreeWidgetItem* it = head->child(j);
+            if (it->data(0, Qt::UserRole).toString() != id) continue;
+            head->setExpanded(true);   // going to it opens its group
+            syncing_ = true;
+            tree_->setCurrentItem(it);
+            syncing_ = false;
+            tree_->scrollToItem(it);
+            showPart(id);
+            return;
+        }
+    }
+    showPart(id);   // not listed at all: still shown
 }
 
 LibraryPart* PartsLibraryDialog::current() {
@@ -3287,7 +3342,10 @@ void PartsLibraryDialog::refreshContactChoice() {
                                            contactList_);
             it->setData(Qt::UserRole, id);
         }
-        contactList_->setVisible(isConnector && !withPins);
+        // On a connector its contacts, on a contact the connectors it goes in.
+        contactList_->setVisible((isConnector && !withPins) || isContact);
+        contactList_->setToolTip(isContact ? QStringLiteral("Every connector this contact goes in - double-click to open")
+                                           : QStringLiteral("Every contact tied to this connector - double-click to open"));
     }
     const int at = contactBox_->findData(chosen);
     // Something no longer in any library that is open is still what the part says: shown as itself rather

@@ -80,6 +80,9 @@ public:
     // Testing / driving: the part currently shown, and the actions the buttons run.
     QString currentPartId() const { return currentId_; }
     void selectPart(const QString& id);
+    // GO TO A PART: its group opened if folded, the part picked and scrolled to, its form shown - what Open does
+    // from a connector to its contact and back.
+    void openPart(const QString& id);
     LibraryPart* addPart(PartKind kind);
     void deleteCurrentPart();
     void duplicateCurrentPart();
