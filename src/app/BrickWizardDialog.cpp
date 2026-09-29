@@ -2632,7 +2632,7 @@ QString BrickWizardDialog::previewPartAt(const QPointF& at) const {
     {
         QString near;
         double best = 1e300;
-        const double reach = 4.0;
+        const double reach = handleMm_ * 2.5;
         for (const Brick& b : design_.bricks) {
             if (b.type != BrickType::End) continue;
             const auto f = lastFaces_.constFind(b.id + QStringLiteral(":0"));
@@ -2722,6 +2722,10 @@ void BrickWizardDialog::refreshPreview() {
             e.meta.insert(QLatin1String(kPreviewSelectedKey), true);
     // THE GRAB POINT OF EVERY END PART, on the preview only: a blue ring where its run meets it - press there and
     // drag to move the part on the drawing (its run's length follows).
+    // Big enough to see and to take hold of whatever size the drawing is: a share of the drawing, not a fixed 2 mm.
+    Bounds whole;
+    for (const Entity& e : built.entities) whole.expand(e.bounds());
+    handleMm_ = whole.valid ? std::clamp(std::max(whole.width(), whole.height()) * 0.012, 1.5, 12.0) : 2.0;
     for (const Brick& b : design_.bricks) {
         if (b.type != BrickType::End) continue;
         const auto f = built.faces.constFind(b.id + QStringLiteral(":0"));
@@ -2730,7 +2734,7 @@ void BrickWizardDialog::refreshPreview() {
         ring.type = EntityType::Circle;
         ring.center = f->centre;
         ring.a = f->centre;
-        ring.radius = 2.0;
+        ring.radius = handleMm_;
         ring.color = QStringLiteral("#5aa0ff");
         ring.meta.insert(QLatin1String(kPreviewMarkKey), true);
         ring.meta.insert(QStringLiteral("brickHandle"), b.id);

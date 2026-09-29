@@ -331,6 +331,7 @@ private:
     BrickDesign partDragDesign_;
     BrickBuild partDragBuilt_;
     QString previewPartAt(const QPointF& at) const;
+    double handleMm_ = 2.0;   // the grab point's size on the drawing just shown
     // THE DRAWING ENLARGED to the whole window, the pane small beside it, and a button to go back.
     QSplitter* mainSplit_ = nullptr;
     QToolButton* enlargeBtn_ = nullptr;

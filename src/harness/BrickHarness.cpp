@@ -711,7 +711,30 @@ QString dragPartOnDrawing(BrickDesign& d, const BrickBuild& built, const QString
         Brick* s = d.brick(sid);
         if (!s || !brickIsSpecial(s->type)) continue;
         const QStringList a = d.startsOf(sid), b = d.finishesOf(sid);
-        const QStringList other = a.contains(part) ? b : a;
+        QStringList other = a.contains(part) ? b : a;
+        // A BRIDGE WIRE's other end is on its cable, not a part: measured from the part that cable goes to there,
+        // where the bridge comes out of its fan.
+        if (other.isEmpty() && brickIsBridge(*s)) {
+            const QString cable = joinedSpecial(d, sid);
+            if (!cable.isEmpty())
+                for (const QString& e : d.sideOf(cable, d.portOn(cable, sid)))
+                    if (const Brick* eb = d.brick(e); eb && eb->type == BrickType::End) {
+                        other = QStringList{e};
+                        break;
+                    }
+            if (other.size() == 1) {
+                const auto of = built.faces.constFind(faceKey(other.front(), d.portOn(other.front(), cable)));
+                const auto mine = built.faces.constFind(faceKey(part, d.portOn(part, sid)));
+                if (of == built.faces.cend() || mine == built.faces.cend()) continue;
+                const Vec2 from = of->centre, was = mine->centre, now = was + Vec2{dx, dy};
+                const double k = std::sqrt(2.0) - 1.0;
+                const double before = std::abs(was.x - from.x) + std::abs(was.y - from.y) * k;
+                const double after = std::abs(now.x - from.x) + std::abs(now.y - from.y) * k;
+                s->run.lengthMm = std::max(1.0, std::round(s->run.lengthMm + after - before));
+                p->drawDyMm += dy;
+                return sid;
+            }
+        }
         if (other.size() != 1) continue;
         const auto of = built.faces.constFind(faceKey(other.front(), d.portOn(other.front(), sid)));
         const auto mine = built.faces.constFind(faceKey(part, d.portOn(part, sid)));

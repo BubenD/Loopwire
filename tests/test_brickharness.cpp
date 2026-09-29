@@ -2096,6 +2096,14 @@ void testRoundEight() {
         // An ordinary special still may not share a cable's end.
         const QString fan = d.addBrick(BrickType::Fanout, PartKind::Wire, 3, -1);
         check(!d.connect(c, fan, &why), "bridge wire: an ordinary special still does not share an end already used");
+        // ITS PART DRAGGED ON THE DRAWING: the bridge wire's length follows, as any run's does.
+        {
+            const BrickBuild built = buildBrickHarness(d, nullptr);
+            const double was = d.brick(br)->run.lengthMm;
+            const QString moved = dragPartOnDrawing(d, built, f, 40.0, 0.0);
+            std::printf("  bridge wire: its ferrule dragged 40 along, %.0f -> %.0f\n", was, d.brick(br)->run.lengthMm);
+            check(moved == br && d.brick(br)->run.lengthMm > was, "bridge wire: its part can be dragged, and its length follows");
+        }
     }
     // THE WIZARD: Esc does not close it; the palette has the bridge wire; linked, a special comes into its part's line.
     {
