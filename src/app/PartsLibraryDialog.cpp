@@ -2117,6 +2117,15 @@ void PartsLibraryDialog::reloadTree() {
                              .arg(shown.size()));
         head->setData(0, Qt::UserRole + 1, partKindName(k));   // which kind, for remembering it folded
         head->setFirstColumnSpanned(false);
+        // A GROUP LOOKS LIKE ONE: its arrow shown even when there is nothing in it yet, and an empty group says
+        // how to put the first part in - an empty row with no arrow read as a line, not a group.
+        head->setChildIndicatorPolicy(QTreeWidgetItem::ShowIndicator);
+        if (shown.empty()) {
+            auto* none = new QTreeWidgetItem(head);
+            none->setText(0, QStringLiteral("none yet - New part below, kind \"%1\"").arg(partKindName(k)));
+            none->setFlags(Qt::ItemIsEnabled);
+            none->setForeground(0, QColor("#8a97a6"));
+        }
         QFont f = head->font(0);
         f.setBold(true);
         head->setFont(0, f);

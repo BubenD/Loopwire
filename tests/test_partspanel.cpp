@@ -2885,6 +2885,13 @@ int run_partspanel_tests() {
                         if (t->topLevelItem(i)->text(0).startsWith(QStringLiteral("Connector contacts"))) contacts = true;
                 }
                 check(contacts, "contacts group: the connector contacts have a group of their own, even empty");
+                QTreeWidgetItem* group = nullptr;
+                for (QTreeWidget* t : dlg.findChildren<QTreeWidget*>())
+                    for (int i = 0; i < t->topLevelItemCount(); ++i)
+                        if (t->topLevelItem(i)->text(0).startsWith(QStringLiteral("Connector contacts"))) group = t->topLevelItem(i);
+                check(group && group->childIndicatorPolicy() == QTreeWidgetItem::ShowIndicator && group->childCount() == 1 &&
+                          group->child(0)->data(0, Qt::UserRole).toString().isEmpty(),
+                      "contacts group: a group with its arrow, and a line saying how to add the first contact");
                 check(style.contains(QStringLiteral("branch:selected")) && style.contains(QStringLiteral("edraw_branch_closed")),
                       "tree: the fold arrow is drawn on a picked group too");
             }
