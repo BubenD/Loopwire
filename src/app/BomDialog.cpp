@@ -330,6 +330,21 @@ void BomDialog::cancelChanges() {
     reject();
 }
 
+int BomDialog::highlightParts(const QStringList& partIds) {
+    if (!view_) return 0;
+    view_->clearSelection();
+    if (partIds.isEmpty()) return 0;
+    const std::vector<BomRow> rows = shownRows();
+    int picked = 0;
+    for (int row = 0; row < view_->rowCount() && row < static_cast<int>(rows.size()); ++row) {
+        if (!partIds.contains(rows[static_cast<size_t>(row)].partId)) continue;
+        view_->selectionModel()->select(view_->model()->index(row, 0),
+                                        QItemSelectionModel::Select | QItemSelectionModel::Rows);
+        if (picked++ == 0) view_->scrollTo(view_->model()->index(row, 0));
+    }
+    return picked;
+}
+
 std::vector<BomRow> BomDialog::shownRows() const {
     std::vector<BomRow> rows;
     if (table_.config.includeDrawing && editor_ && editor_->document())

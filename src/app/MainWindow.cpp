@@ -11354,19 +11354,34 @@ int MainWindow::bomHoverAt(const Vec2& world, bool alt) {
     if (!alt) {
         if (bomHoverLit_) {
             bomPanel_->clearSelection();
+            editor_->setLookupHighlight({});
+            if (bomDlg_ && bomDlg_->isVisible()) bomDlg_->highlightParts({});
             bomHoverLit_ = false;
         }
         return 0;
     }
-    // What it is made of: its own part, and the part of each layer of a run.
+    // What it is made of: its own part, and the part of each layer of a run - and on the drawing, all of the part
+    // (every object of the one copy put down) lit in a very light orange.
     QStringList ids;
+    std::vector<QString> lit;
     if (const std::optional<QString> hit = editor_->objectAt(world))
         if (const Entity* e = editor_->objectById(*hit)) {
             const QString own = e->meta.value(QStringLiteral("libPart")).toString();
             if (!own.isEmpty()) ids << own;
             for (const QJsonValue v : e->meta.value(QStringLiteral("stackParts")).toArray())
                 if (!v.toString().isEmpty() && !ids.contains(v.toString())) ids << v.toString();
+            if (!ids.isEmpty()) {
+                const QString copy = e->meta.value(QStringLiteral("blockInst")).toString();
+                if (!copy.isEmpty() && editor_->document()) {
+                    for (const Entity& o : editor_->document()->entities())
+                        if (o.meta.value(QStringLiteral("blockInst")).toString() == copy) lit.push_back(o.id);
+                } else {
+                    lit.push_back(e->id);
+                }
+            }
         }
+    editor_->setLookupHighlight(lit);
+    if (bomDlg_ && bomDlg_->isVisible()) bomDlg_->highlightParts(ids);
     bomPanel_->clearSelection();
     bomHoverLit_ = true;
     int picked = 0, first = -1;

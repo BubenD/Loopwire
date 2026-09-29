@@ -95,6 +95,18 @@ void DrawingPreview::setEmptyText(const QString& text) {
     update();
 }
 
+void DrawingPreview::zoomToBounds(const Bounds& t, double share) {
+    if (!t.valid || !lastBounds_.valid || lastFit_ <= 0.0 || lastBox_.isEmpty()) return;
+    const double w = std::max(1e-6, t.max.x - t.min.x), h = std::max(1e-6, t.max.y - t.min.y);
+    const double scale = share * std::min(lastBox_.width() / w, lastBox_.height() / h);
+    zoom_ = std::max(0.05, scale / lastFit_);
+    const double cxAll = (lastBounds_.min.x + lastBounds_.max.x) / 2.0, cyAll = (lastBounds_.min.y + lastBounds_.max.y) / 2.0;
+    const double cx = (t.min.x + t.max.x) / 2.0, cy = (t.min.y + t.max.y) / 2.0;
+    pan_ = QPointF(-(cx - cxAll) * scale, (cy - cyAll) * scale);
+    holdView_ = false;
+    update();
+}
+
 void DrawingPreview::fitToView() {
     zoom_ = 1.0;
     pan_ = QPointF(0.0, 0.0);
@@ -313,6 +325,8 @@ void DrawingPreview::paintEvent(QPaintEvent*) {
     const double h = std::max(1e-6, b.max.y - b.min.y);
     const QRect box = r.adjusted(10, 18, -10, -10);
     const double fit = std::min(box.width() / w, box.height() / h) * 0.9;
+    lastFit_ = fit;
+    lastBox_ = box;
     // A kept view: the zoom and pan that put the new drawing exactly where the last one was drawn.
     if (holdView_ && lastVtValid_ && lastScale_ > 0.0) {
         holdView_ = false;

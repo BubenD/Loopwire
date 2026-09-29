@@ -41,6 +41,8 @@ public:
 
     // Back to the whole drawing, filling the widget.
     void fitToView();
+    // ONE THING OF THE DRAWING brought up to fill `share` of the pane, in the middle of it.
+    void zoomToBounds(const Bounds& target, double share = 0.5);
     double zoom() const { return zoom_; }
     // The drawing's point under a point of the pane, as it was last painted.
     Vec2 worldAt(const QPointF& at) const { return lastVt_.toWorld(at); }
@@ -108,6 +110,8 @@ private:
     ViewTransform lastVt_;
     bool lastVtValid_ = false;
     bool keepView_ = false;
+    double lastFit_ = 0.0;   // the whole drawing's fit, as last painted
+    QRect lastBox_;
     bool holdView_ = false;   // the next paint keeps the last paint's mapping
 };
 

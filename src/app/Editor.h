@@ -71,6 +71,10 @@ public:
     // The object under a point of the drawing (as a click there would take it), and an object by its id - for
     // what is looked up without picking anything, such as the bill line of the part under the pointer.
     std::optional<QString> objectAt(const Vec2& world) const { return hitTest(world); }
+    // A PART LIT FOR LOOKING UP (Alt + the pointer over it): these objects drawn over in a very light orange. Empty,
+    // nothing lit.
+    void setLookupHighlight(const std::vector<QString>& ids);
+    const std::vector<QString>& lookupHighlight() const { return lookupHighlight_; }
     const Entity* objectById(const QString& id) const { return entityById(id); }
 
     // ---- A BIG SELECTION IS DRAWN INTO THE SCENE CACHE INSTEAD OF ONTO EVERY FRAME ---------------
@@ -2201,6 +2205,7 @@ private:
     bool drawBigPasteGhost(QPainter& p, const ViewTransform& vt, const QColor& ghost) const;
     // The block reference under the cursor, lit a soft grey so it is clear a click would take it.
     QString hoverBlockId_;
+    std::vector<QString> lookupHighlight_;
     // A BIG PASTE'S GHOST, drawn once and moved with the cursor: tens of thousands of objects drawn
     // afresh on every mouse move made placing them crawl. Keyed on what the picture depends on.
     mutable QImage ghostImg_;

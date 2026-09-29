@@ -42,6 +42,8 @@ public:
     // Testing / driving.
     const BomTable& table() const { return table_; }
     void reload();                       // re-read the drawing and redraw the table
+    // The lines of these parts picked in the table (none picked for an empty list) - a part looked up on the drawing.
+    int highlightParts(const QStringList& partIds);
     // Written into the drawing as it stands (and kept, so Cancel from here on does not undo it), and
     // everything back as it was when this window opened.
     void saveNow();

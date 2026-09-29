@@ -1294,12 +1294,22 @@ void testDialog() {
     dlg.selectBrick(f1);
     if (auto* right = dlg.findChild<QPushButton*>(QStringLiteral("brickRight"))) right->click();
     check(near(dlg.design().brick(f1)->col, wasCol + 1.0), "wizard: the arrow buttons move the picked brick");
-    dlg.arrange();
-    canvas->resetZoom();   // Symmetric fits the pane; the clicks below are aimed at its own size
-    canvas->centreView();
-    check(near(dlg.design().brick(f1)->row, dlg.design().brick(x1)->row) &&
-              dlg.design().brick(f1)->col > dlg.design().brick(x1)->col,
-          "wizard: arranged, a single run is laid straight along the axis");
+    // SYMMETRIC LAYS OUT THE DRAWING, NOT THE BRICKS: they stay where they are; on the drawing a single run is
+    // laid straight along the axis.
+    {
+        const double col0 = dlg.design().brick(f1)->col, row0 = dlg.design().brick(f1)->row;
+        dlg.arrange();
+        canvas->resetZoom();
+        canvas->centreView();
+        check(near(dlg.design().brick(f1)->col, col0) && near(dlg.design().brick(f1)->row, row0),
+              "wizard: Symmetric leaves the bricks where they are");
+        // On the drawing both parts on one row: each drawn at -row x pitch + its offset, the same for the two.
+        const double pitch = buildBrickHarness(dlg.design(), &dlg.catalog()).rowPitch;
+        const double yf = -dlg.design().brick(f1)->row * pitch + dlg.design().brick(f1)->drawDyMm;
+        const double yx = -dlg.design().brick(x1)->row * pitch + dlg.design().brick(x1)->drawDyMm;
+        std::printf("  symmetric: drawn at %.1f and %.1f\n", yf, yx);
+        check(std::abs(yf - yx) < 1e-6, "wizard: and on the drawing a single run is laid straight along the axis");
+    }
 
     // PLACED: onto the editor's cursor, the window out of the way.
     dlg.place();
@@ -1310,10 +1320,12 @@ void testDialog() {
     dlg.selectBrick(QString());
     const Brick* ra = dlg.design().brick(run);
     const Brick* rb = dlg.design().brick(f1);
-    mouse(canvas, QEvent::MouseButtonPress,
-          (canvas->brickRect(*ra).center() + canvas->brickRect(*rb).center()) / 2.0);
-    mouse(canvas, QEvent::MouseButtonRelease,
-          (canvas->brickRect(*ra).center() + canvas->brickRect(*rb).center()) / 2.0);
+    // Halfway along the link itself - from port to port, wherever the bricks were left.
+    const QPointF onLink = (canvas->portPoint(*ra, dlg.design().portOn(run, f1)) +
+                            canvas->portPoint(*rb, dlg.design().portOn(f1, run))) /
+                           2.0;
+    mouse(canvas, QEvent::MouseButtonPress, onLink);
+    mouse(canvas, QEvent::MouseButtonRelease, onLink);
     canvas->deleteSelected();
     check(!dlg.design().linked(run, f1), "wizard: a link picked on the pane is deleted");
 }
@@ -1403,10 +1415,12 @@ void testDialogMore() {
     if (auto* rot = dlg.findChild<QPushButton*>(QStringLiteral("brickRotate"))) rot->click();
     check(d.brick(f1)->rot == (f1Rot + 1) % 4 && d.brick(fan)->rot == (fanRot + 1) % 4 && d.brick(x1)->rot == x1Rot,
           "rotate: the bar button turns what is picked a quarter");
-    dlg.arrange();   // and arranging turns each to face what it is linked to again
-    canvas->resetZoom();   // Symmetric fits the pane; the clicks below are aimed at its own size
+    dlg.arrange();   // Symmetric no longer touches the bricks: turned, they stay turned
+    canvas->resetZoom();
     canvas->centreView();
-    check(d.brick(f1)->rot == f1Rot && d.brick(fan)->rot == fanRot, "arrange: turns them back to face their links");
+    check(d.brick(f1)->rot != f1Rot || d.brick(fan)->rot != fanRot, "symmetric: the bricks are not turned or moved by it");
+    d.brick(f1)->rot = f1Rot;   // back, for the clicks below
+    d.brick(fan)->rot = fanRot;
 
     // THE FANOUT'S WIRES PER PART: picking its link to a ferrule, and saying two.
     canvas->setSelection({});
@@ -2421,12 +2435,12 @@ void testRoundEleven() {
         dlg.canvas()->moveSelection(-3.0, 0.0);   // along, and not past the other part (that turns the harness round)
         check(distance(aWas, faceOf(a)) < 1e-6 && distance(bWas, faceOf(b)) < 1e-6,
               "pane move: the first part moved along the pane does not move the drawing");
-        // THE GRAB POINTS: a ring on every end part, in the preview only.
+        // THE GRAB POINT: on the part picked (and the one pointed at), in the preview only - not on every part.
         dlg.selectBrick(a);   // the preview rebuilt
         int rings = 0;
         for (const Entity& e : dlg.preview()->entities())
             if (!e.meta.value(QStringLiteral("brickHandle")).toString().isEmpty()) ++rings;
-        check(rings == 2, "grab: every end part shows its grab point in the preview");
+        check(rings == 1, "grab: the part picked shows its grab point in the preview, the others none");
         bool inDrawing = false;
         for (const Entity& e : dlg.drawing())
             if (e.meta.contains(QStringLiteral("brickHandle"))) inDrawing = true;
@@ -2549,6 +2563,9 @@ void testRoundThirteen() {
             return out;
         };
         std::vector<Entity> two = dims();
+        if (two.size() == 2)
+            std::printf("  dims: %.1f..%.1f at %.1f, %.1f..%.1f at %.1f\n", two[0].points[0].x, two[0].points[1].x,
+                        two[0].points[2].y, two[1].points[0].x, two[1].points[1].x, two[1].points[2].y);
         check(two.size() == 2 && std::abs(two[0].points[2].y - two[1].points[2].y) > 5.0,
               "dims: two that would cross are put at different heights");
         check(two.size() == 2 && two[0].points[2].y < two[1].points[2].y,
@@ -2682,6 +2699,84 @@ void testConnectorContactsOnBill() {
     QFile::remove(libFile);
 }
 
+// ROUND FOURTEEN: pairs on a twisted pair; the run's length on the drawing whatever the pane's columns; a cable no
+// wider than the face it goes into; the brick double-clicked brought up on the preview.
+void testRoundFourteen() {
+    {
+        BrickDesign d;
+        const QString a = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString t = d.addBrick(BrickType::TwistedPair, PartKind::Wire, 1, 0);
+        const QString b = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        d.connect(a, t);
+        d.connect(t, b);
+        d.brick(t)->run.pairs = 3;
+        int wires = 0;
+        for (const Entity& e : buildBrickHarness(d, nullptr).entities)
+            if (e.type == EntityType::TwistedPair) wires = e.meta.value(QStringLiteral("twistWires")).toInt();
+        check(wires == 6, "pairs: three twisted pairs are six wires");
+        check(BrickDesign::fromJson(d.toJson()).brick(t)->run.pairs == 3, "pairs: kept with the design");
+    }
+    {
+        // Both parts in one column of the pane: the drawing still puts them the run's length apart, along the way
+        // the face looks.
+        BrickDesign d;
+        const QString a = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString r = d.addBrick(BrickType::Run, PartKind::Cable, 0, 1);
+        const QString b = d.addBrick(BrickType::End, PartKind::Connector, 0, 2);
+        d.connect(a, r);
+        d.connect(r, b);
+        auto apart = [&d, &a, &b] {
+            const BrickBuild bb = buildBrickHarness(d, nullptr);
+            return std::abs(bb.faces.value(b + QStringLiteral(":0")).centre.x - bb.faces.value(a + QStringLiteral(":0")).centre.x);
+        };
+        const double was = apart();
+        d.brick(r)->run.lengthMm += 100.0;
+        const double now = apart();
+        std::printf("  length: parts %.1f apart, %.1f after 100 more\n", was, now);
+        check(now > was + 50.0, "length: typed into the run, it is on the drawing - the pane's columns do not stop it");
+    }
+    {
+        // A cable into small faces: never wider than the face.
+        BrickDesign d;
+        const QString a = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString r = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString b = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        d.connect(a, r);
+        d.connect(r, b);
+        d.brick(r)->run.stack = {QStringLiteral("wires"), QStringLiteral("cable")};
+        d.brick(r)->run.wires = 12;
+        d.brick(a)->scale = 0.3;
+        const BrickBuild bb = buildBrickHarness(d, nullptr);
+        const double face = bb.faces.value(a + QStringLiteral(":0")).lengthMm;
+        double body = 0.0;
+        for (const Entity& e : bb.entities)
+            if (e.type == EntityType::TwistedPair) body = e.meta.value(QStringLiteral("twistBodyWidth")).toDouble();
+        std::printf("  cable: %.2f wide into a face %.2f\n", body, face);
+        check(body > 0.0 && body <= face + 1e-6, "cable: never wider than the face of the part scaled down");
+    }
+    {
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        BrickWizardDialog dlg(&ed);
+        dlg.resize(1400, 900);
+        dlg.show();
+        BrickDesign& w = dlg.design();
+        const QString a = w.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString r = w.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString b = w.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        w.connect(a, r);
+        w.connect(r, b);
+        dlg.selectBrick(r);
+        dlg.preview()->grab();
+        const double z0 = dlg.preview()->zoom();
+        emit dlg.canvas()->brickDoubleClicked(a);
+        dlg.preview()->grab();
+        std::printf("  double-click: preview zoom %.2f -> %.2f\n", z0, dlg.preview()->zoom());
+        check(dlg.preview()->zoom() > z0 * 1.5, "double-click: the brick's part brought up on the preview");
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -2709,6 +2804,7 @@ int run_brickharness_tests() {
     testRoundTwelve();
     testRoundThirteen();
     testConnectorContactsOnBill();
+    testRoundFourteen();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

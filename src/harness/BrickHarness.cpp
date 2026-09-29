@@ -417,6 +417,7 @@ QJsonObject BrickDesign::toJson() const {
                                                    {"dimTrace", r.dimTrace},
                                                    {"dimSingle", r.dimSingle},
                                                    {"trunkWires", r.trunkWires},
+                                                   {"pairs", r.pairs},
                                                    {"bridgeWires", r.bridgeWires},
                                                    {"stackParts", [&r] {
                                                         QJsonObject sp;
@@ -518,6 +519,7 @@ BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
             s.dimTrace = r.value(QStringLiteral("dimTrace")).toBool(false);
             s.dimSingle = r.value(QStringLiteral("dimSingle")).toBool(false);
             s.trunkWires = r.value(QStringLiteral("trunkWires")).toInt(0);
+            s.pairs = std::max(1, r.value(QStringLiteral("pairs")).toInt(1));
         }
         d.bricks.push_back(b);
     }
@@ -693,7 +695,7 @@ int syncBridgeWires(BrickDesign& d) {
         QStringList nets;
         for (int w : take) nets << from->run.nets.value(w - 1);
         if (shield) nets = QStringList{QStringLiteral("SHIELD")};
-        const int wires = s.type == BrickType::TwistedPair ? 2 : shield ? 1 : static_cast<int>(take.size());
+        const int wires = s.type == BrickType::TwistedPair ? 2 * std::max(1, s.run.pairs) : shield ? 1 : static_cast<int>(take.size());
         if (s.run.wires != wires || s.run.nets != nets) ++changed;
         s.run.wires = wires;
         s.run.nets = nets;
@@ -704,6 +706,18 @@ int syncBridgeWires(BrickDesign& d) {
 }
 
 bool brickIsTied(const Brick& b) { return b.type == BrickType::End && !brickKindIsJoint(b.kind); }
+
+void symmetricOnDrawing(BrickDesign& d, double rowPitch) {
+    if (rowPitch <= 0.0) rowPitch = brickRowPitchMm(d);
+    BrickDesign laid = d;
+    arrangeBricks(laid);
+    // Drawn at -row x pitch + dy: the dy that puts each part where the symmetric layout's row would.
+    for (Brick& b : d.bricks) {
+        if (b.type != BrickType::End) continue;
+        const Brick* s = laid.brick(b.id);
+        if (s) b.drawDyMm = (b.row - s->row) * rowPitch;
+    }
+}
 
 double brickRowPitchMm(const BrickDesign& d) {
     // The same figure the drawing lays its rows out at (see buildBrickHarness).
@@ -1483,6 +1497,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         shapes.insert(b.id, s);
     }
     const double rowPitch = std::max(40.0, widest + 25.0);
+    out.rowPitch = rowPitch;
 
     // THE NODES: every end, and a JUNCTION wherever two specials are joined - a fanout or a twisted
     // run carried on into a cable. At a junction the wires pass straight through, packed.
@@ -1660,7 +1675,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         br.flipped = flipped;
         br.a = a.front();
         if (!b.isEmpty()) br.b = b.front();
-        br.wires = s.type == BrickType::TwistedPair ? 2 : std::max(1, s.run.wires - bridged);
+        br.wires = s.type == BrickType::TwistedPair ? 2 * std::max(1, s.run.pairs) : std::max(1, s.run.wires - bridged);
         branches.push_back(br);
     }
 
@@ -1676,6 +1691,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             Vec2 fromFace;    // where the face is on this node, from its centre (turned)
             Vec2 toFace;      // and on the other
             bool pinned = false;   // face on face, whatever the columns say (a bridge wire on its cable's part)
+            Vec2 fromOut{0.0, 0.0};   // which way the face on this node looks - the way the run goes from it
         };
         QHash<QString, QList<Edge>> edges;
         // Where a face is on its part, from the part's centre, turned as the brick is; a junction is a point.
@@ -1718,8 +1734,9 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             // the part: the run goes straight on out of it up to the other part's height and makes ONE bend
             // into it, so the part is put where that one-bend run is the run's length. Put anywhere nearer, the
             // wires ran on the slant past the part and came back to it in a hook.
-            // Along the harness, which way from a to b (as the layout below will put it).
-            const double ahead = gridOf(br.b.node).x - gridOf(br.a.node).x;
+            // Along the harness, which way from a to b (as the layout below will put it): the way a's face looks.
+            const Vec2 ua0 = faceOutOf(br.a);
+            const double ahead = std::abs(ua0.x) > 0.3 ? ua0.x : gridOf(br.b.node).x - gridOf(br.a.node).x;
             auto slanted = [&](const Vec2& u, double toward, double forward) {
                 return std::abs(u.x) > 0.1 && std::abs(u.y) > 0.1 && across > 1e-6 && std::abs(forward) > 1e-9 &&
                        (u.y > 0.0) == (toward > 0.0) && (u.x > 0.0) == (forward > 0.0);
@@ -1745,8 +1762,8 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             }
             if (drawn > real + 1e-6)
                 stretchOf.insert(br.special->id, std::max(stretchOf.value(br.special->id), drawn - real));
-            edges[br.a.node] << Edge{br.b.node, gap, fa, fb};
-            edges[br.b.node] << Edge{br.a.node, gap, fb, fa};
+            edges[br.a.node] << Edge{br.b.node, gap, fa, fb, false, ua};
+            edges[br.b.node] << Edge{br.a.node, gap, fb, fa, false, ub};
         }
         // A BRIDGE WIRE STARTS AT ITS CABLE'S PART - where that fan is - so its own part can stand level with it.
         for (auto it = bridgeOff.cbegin(); it != bridgeOff.cend(); ++it) {
@@ -1800,12 +1817,25 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                 queue.pop_front();
                 for (const Edge& e : edges.value(n)) {
                     if (xOf.contains(e.to)) continue;
+                    // WHICH WAY THE RUN GOES: the way the face it leaves looks - not where the bricks sit on the
+                    // pane, which says what is joined to what and nothing about the drawing. Only a face looking up or
+                    // down leaves it to the pane's columns, and failing those, onward to the right: the run's length
+                    // always counts.
                     const double dc = gridOf(e.to).x - gridOf(n).x;
-                    const double sign = dc > 1e-9 ? 1.0 : dc < -1e-9 ? -1.0 : 0.0;
-                    // Face to face along the harness; one above the other, centre over centre.
-                    xOf.insert(e.to, e.pinned        ? xOf.value(n) + e.fromFace.x - e.toFace.x
-                                     : sign == 0.0 ? xOf.value(n)
-                                                   : xOf.value(n) + e.fromFace.x + sign * e.gap - e.toFace.x);
+                    // One face carrying more than one run (a part in the middle of a chain drawn with a single
+                    // face) says nothing about which of them goes which way: the pane's columns do.
+                    int sameFace = 0;
+                    for (const Edge& o : edges.value(n))
+                        if (!o.pinned && distance(o.fromFace, e.fromFace) < 1e-6) ++sameFace;
+                    const bool faceSays = sameFace <= 1;
+                    const double sign = faceSays && e.fromOut.x > 0.3    ? 1.0
+                                        : faceSays && e.fromOut.x < -0.3 ? -1.0
+                                        : dc > 1e-9          ? 1.0
+                                        : dc < -1e-9         ? -1.0
+                                                             : 1.0;
+                    // Face to face along the harness.
+                    xOf.insert(e.to, e.pinned ? xOf.value(n) + e.fromFace.x - e.toFace.x
+                                              : xOf.value(n) + e.fromFace.x + sign * e.gap - e.toFace.x);
                     queue.push_back(e.to);
                 }
             }
@@ -2385,8 +2415,11 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                     const int layers = std::max(0, static_cast<int>(r.stack.size()) - 2);
                     bodyWidth = r.bodyWidthMm > 1e-9
                                     ? r.bodyWidthMm
-                                    : std::max(r.bodyScalePct / 100.0 * share, packed * (wires - 1) * 0.6 + ww) +
-                                          0.6 * layers;
+                                    : std::min(std::max(r.bodyScalePct / 100.0 * share, packed * (wires - 1) * 0.6 + ww) +
+                                                   0.6 * layers,
+                                               // NEVER WIDER THAN THE FACE IT GOES INTO: a part scaled down takes the
+                                               // cable down with it, converging to its entry face.
+                                               std::max(ww * 1.5, loose ? la.share : std::min(la.share, lb.share)));
                     run.meta.insert(QStringLiteral("twistBody"),
                                     outer == QLatin1String("heatshrink") ? QStringLiteral("heatshrink")
                                                                          : QStringLiteral("cable"));

@@ -111,6 +111,8 @@ struct BrickRunSpec {
     int fanSide = -1;
     // HOW MANY LINES THE WIRES CONVERGE TO where they are gathered; 0 = as the drawing draws it.
     int trunkWires = 0;
+    // A TWISTED PAIR's number of pairs - two wires each.
+    int pairs = 1;
     std::vector<BrickLabel> labels;
     // THE NET OF EACH WIRE, numbered from the top down like the labels: taken from the schematic
     // where the part is on it, or given here.
@@ -323,6 +325,9 @@ QString dragPartOnDrawing(BrickDesign& d, const BrickBuild& built, const QString
 // How far apart the pane's rows are on the drawing - so a brick moved a row on the pane can be kept where it was
 // on the drawing.
 double brickRowPitchMm(const BrickDesign& d);
+// SYMMETRIC ON THE DRAWING ONLY: every part set up or down on the drawing to where a symmetric layout puts it, the
+// bricks on the pane left exactly where they are. `rowPitch` is how far apart the drawing's rows are.
+void symmetricOnDrawing(BrickDesign& d, double rowPitch);
 
 // One entry face of an end, once the design is laid out.
 struct BrickFace {
@@ -351,6 +356,7 @@ struct BrickBuild {
     QHash<QString, BrickFace> faces;        // by "<end id>:<port>"
     QHash<QString, double> scales;          // what each end was drawn at, by id - Auto's figure included
     QStringList problems;                   // what could not be drawn, and why
+    double rowPitch = 0.0;                  // how far apart the pane's rows were drawn
 };
 
 // THE DRAWING: every end as its library part (or a placeholder of its kind) set down by its entry

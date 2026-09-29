@@ -450,8 +450,11 @@ int run_partspanel_tests() {
                 const int picked = win.bomHoverAt(Vec2{5020.0, 5000.0}, true);
                 check(picked == 1 && !bom->selectionModel()->selectedRows().isEmpty(),
                       "bom hover: Alt over a part picks its line of the bill");
+                check(win.editorForTest()->lookupHighlight().size() == 1,
+                      "bom hover: and the part is lit on the drawing");
                 win.bomHoverAt(Vec2{5020.0, 5000.0}, false);
-                check(bom->selectionModel()->selectedRows().isEmpty(), "bom hover: and without Alt, nothing stays picked");
+                check(bom->selectionModel()->selectedRows().isEmpty() && win.editorForTest()->lookupHighlight().empty(),
+                      "bom hover: and without Alt, nothing stays picked or lit");
                 doc->entities().pop_back();
             }
             int row = -1;

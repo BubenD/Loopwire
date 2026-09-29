@@ -19534,7 +19534,36 @@ void Editor::computeHatchPreview() {
     if (hatchPreview_.valid) emit overlayChanged();
 }
 
+void Editor::setLookupHighlight(const std::vector<QString>& ids) {
+    if (ids == lookupHighlight_) return;
+    lookupHighlight_ = ids;
+    emit overlayChanged();
+}
+
 void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
+    // THE PART LOOKED UP (Alt + the pointer): the box round all of it, in a very light orange.
+    if (!lookupHighlight_.empty()) {
+        Bounds all;
+        for (const QString& id : lookupHighlight_)
+            if (const Entity* e = entityById(id)) {
+                const Bounds b = e->bounds();
+                if (b.valid) {
+                    all.expand(b.min);
+                    all.expand(b.max);
+                }
+            }
+        if (all.valid) {
+            const QRectF box = QRectF(vt.toScreen(all.min), vt.toScreen(all.max)).normalized().adjusted(-3, -3, 3, 3);
+            p.save();
+            QPen op(QColor(255, 176, 90, 200));
+            op.setCosmetic(true);
+            op.setWidthF(1.4);
+            p.setPen(op);
+            p.setBrush(QColor(255, 200, 140, 55));
+            p.drawRect(box);
+            p.restore();
+        }
+    }
     // The block under the cursor, in a soft grey over its box - not when it is already picked, which
     // says more.
     if (!hoverBlockId_.isEmpty() && tool_ == ToolId::Select &&

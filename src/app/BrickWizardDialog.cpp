@@ -380,7 +380,21 @@ void BrickCanvas::deleteSelected() {
     update();
 }
 
+void BrickCanvas::mouseDoubleClickEvent(QMouseEvent* e) {
+    const QString hit = brickAt(L(e->position()));
+    if (!hit.isEmpty()) {
+        emit brickDoubleClicked(hit);
+        e->accept();
+        return;
+    }
+    QWidget::mouseDoubleClickEvent(e);
+}
+
 void BrickCanvas::keepOnDrawing(const QHash<QString, QPointF>& from) {
+    // The pitch the drawing was LAST DRAWN at - scaled parts (Auto) change it, and a figure worked out afresh
+    // without them moved the part the other way from the brick.
+    // Worked out once as the move begins, from the drawing as it is now (Auto's scales and all).
+    if (rowPitchMm_ <= 0.0) rowPitchMm_ = buildBrickHarness(*d_, d_->catalog).rowPitch;
     if (rowPitchMm_ <= 0.0) rowPitchMm_ = brickRowPitchMm(*d_);
     for (auto it = from.cbegin(); it != from.cend(); ++it) {
         Brick* b = d_->brick(it.key());
@@ -528,7 +542,9 @@ void BrickCanvas::paintEvent(QPaintEvent*) {
                   : !lp->mfrPn.isEmpty() ? lp->mfrPn
                                          : lp->title();
         }
-        else sub = QStringLiteral("%1 w · %2").arg(b.run.wires).arg(b.run.lengthMm, 0, 'f', 0);
+        else sub = b.type == BrickType::TwistedPair
+                       ? QStringLiteral("%1 pr · L-%2").arg(std::max(1, b.run.pairs)).arg(b.run.lengthMm, 0, 'f', 0)
+                       : QStringLiteral("%1 w · L-%2").arg(b.run.wires).arg(b.run.lengthMm, 0, 'f', 0);
         const QRectF bottom(r.left() + 3, r.center().y(), r.width() - 6, r.height() / 2.0 - 2);
         p.setPen(QColor(0xb8, 0xc0, 0xcc));
         p.drawText(bottom, Qt::AlignCenter,
@@ -1404,6 +1420,15 @@ void BrickWizardDialog::buildUi() {
         sc->setContext(Qt::WindowShortcut);
         connect(sc, &QShortcut::activated, this, fn);
     }
+    // DOUBLE-CLICK A BRICK: its part brought up on the drawing - half the pane, in the middle.
+    connect(canvas_, &BrickCanvas::brickDoubleClicked, this, [this](const QString& id) {
+        Bounds b;
+        for (const Entity& e : lastEnts_)
+            if (e.meta.value(QStringLiteral("brickId")).toString() == id && e.type != EntityType::Dimension)
+                b.expand(e.bounds());
+        selectBrick(id);   // first: picking it rebuilds the preview, which would put the old view back
+        if (b.valid) preview_->zoomToBounds(b, 0.5);
+    });
     connect(canvas_, &BrickCanvas::designChanged, this, &BrickWizardDialog::designChanged);
     connect(canvas_, &BrickCanvas::message, this, [this](const QString& t) { status_->setText(t); });
 
@@ -1677,6 +1702,16 @@ QWidget* BrickWizardDialog::buildRunPage() {
     wires_->setObjectName(QStringLiteral("brickWires"));
     wires_->setRange(1, 64);
     form->addRow(QStringLiteral("Wires"), wires_);
+    // A TWISTED PAIR: how many pairs (two wires each).
+    pairs_ = new QSpinBox(page);
+    pairs_->setObjectName(QStringLiteral("brickPairs"));
+    pairs_->setRange(1, 32);
+    pairs_->setToolTip(QStringLiteral("How many twisted pairs - two wires each"));
+    form->addRow(QStringLiteral("Pairs"), pairs_);
+    connect(pairs_, &QSpinBox::valueChanged, this, [this](int) {
+        writeRun();
+        loadPanel();
+    });
     length_ = spin("brickLength", 10.0, 100000.0, 10.0, QStringLiteral(" mm"));
     form->addRow(QStringLiteral("Length"), length_);
     // BRIDGE WIRES: which wires of the cable, fanout or heatshrink this one is joined to it takes - "1-3,5" -
@@ -2127,13 +2162,16 @@ void BrickWizardDialog::rotateSelected() {
 }
 
 void BrickWizardDialog::arrange() {
-    arrangeBricks(design_);
-    // Symmetric means the drawing too: parts moved up or down on it go back onto their rows.
-    for (Brick& b : design_.bricks) b.drawDyMm = 0.0;
-    canvas_->fit();
+    // SYMMETRIC ON THE DRAWING: the parts set up or down on it where a symmetric layout puts them - the bricks on the
+    // pane are left exactly where they were put.
+    symmetricOnDrawing(design_, canvas_ ? lastRowPitch() : 0.0);
     designChanged();
     preview_->fitToView();
-    status_->setText(QStringLiteral("Arranged symmetrically"));
+    status_->setText(QStringLiteral("The drawing laid out symmetrically - the bricks left where they are"));
+}
+
+double BrickWizardDialog::lastRowPitch() const {
+    return buildBrickHarness(design_, &catalog_).rowPitch;
 }
 
 std::vector<Entity> BrickWizardDialog::drawing() const {
@@ -2238,7 +2276,9 @@ void BrickWizardDialog::loadPanel() {
         }
         bomState_->setText(!p      ? QStringLiteral("Choose a library part first")
                            : item  ? QStringLiteral("✔ In the BOM as item %1").arg(item)
-                                   : QStringLiteral("Not in the BOM"));
+                                   : QStringLiteral("⚠ Not in the BOM"));
+        // Not on the bill: said in red, so it is not missed.
+        bomState_->setStyleSheet(p && !item ? QStringLiteral("color:#ff5b5b;font-weight:bold;") : QString());
         return;
     }
     panel_->setCurrentIndex(2);
@@ -2248,6 +2288,11 @@ void BrickWizardDialog::loadPanel() {
     const BrickRunSpec& r = b->run;
     runKind_->setText(brickTypeName(b->type));
     wires_->setValue(r.wires);
+    if (pairs_) {
+        const QSignalBlocker hush(pairs_);
+        pairs_->setValue(std::max(1, r.pairs));
+        if (runForm_) runForm_->setRowVisible(pairs_, b->type == BrickType::TwistedPair);
+    }
     {
         // Bridge wires: only for a special joined to another one, and then they decide the wire count.
         // Only on a BRIDGE WIRE: a cable's own panel has no such thing.
@@ -2561,6 +2606,10 @@ bool BrickWizardDialog::eventFilter(QObject* o, QEvent* e) {
             !(static_cast<QMouseEvent*>(e)->buttons() & Qt::LeftButton)) {
             const QString over = previewPartAt(static_cast<QMouseEvent*>(e)->position());
             preview_->setCursor(over.isEmpty() ? Qt::ArrowCursor : Qt::OpenHandCursor);
+            if (over != hoverPart_) {
+                hoverPart_ = over;
+                showGrabRings();
+            }
         }
         if (e->type() == QEvent::MouseButtonPress) {
             auto* me = static_cast<QMouseEvent*>(e);
@@ -2678,7 +2727,8 @@ void BrickWizardDialog::writeRun() {
     Brick* b = design_.brick(canvas_->selected());
     if (!b || !brickIsSpecial(b->type)) return;
     BrickRunSpec& r = b->run;
-    r.wires = b->type == BrickType::TwistedPair ? 2 : wires_->value();
+    if (b->type == BrickType::TwistedPair && pairs_) r.pairs = pairs_->value();
+    r.wires = b->type == BrickType::TwistedPair ? 2 * std::max(1, r.pairs) : wires_->value();
     const double oldLength = r.lengthMm;
     r.lengthMm = length_->value();
     // THE LENGTH CHANGED: the part at its finish, and all beyond it, pulled in or pushed out to suit.
@@ -2796,6 +2846,30 @@ void BrickWizardDialog::checkCompatibility(const Brick* b) {
     compat_->setText(said.isEmpty() ? QString() : QStringLiteral("⚠ ") + said);
     compat_->setVisible(!said.isEmpty());
     compatAdd_->setVisible(canAdd);
+}
+
+void BrickWizardDialog::showGrabRings() {
+    // THE GRAB POINT, on the preview only and only where it is wanted: the part picked, and the part the pointer is
+    // over - a ring on every part all the time read as connection points drawn on the parts.
+    std::vector<Entity> ents = lastEnts_;
+    QStringList want = canvas_->selection();
+    if (!hoverPart_.isEmpty() && !want.contains(hoverPart_)) want << hoverPart_;
+    for (const QString& id : want) {
+        const Brick* b = design_.brick(id);
+        if (!b || b->type != BrickType::End) continue;
+        const auto f = lastFaces_.constFind(b->id + QStringLiteral(":0"));
+        if (f == lastFaces_.cend()) continue;
+        Entity ring;
+        ring.type = EntityType::Circle;
+        ring.center = f->centre;
+        ring.a = f->centre;
+        ring.radius = handleMm_;
+        ring.color = QStringLiteral("#5aa0ff");
+        ring.meta.insert(QLatin1String(kPreviewMarkKey), true);
+        ring.meta.insert(QStringLiteral("brickHandle"), b->id);
+        ents.push_back(ring);
+    }
+    preview_->setEntities(ents);
 }
 
 QString BrickWizardDialog::bridgeValue() const {
@@ -2938,27 +3012,13 @@ void BrickWizardDialog::refreshPreview() {
     for (Entity& e : ents)
         if (sel.contains(e.meta.value(QStringLiteral("brickId")).toString()))
             e.meta.insert(QLatin1String(kPreviewSelectedKey), true);
-    // THE GRAB POINT OF EVERY END PART, on the preview only: a blue ring where its run meets it - press there and
-    // drag to move the part on the drawing (its run's length follows).
     // Big enough to see and to take hold of whatever size the drawing is: a share of the drawing, not a fixed 2 mm.
     Bounds whole;
     for (const Entity& e : built.entities) whole.expand(e.bounds());
     handleMm_ = whole.valid ? std::clamp(std::max(whole.width(), whole.height()) * 0.012, 1.5, 12.0) : 2.0;
-    for (const Brick& b : design_.bricks) {
-        if (b.type != BrickType::End) continue;
-        const auto f = built.faces.constFind(b.id + QStringLiteral(":0"));
-        if (f == built.faces.cend()) continue;
-        Entity ring;
-        ring.type = EntityType::Circle;
-        ring.center = f->centre;
-        ring.a = f->centre;
-        ring.radius = handleMm_;
-        ring.color = QStringLiteral("#5aa0ff");
-        ring.meta.insert(QLatin1String(kPreviewMarkKey), true);
-        ring.meta.insert(QStringLiteral("brickHandle"), b.id);
-        ents.push_back(ring);
-    }
-    preview_->setEntities(ents);
+    canvas_->setDrawingRowPitch(built.rowPitch);
+    lastEnts_ = ents;
+    showGrabRings();
     refreshBom();
     showActuals();
 }

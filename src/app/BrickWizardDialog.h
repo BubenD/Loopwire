@@ -96,6 +96,8 @@ signals:
     void linkPicked(const QString& a, const QString& b);
     // Bricks moved on the pane, with where each was before the move - so a part moved can say a new length.
     void bricksMoved(const QHash<QString, QPointF>& from);
+    // A brick double-clicked: its part brought up on the drawing.
+    void brickDoubleClicked(const QString& id);
     // Two bricks clicked while putting a dimension on: the dimension goes between them.
     void dimensionPicked(const QString& a, const QString& b);
     // A brick clicked while setting another's drawing order: `source` goes above (or under) `other`.
@@ -112,6 +114,11 @@ protected:
     void mouseReleaseEvent(QMouseEvent* e) override;
     void keyPressEvent(QKeyEvent* e) override;
     void keyReleaseEvent(QKeyEvent* e) override;
+    void mouseDoubleClickEvent(QMouseEvent* e) override;
+public:
+    // How far apart the drawing's rows were last drawn - what a brick moved a row is kept still on the drawing by.
+    void setDrawingRowPitch(double mm) { drawnRowPitch_ = mm; }
+protected:
     void dragEnterEvent(QDragEnterEvent* e) override;
     void dragMoveEvent(QDragMoveEvent* e) override;
     void dropEvent(QDropEvent* e) override;
@@ -147,6 +154,7 @@ private:
     // move began, and how far apart the rows are drawn - so its move on the pane is taken back off the drawing.
     QHash<QString, double> startDy_;
     double rowPitchMm_ = 0.0;
+    double drawnRowPitch_ = 0.0;
     void keepOnDrawing(const QHash<QString, QPointF>& from);
     bool dimMode_ = false;                 // putting a dimension on: two clicks, two bricks
     QString dimFirst_;
@@ -331,6 +339,12 @@ private:
     // cable's wires (by net, where they have one) or its braided shield, or typed ("1-3,5").
     QComboBox* bridge_ = nullptr;
     QFormLayout* runForm_ = nullptr;
+    QSpinBox* pairs_ = nullptr;          // a twisted pair's number of pairs
+    // THE DRAWING AS LAST BUILT, without the grab rings - which are shown only for the part picked or pointed at.
+    std::vector<Entity> lastEnts_;
+    QString hoverPart_;
+    void showGrabRings();
+    double lastRowPitch() const;
     QString bridgeValue() const;
     // A PART DRAGGED ON THE DRAWING (the preview): its run's length follows, the pane stays as it is.
     QString partDrag_;
