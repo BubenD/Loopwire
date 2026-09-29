@@ -68,6 +68,10 @@ public:
     const SnapSettings& snapSettings() const { return snap_; }
 
     const std::vector<QString>& selection() const { return selected_; }
+    // The object under a point of the drawing (as a click there would take it), and an object by its id - for
+    // what is looked up without picking anything, such as the bill line of the part under the pointer.
+    std::optional<QString> objectAt(const Vec2& world) const { return hitTest(world); }
+    const Entity* objectById(const QString& id) const { return entityById(id); }
 
     // ---- A BIG SELECTION IS DRAWN INTO THE SCENE CACHE INSTEAD OF ONTO EVERY FRAME ---------------
     //

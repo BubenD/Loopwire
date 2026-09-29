@@ -2091,8 +2091,11 @@ void testRoundEight() {
         std::printf("  bridge wire: cable in %d run(s), %d wire(s) on to the connector, the bridge %.2f off the cable\n",
                     cableRuns, toX1, off);
         check(cableRuns == 1 && toX1 == 2, "bridge wire: the cable is not split - the rest of its wires go on to its part");
-        check(off < 1e-6 && !cableRoute.empty() && bridgeRoute.front().x < cableRoute.back().x,
-              "bridge wire: and the bridge comes out of the cable where its fan begins");
+        // Out of the cable's END FACE, square to it: on the face (within the cover's width of the middle), where the
+        // fan begins, its first stretch along the cable before it turns.
+        check(off < 12.0 && !cableRoute.empty() && bridgeRoute.front().x < cableRoute.back().x && bridgeRoute.size() >= 2 &&
+                  std::abs(bridgeRoute[1].y - bridgeRoute[0].y) < 1e-6 && bridgeRoute[1].x > bridgeRoute[0].x,
+              "bridge wire: and it comes out of the cable's end face, square to it, where the fan begins");
         // An ordinary special still may not share a cable's end.
         const QString fan = d.addBrick(BrickType::Fanout, PartKind::Wire, 3, -1);
         check(!d.connect(c, fan, &why), "bridge wire: an ordinary special still does not share an end already used");
@@ -2131,11 +2134,12 @@ void testRoundEight() {
         const QString s = w.addBrick(BrickType::Run, PartKind::Cable, 2, 2.0);
         w.connect(e, s);
         emit dlg.canvas()->linked(e, s);
-        check(std::abs(w.brick(s)->row - w.brick(e)->row) < 1e-9, "wizard: linked to its first part, the special comes into its line");
+        // THE PANE NO LONGER PLACES THE DRAWING: a special is tied to no part there, each stays where it is put.
+        check(std::abs(w.brick(s)->row - 2.0) < 1e-9, "wizard: linked, the special stays where it was put");
         dlg.canvas()->setSelection({e});
         dlg.canvas()->moveSelection(0.0, 1.0);
-        check(std::abs(w.brick(s)->row - w.brick(e)->row) < 1e-9 && std::abs(w.brick(e)->row - 1.0) < 1e-9,
-              "wizard: the part moved down, its special moves with it");
+        check(std::abs(w.brick(s)->row - 2.0) < 1e-9 && std::abs(w.brick(e)->row - 1.0) < 1e-9,
+              "wizard: the part moved down, the special is not moved with it");
     }
 }
 
@@ -2442,6 +2446,65 @@ void testRoundEleven() {
     }
 }
 
+// ROUND TWELVE: the drawing order of bricks; each layer of a run with its part number, copied from the cables next
+// along.
+void testRoundTwelve() {
+    // DRAW ORDER: a brick told to come to the front is drawn after the others.
+    {
+        BrickDesign d;
+        const QString a = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString r = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString b = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        d.connect(a, r);
+        d.connect(r, b);
+        auto lastOf = [&d] {
+            const BrickBuild bb = buildBrickHarness(d, nullptr);
+            QString last;
+            for (const Entity& e : bb.entities)
+                if (!e.meta.value(QStringLiteral("brickId")).toString().isEmpty()) last = e.meta.value(QStringLiteral("brickId")).toString();
+            return last;
+        };
+        d.brick(a)->z = 5;
+        check(lastOf() == a, "draw order: a brick brought to the front is drawn over the rest");
+        d.brick(a)->z = -5;
+        d.brick(r)->z = 3;
+        check(lastOf() == r, "draw order: and one sent back is drawn under them");
+        check(BrickDesign::fromJson(d.toJson()).brick(r)->z == 3, "draw order: kept with the design");
+    }
+    // LAYER PART NUMBERS: set on one cable, copied to the cable on the other side of a part; on the drawing too.
+    {
+        BrickDesign d;
+        const QString x0 = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString c1 = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString j = d.addBrick(BrickType::End, PartKind::Splice, 2, 0);
+        const QString c2 = d.addBrick(BrickType::Run, PartKind::Cable, 3, 0);
+        const QString x1 = d.addBrick(BrickType::End, PartKind::Connector, 4, 0);
+        for (const auto& [a, b] : {std::pair<QString, QString>{x0, c1}, {c1, j}, {j, c2}, {c2, x1}}) d.connect(a, b);
+        for (const QString& c : {c1, c2}) d.brick(c)->run.stack = {QStringLiteral("wires"), QStringLiteral("braid"),
+                                                                    QStringLiteral("heatshrink")};
+        d.brick(c1)->run.stackParts.insert(QStringLiteral("heatshrink"), QStringLiteral("HS-1"));
+        d.brick(c1)->run.stackParts.insert(QStringLiteral("braid"), QStringLiteral("BR-1"));
+        check(BrickDesign::fromJson(d.toJson()).brick(c1)->run.stackParts.value(QStringLiteral("braid")) == QStringLiteral("BR-1"),
+              "layer P/N: kept with the design");
+        QStringList onDrawing;
+        for (const Entity& e : buildBrickHarness(d, nullptr).entities)
+            if (e.meta.value(QStringLiteral("brickId")).toString() == c1)
+                for (const QJsonValue v : e.meta.value(QStringLiteral("stackParts")).toArray()) onDrawing << v.toString();
+        check(onDrawing.contains(QStringLiteral("HS-1")) && onDrawing.contains(QStringLiteral("BR-1")),
+              "layer P/N: and on the drawing, so its lines of the bill can be found from it");
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        BrickWizardDialog dlg(&ed);
+        dlg.design().bricks = d.bricks;
+        dlg.design().links = d.links;
+        const int given = dlg.layerPartsFromNeighbours(c2);
+        std::printf("  layer P/N: %d layer(s) copied from the cable past the splice\n", given);
+        check(given == 2 && dlg.design().brick(c2)->run.stackParts.value(QStringLiteral("heatshrink")) == QStringLiteral("HS-1"),
+              "layer P/N: As neighbours copies them from the cable next along, the splice between ignored");
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -2466,6 +2529,7 @@ int run_brickharness_tests() {
     testRoundNine();
     testRoundTen();
     testRoundEleven();
+    testRoundTwelve();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

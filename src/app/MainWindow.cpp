@@ -2395,6 +2395,9 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
     statusBar()->showMessage(QStringLiteral("Ready"));
 
     connect(canvas_, &CanvasWidget::cursorWorldMoved, this, [this](Vec2 w) {
+        bomHoverAt(w, QGuiApplication::keyboardModifiers() & Qt::AltModifier);
+    });
+    connect(canvas_, &CanvasWidget::cursorWorldMoved, this, [this](Vec2 w) {
         coordLabel_->setText(QStringLiteral("%1, %2").arg(w.x, 0, 'f', 3).arg(w.y, 0, 'f', 3));
     });
     connect(canvas_, &CanvasWidget::contextMenuRequested, this,
@@ -11305,6 +11308,39 @@ void MainWindow::refreshProperties() {
     refreshing_ = false;
 }
 
+int MainWindow::bomHoverAt(const Vec2& world, bool alt) {
+    if (!bomPanel_) return 0;
+    if (!alt) {
+        if (bomHoverLit_) {
+            bomPanel_->clearSelection();
+            bomHoverLit_ = false;
+        }
+        return 0;
+    }
+    // What it is made of: its own part, and the part of each layer of a run.
+    QStringList ids;
+    if (const std::optional<QString> hit = editor_->objectAt(world))
+        if (const Entity* e = editor_->objectById(*hit)) {
+            const QString own = e->meta.value(QStringLiteral("libPart")).toString();
+            if (!own.isEmpty()) ids << own;
+            for (const QJsonValue v : e->meta.value(QStringLiteral("stackParts")).toArray())
+                if (!v.toString().isEmpty() && !ids.contains(v.toString())) ids << v.toString();
+        }
+    bomPanel_->clearSelection();
+    bomHoverLit_ = true;
+    int picked = 0, first = -1;
+    for (int row = 0; row < bomPanel_->rowCount(); ++row) {
+        const QTableWidgetItem* it = bomPanel_->item(row, 1);
+        if (!it || !ids.contains(it->data(Qt::UserRole + 2).toString())) continue;
+        bomPanel_->selectionModel()->select(bomPanel_->model()->index(row, 0),
+                                            QItemSelectionModel::Select | QItemSelectionModel::Rows);
+        if (first < 0) first = row;
+        ++picked;
+    }
+    if (first >= 0) bomPanel_->scrollToItem(bomPanel_->item(first, 0));
+    return picked;
+}
+
 void MainWindow::refreshBomPanel() {
     if (!bomPanel_ || !doc_) return;
     // The same rows the bill-of-materials window shows: what the drawing calls for, plus the rows added
@@ -11502,12 +11538,6 @@ void MainWindow::buildCommands() {
         {{"buildwizard", "wizard", "harnesswizard"}, "Harness",
          "Mechanical harness wizard: end parts and the runs between them as bricks, previewed live",
          [this] { showMechWizard(); }},
-        {{"stepwizard", "oldwizard"}, "Harness",
-         "Step wizard: place one thing at a time, in any order, with the neighbours checked",
-         [this] { showStepWizard(); }},
-        {{"buildsteps", "guided", "harnesssteps"}, "Harness",
-         "Harness build steps (the older fixed eleven-step wizard)",
-         [this] { showHarnessSteps(); }},
         {{"voltagedrop", "vdrop", "vd"}, "Harness",
          "Voltage drop: what arrives at the load, wire by wire",
          [this] { showVoltageDropDialog(); }},

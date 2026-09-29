@@ -506,6 +506,12 @@ private:
     void refreshProperties();
     void refreshEntityList();
     void refreshBomPanel();
+public:
+    // ALT + THE POINTER OVER A PART: its lines of the bill picked in the BOM panel - one for a part, several for
+    // a run made of several (wires, braid, heatshrink). Returns how many lines were picked.
+    int bomHoverAt(const Vec2& world, bool alt);
+private:
+    bool bomHoverLit_ = false;
     // A Properties-panel field edit rebuilds the whole panel, which would destroy the
     // field the user just clicked into. Run the apply deferred, then re-focus the field
     // now at the same row — so a single click moves editing straight to the new field.

@@ -401,8 +401,8 @@ void BrickCanvas::setDimensionMode(bool on) {
 void BrickCanvas::moveSelection(double dCol, double dRow) {
     if (sel_.isEmpty()) return;
     QHash<QString, QPointF> from;
-    // What goes with them - the special in line with a part, a part in line with its special.
-    const QHash<QString, BrickFollow> follow = bricksFollowing(*d_, sel_);
+    // Nothing goes with them: with the drawing no longer placed by the pane, a brick is not tied to another.
+    const QHash<QString, BrickFollow> follow;
     for (auto it = follow.cbegin(); it != follow.cend(); ++it)
         if (Brick* b = d_->brick(it.key())) {
             from.insert(it.key(), QPointF(b->col, b->row));
@@ -602,6 +602,17 @@ void BrickCanvas::mousePressEvent(QMouseEvent* e) {
         return;
     }
     const bool shift = e->modifiers() & Qt::ShiftModifier;
+    // DRAWING ORDER against another brick: the one clicked now is the other.
+    if (!orderSource_.isEmpty()) {
+        const QString hit = brickAt(L(e->position()));
+        const QString source = orderSource_;
+        orderSource_.clear();
+        setCursor(Qt::ArrowCursor);
+        if (!hit.isEmpty() && hit != source) emit orderPicked(source, hit, orderAbove_);
+        else emit message(QStringLiteral("Drawing order left as it was"));
+        update();
+        return;
+    }
     // PUTTING A DIMENSION ON: the first brick clicked, then the second - and the dimension goes between them.
     if (dimMode_) {
         const QString hit = brickAt(L(e->position()));
@@ -663,8 +674,8 @@ void BrickCanvas::mousePressEvent(QMouseEvent* e) {
         startAt_.clear();
         for (const QString& id : sel_)
             if (const Brick* b = d_->brick(id)) startAt_.insert(id, QPointF(b->col, b->row));
-        // And what goes with them, each on the axes it follows.
-        follow_ = bricksFollowing(*d_, sel_);
+        // Only the bricks picked move: none is tied to another on the pane.
+        follow_.clear();
         for (auto it = follow_.cbegin(); it != follow_.cend(); ++it)
             if (const Brick* b = d_->brick(it.key())) startAt_.insert(it.key(), QPointF(b->col, b->row));
         startDy_.clear();
@@ -811,6 +822,41 @@ void BrickCanvas::fillContextMenu(QMenu& menu) {
             emit designChanged();
             update();
         });
+    // DRAWING ORDER: over everything, under everything, or over / under one other brick clicked next.
+    {
+        QMenu* order = menu.addMenu(QStringLiteral("Draw order"));
+        auto zRange = [this](int& lo, int& hi) {
+            lo = hi = 0;
+            for (const Brick& b : d_->bricks) {
+                lo = std::min(lo, b.z);
+                hi = std::max(hi, b.z);
+            }
+        };
+        order->addAction(QStringLiteral("Bring to front"), this, [this, zRange] {
+            int lo, hi;
+            zRange(lo, hi);
+            for (const QString& id : sel_)
+                if (Brick* b = d_->brick(id)) b->z = ++hi;
+            emit designChanged();
+        });
+        order->addAction(QStringLiteral("Send to back"), this, [this, zRange] {
+            int lo, hi;
+            zRange(lo, hi);
+            for (const QString& id : sel_)
+                if (Brick* b = d_->brick(id)) b->z = --lo;
+            emit designChanged();
+        });
+        auto against = [this](bool above) {
+            if (sel_.isEmpty()) return;
+            orderSource_ = sel_.back();
+            orderAbove_ = above;
+            setCursor(Qt::PointingHandCursor);
+            emit message(above ? QStringLiteral("Click the brick to draw it above")
+                               : QStringLiteral("Click the brick to draw it under"));
+        };
+        order->addAction(QStringLiteral("Above another brick…"), this, [against] { against(true); });
+        order->addAction(QStringLiteral("Under another brick…"), this, [against] { against(false); });
+    }
     menu.addAction(QStringLiteral("Duplicate"), this, [this] { duplicateSelection(); });
     menu.addAction(QStringLiteral("Unlink"), this, [this] {
         for (const QString& id : sel_)
@@ -1321,17 +1367,22 @@ void BrickWizardDialog::buildUi() {
         const Brick* en = sp == ba ? bb : ba;
         if (!brickIsSpecial(sp->type) || en->type != BrickType::End) return;
         if (!brickIsTied(*en)) return;   // a joint stands alone
-        // IN ONE LINE WITH ITS FIRST PART: a special linked to a part with nothing on its other end yet comes
-        // onto that part's row - they move up and down together from then on.
-        {
-            const QStringList starts = design_.startsOf(sp->id), finishes = design_.finishesOf(sp->id);
-            const QStringList otherSide = starts.contains(en->id) ? finishes : starts;
-            bool alone = otherSide.isEmpty();
-            for (const QString& o : design_.linksOf(sp->id))
-                if (const Brick* ob = design_.brick(o); ob && brickIsSpecial(ob->type)) alone = false;
-            if (alone)
-                if (Brick* s = design_.brick(sp->id)) s->row = en->row;
-        }
+        // The pane no longer places the drawing, so a special is not tied to its part there: each brick stays
+        // where it is put.
+    });
+    // ABOVE OR UNDER ANOTHER BRICK: just over it (or just under it), everything between moved along to make room.
+    connect(canvas_, &BrickCanvas::orderPicked, this, [this](const QString& source, const QString& other, bool above) {
+        Brick* s = design_.brick(source);
+        const Brick* o = design_.brick(other);
+        if (!s || !o) return;
+        const int at = above ? o->z + 1 : o->z;
+        for (Brick& b : design_.bricks)
+            if (b.id != source && b.z >= at) ++b.z;
+        s->z = at;
+        designChanged();
+        status_->setText(QStringLiteral("%1 drawn %2 %3").arg(brickTitle(*s), above ? QStringLiteral("above")
+                                                                                      : QStringLiteral("under"),
+                                                              brickTitle(*o)));
     });
     connect(canvas_, &BrickCanvas::dimensionPicked, this, [this](const QString& a, const QString& b) {
         design_.dims.push_back({a, b, dimSide_ && dimSide_->currentIndex() == 1});
@@ -1755,6 +1806,41 @@ QWidget* BrickWizardDialog::buildRunPage() {
     auto* inBtn = layerBtn("brickStackIn", QStringLiteral("Inward"));
     auto* rmBtn = layerBtn("brickStackRemove", QStringLiteral("Remove"));
     sv->addLayout(sb);
+    // THE PICKED LAYER'S PART NUMBER: from the parts list (parts of that layer's kind), or the same as the
+    // cables next along have.
+    {
+        auto* pr = new QHBoxLayout;
+        pr->addWidget(new QLabel(QStringLiteral("P/N"), stackBox));
+        layerPart_ = new QComboBox(stackBox);
+        layerPart_->setObjectName(QStringLiteral("brickLayerPart"));
+        layerPart_->setToolTip(QStringLiteral("The part number of the layer picked above, from the parts list"));
+        pr->addWidget(layerPart_, 1);
+        auto* same = new QPushButton(QStringLiteral("As neighbours"), stackBox);
+        same->setObjectName(QStringLiteral("brickLayerPartNeighbours"));
+        same->setToolTip(QStringLiteral("Every layer the same part as on the cables next along (parts between "
+                                        "them do not count)"));
+        pr->addWidget(same);
+        sv->addLayout(pr);
+        connect(stack_, &QListWidget::currentRowChanged, this, [this](int) { loadLayerPart(); });
+        connect(layerPart_, &QComboBox::activated, this, [this](int i) {
+            Brick* b = design_.brick(canvas_->selected());
+            const int row = stack_->currentRow();
+            if (!b || !brickIsSpecial(b->type) || row < 0 || row >= b->run.stack.size()) return;
+            const QString id = layerPart_->itemData(i).toString();
+            b->run.stackParts.insert(b->run.stack[row], id);
+            // On the bill, once.
+            if (!id.isEmpty() && bomItemOf(id) == 0) addPartToBom(id);
+            loadPanel();
+            refreshPreview();
+        });
+        connect(same, &QPushButton::clicked, this, [this] {
+            const int n = layerPartsFromNeighbours(canvas_->selected());
+            loadPanel();
+            refreshPreview();
+            status_->setText(n > 0 ? QStringLiteral("%1 layer(s) given the part the cables next along have").arg(n)
+                                   : QStringLiteral("No cable next along has a part for these layers"));
+        });
+    }
     stackBox->setTitle(QString());
     foldSection(QStringLiteral("Stack — from the inside out"), stackBox, cols, "brickFoldStack", 150);
     auto editStack = [this](auto fn) {
@@ -2197,7 +2283,11 @@ void BrickWizardDialog::loadPanel() {
     const int keep = stack_->currentRow();
     stack_->clear();
     for (int i = 0; i < r.stack.size(); ++i) {
-        auto* it = new QListWidgetItem(layerName(r.stack[i]), stack_);
+        // With its part number, where it has one.
+        QString text = layerName(r.stack[i]);
+        if (const LibraryPart* lp = catalog_.byId(r.stackParts.value(r.stack[i])))
+            text += QStringLiteral("  -  ") + (lp->mfrPn.isEmpty() ? lp->title() : lp->mfrPn);
+        auto* it = new QListWidgetItem(text, stack_);
         if (i == r.stack.size() - 1) {
             QFont f = it->font();
             f.setBold(true);
@@ -2206,6 +2296,7 @@ void BrickWizardDialog::loadPanel() {
         }
     }
     stack_->setCurrentRow(std::clamp(keep, 0, stack_->count() - 1));
+    loadLayerPart();
     loadLabels();
     loadNets();
     showActuals();
@@ -2578,6 +2669,56 @@ void BrickWizardDialog::writeRun() {
     r.dimTextBetween = dimTextBetween_->text().trimmed();
     canvas_->update();
     refreshPreview();
+}
+
+void BrickWizardDialog::loadLayerPart() {
+    if (!layerPart_) return;
+    const QSignalBlocker hush(layerPart_);
+    layerPart_->clear();
+    const Brick* b = design_.brick(canvas_->selected());
+    const int row = stack_ ? stack_->currentRow() : -1;
+    if (!b || !brickIsSpecial(b->type) || row < 0 || row >= b->run.stack.size()) {
+        layerPart_->setEnabled(false);
+        return;
+    }
+    const QString layer = b->run.stack[row];
+    const PartKind kind = layer == QLatin1String("cable")        ? PartKind::Cable
+                          : layer == QLatin1String("braid")      ? PartKind::ShieldBraid
+                          : layer == QLatin1String("heatshrink") ? PartKind::Heatshrink
+                                                                 : PartKind::Wire;
+    layerPart_->addItem(QStringLiteral("(none)"), QString());
+    for (const LibraryPart* p : catalog_.merged().ofKind(kind))
+        layerPart_->addItem(p->mfrPn.isEmpty() ? p->title() : p->mfrPn + QStringLiteral(" - ") + p->title(), p->id);
+    const int at = layerPart_->findData(b->run.stackParts.value(layer));
+    layerPart_->setCurrentIndex(at >= 0 ? at : 0);
+    layerPart_->setEnabled(true);
+}
+
+int BrickWizardDialog::layerPartsFromNeighbours(const QString& special) {
+    Brick* s = design_.brick(special);
+    if (!s || !brickIsSpecial(s->type)) return 0;
+    // The specials next along: joined to it, or on the other side of a part it is linked to.
+    QStringList near;
+    for (const QString& o : design_.linksOf(special)) {
+        const Brick* ob = design_.brick(o);
+        if (!ob) continue;
+        if (brickIsSpecial(ob->type)) near << o;
+        else
+            for (const QString& o2 : design_.linksOf(o))
+                if (o2 != special)
+                    if (const Brick* b2 = design_.brick(o2); b2 && brickIsSpecial(b2->type)) near << o2;
+    }
+    int given = 0;
+    for (const QString& layer : s->run.stack) {
+        if (!s->run.stackParts.value(layer).isEmpty()) continue;
+        for (const QString& n : near)
+            if (const Brick* nb = design_.brick(n); nb && !nb->run.stackParts.value(layer).isEmpty()) {
+                s->run.stackParts.insert(layer, nb->run.stackParts.value(layer));
+                ++given;
+                break;
+            }
+    }
+    return given;
 }
 
 QString BrickWizardDialog::bridgeValue() const {

@@ -6,6 +6,7 @@
 
 #include <QHash>
 #include <QJsonObject>
+#include <QMap>
 #include <QString>
 #include <QStringList>
 
@@ -114,6 +115,8 @@ struct BrickRunSpec {
     // THE NET OF EACH WIRE, numbered from the top down like the labels: taken from the schematic
     // where the part is on it, or given here.
     QStringList nets;
+    // THE PART NUMBER OF EACH LAYER OF THE STACK - "wires", "cable", "braid", "heatshrink" to a library part.
+    QMap<QString, QString> stackParts;
 
     // What is outermost, and so what the body is drawn as.
     QString outermost() const;
@@ -134,6 +137,8 @@ struct Brick {
     bool showDesignator = false;
     // MOVED UP OR DOWN ON THE DRAWING itself (dragged in the preview), off the row the pane gives it.
     double drawDyMm = 0.0;
+    // DRAWING ORDER: a brick with a higher figure is drawn over one with a lower.
+    int z = 0;
     double designatorHeightMm = 3.5;
     BrickRunSpec run;                      // for a special
     // HOW BIG AN END'S PART IS DRAWN, 1 = as drawn in the library. Its faces scale with it, so the wires

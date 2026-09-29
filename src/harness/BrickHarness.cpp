@@ -377,7 +377,7 @@ QJsonObject BrickDesign::toJson() const {
                       {"libPart", b.libPart}, {"name", b.name},         {"col", b.col},
                       {"row", b.row},      {"rot", b.rot},             {"balloon", b.balloon},
                       {"showDesignator", b.showDesignator}, {"designatorHeightMm", b.designatorHeightMm},
-                      {"drawDy", b.drawDyMm}};
+                      {"drawDy", b.drawDyMm}, {"z", b.z}};
         if (std::abs(b.scale - 1.0) > 1e-9) o.insert(QStringLiteral("scale"), b.scale);
         if (b.autoScale) o.insert(QStringLiteral("autoScale"), true);
         if (brickIsSpecial(b.type)) {
@@ -417,7 +417,13 @@ QJsonObject BrickDesign::toJson() const {
                                                    {"dimTrace", r.dimTrace},
                                                    {"dimSingle", r.dimSingle},
                                                    {"trunkWires", r.trunkWires},
-                                                   {"bridgeWires", r.bridgeWires}};
+                                                   {"bridgeWires", r.bridgeWires},
+                                                   {"stackParts", [&r] {
+                                                        QJsonObject sp;
+                                                        for (auto it = r.stackParts.cbegin(); it != r.stackParts.cend(); ++it)
+                                                            if (!it.value().isEmpty()) sp.insert(it.key(), it.value());
+                                                        return sp;
+                                                    }()}};
         }
         bs.append(o);
     }
@@ -453,6 +459,7 @@ BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
         b.rot = bo.value(QStringLiteral("rot")).toInt();
         b.balloon = bo.value(QStringLiteral("balloon")).toBool();
         b.drawDyMm = bo.value(QStringLiteral("drawDy")).toDouble(0.0);
+        b.z = bo.value(QStringLiteral("z")).toInt(0);
         b.showDesignator = bo.value(QStringLiteral("showDesignator")).toBool(false);
         b.designatorHeightMm = std::clamp(bo.value(QStringLiteral("designatorHeightMm")).toDouble(3.5), 0.5, 50.0);
         b.scale = std::clamp(bo.value(QStringLiteral("scale")).toDouble(1.0), 0.05, 20.0);
@@ -478,6 +485,10 @@ BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
             }
             s.transitions = endsFromKey(r.value(QStringLiteral("transitions")).toString());
             s.bridgeWires = r.value(QStringLiteral("bridgeWires")).toString();
+            {
+                const QJsonObject sp = r.value(QStringLiteral("stackParts")).toObject();
+                for (auto it = sp.begin(); it != sp.end(); ++it) s.stackParts.insert(it.key(), it.value().toString());
+            }
             s.transitionWidthMm = std::max(0.0, r.value(QStringLiteral("transitionWidthMm")).toDouble(0.0));
             s.dimTotal = r.value(QStringLiteral("dimTotal")).toBool();
             s.dimFans = r.value(QStringLiteral("dimFans")).toBool();
@@ -2137,6 +2148,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
     struct BridgeStart {
         Vec2 at;
         Vec2 dir;
+        double half = 0.0;   // half the width of the face it comes out of
     };
     QHash<QString, BridgeStart> bridgeStart;
     std::vector<size_t> runOrder;
@@ -2169,21 +2181,25 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         // It comes out of the fan ON THE SLANT, toward its own part - not straight on through the part the fan
         // goes into - and makes one bend into its part.
         bool bridgeOut = false;
+        bool bridgeAtA = false;
         if (brickIsBridge(s)) {
-            auto slantToward = [](const BridgeStart& st, const Vec2& target) {
+            // OUT OF THE CABLE'S END FACE: on the face - the square end of the cover - toward the side its part is
+            // on, both its lines leaving that face square to it, and turning at once toward its part.
+            auto onFace = [](const BridgeStart& st, const Vec2& target) {
                 Vec2 side = st.dir.perp();
                 if (dot(target - st.at, side) < 0.0) side = side * -1.0;
-                return (st.dir + side).normalized();
+                return st.at + side * (st.half * 0.55);
             };
             if (jA && bridgeStart.contains(br.a.node)) {
                 const BridgeStart st = bridgeStart.value(br.a.node);
-                la.centre = st.at;
-                fa.out = slantToward(st, lb.centre);
+                la.centre = onFace(st, lb.centre);
+                fa.out = st.dir;
                 bridgeOut = true;
+                bridgeAtA = true;
             } else if (jB && bridgeStart.contains(br.b.node)) {
                 const BridgeStart st = bridgeStart.value(br.b.node);
-                lb.centre = st.at;
-                fb.out = slantToward(st, la.centre);
+                lb.centre = onFace(st, la.centre);
+                fb.out = st.dir;
                 bridgeOut = true;
             }
         }
@@ -2223,8 +2239,8 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         const double fanB = !spreadB ? 0.0
                             : fanSpecB >= 0.0 ? fanSpecB
                                               : std::max(kWiresRunEnd, lb.lane * (wires - 1) / 2.0);
-        // Out of a fan a bridge wire turns at once: no straight lead of its own there.
-        const double lead = bridgeOut ? 3.0 : std::max({fanA, fanB, 10.0}) + std::max(0.0, r.kneeRadiusMm) + 5.0;
+        // Out of a cable's face a bridge wire turns at once: no straight lead of its own there.
+        const double lead = bridgeOut ? 1.0 : std::max({fanA, fanB, 10.0}) + std::max(0.0, r.kneeRadiusMm) + 5.0;
         std::vector<Vec2> route;
         if (isTrunk && br.freeStart) route = {splitAt[i], splitAt[i] + splitDir[i] * r.lengthMm};
         else if (isTrunk) route = {la.centre, splitAt[i]};
@@ -2237,26 +2253,19 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                 std::abs(colB - colA) > 1e-6 ? std::clamp((s.col - colA) / (colB - colA), 0.05, 0.95) : 0.5;
             // In line with one of its parts, the special's brick is the knee where the run leaves that line.
             const double rowA = gridOf(br.a.node).y, rowB = gridOf(br.b.node).y;
-            const int knee = std::abs(rowA - rowB) < 1e-6        ? -1
-                             : std::abs(s.row - rowA) < 0.25 ? 0
-                             : std::abs(s.row - rowB) < 0.25 ? 1
-                                                                 : -1;
-            route = routeBetweenFaces(la.centre, fa.out, lb.centre, fb.out, lead, 45.0, bendAt, knee);
+            int knee = std::abs(rowA - rowB) < 1e-6        ? -1
+                       : std::abs(s.row - rowA) < 0.25 ? 0
+                       : std::abs(s.row - rowB) < 0.25 ? 1
+                                                           : -1;
+            double bend = bendAt;
+            // A bridge wire turns as it leaves the cable's face.
+            if (bridgeOut) {
+                knee = bridgeAtA ? 0 : 1;
+                bend = bridgeAtA ? 0.0 : 1.0;
+            }
+            route = routeBetweenFaces(la.centre, fa.out, lb.centre, fb.out, lead, 45.0, bend, knee);
         }
         if (route.size() < 2) continue;
-        // Where each bridge wire on this run leaves it: where its fan starts at that end, going on out that way.
-        for (auto it = bridgeOff.cbegin(); it != bridgeOff.cend(); ++it) {
-            if (it.value().source != s.id || it.value().partThere.isEmpty()) continue;
-            const bool atB = br.b.node == it.value().partThere, atA = br.a.node == it.value().partThere;
-            if (!atA && !atB) continue;
-            std::vector<Vec2> rev = route;
-            if (atB) std::reverse(rev.begin(), rev.end());
-            const double fan = atB ? fanB : fanA;
-            Vec2 dir;
-            const Vec2 at = pointAlong(rev, std::max(0.0, fan), &dir);
-            // Heading out toward the part, the way the run goes at that end.
-            bridgeStart.insert(it.key(), BridgeStart{at, dir * -1.0});
-        }
         std::vector<Entity> made;
 
         const bool laidUp = s.type == BrickType::TwistedPair || s.type == BrickType::TwistedBundle;
@@ -2352,6 +2361,28 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             made.push_back(run);
         }
 
+        // Where each bridge wire on this run leaves it: its end face, where its fan starts at that end, going on out
+        // that way - and how wide the face is there, so the bridge comes out of the face and not its middle.
+        for (auto it = bridgeOff.cbegin(); it != bridgeOff.cend(); ++it) {
+            if (it.value().source != s.id || it.value().partThere.isEmpty()) continue;
+            const bool atB = br.b.node == it.value().partThere, atA = br.a.node == it.value().partThere;
+            if (!atA && !atB) continue;
+            std::vector<Vec2> rev = route;
+            if (atB) std::reverse(rev.begin(), rev.end());
+            const double fan = atB ? fanB : fanA;
+            Vec2 dir;
+            const Vec2 at = pointAlong(rev, std::max(0.0, fan), &dir);
+            const double half = std::max(bodyWidth / 2.0, packed * (wires - 1) / 2.0 + ww / 2.0);
+            bridgeStart.insert(it.key(), BridgeStart{at, dir * -1.0, half});
+        }
+        // THE LAYERS' PART NUMBERS go with the drawing, so what it is made of can be looked up on it.
+        if (!r.stackParts.isEmpty()) {
+            QJsonArray ids;
+            for (const QString& layer : r.stack)
+                if (!r.stackParts.value(layer).isEmpty()) ids.append(r.stackParts.value(layer));
+            if (!ids.isEmpty())
+                for (Entity& e : made) e.meta.insert(QStringLiteral("stackParts"), ids);
+        }
         // How long it REALLY is: drawn longer only for room to see, the dimensions say the real figure.
         const double total = stretchOf.contains(s.id) ? s.run.lengthMm : routeLength(route);
         // WHAT AUTO CAME TO, on the special's first run, so the window can show it.
@@ -2570,6 +2601,20 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             e.meta.insert(QStringLiteral("brickBranch"), static_cast<int>(i));
             if (isTrunk) e.meta.insert(QStringLiteral("brickTrunk"), true);
             out.entities.push_back(std::move(e));
+        }
+    }
+
+    // DRAWING ORDER: the bricks set to be drawn over others last, in the order they are told; the rest as built.
+    {
+        bool any = false;
+        for (const Brick& b : design.bricks) any = any || b.z != 0;
+        if (any) {
+            auto zOf = [&design](const Entity& e) {
+                const Brick* b = design.brick(e.meta.value(QStringLiteral("brickId")).toString());
+                return b ? b->z : 0;
+            };
+            std::stable_sort(out.entities.begin(), out.entities.end(),
+                             [&zOf](const Entity& x, const Entity& y) { return zOf(x) < zOf(y); });
         }
     }
 

@@ -98,6 +98,8 @@ signals:
     void bricksMoved(const QHash<QString, QPointF>& from);
     // Two bricks clicked while putting a dimension on: the dimension goes between them.
     void dimensionPicked(const QString& a, const QString& b);
+    // A brick clicked while setting another's drawing order: `source` goes above (or under) `other`.
+    void orderPicked(const QString& source, const QString& other, bool above);
     // A link made on the pane - so a part linked to a special can be put at the special's length.
     void linked(const QString& a, const QString& b);
     void designChanged();
@@ -148,6 +150,8 @@ private:
     void keepOnDrawing(const QHash<QString, QPointF>& from);
     bool dimMode_ = false;                 // putting a dimension on: two clicks, two bricks
     QString dimFirst_;
+    QString orderSource_;                  // setting a brick's drawing order: the next brick clicked is the other
+    bool orderAbove_ = true;
 public:
     void setDimensionMode(bool on);
     bool dimensionMode() const { return dimMode_; }
@@ -342,6 +346,14 @@ public:
     bool drawingEnlarged() const;
 private:
     QLabel* bridgeFrom_ = nullptr;       // and which special that is
+    // THE PICKED LAYER'S PART NUMBER, from the parts list - or copied from the cables next along.
+    QComboBox* layerPart_ = nullptr;
+    void loadLayerPart();
+public:
+    // The layers' part numbers of the specials next to this one - through a part (ignored) or a junction -
+    // copied onto it where it has the same layer. Returns how many layers were given a part.
+    int layerPartsFromNeighbours(const QString& special);
+private:
     QDoubleSpinBox* fanStart_ = nullptr;
     QDoubleSpinBox* fanFinish_ = nullptr;
     // WHETHER THERE IS A FAN at each end at all: off, the wires go in as the bundle (fan length nought).

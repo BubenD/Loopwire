@@ -434,6 +434,24 @@ int run_partspanel_tests() {
             win.addPartToBom(drawnId);
             QApplication::processEvents();
             check(bom->rowCount() == before + 1, "bom: a part added from the library is a line on it");
+            // ALT + THE POINTER OVER THE PART ON THE DRAWING: its line of the bill is picked; let go of Alt, unpicked.
+            {
+                Document* doc = win.editorForTest()->document();
+                Entity part;
+                part.type = EntityType::Line;
+                part.id = QStringLiteral("hover-part");
+                part.a = {5000.0, 5000.0};
+                part.b = {5040.0, 5000.0};
+                part.layer = QStringLiteral("0");
+                part.meta.insert(QStringLiteral("libPart"), drawnId);
+                doc->entities().push_back(part);
+                const int picked = win.bomHoverAt(Vec2{5020.0, 5000.0}, true);
+                check(picked == 1 && !bom->selectionModel()->selectedRows().isEmpty(),
+                      "bom hover: Alt over a part picks its line of the bill");
+                win.bomHoverAt(Vec2{5020.0, 5000.0}, false);
+                check(bom->selectionModel()->selectedRows().isEmpty(), "bom hover: and without Alt, nothing stays picked");
+                doc->entities().pop_back();
+            }
             int row = -1;
             for (int i = 0; i < bom->rowCount(); ++i)
                 if (bom->item(i, kDesc) && bom->item(i, kDesc)->text().contains(QStringLiteral("housing"))) row = i;
