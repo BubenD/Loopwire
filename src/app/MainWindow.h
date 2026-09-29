@@ -512,6 +512,11 @@ public:
     int bomHoverAt(const Vec2& world, bool alt);
 private:
     bool bomHoverLit_ = false;
+    std::function<QString(const QStringList&)> chooseContact_;
+public:
+    // Which contact goes on the bill with a connector that has several tied - asked, or answered by this (tests).
+    void setContactChooser(std::function<QString(const QStringList&)> fn) { chooseContact_ = std::move(fn); }
+private:
     // A Properties-panel field edit rebuilds the whole panel, which would destroy the
     // field the user just clicked into. Run the apply deferred, then re-focus the field
     // now at the same row — so a single click moves editing straight to the new field.

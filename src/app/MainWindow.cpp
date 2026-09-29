@@ -3484,12 +3484,40 @@ void MainWindow::addPartToBom(const QString& partId) {
     row.rowId = bomNextRowId(table.rows);
     row.fromDrawing = false;   // put there by hand, and so removable by hand
     table.rows.push_back(row);
-    // A CONNECTOR BOUGHT WITHOUT ITS CONTACTS comes onto the bill with them: the contact tied to it, one per way.
+    // A CONNECTOR BOUGHT WITHOUT ITS CONTACTS comes onto the bill with them: the contact tied to it, one per way -
+    // asked which when several are tied, and none added when one of them is on the bill already.
     QString withContacts;
-    if (part->kind == PartKind::Connector && !partIncludesPins(*part)) {
+    if (part->kind == PartKind::Connector && !partIncludesPins(*part) && !partIsWired(*part)) {
         const PartsLibrary merged = catalog.merged();
         const QStringList tied = tiedContactsOf(merged, part->id);
-        if (const LibraryPart* contact = tied.isEmpty() ? nullptr : merged.byId(tied.front())) {
+        bool already = false;
+        for (const BomRow& r : table.rows) already = already || tied.contains(r.partId);
+        QString pick = tied.isEmpty() || already ? QString() : tied.front();
+        if (!already && tied.size() > 1) {
+            if (chooseContact_) {
+                pick = chooseContact_(tied);
+            } else if (QGuiApplication::platformName() == QLatin1String("offscreen")) {
+                pick = tied.front();   // no screen to ask on: the first, the one the connector names
+            } else {
+                QStringList names;
+                for (const QString& id : tied) {
+                    const LibraryPart* c = merged.byId(id);
+                    names << (c ? (c->mfrPn.isEmpty() ? c->title() : c->mfrPn + QStringLiteral(" - ") + c->description)
+                                : id);
+                }
+                names << tr("(no contacts now)");
+                bool ok = false;
+                const QString chosen = QInputDialog::getItem(
+                    this, tr("Contacts for %1").arg(part->title()),
+                    tr("%1 is bought without its contacts. Which contact goes on the bill with it (%2 of them)?")
+                        .arg(part->title())
+                        .arg(part->wayCount()),
+                    names, 0, false, &ok);
+                const int at = names.indexOf(chosen);
+                pick = ok && at >= 0 && at < tied.size() ? tied[at] : QString();
+            }
+        }
+        if (const LibraryPart* contact = pick.isEmpty() ? nullptr : merged.byId(pick)) {
             BomRow c = bomRowFromPart(*contact, part->wayCount());
             c.rowId = bomNextRowId(table.rows);
             c.fromDrawing = false;

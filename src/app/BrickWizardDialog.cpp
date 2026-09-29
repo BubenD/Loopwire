@@ -520,7 +520,14 @@ void BrickCanvas::paintEvent(QPaintEvent*) {
         f.setPointSizeF(7.5);
         p.setFont(f);
         QString sub;
-        if (end) sub = b.libPart.isEmpty() ? QStringLiteral("no part yet") : b.libPart;
+        // ITS PART NUMBER - not the library's own id for the part ("connector-187" said nothing to anybody).
+        if (end) {
+            const LibraryPart* lp = d_->catalog && !b.libPart.isEmpty() ? d_->catalog->byId(b.libPart) : nullptr;
+            sub = b.libPart.isEmpty() ? QStringLiteral("no part yet")
+                  : !lp               ? b.libPart
+                  : !lp->mfrPn.isEmpty() ? lp->mfrPn
+                                         : lp->title();
+        }
         else sub = QStringLiteral("%1 w · %2").arg(b.run.wires).arg(b.run.lengthMm, 0, 'f', 0);
         const QRectF bottom(r.left() + 3, r.center().y(), r.width() - 6, r.height() / 2.0 - 2);
         p.setPen(QColor(0xb8, 0xc0, 0xcc));
@@ -3253,7 +3260,63 @@ bool BrickWizardDialog::addPartToBom(const QString& partId, double qty) {
     doc->setDirty(true);
     emit bomChanged();
     refreshBom();
+    addContactsFor(*p);
     return true;
+}
+
+void BrickWizardDialog::addContactsFor(const LibraryPart& connector) {
+    if (connector.kind != PartKind::Connector || partIncludesPins(connector) || partIsWired(connector)) return;
+    const PartsLibrary merged = catalog_.merged();
+    const QStringList tied = tiedContactsOf(merged, connector.id);
+    // One of them already on the bill: nothing more to add.
+    for (const QString& id : tied)
+        if (bomItemOf(id) > 0) return;
+    if (tied.isEmpty()) {
+        status_->setText(QStringLiteral("%1 needs contacts - none are tied to it; tie them in the parts library")
+                             .arg(connector.title()));
+        return;
+    }
+    QString pick = tied.front();
+    // SEVERAL: which one - asked.
+    if (tied.size() > 1) {
+        if (chooseContact_) {
+            pick = chooseContact_(tied);
+        } else if (QGuiApplication::platformName() == QLatin1String("offscreen")) {
+            pick = tied.front();   // no screen to ask on: the first, the one the connector names
+        } else {
+            QStringList names;
+            for (const QString& id : tied) {
+                const LibraryPart* c = merged.byId(id);
+                names << (c ? (c->mfrPn.isEmpty() ? c->title() : c->mfrPn + QStringLiteral(" - ") + c->description) : id);
+            }
+            names << QStringLiteral("(no contacts now)");
+            bool ok = false;
+            const QString chosen = QInputDialog::getItem(
+                this, QStringLiteral("Contacts for %1").arg(connector.title()),
+                QStringLiteral("%1 is bought without its contacts. Which contact goes on the bill with it (%2 of them)?")
+                    .arg(connector.title())
+                    .arg(connector.wayCount()),
+                names, 0, false, &ok);
+            const int at = names.indexOf(chosen);
+            pick = ok && at >= 0 && at < tied.size() ? tied[at] : QString();
+        }
+    }
+    if (pick.isEmpty()) return;
+    const LibraryPart* contact = merged.byId(pick);
+    if (!contact) return;
+    Document* doc = document();
+    if (!doc) return;
+    BomTable table;
+    table.fromJson(doc->bom());
+    BomRow row = bomRowFromPart(*contact, connector.wayCount());
+    row.rowId = bomNextRowId(table.rows);
+    table.rows.push_back(row);
+    doc->bom() = table.toJson();
+    doc->setDirty(true);
+    emit bomChanged();
+    refreshBom();
+    status_->setText(QStringLiteral("%1 on the bill, with %2 x %3").arg(connector.title()).arg(connector.wayCount())
+                         .arg(contact->mfrPn.isEmpty() ? contact->title() : contact->mfrPn));
 }
 
 void BrickWizardDialog::place() {

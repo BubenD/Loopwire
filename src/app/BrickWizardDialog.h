@@ -200,6 +200,9 @@ public:
     // is not added without asking; `ask` answers the question (the window asks the user when none is
     // set - a test sets one). Returns whether a line was added.
     bool addPartToBom(const QString& partId, double qty = 1.0);
+    // WHICH CONTACT, when a connector bought without its contacts goes on the bill and several are tied to it:
+    // asked (a list to pick from), or answered by this - for a test. Returns the contact's id, or empty for none.
+    void setContactChooser(std::function<QString(const QStringList& contactIds)> fn) { chooseContact_ = std::move(fn); }
     // The line of the bill a part is on, 1-based, or 0.
     int bomItemOf(const QString& partId) const;
     void setAsk(std::function<bool(const QString& question)> ask) { ask_ = std::move(ask); }
@@ -383,6 +386,9 @@ private:
     QToolButton* dimTool_ = nullptr;              // putting a dimension on by hand
     QComboBox* dimSide_ = nullptr;                // (the part's own Dimensions side, on its panel)
     QComboBox* partDimSide_ = nullptr;            // the picked part's dimensions: above it or below it
+    std::function<QString(const QStringList&)> chooseContact_;
+    // A connector just put on the bill: its contacts with it, as the connector needs them (one per way).
+    void addContactsFor(const LibraryPart& connector);
     // WHAT GOES WITH IT: a connector bought without its contacts needs contacts on the bill - said, with the
     // contacts tied to it offered.
     QLabel* compat_ = nullptr;

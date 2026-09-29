@@ -35,6 +35,7 @@
 #include "harness/Bom.h"
 #include "io/Dwx.h"
 #include <QDir>
+#include <QFile>
 #include <QKeyEvent>
 #include <QLineEdit>
 
@@ -2618,6 +2619,69 @@ void testRoundThirteen() {
     }
 }
 
+// A CONNECTOR ON THE BILL BRINGS ITS CONTACTS: several tied, the one chosen, one per way; one already on the bill,
+// nothing more.
+void testConnectorContactsOnBill() {
+    const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_bill_contacts.plb"));
+    QFile::remove(libFile);
+    {
+        PartsLibrary lib;
+        LibraryPart conn;
+        conn.id = QStringLiteral("BILL-CONN");
+        conn.kind = PartKind::Connector;
+        conn.mfrPn = QStringLiteral("HOUSING-6");
+        conn.params[QStringLiteral("pins")] = QStringLiteral("6");
+        LibraryPart a;
+        a.id = QStringLiteral("BILL-PIN-A");
+        a.kind = PartKind::ContactPin;
+        a.mfrPn = QStringLiteral("PIN-A");
+        LibraryPart b = a;
+        b.id = QStringLiteral("BILL-PIN-B");
+        b.mfrPn = QStringLiteral("PIN-B");
+        lib.parts = {conn, a, b};
+        addContactTie(lib, conn.id, a.id);
+        addContactTie(lib, conn.id, b.id);
+        lib.save(libFile);
+    }
+    PartsCatalog cat;
+    cat.openRemembered();
+    cat.connectLibrary(libFile);
+    cat.remember();
+    {
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        BrickWizardDialog dlg(&ed);
+        QStringList offered;
+        dlg.setContactChooser([&offered](const QStringList& ids) {
+            offered = ids;
+            return ids.value(1);   // the second of them
+        });
+        check(dlg.addPartToBom(QStringLiteral("BILL-CONN")), "bill contacts: the connector goes on the bill");
+        BomTable table;
+        table.fromJson(doc.bom());
+        double qtyB = 0.0;
+        bool hasA = false;
+        for (const BomRow& r : table.rows) {
+            if (r.partId == QStringLiteral("BILL-PIN-B")) qtyB = r.qty;
+            if (r.partId == QStringLiteral("BILL-PIN-A")) hasA = true;
+        }
+        std::printf("  bill contacts: offered %d, PIN-B x %.0f\n", static_cast<int>(offered.size()), qtyB);
+        check(offered.size() == 2 && std::abs(qtyB - 6.0) < 1e-9 && !hasA,
+              "bill contacts: several tied, asked which - the one chosen goes on, one per way");
+        const size_t rows = table.rows.size();
+        offered.clear();
+        dlg.setAsk([](const QString&) { return true; });   // "add it again?" - yes
+        dlg.addPartToBom(QStringLiteral("BILL-CONN"));
+        table.fromJson(doc.bom());
+        check(table.rows.size() == rows + 1 && offered.isEmpty(),
+              "bill contacts: a contact already on the bill - nothing more is added, and nothing is asked");
+    }
+    cat.disconnectLibrary(libFile);
+    cat.remember();
+    QFile::remove(libFile);
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -2644,6 +2708,7 @@ int run_brickharness_tests() {
     testRoundEleven();
     testRoundTwelve();
     testRoundThirteen();
+    testConnectorContactsOnBill();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

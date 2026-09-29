@@ -215,6 +215,8 @@ int run_partspanel_tests() {
     }
 
     MainWindow win;
+
+    win.setContactChooser([](const QStringList&) { return QString(); });   // never a question in a test
     QTreeWidget* list = partsList(win);
     check(list != nullptr, "panel: the parts panel is a table of parts");
     if (!list) {
@@ -1269,6 +1271,8 @@ int run_partspanel_tests() {
         cat.remember();
 
         MainWindow win;
+
+        win.setContactChooser([](const QStringList&) { return QString(); });   // never a question in a test
         win.resize(1280, 820);
         win.show();
         QApplication::processEvents();
@@ -1388,6 +1392,8 @@ int run_partspanel_tests() {
         cat.remember();
 
         MainWindow win;
+
+        win.setContactChooser([](const QStringList&) { return QString(); });   // never a question in a test
         win.resize(1200, 800);
         win.show();
         QApplication::processEvents();
@@ -1450,6 +1456,7 @@ int run_partspanel_tests() {
         // to say which. The commands are on the right-click menu, where a person looks for them, under a
         // submenu of their own - and greyed out with nothing picked, because they act on a selection.
         MainWindow win;
+        win.setContactChooser([](const QStringList&) { return QString(); });   // never a question in a test
         win.resize(1200, 800);
         win.show();
         QApplication::processEvents();
@@ -1561,6 +1568,8 @@ int run_partspanel_tests() {
         cat.remember();
 
         MainWindow win;
+
+        win.setContactChooser([](const QStringList&) { return QString(); });   // never a question in a test
         win.resize(1280, 820);
         win.show();
         QApplication::processEvents();
@@ -1617,6 +1626,7 @@ int run_partspanel_tests() {
         // them too, because nothing looked at the Shift. Which left no way at all to type a callout of two
         // lines: the one key everybody reaches for did the opposite of what it does everywhere else.
         MainWindow win;
+        win.setContactChooser([](const QStringList&) { return QString(); });   // never a question in a test
         win.resize(1200, 800);
         win.show();
         QApplication::processEvents();
@@ -1699,6 +1709,8 @@ int run_partspanel_tests() {
         cat.remember();
 
         MainWindow win;
+
+        win.setContactChooser([](const QStringList&) { return QString(); });   // never a question in a test
         win.resize(1400, 860);
         win.show();
         QApplication::processEvents();
@@ -1877,6 +1889,8 @@ int run_partspanel_tests() {
         cat.remember();
 
         MainWindow win;
+
+        win.setContactChooser([](const QStringList&) { return QString(); });   // never a question in a test
         win.resize(1280, 860);
         win.show();
         QApplication::processEvents();
@@ -2195,6 +2209,8 @@ int run_partspanel_tests() {
         cat.remember();
 
         MainWindow win;
+
+        win.setContactChooser([](const QStringList&) { return QString(); });   // never a question in a test
         win.resize(1300, 860);
         win.show();
         QApplication::processEvents();
@@ -2243,6 +2259,7 @@ int run_partspanel_tests() {
         // the same drawing seen from the face or from the wires - and "mirrored" says how the second one was
         // made rather than what it shows.
         MainWindow win;
+        win.setContactChooser([](const QStringList&) { return QString(); });   // never a question in a test
         win.resize(1300, 860);
         win.show();
         QApplication::processEvents();
@@ -2290,6 +2307,8 @@ int run_partspanel_tests() {
         cat.remember();
 
         MainWindow win;
+
+        win.setContactChooser([](const QStringList&) { return QString(); });   // never a question in a test
         win.resize(1300, 860);
         win.show();
         QApplication::processEvents();
@@ -2400,6 +2419,7 @@ int run_partspanel_tests() {
     {
         // Two views of one list. A column left off the sheet has no business in either of them.
         MainWindow win;
+        win.setContactChooser([](const QStringList&) { return QString(); });   // never a question in a test
         win.resize(1300, 860);
         win.show();
         QApplication::processEvents();
