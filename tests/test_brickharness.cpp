@@ -1787,6 +1787,74 @@ void testPartSizeByEntry() {
     }
 }
 
+// A FERRULE MARKED ONLY WITH A CONNECTION POINT, its arrow running into the body (how a new part starts marked):
+// in the harness its connection is on the side its brick is joined on, and the wires do not run through it.
+void testConnectPointFacesBrick() {
+    PartsCatalog cat;
+    cat.setRemembering(false);
+    QString pid;
+    {
+        LibraryPart& p = cat.active().add(PartKind::Ferrule);
+        pid = p.id;
+        Entity body;
+        body.type = EntityType::Polyline;
+        body.points = {{0, -3}, {20, -3}, {20, 3}, {0, 3}, {0, -3}};
+        body.a = body.points.front();
+        body.b = body.points.back();
+        p.mechanical = partDrawingFromEntities({body});
+        p.hasConnect = true;
+        p.connectPoint = Vec2{0, 0};
+        p.connectAngleRad = 0.0;   // into the body
+    }
+    BrickDesign d;
+    d.catalog = &cat;
+    const QString f = d.addBrick(BrickType::End, PartKind::Ferrule, 0, 0);
+    d.brick(f)->libPart = pid;
+    const BrickShape s = d.shapeOf(*d.brick(f));
+    Bounds bb;
+    for (const Entity& e : s.drawing) bb.expand(e.bounds());
+    std::printf("  ferrule: face at %.1f looking %.0f, the body %.1f..%.1f\n", s.faceMid.empty() ? 0.0 : s.faceMid[0].x,
+                s.faceOut.empty() ? 0.0 : s.faceOut[0].x, bb.min.x, bb.max.x);
+    check(s.ports() == 1 && s.faceOut[0].x > 0.5 && std::abs(s.faceMid[0].x - bb.max.x) < 1e-6,
+          "ferrule: its connection is on the end its brick's port looks out of, not the far end");
+    // Joined on the left of a run: the wires come in from the right, onto the connection.
+    const QString x = d.addBrick(BrickType::End, PartKind::Connector, 3, 0);
+    const QString r = d.addBrick(BrickType::Fanout, PartKind::Wire, 1.5, 0);
+    d.connect(f, r);
+    d.connect(r, x);
+    const BrickBuild b = buildBrickHarness(d, &cat);
+    const BrickFace face = b.faces.value(QStringLiteral("%1:0").arg(f));
+    Bounds part;
+    for (const Entity& e : b.entities)
+        if (e.meta.value(QStringLiteral("brickId")).toString() == f && e.type == EntityType::Polyline) part.expand(e.bounds());
+    check(part.valid && face.out.x > 0.5 && std::abs(face.centre.x - part.max.x) < 1e-6,
+          "ferrule: on the drawing, the run meets it at its connection, facing the run");
+
+    // NEAR AND FAR SAY THE WAY, whatever the arrow says; the CONNECTION POINT is where it sits; the ENTRY FACE is
+    // only where the wires land. Near on the left, far on the right, the arrow pointing right, the face in the middle.
+    {
+        LibraryPart& p = *cat.active().byId(pid);
+        p.hasNearPoint = true;
+        p.nearPoint = Vec2{0, 0};
+        p.hasFarPoint = true;
+        p.farPoint = Vec2{20, 0};
+        p.outputs = {{{8, -2}, {8, 2}}};
+        d.shapeCache.clear();
+        const BrickShape t = d.shapeOf(*d.brick(f));
+        Bounds tb;
+        for (const Entity& e : t.drawing) tb.expand(e.bounds());
+        std::printf("  marks: near %.1f far %.1f, face %.1f looking %.0f, body %.1f..%.1f\n", t.nearAt.x, t.farAt.x,
+                    t.faceMid.empty() ? 0.0 : t.faceMid[0].x, t.faceOut.empty() ? 0.0 : t.faceOut[0].x, tb.min.x, tb.max.x);
+        check(t.haveEnds && t.nearAt.x > t.farAt.x && std::abs(t.nearAt.x - tb.max.x) < 1e-6,
+              "marks: near-far turned to look out of the port - the near end toward the harness");
+        check(t.ports() == 1 && t.faceOut[0].x > 0.5 && t.faceMid[0].x < tb.max.x - 1.0 && t.faceMid[0].x > tb.min.x + 1.0,
+              "marks: and the wires land on the entry face where it is on the part, not at its end");
+        p.hasNearPoint = p.hasFarPoint = false;
+        p.outputs.clear();
+        d.shapeCache.clear();
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -1805,6 +1873,7 @@ int run_brickharness_tests() {
     testRoundSix();
     testRoundSeven();
     testPartSizeByEntry();
+    testConnectPointFacesBrick();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

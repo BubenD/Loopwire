@@ -529,8 +529,14 @@ QJsonArray withWiredWires(const LibraryPart& part, bool mechanical, const QJsonA
         for (const Entity& e : ents) body.expand(e.bounds());
         if (!body.valid) return drawing;
         Vec2 dir{0.0, 0.0};
-        if (part.hasConnect) dir = Vec2{std::cos(part.connectAngleRad), std::sin(part.connectAngleRad)};
-        else if (part.hasNearPoint && part.hasFarPoint) dir = (part.nearPoint - part.farPoint).normalized();
+        if (part.hasConnect) {
+            // The arrow runs along the part, marked either way round (into the body, as a new part starts, or out
+            // of it): the harness leaves the connection point on the side AWAY from the body.
+            dir = Vec2{std::cos(part.connectAngleRad), std::sin(part.connectAngleRad)};
+            if (dot(part.connectPoint - body.center(), dir) < 0.0) dir = dir * -1.0;
+        } else if (part.hasNearPoint && part.hasFarPoint) {
+            dir = (part.nearPoint - part.farPoint).normalized();
+        }
         const bool haveDir = dir.lengthSq() > 1e-12;
         // THE ENTRY FACE the fan fits in: the part's first output face; else across the end of the part the
         // harness leaves by, as wide as the drawing is there; else its right-hand end.

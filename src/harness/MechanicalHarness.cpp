@@ -1403,7 +1403,18 @@ std::vector<Entity> placedPartDrawing(const LibraryPart& partAsStored, const Vec
     // MARKED WITH A CONNECTION POINT AND A DIRECTION - the same pair a default model is placed by: the
     // drawing is turned so that direction runs along the run, and set down so that point lands on the joint.
     if (part.hasConnect) {
-        const double turn = dirRad - part.connectAngleRad;
+        double turn = dirRad - part.connectAngleRad;
+        // AND THE BODY ON THE FAR SIDE FROM THE HARNESS, when the caller says which side that is - as a part set
+        // down by its face is. The arrow of a connection point runs along the part, and it is marked either way
+        // round: from the connection INTO the body (how a new part starts marked) as often as out of it. Turned
+        // by the arrow alone, a ferrule marked the first way came down with its body over the wires and its
+        // connection on the wrong end, facing away from the brick it was joined to.
+        if (outward.length() > 1e-9) {
+            const Vec2 off = mid - part.connectPoint;
+            const double c = std::cos(turn), s = std::sin(turn);
+            const Vec2 turned{off.x * c - off.y * s, off.x * s + off.y * c};
+            if (dot(turned, outward) < 0.0) turn += M_PI;
+        }
         for (Entity& e : out) {
             if (std::abs(turn) > 1e-9) rotateEntity(e, part.connectPoint, turn);
             translateEntity(e, at - part.connectPoint);

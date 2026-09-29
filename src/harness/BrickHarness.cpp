@@ -896,6 +896,81 @@ BrickShape endShapeAsDrawn(const Brick& b, const PartsCatalog* catalog) {
     BrickShape s;
     // Placed at its size (placeLibraryPartAtFace sizes a part drawn to proportion by its entry face).
     const LibraryPart* part = catalog && !b.libPart.isEmpty() ? catalog->byId(b.libPart) : nullptr;
+    // A BRICK SETS ITS PART DOWN BY ITS MARKS, each meaning one thing:
+    //   the CONNECTION POINT is where the part is - the point on the joint;
+    //   NEAR and FAR say which way it faces - from the far end (the back of it) to the near end (the side the
+    //     harness is on), which is turned to look out of the brick's port;
+    //   the ENTRY FACE is where the cable or the fanout lands on it, and nothing else.
+    // Set down by its entry face, a part whose face was not where it connects - or whose body lay the other side
+    // of the face from how the brick was joined - came down facing the wrong way. Where a part has no near and
+    // far, the arrow of its connection point says the way, read as leaving the body.
+    if (part && part->hasMechanical() && (part->hasConnect || (part->hasNearPoint && part->hasFarPoint))) {
+        const LibraryPart sized = partSized(*part);
+        Bounds raw;
+        for (const Entity& e : partDrawingEntities(sized.mechanical)) raw.expand(e.bounds());
+        Vec2 toHarness{0.0, 0.0};
+        if (sized.hasNearPoint && sized.hasFarPoint && distance(sized.nearPoint, sized.farPoint) > 1e-9) {
+            toHarness = (sized.nearPoint - sized.farPoint).normalized();
+        } else if (sized.hasConnect) {
+            toHarness = Vec2{std::cos(sized.connectAngleRad), std::sin(sized.connectAngleRad)};
+            if (raw.valid && dot(sized.connectPoint - raw.center(), toHarness) < 0.0) toHarness = toHarness * -1.0;
+        }
+        if (toHarness.lengthSq() > 1e-12) {
+            const bool many = sized.outputs.size() >= 2;
+            const Vec2 look = many ? Vec2{-1.0, 0.0} : Vec2{1.0, 0.0};   // the first port: in on a joint, out on an end
+            const Vec2 anchor = sized.hasConnect ? sized.connectPoint : sized.nearPoint;
+            // Set down by the connection point, turned so near-far looks out of the port: the marks rewritten to
+            // exactly that, the faces kept aside (they only say where the wires land), no legacy line to follow.
+            LibraryPart q = sized;
+            q.outputs.clear();
+            q.hasConnect = true;
+            q.connectPoint = anchor;
+            q.connectAngleRad = std::atan2(toHarness.y, toHarness.x);
+            {
+                std::vector<Entity> ents = partDrawingEntities(q.mechanical);
+                for (Entity& e : ents) e.meta.remove(QLatin1String(kConnectionLineKey));
+                q.mechanical = partDrawingFromEntities(ents);
+            }
+            MechDrawOptions opt;
+            const double dirRad = std::atan2(look.y, look.x);
+            const PlacedLibraryPart placed = placeLibraryPartAtFace(q, Vec2{0.0, 0.0}, dirRad, Vec2{0.0, 0.0}, opt);
+            const double turn = dirRad - q.connectAngleRad;
+            const double tc = std::cos(turn), ts = std::sin(turn);
+            auto put = [&](const Vec2& p) {
+                const Vec2 d = p - anchor;
+                return Vec2{d.x * tc - d.y * ts, d.x * ts + d.y * tc};
+            };
+            Bounds bb;
+            for (const Entity& e : placed.entities) bb.expand(e.bounds());
+            const Vec2 c = bb.valid ? (bb.min + bb.max) * 0.5 : Vec2{0.0, 0.0};
+            s.drawing = placed.entities;
+            for (Entity& e : s.drawing) translateEntity(e, c * -1.0);
+            s.half = bb.valid ? (bb.max - bb.min) * 0.5 : Vec2{12.0, 10.0};
+            if (!sized.outputs.empty()) {
+                for (size_t i = 0; i < sized.outputs.size(); ++i) {
+                    const Vec2 a = put(sized.outputs[i].a) - c, e = put(sized.outputs[i].b) - c;
+                    const Vec2 mid = (a + e) * 0.5;
+                    Vec2 n = (e - a).perp().normalized();
+                    if (i == 0) n = look;
+                    else if (dot(n, mid) < 0.0) n = n * -1.0;   // away from the middle of the part
+                    s.faceMid.push_back(mid);
+                    s.faceOut.push_back(n);
+                    s.faceLen.push_back(std::max(0.5, distance(a, e)));
+                }
+            } else {
+                // No entry face marked: the wires land at the connection point, across the part's end.
+                s.faceMid.push_back(c * -1.0);
+                s.faceOut.push_back(look);
+                s.faceLen.push_back(std::max(0.5, std::abs(look.x) > 0.5 ? s.half.y * 2.0 * 0.8 : s.half.x * 2.0 * 0.8));
+            }
+            if (sized.hasNearPoint && sized.hasFarPoint) {
+                s.haveEnds = true;
+                s.nearAt = put(sized.nearPoint) - c;
+                s.farAt = put(sized.farPoint) - c;
+            }
+            return s;
+        }
+    }
     if (part && part->hasMechanical()) {
         // THE LIBRARY PART, set down by its first face: looking right when it has only that one, left
         // when it has more - the way in of a joint - and every other face wherever the part has it.

@@ -2464,7 +2464,7 @@ int run_partspanel_tests() {
             left.outputs.clear();
             left.hasConnect = true;
             left.connectPoint = Vec2{0, 0};
-            left.connectAngleRad = M_PI;
+            left.connectAngleRad = 0.0;   // the arrow into the body, as a new part starts marked
             bool away = true, fitted = true;
             int n = 0;
             for (const Entity& e : partDrawingEntities(withWiredWires(left, true, left.mechanical))) {
