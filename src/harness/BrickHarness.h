@@ -164,9 +164,17 @@ struct BrickShape {
     int ports() const { return static_cast<int>(faceOut.size()); }
 };
 
+// A DIMENSION PUT ON BY HAND: between two bricks, above or below them.
+struct BrickDim {
+    QString a;
+    QString b;
+    bool below = false;
+};
+
 struct BrickDesign {
     std::vector<Brick> bricks;
     std::vector<BrickLink> links;
+    std::vector<BrickDim> dims;
     // Where library parts are read from - for how many faces an end has, and where. Not saved.
     const PartsCatalog* catalog = nullptr;
     // How much of a cable's width the wires of a fan joined to it enter across (Options, Drawing:
@@ -273,6 +281,9 @@ int syncBridgeWires(BrickDesign& d);
 // Unlike any other special it may join a cable's end that already has its parts - the rest of the wires go on
 // to them.
 bool brickIsBridge(const Brick& b);
+// AN END PART TIED TO ITS SPECIALS - put at their length, moving in line with them. A JOINT stands alone: it is
+// placed where it is put and ties nothing.
+bool brickIsTied(const Brick& b);
 // Made into a bridge wire: one wire, no cover, taking wire 1 until told otherwise.
 void makeBridgeWire(Brick& b);
 

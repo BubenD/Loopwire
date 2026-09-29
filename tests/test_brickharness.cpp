@@ -999,7 +999,7 @@ void testRoundFive() {
     dlg.show();
     QApplication::processEvents();
     // 10. A brick from the palette lands in view.
-    const QString x = dlg.addFromPalette(QStringLiteral("end|connector"));
+    const QString x = dlg.addFromPalette(brickTypeKey(BrickType::End) + QStringLiteral("|") + partKindKey(PartKind::Connector));
     const QString f = dlg.addFromPalette(QStringLiteral("fanout|wire"));
     BrickCanvas* canvas = dlg.canvas();
     check(QRectF(canvas->rect()).intersects(canvas->brickRect(*dlg.design().brick(x))) &&
@@ -1242,7 +1242,7 @@ void testDialog() {
 
     // Two more from the palette, and LINKED by dragging from a brick's port onto another.
     const QString run = dlg.addFromPalette(QStringLiteral("fanout|wire"));
-    const QString f1 = dlg.addFromPalette(QStringLiteral("end|ferrule"));
+    const QString f1 = dlg.addFromPalette(brickTypeKey(BrickType::End) + QStringLiteral("|") + partKindKey(PartKind::Ferrule));
     canvas->update();
     auto drag = [&](const QString& from, const QString& to, Qt::KeyboardModifiers mods) {
         const Brick* a = dlg.design().brick(from);
@@ -2067,16 +2067,30 @@ void testRoundEight() {
         syncBridgeWires(d);
         check(d.brick(br)->run.wires == 2 && d.link(c, br) && d.link(c, br)->wires == 2,
               "bridge wire: it takes the two wires it is told, and the cable gives them to it");
-        int toX1 = -1, toBridge = -1;
-        for (const Entity& e : buildBrickHarness(d, nullptr).entities)
-            if (e.type == EntityType::TwistedPair && e.meta.value(QStringLiteral("brickId")).toString() == c &&
-                e.points.size() > 2) {
-                const int n = e.meta.value(QStringLiteral("twistWires")).toInt();
-                if (e.points.back().y > -1.0) toX1 = n;
-                else toBridge = n;
+        // OUT OF THE CABLE'S FAN, not a split of it: the cable runs whole to its connector with the wires left,
+        // and the bridge starts on the cable where its fan begins.
+        int cableRuns = 0, toX1 = -1;
+        std::vector<Vec2> cableRoute, bridgeRoute;
+        for (const Entity& e : buildBrickHarness(d, nullptr).entities) {
+            if (e.type != EntityType::TwistedPair) continue;
+            const QString id = e.meta.value(QStringLiteral("brickId")).toString();
+            if (id == c) {
+                ++cableRuns;
+                toX1 = e.meta.value(QStringLiteral("twistWires")).toInt();
+                cableRoute = e.points;
+            } else if (id == br) {
+                bridgeRoute = e.points;
             }
-        std::printf("  bridge wire: %d wire(s) on to the connector, %d into the bridge\n", toX1, toBridge);
-        check(toX1 == 2 && toBridge == 2, "bridge wire: the cable splits - the rest on to its part, the two into the bridge");
+        }
+        double off = 1e300;
+        if (!bridgeRoute.empty())
+            for (size_t k = 0; k + 1 < cableRoute.size(); ++k)
+                off = std::min(off, closestPointOnSegment(bridgeRoute.front(), cableRoute[k], cableRoute[k + 1]).distance);
+        std::printf("  bridge wire: cable in %d run(s), %d wire(s) on to the connector, the bridge %.2f off the cable\n",
+                    cableRuns, toX1, off);
+        check(cableRuns == 1 && toX1 == 2, "bridge wire: the cable is not split - the rest of its wires go on to its part");
+        check(off < 1e-6 && !cableRoute.empty() && bridgeRoute.front().x < cableRoute.back().x,
+              "bridge wire: and the bridge comes out of the cable where its fan begins");
         // An ordinary special still may not share a cable's end.
         const QString fan = d.addBrick(BrickType::Fanout, PartKind::Wire, 3, -1);
         check(!d.connect(c, fan, &why), "bridge wire: an ordinary special still does not share an end already used");
@@ -2115,6 +2129,129 @@ void testRoundEight() {
     }
 }
 
+// ROUND NINE: balloons touch their part, one height for every designator, joints stand alone, undo and redo,
+// dimensions put on by hand.
+void testRoundNine() {
+    // A BALLOON'S LEADER ENDS ON THE PART - here a tall piece and a low one, the box's top middle empty paper.
+    {
+        PartsCatalog cat;
+        cat.setRemembering(false);
+        LibraryPart& p = cat.active().add(PartKind::Connector);
+        const QString pid = p.id;
+        auto box = [](double x0, double y0, double x1, double y1) {
+            Entity e;
+            e.type = EntityType::Polyline;
+            e.points = {{x0, y0}, {x1, y0}, {x1, y1}, {x0, y1}, {x0, y0}};
+            e.a = e.points.front();
+            e.b = e.points.back();
+            return e;
+        };
+        p.mechanical = partDrawingFromEntities({box(0, -5, 6, 5), box(6, -2, 30, 2)});
+        p.outputs = {{{30, -2}, {30, 2}}};
+        BrickDesign d;
+        d.catalog = &cat;
+        const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        d.brick(x)->libPart = pid;
+        d.brick(x)->balloon = true;
+        const BrickBuild b = buildBrickHarness(d, &cat);
+        Vec2 tip;
+        bool have = false;
+        std::vector<const Entity*> outline;
+        for (const Entity& e : b.entities) {
+            if (e.meta.value(QStringLiteral("balloon")).toBool() && e.type == EntityType::Circle) {
+                const QJsonArray lead = e.meta.value(QStringLiteral("leaders")).toArray();
+                if (!lead.isEmpty()) {
+                    tip = Vec2{lead[0].toArray()[0].toDouble(), lead[0].toArray()[1].toDouble()};
+                    have = true;
+                }
+            } else if (e.type == EntityType::Polyline && e.meta.value(QStringLiteral("brickId")).toString() == x) {
+                outline.push_back(&e);
+            }
+        }
+        double off = 1e300;
+        for (const Entity* e : outline)
+            for (size_t k = 0; k + 1 < e->points.size(); ++k)
+                off = std::min(off, closestPointOnSegment(tip, e->points[k], e->points[k + 1]).distance);
+        std::printf("  balloon: its leader ends %.3f off the part\n", off);
+        check(have && off < 1e-6, "balloon: its leader touches the part's own outline");
+    }
+    // JOINTS STAND ALONE.
+    {
+        BrickDesign d;
+        const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString r = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString j = d.addBrick(BrickType::End, PartKind::Splice, 2, 0);
+        d.connect(x, r);
+        d.connect(r, j);
+        check(!brickIsTied(*d.brick(j)) && brickIsTied(*d.brick(x)), "joint: a joint stands alone, a connector is tied");
+        check(!bricksFollowing(d, {j}).contains(r) && !bricksFollowing(d, {r}).contains(j),
+              "joint: it takes no special with it and is taken by none");
+        check(!specialOneToOne(d, r, nullptr, nullptr) && !fitEndToLength(d, r, j),
+              "joint: a run to it is not measured off the pane, and linking does not move it");
+    }
+    // DIMENSIONS PUT ON BY HAND: above or below the two parts, saying the run's length.
+    {
+        BrickDesign d;
+        const QString x0 = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString r = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString x1 = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        d.connect(x0, r);
+        d.connect(r, x1);
+        d.brick(r)->run.lengthMm = 250.0;
+        d.dims.push_back({x0, x1, false});
+        d.dims.push_back({x0, x1, true});
+        const BrickBuild b = buildBrickHarness(d, nullptr);
+        Bounds parts;
+        std::vector<const Entity*> dims;
+        for (const Entity& e : b.entities) {
+            if (e.meta.value(QStringLiteral("brickDim")).toString() == QStringLiteral("manual")) dims.push_back(&e);
+            else if (e.meta.value(QStringLiteral("brickId")).toString() == x0 || e.meta.value(QStringLiteral("brickId")).toString() == x1)
+                parts.expand(e.bounds());
+        }
+        check(dims.size() == 2, "dims: each one put on by hand is drawn");
+        if (dims.size() == 2 && parts.valid) {
+            const double above = dims[0]->points[2].y, below = dims[1]->points[2].y;
+            std::printf("  dims: above at %.1f, below at %.1f, the parts %.1f..%.1f, saying %s\n", above, below,
+                        parts.min.y, parts.max.y, qPrintable(dims[0]->meta.value(QStringLiteral("textOverride")).toString()));
+            check(above > parts.max.y && below < parts.min.y, "dims: one above the parts, one below them");
+            check(std::abs(dims[0]->meta.value(QStringLiteral("brickMeasured")).toDouble() - 250.0) < 1e-6,
+                  "dims: between two parts on one run, it says the run's length");
+        }
+        check(BrickDesign::fromJson(d.toJson()).dims.size() == 2, "dims: kept with the design");
+    }
+    // THE WIZARD: one height for all; undo and redo; the Dimension tool.
+    {
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        BrickWizardDialog dlg(&ed);
+        dlg.show();
+        BrickDesign& w = dlg.design();
+        const QString a = dlg.addFromPalette(brickTypeKey(BrickType::End) + QStringLiteral("|") + partKindKey(PartKind::Connector));
+        const QString b = dlg.addFromPalette(brickTypeKey(BrickType::End) + QStringLiteral("|") + partKindKey(PartKind::Connector));
+        dlg.selectBrick(a);
+        QApplication::processEvents();
+        auto* height = dlg.findChild<QDoubleSpinBox*>(QStringLiteral("brickDesignatorHeight"));
+        auto* all = dlg.findChild<QToolButton*>(QStringLiteral("brickDesignatorHeightAll"));
+        if (height) height->setValue(7.0);
+        if (all) all->click();
+        check(all && w.brick(a) && w.brick(b) && std::abs(w.brick(b)->designatorHeightMm - 7.0) < 1e-9,
+              "wizard: All gives every designator on the drawing that height");
+        const size_t had = w.bricks.size();
+        dlg.addFromPalette(brickTypeKey(BrickType::End) + QStringLiteral("|") + partKindKey(PartKind::Ferrule));
+        check(dlg.design().bricks.size() == had + 1 && dlg.canUndo(), "undo: a brick added can be undone");
+        dlg.undo();
+        check(dlg.design().bricks.size() == had, "undo: Ctrl+Z takes it off again");
+        dlg.redo();
+        check(dlg.design().bricks.size() == had + 1, "redo: Ctrl+Y puts it back");
+        auto* tool = dlg.findChild<QToolButton*>(QStringLiteral("brickDimTool"));
+        check(tool && tool->isCheckable(), "wizard: a Dimension tool - two bricks clicked put one on");
+        const size_t dimsWas = dlg.design().dims.size();
+        emit dlg.canvas()->dimensionPicked(a, b);
+        check(dlg.design().dims.size() == dimsWas + 1, "wizard: the two bricks picked get a dimension between them");
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -2136,6 +2273,7 @@ int run_brickharness_tests() {
     testConnectPointFacesBrick();
     testLengthsAndBridges();
     testRoundEight();
+    testRoundNine();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

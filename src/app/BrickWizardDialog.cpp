@@ -51,6 +51,7 @@
 #include <QClipboard>
 #include <QGuiApplication>
 #include <QJsonDocument>
+#include <QShortcut>
 
 namespace Edraw_Desktop {
 
@@ -379,6 +380,13 @@ void BrickCanvas::deleteSelected() {
     update();
 }
 
+void BrickCanvas::setDimensionMode(bool on) {
+    dimMode_ = on;
+    dimFirst_.clear();
+    setCursor(on ? Qt::CrossCursor : Qt::ArrowCursor);
+    emit message(on ? QStringLiteral("Dimension: click the first brick, then the second") : QString());
+}
+
 void BrickCanvas::moveSelection(double dCol, double dRow) {
     if (sel_.isEmpty()) return;
     QHash<QString, QPointF> from;
@@ -580,6 +588,27 @@ void BrickCanvas::mousePressEvent(QMouseEvent* e) {
         return;
     }
     const bool shift = e->modifiers() & Qt::ShiftModifier;
+    // PUTTING A DIMENSION ON: the first brick clicked, then the second - and the dimension goes between them.
+    if (dimMode_) {
+        const QString hit = brickAt(L(e->position()));
+        if (hit.isEmpty()) {
+            emit message(QStringLiteral("Dimension: click a brick"));
+            return;
+        }
+        if (dimFirst_.isEmpty() || dimFirst_ == hit) {
+            dimFirst_ = hit;
+            sel_ = {hit};
+            emit message(QStringLiteral("Dimension: now click the second brick"));
+            update();
+            return;
+        }
+        const QString first = dimFirst_;
+        dimFirst_.clear();
+        sel_.clear();
+        emit dimensionPicked(first, hit);
+        update();
+        return;
+    }
     // A PORT, aimed at on purpose, wins over any brick's body: a link starts there.
     const auto port = portAt(L(e->position()));
     if (!port.first.isEmpty()) {
@@ -720,9 +749,11 @@ void BrickCanvas::mouseReleaseEvent(QMouseEvent* e) {
             emit message(QStringLiteral("%1 brick(s) picked").arg(sel_.size()));
         }
     }
+    const bool wasMove = drag_ == Drag::Move;
     drag_ = Drag::None;
     dragId_.clear();
     update();
+    if (wasMove) emit designChanged();   // the move finished: one step to undo
 }
 
 void BrickCanvas::contextMenuEvent(QContextMenuEvent* e) {
@@ -1084,6 +1115,26 @@ void BrickWizardDialog::buildUi() {
                           "part on the axis, the rest evenly either side, every brick turned to face what it "
                           "is linked to - then both panes fitted to show it all"),
            [this] { arrange(); });
+    // A DIMENSION BY HAND: pressed, click two bricks - it goes between them, above them or below.
+    dimTool_ = new QToolButton(this);
+    dimTool_->setObjectName(QStringLiteral("brickDimTool"));
+    dimTool_->setText(QStringLiteral("Dimension"));
+    dimTool_->setCheckable(true);
+    dimTool_->setToolTip(QStringLiteral("Put a dimension on: press, then click two bricks"));
+    dimTool_->setStyleSheet(QStringLiteral("QToolButton{padding:2px 6px;}"
+                                           "QToolButton:checked{background:#2b6cb0;color:white;}"));
+    connect(dimTool_, &QToolButton::toggled, this, [this](bool on) { canvas_->setDimensionMode(on); });
+    bar->addWidget(dimTool_);
+    dimSide_ = new QComboBox(this);
+    dimSide_->setObjectName(QStringLiteral("brickDimSide"));
+    dimSide_->addItems({QStringLiteral("Above"), QStringLiteral("Below")});
+    dimSide_->setToolTip(QStringLiteral("Where the next dimension goes: above the two parts or below them"));
+    bar->addWidget(dimSide_);
+    button("brickDimClear", QStringLiteral("Clear dims"), QStringLiteral("Take off every dimension put on by hand"),
+           [this] {
+               design_.dims.clear();
+               designChanged();
+           });
     bar->addSpacing(18);
     bar->addWidget(new QLabel(QStringLiteral("Dimensions from"), this));
     dimFrom_ = new QComboBox(this);
@@ -1256,6 +1307,7 @@ void BrickWizardDialog::buildUi() {
         const Brick* sp = brickIsSpecial(ba->type) ? ba : bb;
         const Brick* en = sp == ba ? bb : ba;
         if (!brickIsSpecial(sp->type) || en->type != BrickType::End) return;
+        if (!brickIsTied(*en)) return;   // a joint stands alone
         // IN ONE LINE WITH ITS FIRST PART: a special linked to a part with nothing on its other end yet comes
         // onto that part's row - they move up and down together from then on.
         {
@@ -1270,6 +1322,21 @@ void BrickWizardDialog::buildUi() {
         if (fitEndToLength(design_, sp->id, en->id))
             status_->setText(QStringLiteral("Linked - put at the run's %1 mm").arg(sp->run.lengthMm, 0, 'f', 0));
     });
+    connect(canvas_, &BrickCanvas::dimensionPicked, this, [this](const QString& a, const QString& b) {
+        design_.dims.push_back({a, b, dimSide_ && dimSide_->currentIndex() == 1});
+        designChanged();
+        status_->setText(QStringLiteral("Dimension put on between %1 and %2 - click two more for another")
+                             .arg(brickTitle(*design_.brick(a)), brickTitle(*design_.brick(b))));
+    });
+    // UNDO AND REDO, Ctrl+Z and Ctrl+Y (and Ctrl+Shift+Z).
+    for (const auto& [keys, fn] : {std::pair<QKeySequence, void (BrickWizardDialog::*)()>{QKeySequence::Undo,
+                                                                                            &BrickWizardDialog::undo},
+                                   {QKeySequence(Qt::CTRL | Qt::Key_Y), &BrickWizardDialog::redo},
+                                   {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Z), &BrickWizardDialog::redo}}) {
+        auto* sc = new QShortcut(keys, this);
+        sc->setContext(Qt::WindowShortcut);
+        connect(sc, &QShortcut::activated, this, fn);
+    }
     connect(canvas_, &BrickCanvas::designChanged, this, &BrickWizardDialog::designChanged);
     connect(canvas_, &BrickCanvas::message, this, [this](const QString& t) { status_->setText(t); });
 
@@ -1366,6 +1433,19 @@ QWidget* BrickWizardDialog::buildEndPage() {
         showDesignator_->setStyleSheet(QStringLiteral("QToolButton{padding:1px 5px;}"
                                                       "QToolButton:checked{background:#2b6cb0;color:white;}"));
         row->addWidget(showDesignator_);
+        // THE SAME HEIGHT FOR EVERY DESIGNATOR on the drawing.
+        auto* all = new QToolButton(page);
+        all->setObjectName(QStringLiteral("brickDesignatorHeightAll"));
+        all->setText(QStringLiteral("All"));
+        all->setToolTip(QStringLiteral("Every designator on the drawing this tall"));
+        connect(all, &QToolButton::clicked, this, [this] {
+            const double h = designatorHeight_->value();
+            for (Brick& b : design_.bricks)
+                if (b.type == BrickType::End) b.designatorHeightMm = h;
+            refreshPreview();
+            status_->setText(QStringLiteral("Every designator is %1 mm tall").arg(h, 0, 'f', 1));
+        });
+        row->addWidget(all);
         f->addRow(QStringLiteral("Designator"), row);
     }
     balloon_ = new QCheckBox(QStringLiteral("Balloon"), page);
@@ -2416,9 +2496,54 @@ void BrickWizardDialog::writeRun() {
     refreshPreview();
 }
 
+void BrickWizardDialog::recordHistory() {
+    if (restoring_ || (canvas_ && canvas_->dragging())) return;   // a drag is one step, taken when it ends
+    const QByteArray now = QJsonDocument(design_.toJson()).toJson(QJsonDocument::Compact);
+    if (historyAt_ >= 0 && historyAt_ < static_cast<int>(history_.size()) && history_[historyAt_] == now) return;
+    history_.resize(static_cast<size_t>(historyAt_ + 1));
+    history_.push_back(now);
+    if (history_.size() > 300) history_.erase(history_.begin());
+    historyAt_ = static_cast<int>(history_.size()) - 1;
+}
+
+void BrickWizardDialog::restoreHistory(int at) {
+    if (at < 0 || at >= static_cast<int>(history_.size())) return;
+    restoring_ = true;
+    const double fan = design_.faceFanPct;
+    design_ = BrickDesign::fromJson(QJsonDocument::fromJson(history_[static_cast<size_t>(at)]).object());
+    design_.catalog = &catalog_;
+    design_.faceFanPct = fan;
+    historyAt_ = at;
+    QStringList keep;
+    for (const QString& id : canvas_->selection())
+        if (design_.brick(id)) keep << id;
+    canvas_->setSelection(keep);
+    designChanged();
+    restoring_ = false;
+}
+
+void BrickWizardDialog::undo() {
+    if (!canUndo()) {
+        status_->setText(QStringLiteral("Nothing to undo"));
+        return;
+    }
+    restoreHistory(historyAt_ - 1);
+    status_->setText(QStringLiteral("Undone"));
+}
+
+void BrickWizardDialog::redo() {
+    if (!canRedo()) {
+        status_->setText(QStringLiteral("Nothing to redo"));
+        return;
+    }
+    restoreHistory(historyAt_ + 1);
+    status_->setText(QStringLiteral("Redone"));
+}
+
 void BrickWizardDialog::refreshPreview() {
     if (editor_) design_.faceFanPct = editor_->faceFanScale();
     syncBridgeWires(design_);   // wires taken from a joined special follow it
+    recordHistory();
     const BrickBuild built = buildBrickHarness(design_, &catalog_,
                                                [this](const QString& id) { return bomItemOf(id); });
     actual_ = built.actual;

@@ -95,6 +95,8 @@ signals:
     void linkPicked(const QString& a, const QString& b);
     // Bricks moved on the pane, with where each was before the move - so a part moved can say a new length.
     void bricksMoved(const QHash<QString, QPointF>& from);
+    // Two bricks clicked while putting a dimension on: the dimension goes between them.
+    void dimensionPicked(const QString& a, const QString& b);
     // A link made on the pane - so a part linked to a special can be put at the special's length.
     void linked(const QString& a, const QString& b);
     void designChanged();
@@ -138,6 +140,13 @@ private:
     QPointF cursor_;
     QHash<QString, QPointF> startAt_;   // where each picked brick was when the drag began
     QHash<QString, BrickFollow> follow_;   // what goes with the picked bricks, and on which axes
+    bool dimMode_ = false;                 // putting a dimension on: two clicks, two bricks
+    QString dimFirst_;
+public:
+    void setDimensionMode(bool on);
+    bool dimensionMode() const { return dimMode_; }
+    bool dragging() const { return drag_ != Drag::None; }
+private:
     QPointF panFrom_;
     bool zoneAdd_ = false;
     bool shiftAlone_ = false;   // Shift pressed and let go with nothing clicked in between
@@ -321,6 +330,20 @@ private:
     QComboBox* transitions_ = nullptr;
     QDoubleSpinBox* transitionWidth_ = nullptr;   // never below the cable's width
     QToolButton* showDesignator_ = nullptr;       // the eye on the Designator line: written on the drawing or not
+    // UNDO AND REDO: the design as it was after each change, and where in that list it is now.
+    std::vector<QByteArray> history_;
+    int historyAt_ = -1;
+    bool restoring_ = false;
+    void recordHistory();
+    void restoreHistory(int at);
+public:
+    void undo();
+    void redo();
+    bool canUndo() const { return historyAt_ > 0; }
+    bool canRedo() const { return historyAt_ + 1 < static_cast<int>(history_.size()); }
+private:
+    QToolButton* dimTool_ = nullptr;              // putting a dimension on by hand
+    QComboBox* dimSide_ = nullptr;                // above the parts or below them
     QDoubleSpinBox* designatorHeight_ = nullptr;  // how tall its letters are
     QCheckBox* dimTotal_ = nullptr;
     QCheckBox* dimFans_ = nullptr;
