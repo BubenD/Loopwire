@@ -137,6 +137,8 @@ public:
     void openDatasheet();
     void removeDatasheet();
     void refreshDatasheetRow();
+    // THE SIZE a mechanical drawing drawn to proportion is put at - by its entry face (see partSizeFactor).
+    void refreshSizeRow();
     // Which file is picked in the list, or the part's first when none is.
     QString selectedDatasheet() const;
     void showDatasheetInFolder();   // open Explorer with the file selected
@@ -220,6 +222,9 @@ private:
     QPushButton* outputFacesBtn_ = nullptr;
     // One Place button, and a tick against each drawing of the part it puts down. See placeTicked().
     QToolButton* placeBtn_ = nullptr;
+    QComboBox* sizeModeBox_ = nullptr;       // as drawn / entry face known / from the part's figures / Auto
+    QDoubleSpinBox* sizeKnownBox_ = nullptr; // the entry face, when it is known
+    QLabel* sizeInfo_ = nullptr;             // what that comes to
     // A connector that comes with its pins fitted: the tick, the contact menu it puts away, and the rows
     // that describe the pins instead. See rebuildPinTypes().
     QCheckBox* includePinsBox_ = nullptr;

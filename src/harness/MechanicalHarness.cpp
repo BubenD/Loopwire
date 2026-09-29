@@ -1301,12 +1301,15 @@ struct PlacedEnds {
     Vec2 farAt{0.0, 0.0};
 };
 
-std::vector<Entity> placedPartDrawing(const LibraryPart& part, const Vec2& at, double dirRad,
+std::vector<Entity> placedPartDrawing(const LibraryPart& partAsStored, const Vec2& at, double dirRad,
                                       const MechDrawOptions& opt, const QString& role,
                                       const Vec2& outward = Vec2{0.0, 0.0},
                                       std::vector<Vec2>* placedFaces = nullptr,
                                       PlacedEnds* placedEnds = nullptr,
                                       std::vector<std::pair<Vec2, Vec2>>* placedFaceEnds = nullptr) {
+    // AT ITS SIZE: a part drawn to proportion is sized by its entry face - known, from its figures - before
+    // anything else is worked out from it (see partSized). A part drawn to size is as it was.
+    const LibraryPart part = partSized(partAsStored);
     std::vector<Entity> out;
     if (placedFaces) placedFaces->clear();
     if (placedFaceEnds) placedFaceEnds->clear();

@@ -10,6 +10,7 @@
 #include "app/Editor.h"
 #include "harness/BrickHarness.h"
 #include "harness/PartsLibrary.h"
+#include "model/Block.h"
 #include "model/Document.h"
 
 #include <QApplication>
@@ -1703,6 +1704,89 @@ void testRoundSeven() {
     }
 }
 
+// A PART DRAWN TO PROPORTION, sized by its entry face: known, from its figures, or left to the drawing.
+void testPartSizeByEntry() {
+    PartsCatalog cat;
+    cat.setRemembering(false);
+    QString pid;
+    {
+        LibraryPart& p = cat.active().add(PartKind::Connector);
+        pid = p.id;
+        Entity body;
+        body.type = EntityType::Polyline;
+        body.points = {{0, -5}, {20, -5}, {20, 5}, {0, 5}, {0, -5}};
+        body.a = body.points.front();
+        body.b = body.points.back();
+        p.mechanical = partDrawingFromEntities({body});
+        p.outputs = {{{20, -4}, {20, 4}}};   // an entry face 8 long
+    }
+    LibraryPart& p = *cat.active().byId(pid);
+    check(!partIsNominal(p) && std::abs(partSizeFactor(p) - 1.0) < 1e-12 && std::abs(partDrawnEntryMm(p) - 8.0) < 1e-9,
+          "size: as drawn, the drawing is the part's size");
+    setPartSizeMode(p, PartSizeMode::Known);
+    setPartSizeKnownMm(p, 12.0);
+    const LibraryPart sized = partSized(p);
+    Bounds bb;
+    for (const Entity& e : partDrawingEntities(sized.mechanical)) bb.expand(e.bounds());
+    std::printf("  size: known 12 on a face drawn 8 - x%.2f, the part %.1f long\n", partSizeFactor(p), bb.width());
+    check(partIsNominal(p) && std::abs(partSizeFactor(p) - 1.5) < 1e-9 &&
+              std::abs(distance(sized.outputs.front().a, sized.outputs.front().b) - 12.0) < 1e-9 &&
+              std::abs(bb.width() - 30.0) < 1e-6,
+          "size: the entry face known, the whole drawing is scaled so the face is that long");
+    setPartSizeMode(p, PartSizeMode::FromParams);
+    check(std::abs(partSizeFactor(p) - 1.0) < 1e-12, "size: from its figures with none given, it stays as drawn");
+    p.params[QStringLiteral("cableEntryMin")] = QStringLiteral("6");
+    p.params[QStringLiteral("cableEntryMax")] = QStringLiteral("10");
+    check(std::abs(partEntryFromParamsMm(p) - 10.0) < 1e-9 && std::abs(partSizeFactor(p) - 1.25) < 1e-9,
+          "size: from its figures, by the most its cable entry takes");
+    // PLACED from the library at that size, and its faces with it.
+    {
+        Bounds put;
+        for (const Entity& e : partBlockInstance(p, true, Vec2{0, 0})) put.expand(e.bounds());
+        check(std::abs(put.width() - 25.0) < 1e-6, "size: placed from the library, it goes down at that size");
+    }
+    // IN THE HARNESS: the part's face is the size it was given.
+    BrickDesign d;
+    d.catalog = &cat;
+    const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+    const QString r = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+    const QString y = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+    d.connect(x, r);
+    d.connect(r, y);
+    d.brick(x)->libPart = pid;
+    {
+        const BrickBuild b = buildBrickHarness(d, &cat);
+        const double face = b.faces.value(QStringLiteral("%1:0").arg(x)).lengthMm;
+        std::printf("  size: in the harness its face is %.2f\n", face);
+        check(std::abs(face - 10.0) < 1e-6, "size: in the harness, the part is drawn at its size");
+    }
+    // A NOMINAL PART IS NOT MEASURED THROUGH: dimensioned "from far point", it is measured from its face.
+    {
+        d.brick(r)->run.dimTotal = true;
+        d.dimFromFar = true;
+        auto said = [&] {
+            for (const Entity& e : buildBrickHarness(d, &cat).entities)
+                if (e.meta.value(QStringLiteral("brickDim")).toString() == QStringLiteral("total"))
+                    return e.meta.value(QStringLiteral("brickMeasured")).toDouble();
+            return -1.0;
+        };
+        const double nominal = said();
+        setPartSizeMode(p, PartSizeMode::AsDrawn);
+        d.shapeCache.clear();
+        const double real = said();
+        std::printf("  size: from far point %.1f on the nominal part, %.1f on the real one\n", nominal, real);
+        check(nominal > 0.0 && real > nominal + 1.0, "size: the far point of a nominal part is not measured to");
+        d.dimFromFar = false;
+        d.brick(r)->run.dimTotal = false;
+    }
+    // AUTO: chosen in the wizard, it comes in on Auto.
+    {
+        setPartSizeMode(p, PartSizeMode::Auto);
+        check(partIsNominal(p) && std::abs(partSizeFactor(p) - 1.0) < 1e-12,
+              "size: on Auto the library leaves it as drawn - the harness sizes it");
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -1720,6 +1804,7 @@ int run_brickharness_tests() {
     testRoundFive();
     testRoundSix();
     testRoundSeven();
+    testPartSizeByEntry();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

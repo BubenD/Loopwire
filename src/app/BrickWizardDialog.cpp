@@ -2062,7 +2062,17 @@ void BrickWizardDialog::loadLabels() {
 void BrickWizardDialog::writeEnd() {
     Brick* b = design_.brick(canvas_->selected());
     if (!b || b->type != BrickType::End) return;
-    b->libPart = part_->currentData().toString();
+    const QString chosen = part_->currentData().toString();
+    const bool newPart = chosen != b->libPart;
+    b->libPart = chosen;
+    // A PART WHOSE SIZE IS LEFT TO THE DRAWING comes in on Auto: made the drawing's usual entry size.
+    if (newPart && partScaleAuto_) {
+        const LibraryPart* p = chosen.isEmpty() ? nullptr : catalog_.byId(chosen);
+        if (p && partSizeMode(*p) == PartSizeMode::Auto) {
+            const QSignalBlocker hush(partScaleAuto_);
+            partScaleAuto_->setChecked(true);
+        }
+    }
     b->name = name_->text();
     b->balloon = balloon_->isChecked();
     b->showDesignator = showDesignator_->isChecked();

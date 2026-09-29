@@ -348,6 +348,52 @@ QIcon datasheetSignIcon(int attached, int onFile) {
 
 // The S / M / DS signs of one row: a symbol drawn for this part, the standard one its kind comes with,
 // or nothing yet - the same for the mechanical drawing - and whether it has a datasheet on file.
+void PartsLibraryDialog::refreshSizeRow() {
+    if (!sizeModeBox_) return;
+    const LibraryPart* p = current();
+    const bool can = p && p->hasMechanical() && partKindTakesWires(p->kind);
+    if (QWidget* row = sizeModeBox_->parentWidget()) row->setVisible(p && partKindTakesWires(p->kind));
+    const PartSizeMode mode = p ? partSizeMode(*p) : PartSizeMode::AsDrawn;
+    {
+        const QSignalBlocker b1(sizeModeBox_), b2(sizeKnownBox_);
+        sizeModeBox_->setCurrentIndex(std::max(0, sizeModeBox_->findData(static_cast<int>(mode))));
+        const double drawn = p ? partDrawnEntryMm(*p) : 0.0;
+        const double known = p ? partSizeKnownMm(*p) : 0.0;
+        sizeKnownBox_->setValue(known > 0.0 ? known : (drawn > 0.0 ? drawn : 10.0));
+    }
+    sizeModeBox_->setEnabled(can);
+    sizeKnownBox_->setVisible(mode == PartSizeMode::Known);
+    sizeKnownBox_->setEnabled(can);
+    QString said;
+    if (p && can) {
+        const double drawn = partDrawnEntryMm(*p);
+        const double k = partSizeFactor(*p);
+        if (drawn <= 1e-9 && mode != PartSizeMode::AsDrawn)
+            said = QStringLiteral("mark an output face first - it is the entry face the size is taken by");
+        else if (mode == PartSizeMode::FromParams && partEntryFromParamsMm(*p) <= 0.0)
+            said = QStringLiteral("no cable entry in Technical parameters yet - drawn as it is");
+        else if (mode == PartSizeMode::Known || mode == PartSizeMode::FromParams)
+            said = QStringLiteral("entry %1 mm drawn → %2 mm, ×%3")
+                       .arg(drawn, 0, 'f', 1)
+                       .arg(drawn * k, 0, 'f', 1)
+                       .arg(k, 0, 'f', 2);
+        else if (mode == PartSizeMode::Auto)
+            said = QStringLiteral("sized in the harness to the drawing's usual entry");
+    }
+    sizeInfo_->setText(said);
+    // The mark down the list and the caption on the pane follow at once.
+    if (p && tree_)
+        if (QTreeWidgetItem* it = tree_->currentItem(); it && it->data(0, Qt::UserRole).toString() == p->id)
+            it->setText(0, partIsNominal(*p) ? p->title() + QStringLiteral("  ≈") : p->title());
+    if (mechPreview_ && p) {
+        QString caption = mechPreview_->caption();
+        const QString mark = QStringLiteral(" — ≈ nominal size, not to scale");
+        caption.remove(mark);
+        if (partIsNominal(*p)) caption += mark;
+        mechPreview_->setCaption(caption);
+    }
+}
+
 void PartsLibraryDialog::setPartSigns(QTreeWidgetItem* item, const LibraryPart& part) {
     if (!item) return;
     const bool ownSchem = part.hasSchematic();
@@ -1207,6 +1253,57 @@ void PartsLibraryDialog::buildUi() {
         rl->addStretch(1);
         dgOuter->addWidget(row);
     }
+    // THE SIZE OF A DRAWING DRAWN TO PROPORTION. Where the part's real size is not known it is drawn to good
+    // proportion and sized by one dimension - its entry face, the first output face: typed in when it is known,
+    // read from the part's own figures (its cable entry), or left to the harness wizard, which makes it the
+    // drawing's usual entry size. Sized any of those ways it is a NOMINAL size, and the part says so.
+    {
+        auto* row = new QWidget(draw);
+        row->setObjectName(QStringLiteral("partSizeRow"));
+        auto* rl = new QHBoxLayout(row);
+        rl->setContentsMargins(0, 0, 0, 0);
+        rl->setSpacing(6);
+        auto* cap = new QLabel(QStringLiteral("Size by entry face"), row);
+        setRole(cap, "caption");
+        rl->addWidget(cap);
+        sizeModeBox_ = new QComboBox(row);
+        sizeModeBox_->setObjectName(QStringLiteral("partSizeMode"));
+        sizeModeBox_->addItem(QStringLiteral("As drawn — real size"), static_cast<int>(PartSizeMode::AsDrawn));
+        sizeModeBox_->addItem(QStringLiteral("Entry face known"), static_cast<int>(PartSizeMode::Known));
+        sizeModeBox_->addItem(QStringLiteral("From the part's figures"), static_cast<int>(PartSizeMode::FromParams));
+        sizeModeBox_->addItem(QStringLiteral("Auto — the harness sizes it"), static_cast<int>(PartSizeMode::Auto));
+        sizeModeBox_->setToolTip(QStringLiteral(
+            "How big the mechanical drawing is put down.\n"
+            "As drawn: the drawing is the part's real size.\n"
+            "Entry face known: type the entry face (from the datasheet) and the whole drawing is scaled to it.\n"
+            "From the part's figures: sized by its cable entry (the most it takes) in Technical parameters.\n"
+            "Auto: the harness wizard makes it the drawing's usual entry size.\n"
+            "All but the first are a nominal size: the drawing is to proportion, not to size."));
+        rl->addWidget(sizeModeBox_);
+        sizeKnownBox_ = new QDoubleSpinBox(row);
+        sizeKnownBox_->setObjectName(QStringLiteral("partSizeKnown"));
+        sizeKnownBox_->setRange(0.1, 1000.0);
+        sizeKnownBox_->setDecimals(2);
+        sizeKnownBox_->setSuffix(QStringLiteral(" mm"));
+        sizeKnownBox_->setToolTip(QStringLiteral("The entry face, across - the drawing is scaled so it is this long"));
+        rl->addWidget(sizeKnownBox_);
+        sizeInfo_ = new QLabel(row);
+        sizeInfo_->setObjectName(QStringLiteral("partSizeInfo"));
+        setRole(sizeInfo_, "caption");
+        rl->addWidget(sizeInfo_, 1);
+        auto write = [this] {
+            if (syncing_) return;
+            LibraryPart* p = current();
+            if (!p) return;
+            setPartSizeMode(*p, static_cast<PartSizeMode>(sizeModeBox_->currentData().toInt()));
+            setPartSizeKnownMm(*p, sizeKnownBox_->value());
+            touched();
+            refreshSizeRow();
+        };
+        connect(sizeModeBox_, &QComboBox::currentIndexChanged, this, write);
+        connect(sizeKnownBox_, &QDoubleSpinBox::valueChanged, this, write);
+        dgOuter->addWidget(row);
+    }
     // N/A: this drawing does not apply to the part. Pressed, the pane stands down - its drawing and its buttons
     // - and the part's row in the list says N/A instead of "not drawn yet".
     auto addNotApplicable = [this](QWidget* btns, int pane) {
@@ -1934,7 +2031,8 @@ void PartsLibraryDialog::reloadTree() {
         head->setFont(0, f);
         for (const LibraryPart* p : shown) {
             auto* it = new QTreeWidgetItem(head);
-            it->setText(0, p->title());
+            // A part drawn to proportion is marked so down the list: "≈" - nominal size.
+            it->setText(0, partIsNominal(*p) ? p->title() + QStringLiteral("  ≈") : p->title());
             it->setText(1, p->mfrName);
             it->setData(0, Qt::UserRole, p->id);
             setPartSigns(it, *p);
@@ -2056,6 +2154,7 @@ void PartsLibraryDialog::showPart(const QString& id) {
             caption += QStringLiteral(" — no output face marked");
         mechPreview_->setCaption(caption);
     }
+    refreshSizeRow();
     if (outputFacesBtn_) {
         const bool wires = p && partKindTakesWires(p->kind);
         outputFacesBtn_->setVisible(wires);

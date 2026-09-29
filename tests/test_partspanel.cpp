@@ -20,6 +20,7 @@
 #include "app/BomDialog.h"
 #include <functional>
 #include <QComboBox>
+#include <QDoubleSpinBox>
 #include <QLineEdit>
 #include <QPushButton>
 #include "tools/ToolId.h"
@@ -2545,6 +2546,13 @@ int run_partspanel_tests() {
             part.kind = PartKind::Connector;
             part.description = QStringLiteral("Four-way lead");
             part.params[QStringLiteral("pins")] = QStringLiteral("4");
+            {
+                Entity body;
+                body.type = EntityType::Rect;
+                body.points = {{0, -5}, {20, -5}, {20, 5}, {0, 5}};
+                part.mechanical = partDrawingFromEntities({body});
+                part.outputs.push_back({Vec2{20, -4}, Vec2{20, 4}});   // an entry face 8 long
+            }
             lib.parts.push_back(part);
             LibraryPart other;
             other.id = QStringLiteral("P-HOSE");
@@ -2788,6 +2796,33 @@ int run_partspanel_tests() {
             QApplication::processEvents();
             check(!group->isVisibleTo(&dlg), "wired: something other than a connector does not offer it");
 
+            // SIZE BY ENTRY FACE: a connector drawn to proportion, its entry face known.
+            {
+                dlg.selectPart(QStringLiteral("P-WIRED"));
+                QApplication::processEvents();
+                auto* mode = dlg.findChild<QComboBox*>(QStringLiteral("partSizeMode"));
+                auto* known = dlg.findChild<QDoubleSpinBox*>(QStringLiteral("partSizeKnown"));
+                auto* info = dlg.findChild<QLabel*>(QStringLiteral("partSizeInfo"));
+                check(mode && known && info && mode->isVisibleTo(&dlg) && mode->isEnabled(),
+                      "size: a connector offers Size by entry face");
+                if (mode && known && info && mode->isEnabled()) {
+                    mode->setCurrentIndex(mode->findData(static_cast<int>(PartSizeMode::Known)));
+                    known->setValue(16.0);
+                    QApplication::processEvents();
+                    const LibraryPart* sp = dlg.partForSession(QStringLiteral("P-WIRED"));
+                    std::printf("  size: %s\n", qPrintable(info->text()));
+                    check(sp && partSizeMode(*sp) == PartSizeMode::Known && std::abs(partSizeKnownMm(*sp) - 16.0) < 1e-9 &&
+                              known->isVisibleTo(&dlg) && info->text().contains(QStringLiteral("16.0 mm")),
+                          "size: the entry face typed in, the part is sized to it and says what that comes to");
+                    bool marked = false;
+                    for (QTreeWidget* t : dlg.findChildren<QTreeWidget*>())
+                        if (QTreeWidgetItem* it = t->currentItem()) marked = it->text(0).endsWith(QStringLiteral("≈"));
+                    check(marked, "size: and the list marks it nominal");
+                    mode->setCurrentIndex(mode->findData(static_cast<int>(PartSizeMode::AsDrawn)));
+                    QApplication::processEvents();
+                    check(sp && !partIsNominal(*sp), "size: as drawn again, it is its real size");
+                }
+            }
             // A Y-SPLIT SHOWS AN ENTRY PER LEG, as many as its Legs say.
             dlg.selectPart(QStringLiteral("P-YSPLIT"));
             QApplication::processEvents();

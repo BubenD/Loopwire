@@ -510,6 +510,33 @@ void setPartWiredDisplay(LibraryPart& part, const WiredDisplay& d);
 // The drawing with a wired connector's wires added, as WiredDisplay says - unchanged for any other part.
 // `mechanical` picks which of the two the drawing is.
 QJsonArray withWiredWires(const LibraryPart& part, bool mechanical, const QJsonArray& drawing);
+
+// ---- A part drawn to proportion, sized by its entry face ------------------------------------------
+//
+// A mechanical drawing whose exact size is not known is drawn to good PROPORTION - the shape, not the size - and
+// sized by one dimension: its ENTRY FACE, the first face the wires leave by. That one figure is:
+//   Known       typed in (the datasheet's), and the whole drawing is scaled so the face is that long;
+//   FromParams  read from the part's own figures - its cable entry (the most it takes), or entry / main side;
+//   Auto        left to the drawing: the harness wizard makes it the drawing's usual entry size;
+//   AsDrawn     none of this - the drawing is the part's real size.
+// Every one but AsDrawn is a NOMINAL size, and says so wherever the part is shown.
+enum class PartSizeMode { AsDrawn, Known, FromParams, Auto };
+PartSizeMode partSizeMode(const LibraryPart& part);
+void setPartSizeMode(LibraryPart& part, PartSizeMode mode);
+double partSizeKnownMm(const LibraryPart& part);
+void setPartSizeKnownMm(LibraryPart& part, double mm);
+// The entry face as drawn, and as the part's own figures give it - nought when there is none.
+double partDrawnEntryMm(const LibraryPart& part);
+double partEntryFromParamsMm(const LibraryPart& part);
+// What the drawing is scaled by for its size (1 as drawn, on Auto, or when the figure is missing), and the
+// entry face that comes to.
+double partSizeFactor(const LibraryPart& part);
+bool partIsNominal(const LibraryPart& part);
+// The mechanical drawing and its faces at that size, scaled about the drawing's origin.
+QJsonArray partMechanicalSized(const LibraryPart& part);
+std::vector<MechOutputFace> partOutputsSized(const LibraryPart& part);
+// The part with its drawing, faces and marks put at that size - what is placed and drawn with.
+LibraryPart partSized(const LibraryPart& part);
 // A wire colour's name as a colour to draw it in; empty (the layer's own) for black and for anything unknown.
 QString leadColorHex(const QString& name);
 // A wire colour as a swatch to show it by - black as black (not left to the layer), the body colour of a

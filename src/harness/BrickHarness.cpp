@@ -894,6 +894,7 @@ BrickShape endShape(const Brick& b, const PartsCatalog* catalog) {
 namespace {
 BrickShape endShapeAsDrawn(const Brick& b, const PartsCatalog* catalog) {
     BrickShape s;
+    // Placed at its size (placeLibraryPartAtFace sizes a part drawn to proportion by its entry face).
     const LibraryPart* part = catalog && !b.libPart.isEmpty() ? catalog->byId(b.libPart) : nullptr;
     if (part && part->hasMechanical()) {
         // THE LIBRARY PART, set down by its first face: looking right when it has only that one, left
@@ -964,9 +965,15 @@ BrickShape endShapeAsDrawn(const Brick& b, const PartsCatalog* catalog) {
 
 BrickShape BrickDesign::shapeOf(const Brick& b) const {
     if (b.type != BrickType::End) return specialShape();
-    const QString key = partKindKey(b.kind) + QLatin1Char('|') + b.libPart + QLatin1Char('|') + b.name +
+    QString key = partKindKey(b.kind) + QLatin1Char('|') + b.libPart + QLatin1Char('|') + b.name +
                         QLatin1Char('|') + QString::number(reinterpret_cast<quintptr>(catalog)) +
                         QLatin1Char('|') + QString::number(b.scale, 'g', 10);
+    // And the size its part is drawn at, which the library can change while the wizard is open.
+    const QString sized = [&] {
+        const LibraryPart* p = catalog && !b.libPart.isEmpty() ? catalog->byId(b.libPart) : nullptr;
+        return p ? QString::number(partSizeFactor(*p), 'g', 10) : QString();
+    }();
+    key += QLatin1Char('|') + sized;
     const auto it = shapeCache.constFind(key);
     if (it != shapeCache.constEnd()) return it.value();
     const BrickShape s = endShape(b, catalog);
@@ -1840,8 +1847,15 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             made.push_back(d);
         };
         if (r.dimTotal && !loose && !isSub && !br.a.id.isEmpty()) {
-            const Vec2 from = design.dimFromFar ? fa.farAt : fa.nearAt;
-            const Vec2 to = design.dimToFar ? fb.farAt : fb.nearAt;
+            // A PART OF NOMINAL SIZE IS NEVER MEASURED THROUGH: its body is drawn to proportion, not to size, so
+            // a dimension to its far end would give a figure nobody can build to. It is measured from its face.
+            auto nominal = [&](const QString& id) {
+                const Brick* e = design.brick(id);
+                const LibraryPart* p = e && catalog && !e->libPart.isEmpty() ? catalog->byId(e->libPart) : nullptr;
+                return p && partIsNominal(*p);
+            };
+            const Vec2 from = design.dimFromFar && !nominal(br.a.id) ? fa.farAt : fa.nearAt;
+            const Vec2 to = design.dimToFar && !nominal(br.b.id) ? fb.farAt : fb.nearAt;
             const double along = total + distance(from, fa.centre) + distance(to, fb.centre);
             const QString said = !r.dimTextTotal.isEmpty() ? r.dimTextTotal : fmt(along);
             if (r.dimSingle) {

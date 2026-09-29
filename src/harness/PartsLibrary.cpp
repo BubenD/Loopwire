@@ -3,6 +3,7 @@
 #include "harness/Harness.h"
 
 #include "model/Entity.h"
+#include "tools/EntityTransforms.h"
 
 #include "io/AppPaths.h"
 
@@ -14,6 +15,8 @@
 #include <QSettings>
 #include <QStandardPaths>
 
+#include <algorithm>
+#include <cmath>
 #include <iterator>
 
 namespace Edraw_Desktop {
@@ -408,6 +411,100 @@ QString leadColorHex(const QString& name) {
     return kHex.value(first);
 }
 
+PartSizeMode partSizeMode(const LibraryPart& part) {
+    const QString m = part.value(QStringLiteral("sizeMode"));
+    if (m == QLatin1String("known")) return PartSizeMode::Known;
+    if (m == QLatin1String("params")) return PartSizeMode::FromParams;
+    if (m == QLatin1String("auto")) return PartSizeMode::Auto;
+    return PartSizeMode::AsDrawn;
+}
+
+void setPartSizeMode(LibraryPart& part, PartSizeMode mode) {
+    if (mode == PartSizeMode::AsDrawn) {
+        part.params.remove(QStringLiteral("sizeMode"));
+        return;
+    }
+    part.params.insert(QStringLiteral("sizeMode"), mode == PartSizeMode::Known        ? QStringLiteral("known")
+                                                   : mode == PartSizeMode::FromParams ? QStringLiteral("params")
+                                                                                      : QStringLiteral("auto"));
+}
+
+double partSizeKnownMm(const LibraryPart& part) {
+    bool ok = false;
+    const double v = part.value(QStringLiteral("sizeKnownMm")).toDouble(&ok);
+    return ok && v > 0.0 ? v : 0.0;
+}
+
+void setPartSizeKnownMm(LibraryPart& part, double mm) {
+    if (mm > 0.0) part.params.insert(QStringLiteral("sizeKnownMm"), QString::number(mm));
+    else part.params.remove(QStringLiteral("sizeKnownMm"));
+}
+
+double partDrawnEntryMm(const LibraryPart& part) {
+    if (part.outputs.empty()) return 0.0;
+    return distance(part.outputs.front().a, part.outputs.front().b);
+}
+
+double partEntryFromParamsMm(const LibraryPart& part) {
+    // The most the entry takes, from whichever of the part's figures says it - a range's top, else its bottom,
+    // else a single figure.
+    auto number = [&part](const QString& key) {
+        bool ok = false;
+        const double v = part.value(key).trimmed().toDouble(&ok);
+        return ok && v > 0.0 ? v : 0.0;
+    };
+    for (const char* k : {"cableEntry", "entry", "main", "connEntry", "insertion", "hole", "diameter"}) {
+        const QString key = QLatin1String(k);
+        for (const QString& v : {key + QStringLiteral("Max"), key + QStringLiteral("Min"), key})
+            if (const double mm = number(v); mm > 0.0) return mm;
+    }
+    return 0.0;
+}
+
+double partSizeFactor(const LibraryPart& part) {
+    const double drawn = partDrawnEntryMm(part);
+    if (drawn <= 1e-9) return 1.0;
+    double want = 0.0;
+    switch (partSizeMode(part)) {
+        case PartSizeMode::Known: want = partSizeKnownMm(part); break;
+        case PartSizeMode::FromParams: want = partEntryFromParamsMm(part); break;
+        default: return 1.0;
+    }
+    return want > 0.0 ? std::clamp(want / drawn, 0.01, 100.0) : 1.0;
+}
+
+bool partIsNominal(const LibraryPart& part) { return partSizeMode(part) != PartSizeMode::AsDrawn; }
+
+QJsonArray partMechanicalSized(const LibraryPart& part) {
+    const double k = partSizeFactor(part);
+    if (std::abs(k - 1.0) < 1e-12 || part.mechanical.isEmpty()) return part.mechanical;
+    std::vector<Entity> ents = partDrawingEntities(part.mechanical);
+    for (Entity& e : ents) scaleEntity(e, Vec2{0.0, 0.0}, k);
+    return partDrawingFromEntities(ents);
+}
+
+std::vector<MechOutputFace> partOutputsSized(const LibraryPart& part) {
+    const double k = partSizeFactor(part);
+    std::vector<MechOutputFace> out = part.outputs;
+    for (MechOutputFace& f : out) {
+        f.a = f.a * k;
+        f.b = f.b * k;
+    }
+    return out;
+}
+
+LibraryPart partSized(const LibraryPart& part) {
+    const double k = partSizeFactor(part);
+    if (std::abs(k - 1.0) < 1e-12) return part;
+    LibraryPart p = part;
+    p.mechanical = partMechanicalSized(part);
+    p.outputs = partOutputsSized(part);
+    p.connectPoint = p.connectPoint * k;
+    p.nearPoint = p.nearPoint * k;
+    p.farPoint = p.farPoint * k;
+    return p;
+}
+
 QString wireSwatchHex(const QString& name) {
     const QString first = name.section(QLatin1Char('/'), 0, 0).trimmed().toLower();
     if (first == QStringLiteral("black")) return QStringLiteral("#202020");
@@ -754,6 +851,8 @@ std::vector<PartField> partFields(PartKind kind) {
                     choice("mounting", "Mounting",
                            {QStringLiteral("Cable plug"), QStringLiteral("Cable receptacle"),
                             QStringLiteral("Panel receptacle"), QStringLiteral("Panel plug")}),
+                    // THE CABLE IT TAKES, across: what a drawing of it drawn to proportion is sized by.
+                    range("cableEntry", "Cable entry", "mm"),
                     choice("material", "Shell material", kMetals + kPolymers),
                     choice("plating", "Contact material", kMetals),
                     text("temp", "Temperature range", "C"),

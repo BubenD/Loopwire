@@ -341,8 +341,10 @@ std::vector<Entity> partBlockInstance(const LibraryPart& part, bool mechanical, 
                                       const QString& instanceKey, bool withWires) {
     // A wired connector placed by hand comes with its wires when it is set to show them; the harness builder
     // asks without, since it draws the harness's own wires.
-    const QJsonArray bare = mechanical ? part.mechanical : partSchematicDrawing(part);
-    const QJsonArray drawing = withWires ? withWiredWires(part, mechanical, bare) : bare;
+    // A part drawn to proportion goes down at its size - scaled by its entry face (see partSized).
+    const LibraryPart sizedPart = mechanical ? partSized(part) : part;
+    const QJsonArray bare = mechanical ? sizedPart.mechanical : partSchematicDrawing(part);
+    const QJsonArray drawing = withWires ? withWiredWires(sizedPart, mechanical, bare) : bare;
     if (drawing.isEmpty()) return {};
     // The same block libraryBlocks() offers, built here rather than searched for: a part's drawing IS
     // the block, and naming it the same way is what lets every copy already on a sheet be rebuilt when
@@ -360,9 +362,9 @@ std::vector<Entity> partBlockInstance(const LibraryPart& part, bool mechanical, 
     // counting what is on the drawing is most of what a bill of materials is for.
     for (Entity& e : out) e.meta.insert(QStringLiteral("libPart"), part.id);
     // THE FACES THE WIRES ENTER BY go down with its body, where it was put down.
-    if (mechanical && !part.outputs.empty()) {
+    if (mechanical && !sizedPart.outputs.empty()) {
         QJsonArray faces;
-        for (const MechOutputFace& f : part.outputs)
+        for (const MechOutputFace& f : sizedPart.outputs)
             for (const Vec2& v : {f.a + at, f.b + at}) {
                 faces.append(v.x);
                 faces.append(v.y);
