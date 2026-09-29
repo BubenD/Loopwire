@@ -240,13 +240,23 @@ bool BrickDesign::connect(const QString& a, const QString& b, QString* why, int 
     // A FANOUT OR A TWISTED RUN CARRIED ON INTO A CABLE OR HEATSHRINK: two specials joined end to end.
     // Each gives that side to the other; the wires pass straight through, packed.
     if (brickIsSpecial(x->type) && brickIsSpecial(y->type) &&
-        (x->type == BrickType::Run || y->type == BrickType::Run)) {
+        (x->type == BrickType::Run || y->type == BrickType::Run || brickIsBridge(*x) || brickIsBridge(*y))) {
         if (linked(a, b)) return refuse(QStringLiteral("Those two are already linked"));
+        // A side is free for the join when nothing is on it - or, for a BRIDGE WIRE joining a cable, when only
+        // parts (and other bridges) are there: it takes some of the wires, the rest go on to the parts.
+        auto freeFor = [&](const Brick& self, int p, const Brick& other) {
+            const QStringList on = sideOf(self.id, p);
+            if (on.isEmpty()) return true;
+            if (!brickIsBridge(other) || brickIsBridge(self)) return false;
+            for (const QString& o : on)
+                if (const Brick* ob = brick(o); ob && brickIsSpecial(ob->type) && !brickIsBridge(*ob)) return false;
+            return true;
+        };
         auto freePort = [&](const Brick& self, const Brick& other, int asked) {
-            if (asked >= 0) return sideOf(self.id, asked).isEmpty() ? asked : -1;
+            if (asked >= 0) return freeFor(self, asked, other) ? asked : -1;
             int p = std::max(0, facingPort(self, Vec2{other.col - self.col, other.row - self.row}));
-            if (!sideOf(self.id, p).isEmpty()) p = 1 - p;
-            return sideOf(self.id, p).isEmpty() ? p : -1;
+            if (!freeFor(self, p, other)) p = 1 - p;
+            return freeFor(self, p, other) ? p : -1;
         };
         const int pa = freePort(*x, *y, portA), pb = freePort(*y, *x, portB);
         if (pa < 0 || pb < 0)
@@ -272,7 +282,7 @@ bool BrickDesign::connect(const QString& a, const QString& b, QString* why, int 
     auto taken = [&](int port) {
         int n = static_cast<int>((port == kPortLeft ? starts : finishes).size());
         for (const QString& o : sideOf(sp.id, port))
-            if (const Brick* ob = brick(o); ob && brickIsSpecial(ob->type)) n += 100;   // joined: full
+            if (const Brick* ob = brick(o); ob && brickIsSpecial(ob->type)) n += brickIsBridge(*ob) ? 1 : 100;   // joined: full
         return n;
     };
     const bool fanout = sp.type == BrickType::Fanout;
@@ -657,8 +667,47 @@ int syncBridgeWires(BrickDesign& d) {
         if (s.run.wires != wires || s.run.nets != nets) ++changed;
         s.run.wires = wires;
         s.run.nets = nets;
+        // And the cable gives that many wires on to it, where it splits.
+        if (BrickLink* l = d.link(from->id, s.id)) l->wires = wires;
     }
     return changed;
+}
+
+bool brickIsBridge(const Brick& b) {
+    return brickIsSpecial(b.type) && !b.run.bridgeWires.trimmed().isEmpty();
+}
+
+void makeBridgeWire(Brick& b) {
+    b.run.wires = 1;
+    b.run.stack = {QStringLiteral("wires")};
+    if (b.run.bridgeWires.trimmed().isEmpty()) b.run.bridgeWires = QStringLiteral("1");
+    if (b.name.isEmpty()) b.name = QStringLiteral("Bridge wire");
+}
+
+QHash<QString, BrickFollow> bricksFollowing(const BrickDesign& d, const QStringList& moving) {
+    QHash<QString, BrickFollow> out;
+    const QSet<QString> set(moving.begin(), moving.end());
+    for (const QString& id : moving) {
+        const Brick* m = d.brick(id);
+        if (!m) continue;
+        for (const QString& o : d.linksOf(id)) {
+            if (set.contains(o)) continue;
+            const Brick* ob = d.brick(o);
+            if (!ob) continue;
+            const bool inLine = std::abs(ob->row - m->row) < 1e-6;
+            if (m->type == BrickType::End && brickIsSpecial(ob->type)) {
+                // Its special: up and down with it when in its line; along with it too when the special is not
+                // strung between two parts (a part at each end sets where it sits along).
+                BrickFollow& f = out[o];
+                f.y = f.y || inLine;
+                f.x = f.x || !specialOneToOne(d, o, nullptr, nullptr);
+                if (!f.x && !f.y) out.remove(o);
+            } else if (brickIsSpecial(m->type) && ob->type == BrickType::End && inLine) {
+                out[o].y = true;   // the part in the special's line goes up and down with it
+            }
+        }
+    }
+    return out;
 }
 
 void arrangeBricks(BrickDesign& design) {
@@ -850,7 +899,7 @@ void tidyRoute(std::vector<Vec2>& p) {
 } // namespace
 
 std::vector<Vec2> routeBetweenFaces(const Vec2& a, const Vec2& aOut, const Vec2& b, const Vec2& bOut,
-                                    double leadMm, double shiftDeg, double bendAt) {
+                                    double leadMm, double shiftDeg, double bendAt, int kneeAt) {
     const Vec2 u = aOut.normalized();
     const Vec2 w = bOut.normalized();
     const Vec2 left = u.perp();
@@ -881,7 +930,10 @@ std::vector<Vec2> routeBetweenFaces(const Vec2& a, const Vec2& aOut, const Vec2&
             // either face that the run does not leave it square.
             const double straight = fwd - slant;
             const double keep = std::min(lead, straight / 2.0);
-            const double leg = std::clamp(straight * std::clamp(bendAt, 0.0, 1.0), keep, straight - keep);
+            // The knee at the special's brick: the first bend there, or the second, or the slant centred there.
+            const double t = std::clamp(bendAt, 0.0, 1.0);
+            const double want = kneeAt == 0 ? fwd * t : kneeAt == 1 ? fwd * t - slant : straight * t;
+            const double leg = std::clamp(want, keep, straight - keep);
             const Vec2 p1 = a + u * leg;
             path.push_back(p1);
             path.push_back(p1 + u * slant + left * side);
@@ -1374,7 +1426,13 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             int given = 0, open = 0;
             QList<int> said;
             for (const FaceRef& f : b) {
-                const BrickLink* l = design.link(s.id, f.node == f.id ? f.id : QString());
+                // A part's link - or, at a junction, the link to the special there (a bridge wire's wires).
+                QString other = f.node == f.id ? f.id : QString();
+                if (other.isEmpty() && junctions.contains(f.node)) {
+                    const Junction& jn = junctions.value(f.node);
+                    other = jn.a == s.id ? jn.b : jn.a;
+                }
+                const BrickLink* l = design.link(s.id, other);
                 const int w = l && l->wires > 0 ? l->wires : 0;
                 said << w;
                 if (w > 0) given += w;
@@ -1947,7 +2005,13 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             const double colA = gridOf(br.a.node).x, colB = gridOf(br.b.node).x;
             const double bendAt =
                 std::abs(colB - colA) > 1e-6 ? std::clamp((s.col - colA) / (colB - colA), 0.05, 0.95) : 0.5;
-            route = routeBetweenFaces(la.centre, fa.out, lb.centre, fb.out, lead, 45.0, bendAt);
+            // In line with one of its parts, the special's brick is the knee where the run leaves that line.
+            const double rowA = gridOf(br.a.node).y, rowB = gridOf(br.b.node).y;
+            const int knee = std::abs(rowA - rowB) < 1e-6        ? -1
+                             : std::abs(s.row - rowA) < 0.25 ? 0
+                             : std::abs(s.row - rowB) < 0.25 ? 1
+                                                                 : -1;
+            route = routeBetweenFaces(la.centre, fa.out, lb.centre, fb.out, lead, 45.0, bendAt, knee);
         }
         if (route.size() < 2) continue;
         std::vector<Entity> made;

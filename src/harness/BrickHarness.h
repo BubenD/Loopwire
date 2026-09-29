@@ -235,8 +235,11 @@ void arrangeBricks(BrickDesign& design);
 // travelling against `bOut`, both square to their faces, with as few bends as that allows.
 // `bendAt` is where along the way a level shift makes its slant, 0 at `a` to 1 at `b` - where the special's
 // brick sits between its two parts on the pane.
+// `kneeAt` says which bend `bendAt` places: 0 the first (the special in line with its start part - its brick IS
+// the knee where the run leaves that line), 1 the second (in line with its finish part), -1 the middle of the
+// slant (the special between the two lines).
 std::vector<Vec2> routeBetweenFaces(const Vec2& a, const Vec2& aOut, const Vec2& b, const Vec2& bOut,
-                                    double leadMm, double shiftDeg = 45.0, double bendAt = 0.5);
+                                    double leadMm, double shiftDeg = 45.0, double bendAt = 0.5, int kneeAt = -1);
 
 // ---- LENGTHS ON THE PANE ----------------------------------------------------------------------------
 // A special's length and how far apart its two parts sit on the pane are one figure: 75 mm to a column. A
@@ -266,6 +269,21 @@ QString joinedSpecial(const BrickDesign& d, const QString& special);
 // Every special with bridge wires made up from them: as many wires as it takes, each with the net of the wire
 // it takes. Returns how many specials were changed.
 int syncBridgeWires(BrickDesign& d);
+// A BRIDGE WIRE: a special that takes some of the wires of the cable it is joined to (it has bridge wires set).
+// Unlike any other special it may join a cable's end that already has its parts - the rest of the wires go on
+// to them.
+bool brickIsBridge(const Brick& b);
+// Made into a bridge wire: one wire, no cover, taking wire 1 until told otherwise.
+void makeBridgeWire(Brick& b);
+
+// ---- WHAT MOVES WITH WHAT ------------------------------------------------------------------------------
+// A part and the special in line with it (on its row) are one line: moved up or down, the other goes too. A
+// special not strung between two parts goes along with its part as well. `moving` are the bricks being moved.
+struct BrickFollow {
+    bool x = false;
+    bool y = false;
+};
+QHash<QString, BrickFollow> bricksFollowing(const BrickDesign& d, const QStringList& moving);
 
 // One entry face of an end, once the design is laid out.
 struct BrickFace {

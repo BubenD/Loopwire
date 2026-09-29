@@ -137,6 +137,7 @@ private:
     QPointF pressAt_;
     QPointF cursor_;
     QHash<QString, QPointF> startAt_;   // where each picked brick was when the drag began
+    QHash<QString, BrickFollow> follow_;   // what goes with the picked bricks, and on which axes
     QPointF panFrom_;
     bool zoneAdd_ = false;
     bool shiftAlone_ = false;   // Shift pressed and let go with nothing clicked in between

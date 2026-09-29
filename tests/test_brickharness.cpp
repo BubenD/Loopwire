@@ -1223,7 +1223,7 @@ void testDialog() {
         else if (!what.isEmpty()) ++specials;
     }
     std::printf("  wizard: palette of %d end part(s) and %d special(s)\n", ends, specials);
-    check(ends >= 5 && specials == 4, "wizard: the palette holds the end parts and the four specials");
+    check(ends >= 5 && specials == 5, "wizard: the palette holds the end parts, the four specials and the bridge wire");
 
     // A BRICK DROPPED ON THE PANE lands on the grid where it was dropped.
     BrickCanvas* canvas = dlg.canvas();
@@ -2016,6 +2016,105 @@ void testLengthsAndBridges() {
     }
 }
 
+// ROUND EIGHT: Esc keeps the wizard open; a part and its special in one line move together; the special's brick
+// is the knee; a bridge wire takes some of a cable's wires, the rest going on to its part.
+void testRoundEight() {
+    // IN ONE LINE, MOVING TOGETHER.
+    {
+        BrickDesign d;
+        const QString e = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString s = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString y = d.addBrick(BrickType::Run, PartKind::Cable, 3, 0);
+        d.connect(e, s);
+        d.connect(s, y);   // its other end a cable: not strung between two parts
+        const QHash<QString, BrickFollow> f = bricksFollowing(d, {e});
+        check(f.contains(s) && f.value(s).x && f.value(s).y, "follow: a special on one part goes with it, along and across");
+        const QString e2 = d.addBrick(BrickType::End, PartKind::Connector, 4, 1);
+        const QString s2 = d.addBrick(BrickType::Run, PartKind::Cable, 5, 1);
+        const QString e3 = d.addBrick(BrickType::End, PartKind::Connector, 6, 2);
+        d.connect(e2, s2);
+        d.connect(s2, e3);
+        const QHash<QString, BrickFollow> g = bricksFollowing(d, {e2});
+        check(g.contains(s2) && !g.value(s2).x && g.value(s2).y,
+              "follow: strung between two parts, it goes up and down with the part in its line, and not along");
+        const QHash<QString, BrickFollow> h = bricksFollowing(d, {s2});
+        check(h.contains(e2) && h.value(e2).y && !h.contains(e3), "follow: the special moved, the part in its line goes too");
+    }
+    // THE KNEE AT THE BRICK: in line with its start part, the first bend is where the brick is.
+    {
+        const std::vector<Vec2> r = routeBetweenFaces({0, 0}, {1, 0}, {200, 40}, {-1, 0}, 10.0, 45.0, 0.3, 0);
+        const std::vector<Vec2> q = routeBetweenFaces({0, 0}, {1, 0}, {200, 40}, {-1, 0}, 10.0, 45.0, 0.7, 1);
+        std::printf("  knee: first bend at %.1f, second bend at %.1f\n", r.size() > 1 ? r[1].x : -1.0,
+                    q.size() > 2 ? q[2].x : -1.0);
+        check(r.size() == 4 && std::abs(r[1].x - 60.0) < 1e-6, "knee: the run leaves its part's line where the brick is");
+        check(q.size() == 4 && std::abs(q[2].x - 140.0) < 1e-6, "knee: in line with its finish part, it joins that line there");
+    }
+    // A BRIDGE WIRE.
+    {
+        BrickDesign d;
+        const QString x0 = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString x1 = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        const QString br = d.addBrick(BrickType::Run, PartKind::Wire, 3, 1);
+        const QString f = d.addBrick(BrickType::End, PartKind::Ferrule, 4, 1);
+        makeBridgeWire(*d.brick(br));
+        d.brick(br)->run.bridgeWires = QStringLiteral("2,3");
+        QString why;
+        d.connect(x0, c);
+        check(d.connect(c, x1, &why), "bridge wire: the cable goes on to its connector");
+        check(brickIsBridge(*d.brick(br)) && d.connect(c, br, &why), "bridge wire: and a bridge wire joins the same end of it");
+        check(d.connect(br, f, &why), "bridge wire: out to its own part");
+        syncBridgeWires(d);
+        check(d.brick(br)->run.wires == 2 && d.link(c, br) && d.link(c, br)->wires == 2,
+              "bridge wire: it takes the two wires it is told, and the cable gives them to it");
+        int toX1 = -1, toBridge = -1;
+        for (const Entity& e : buildBrickHarness(d, nullptr).entities)
+            if (e.type == EntityType::TwistedPair && e.meta.value(QStringLiteral("brickId")).toString() == c &&
+                e.points.size() > 2) {
+                const int n = e.meta.value(QStringLiteral("twistWires")).toInt();
+                if (e.points.back().y > -1.0) toX1 = n;
+                else toBridge = n;
+            }
+        std::printf("  bridge wire: %d wire(s) on to the connector, %d into the bridge\n", toX1, toBridge);
+        check(toX1 == 2 && toBridge == 2, "bridge wire: the cable splits - the rest on to its part, the two into the bridge");
+        // An ordinary special still may not share a cable's end.
+        const QString fan = d.addBrick(BrickType::Fanout, PartKind::Wire, 3, -1);
+        check(!d.connect(c, fan, &why), "bridge wire: an ordinary special still does not share an end already used");
+    }
+    // THE WIZARD: Esc does not close it; the palette has the bridge wire; linked, a special comes into its part's line.
+    {
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        BrickWizardDialog dlg(&ed);
+        dlg.show();
+        QApplication::processEvents();
+        QKeyEvent esc(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QApplication::sendEvent(&dlg, &esc);
+        QApplication::processEvents();
+        check(dlg.isVisible(), "wizard: Esc does not close it");
+        bool bridgeItem = false;
+        for (QListWidget* l : dlg.findChildren<QListWidget*>())
+            for (int i = 0; i < l->count(); ++i)
+                if (l->item(i)->text().trimmed() == QStringLiteral("Bridge wire")) bridgeItem = true;
+        check(bridgeItem, "wizard: a Bridge wire among the specials");
+        const QString made = dlg.addFromPalette(brickTypeKey(BrickType::Run) + QStringLiteral("|") +
+                                                partKindKey(PartKind::Wire) + QStringLiteral("|bridge"));
+        check(dlg.design().brick(made) && brickIsBridge(*dlg.design().brick(made)),
+              "wizard: dropped from the palette, it is a bridge wire");
+        BrickDesign& w = dlg.design();
+        const QString e = w.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString s = w.addBrick(BrickType::Run, PartKind::Cable, 2, 2.0);
+        w.connect(e, s);
+        emit dlg.canvas()->linked(e, s);
+        check(std::abs(w.brick(s)->row - w.brick(e)->row) < 1e-9, "wizard: linked to its first part, the special comes into its line");
+        dlg.canvas()->setSelection({e});
+        dlg.canvas()->moveSelection(0.0, 1.0);
+        check(std::abs(w.brick(s)->row - w.brick(e)->row) < 1e-9 && std::abs(w.brick(e)->row - 1.0) < 1e-9,
+              "wizard: the part moved down, its special moves with it");
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -2036,6 +2135,7 @@ int run_brickharness_tests() {
     testPartSizeByEntry();
     testConnectPointFacesBrick();
     testLengthsAndBridges();
+    testRoundEight();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

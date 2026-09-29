@@ -382,6 +382,14 @@ void BrickCanvas::deleteSelected() {
 void BrickCanvas::moveSelection(double dCol, double dRow) {
     if (sel_.isEmpty()) return;
     QHash<QString, QPointF> from;
+    // What goes with them - the special in line with a part, a part in line with its special.
+    const QHash<QString, BrickFollow> follow = bricksFollowing(*d_, sel_);
+    for (auto it = follow.cbegin(); it != follow.cend(); ++it)
+        if (Brick* b = d_->brick(it.key())) {
+            from.insert(it.key(), QPointF(b->col, b->row));
+            if (it.value().x) b->col += dCol;
+            if (it.value().y) b->row += dRow;
+        }
     for (const QString& id : sel_)
         if (Brick* b = d_->brick(id)) {
             from.insert(id, QPointF(b->col, b->row));
@@ -612,6 +620,10 @@ void BrickCanvas::mousePressEvent(QMouseEvent* e) {
         startAt_.clear();
         for (const QString& id : sel_)
             if (const Brick* b = d_->brick(id)) startAt_.insert(id, QPointF(b->col, b->row));
+        // And what goes with them, each on the axes it follows.
+        follow_ = bricksFollowing(*d_, sel_);
+        for (auto it = follow_.cbegin(); it != follow_.cend(); ++it)
+            if (const Brick* b = d_->brick(it.key())) startAt_.insert(it.key(), QPointF(b->col, b->row));
         update();
         return;
     }
@@ -649,7 +661,9 @@ void BrickCanvas::mouseMoveEvent(QMouseEvent* e) {
         bool moved = false;
         for (auto it = startAt_.begin(); it != startAt_.end(); ++it)
             if (Brick* b = d_->brick(it.key())) {
-                const double col = it.value().x() + dc, row = it.value().y() + dr;
+                const auto f = follow_.constFind(it.key());
+                const bool followX = f == follow_.cend() || f->x, followY = f == follow_.cend() || f->y;
+                const double col = it.value().x() + (followX ? dc : 0.0), row = it.value().y() + (followY ? dr : 0.0);
                 if (col != b->col || row != b->row) {
                     b->col = col;
                     b->row = row;
@@ -901,11 +915,13 @@ void BrickCanvas::dragMoveEvent(QDragMoveEvent* e) {
 void BrickCanvas::dropEvent(QDropEvent* e) {
     const QString what = QString::fromUtf8(e->mimeData()->data(QString::fromLatin1(kBrickMime)));
     const QStringList parts = what.split(QLatin1Char('|'));
-    if (parts.size() != 2) return;
+    if (parts.size() < 2) return;
     double col, row;
     toGrid(L(e->position()), col, row);
     const QString id = d_->addBrick(brickTypeFromKey(parts[0]), partKindFromKey(parts[1]),
                                     std::round(col), snapHalf(row));
+    if (parts.value(2) == QLatin1String("bridge"))
+        if (Brick* b = d_->brick(id)) makeBridgeWire(*b);
     e->acceptProposedAction();
     setSelected(id);
     emit selectionChanged(id);
@@ -942,6 +958,9 @@ BrickPalette::BrickPalette(QWidget* parent) : QListWidget(parent) {
     for (BrickType t : {BrickType::Fanout, BrickType::Run, BrickType::TwistedPair,
                         BrickType::TwistedBundle})
         brick(brickTypeName(t), brickTypeKey(t) + QLatin1Char('|') + partKindKey(PartKind::Wire));
+    // A BRIDGE WIRE: takes the wires it is told from the cable it is joined to, the rest going on to its parts.
+    brick(QStringLiteral("Bridge wire"),
+          brickTypeKey(BrickType::Run) + QLatin1Char('|') + partKindKey(PartKind::Wire) + QStringLiteral("|bridge"));
 }
 
 QStringList BrickPalette::mimeTypes() const { return {QString::fromLatin1(kBrickMime)}; }
@@ -1237,6 +1256,17 @@ void BrickWizardDialog::buildUi() {
         const Brick* sp = brickIsSpecial(ba->type) ? ba : bb;
         const Brick* en = sp == ba ? bb : ba;
         if (!brickIsSpecial(sp->type) || en->type != BrickType::End) return;
+        // IN ONE LINE WITH ITS FIRST PART: a special linked to a part with nothing on its other end yet comes
+        // onto that part's row - they move up and down together from then on.
+        {
+            const QStringList starts = design_.startsOf(sp->id), finishes = design_.finishesOf(sp->id);
+            const QStringList otherSide = starts.contains(en->id) ? finishes : starts;
+            bool alone = otherSide.isEmpty();
+            for (const QString& o : design_.linksOf(sp->id))
+                if (const Brick* ob = design_.brick(o); ob && brickIsSpecial(ob->type)) alone = false;
+            if (alone)
+                if (Brick* s = design_.brick(sp->id)) s->row = en->row;
+        }
         if (fitEndToLength(design_, sp->id, en->id))
             status_->setText(QStringLiteral("Linked - put at the run's %1 mm").arg(sp->run.lengthMm, 0, 'f', 0));
     });
@@ -1826,7 +1856,7 @@ void BrickWizardDialog::fillPartsList() {
 
 QString BrickWizardDialog::addFromPalette(const QString& what) {
     const QStringList parts = what.split(QLatin1Char('|'));
-    if (parts.size() != 2) return QString();
+    if (parts.size() < 2) return QString();
     // IN VIEW: the middle of what the pane shows, or the nearest free place below it.
     const QPointF c = canvas_->viewCentreGrid();
     const double col = std::round(c.x());
@@ -1838,6 +1868,8 @@ QString BrickWizardDialog::addFromPalette(const QString& what) {
     };
     for (int i = 0; i < 40 && taken(row); ++i) row += 1.0;
     const QString id = design_.addBrick(brickTypeFromKey(parts[0]), partKindFromKey(parts[1]), col, row);
+    if (parts.value(2) == QLatin1String("bridge"))
+        if (Brick* b = design_.brick(id)) makeBridgeWire(*b);
     selectBrick(id);
     designChanged();
     return id;
@@ -2475,6 +2507,15 @@ bool BrickWizardDialog::assignPart(const QString& partId) {
 void BrickWizardDialog::keyPressEvent(QKeyEvent* e) {
     // Enter finishes typing, and nothing else: it does not press a button or close the window.
     if (e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) {
+        e->accept();
+        return;
+    }
+    // NOR DOES ESC. It lets go of what is picked; the window closes by Close, not by a key pressed to get out of
+    // something else - a harness half built was lost to it.
+    if (e->key() == Qt::Key_Escape) {
+        canvas_->setSelection({});
+        loadPanel();
+        refreshPreview();
         e->accept();
         return;
     }
