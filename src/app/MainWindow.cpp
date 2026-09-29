@@ -3484,14 +3484,27 @@ void MainWindow::addPartToBom(const QString& partId) {
     row.rowId = bomNextRowId(table.rows);
     row.fromDrawing = false;   // put there by hand, and so removable by hand
     table.rows.push_back(row);
+    // A CONNECTOR BOUGHT WITHOUT ITS CONTACTS comes onto the bill with them: the contact tied to it, one per way.
+    QString withContacts;
+    if (part->kind == PartKind::Connector && !partIncludesPins(*part)) {
+        const PartsLibrary merged = catalog.merged();
+        const QStringList tied = tiedContactsOf(merged, part->id);
+        if (const LibraryPart* contact = tied.isEmpty() ? nullptr : merged.byId(tied.front())) {
+            BomRow c = bomRowFromPart(*contact, part->wayCount());
+            c.rowId = bomNextRowId(table.rows);
+            c.fromDrawing = false;
+            table.rows.push_back(c);
+            withContacts = tr(", with %1 x %2").arg(part->wayCount()).arg(contact->title());
+        }
+    }
     doc->bom() = table.toJson();
     doc->setDirty(true);
     refreshBomPanel();
     // AND THE WINDOW, IF IT IS OPEN. It shows the same bill: a line added from the panel that did not appear
     // there left two views of one list disagreeing, and no way to tell which was right.
     if (bomDlg_) bomDlg_->reload();
-    statusBar()->showMessage(tr("%1 added to the bill of materials — set the quantity in its window")
-                                 .arg(part->title()),
+    statusBar()->showMessage(tr("%1 added to the bill of materials%2 — set the quantity in its window")
+                                 .arg(part->title(), withContacts),
                              6000);
 }
 

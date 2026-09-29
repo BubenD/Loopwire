@@ -93,12 +93,41 @@ QString roleStyle() {
 // The tree's own chrome. The hover was a near-black navy, which is a dark blob with dark text on it the
 // moment the window is light, so it follows the scheme too. The selected row stays the library green in
 // both: it is white-on-green either way, and it is the one row that has to be found at a glance.
+// The fold arrows, drawn: the style's own were painted over by the picked row's colour, so a picked group showed
+// a blank square where its arrow should be. Drawn once into files the style sheet can name.
+QString branchArrow(bool open) {
+    const QString path = QDir(QDir::tempPath()).filePath(open ? QStringLiteral("edraw_branch_open.png")
+                                                              : QStringLiteral("edraw_branch_closed.png"));
+    if (!QFileInfo::exists(path)) {
+        QPixmap pm(12, 12);
+        pm.fill(Qt::transparent);
+        QPainter p(&pm);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor("#c9d4df"));
+        QPolygonF tri;
+        if (open) tri << QPointF(2, 4) << QPointF(10, 4) << QPointF(6, 9);
+        else tri << QPointF(4, 2) << QPointF(9, 6) << QPointF(4, 10);
+        p.drawPolygon(tri);
+        p.end();
+        pm.save(path);
+    }
+    return QDir::fromNativeSeparators(path);
+}
+
 QString treeStyle() {
     return QStringLiteral("QTreeWidget::item:selected{background:#2f6b46;color:#ffffff;}"
                           "QTreeWidget::item:selected:!active{background:#2f6b46;color:#ffffff;}"
                           "QTreeWidget::item:hover{background:%1;}"
-                          "QTreeWidget::item{padding:2px 0px;}")
-        .arg(Chrome::dark() ? QStringLiteral("#33414f") : QStringLiteral("#dce6f2"));
+                          "QTreeWidget::item{padding:2px 0px;}"
+                          // The arrow to fold or open a group, seen on the picked row as on any other.
+                          "QTreeWidget::branch:selected{background:transparent;}"
+                          "QTreeWidget::branch:has-children:!has-siblings:closed,"
+                          "QTreeWidget::branch:closed:has-children:has-siblings{image:url(%2);}"
+                          "QTreeWidget::branch:open:has-children:!has-siblings,"
+                          "QTreeWidget::branch:open:has-children:has-siblings{image:url(%3);}")
+        .arg(Chrome::dark() ? QStringLiteral("#33414f") : QStringLiteral("#dce6f2"), branchArrow(false),
+             branchArrow(true));
 }
 
 // The same ink, thinned - for the wash inside a sign, which has to stay the colour of the outline
@@ -853,7 +882,8 @@ void PartsLibraryDialog::buildUi() {
         if (syncing_) return;
         const QString mode = QSettings().value(QStringLiteral("partsLibrary/foldMode"),
                                                QStringLiteral("remember")).toString();
-        if (mode != QLatin1String("remember")) return;
+        // A group folded stays folded - kept unless every group is to open folded anyway.
+        if (mode == QLatin1String("folded")) return;
         if (filter_ && !filter_->text().trimmed().isEmpty()) return;   // a search opens everything
         QStringList folded = QSettings().value(QStringLiteral("partsLibrary/treeFolded")).toStringList();
         for (int i = 0; i < tree_->topLevelItemCount(); ++i) {
@@ -2077,9 +2107,14 @@ void PartsLibraryDialog::reloadTree() {
                 p->mfrName.contains(needle, Qt::CaseInsensitive))
                 shown.push_back(p);
         }
-        if (shown.empty()) continue; // a kind with nothing in it is not listed
+        // A kind with nothing in it is not listed - except the CONNECTOR CONTACTS, the pins and sockets a
+        // connector is tied to: always there, so there is somewhere to put the first one.
+        if (shown.empty() && (k != PartKind::ContactPin || !needle.isEmpty())) continue;
         auto* head = new QTreeWidgetItem(tree_);
-        head->setText(0, QStringLiteral("%1  (%2)").arg(partKindName(k)).arg(shown.size()));
+        head->setText(0, QStringLiteral("%1  (%2)")
+                             .arg(k == PartKind::ContactPin ? QStringLiteral("Connector contacts - pins / sockets")
+                                                            : partKindName(k))
+                             .arg(shown.size()));
         head->setData(0, Qt::UserRole + 1, partKindName(k));   // which kind, for remembering it folded
         head->setFirstColumnSpanned(false);
         QFont f = head->font(0);
@@ -2113,8 +2148,7 @@ void PartsLibraryDialog::reloadTree() {
             needle.isEmpty() &&
             (!firstBuild && wasFolded.contains(kind)
                  ? wasFolded.value(kind)
-                 : foldMode == QLatin1String("folded") ||
-                       (foldMode == QLatin1String("remember") && foldedKinds.contains(kind)));
+                 : foldMode == QLatin1String("folded") || foldedKinds.contains(kind));
         head->setExpanded(!folded);
     }
     syncing_ = false;

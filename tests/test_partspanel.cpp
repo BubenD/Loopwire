@@ -2874,6 +2874,20 @@ int run_partspanel_tests() {
                 check(libShown && show && show->count() >= 2 && show->itemText(0) == QStringLiteral("All libraries"),
                       "libraries: every part says its library, and Show picks all of them or one");
             }
+            // THE CONNECTOR CONTACTS always have their group, even with none in it yet; and the fold arrows are
+            // drawn, so a picked group still shows its arrow.
+            {
+                bool contacts = false;
+                QString style;
+                for (QTreeWidget* t : dlg.findChildren<QTreeWidget*>()) {
+                    style += t->styleSheet();
+                    for (int i = 0; i < t->topLevelItemCount(); ++i)
+                        if (t->topLevelItem(i)->text(0).startsWith(QStringLiteral("Connector contacts"))) contacts = true;
+                }
+                check(contacts, "contacts group: the connector contacts have a group of their own, even empty");
+                check(style.contains(QStringLiteral("branch:selected")) && style.contains(QStringLiteral("edraw_branch_closed")),
+                      "tree: the fold arrow is drawn on a picked group too");
+            }
             // A FOLDED GROUP STAYS FOLDED when a part in it is picked.
             {
                 QTreeWidgetItem* head = nullptr;
