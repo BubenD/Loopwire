@@ -139,6 +139,8 @@ struct Brick {
     double drawDyMm = 0.0;
     // DRAWING ORDER: a brick with a higher figure is drawn over one with a lower.
     int z = 0;
+    // WHICH SIDE ITS DIMENSIONS GO: above the parts (the default) or below them.
+    bool dimBelow = false;
     double designatorHeightMm = 3.5;
     BrickRunSpec run;                      // for a special
     // HOW BIG AN END'S PART IS DRAWN, 1 = as drawn in the library. Its faces scale with it, so the wires
@@ -193,6 +195,9 @@ struct BrickDesign {
     // its far point (the back of it).
     bool dimFromFar = false;
     bool dimToFar = false;
+    // Or from the MIDDLE of each part - halfway between its near point and its far point.
+    bool dimFromMid = false;
+    bool dimToMid = false;
 
     Brick* brick(const QString& id);
     const Brick* brick(const QString& id) const;

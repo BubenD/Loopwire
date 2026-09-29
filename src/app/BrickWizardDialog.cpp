@@ -1188,11 +1188,6 @@ void BrickWizardDialog::buildUi() {
                                            "QToolButton:checked{background:#2b6cb0;color:white;}"));
     connect(dimTool_, &QToolButton::toggled, this, [this](bool on) { canvas_->setDimensionMode(on); });
     bar->addWidget(dimTool_);
-    dimSide_ = new QComboBox(this);
-    dimSide_->setObjectName(QStringLiteral("brickDimSide"));
-    dimSide_->addItems({QStringLiteral("Above"), QStringLiteral("Below")});
-    dimSide_->setToolTip(QStringLiteral("Where the next dimension goes: above the two parts or below them"));
-    bar->addWidget(dimSide_);
     button("brickDimClear", QStringLiteral("Clear dims"), QStringLiteral("Take off every dimension put on by hand"),
            [this] {
                design_.dims.clear();
@@ -1202,17 +1197,19 @@ void BrickWizardDialog::buildUi() {
     bar->addWidget(new QLabel(QStringLiteral("Dimensions from"), this));
     dimFrom_ = new QComboBox(this);
     dimFrom_->setObjectName(QStringLiteral("brickDimFrom"));
-    dimFrom_->addItems({QStringLiteral("Near point"), QStringLiteral("Far point")});
+    dimFrom_->addItems({QStringLiteral("Near point"), QStringLiteral("Far point"), QStringLiteral("Mid point")});
     bar->addWidget(dimFrom_);
     bar->addWidget(new QLabel(QStringLiteral("to"), this));
     dimTo_ = new QComboBox(this);
     dimTo_->setObjectName(QStringLiteral("brickDimTo"));
-    dimTo_->addItems({QStringLiteral("Near point"), QStringLiteral("Far point")});
+    dimTo_->addItems({QStringLiteral("Near point"), QStringLiteral("Far point"), QStringLiteral("Mid point")});
     bar->addWidget(dimTo_);
     for (QComboBox* c : {dimFrom_, dimTo_})
         connect(c, &QComboBox::currentIndexChanged, this, [this](int) {
             design_.dimFromFar = dimFrom_->currentIndex() == 1;
             design_.dimToFar = dimTo_->currentIndex() == 1;
+            design_.dimFromMid = dimFrom_->currentIndex() == 2;   // halfway between near and far
+            design_.dimToMid = dimTo_->currentIndex() == 2;
             refreshPreview();
         });
     bar->addStretch(1);
@@ -1385,7 +1382,8 @@ void BrickWizardDialog::buildUi() {
                                                               brickTitle(*o)));
     });
     connect(canvas_, &BrickCanvas::dimensionPicked, this, [this](const QString& a, const QString& b) {
-        design_.dims.push_back({a, b, dimSide_ && dimSide_->currentIndex() == 1});
+        // Which side is the part's own (its Dimensions setting): above unless it says below.
+        design_.dims.push_back({a, b, design_.brick(a) && design_.brick(a)->dimBelow});
         designChanged();
         status_->setText(QStringLiteral("Dimension put on between %1 and %2 - click two more for another")
                              .arg(brickTitle(*design_.brick(a)), brickTitle(*design_.brick(b))));
@@ -1576,6 +1574,45 @@ QWidget* BrickWizardDialog::buildEndPage() {
     bomRow->addWidget(bomState_, 1);
     bomRow->addWidget(bomAdd_);
     f->addRow(QStringLiteral("BOM"), bomRow);
+    // IS IT COMPLETE: a connector without its contacts says so, and offers the contacts tied to it.
+    {
+        auto* row = new QHBoxLayout;
+        compat_ = new QLabel(page);
+        compat_->setObjectName(QStringLiteral("brickCompat"));
+        compat_->setWordWrap(true);
+        compat_->setStyleSheet(QStringLiteral("color:#f0b35a;"));
+        row->addWidget(compat_, 1);
+        compatAdd_ = new QPushButton(QStringLiteral("Add contacts"), page);
+        compatAdd_->setObjectName(QStringLiteral("brickCompatAdd"));
+        compatAdd_->setToolTip(QStringLiteral("Put the contact tied to this connector on the bill, one per way"));
+        row->addWidget(compatAdd_);
+        f->addRow(QString(), row);
+        connect(compatAdd_, &QPushButton::clicked, this, [this] {
+            const Brick* b = design_.brick(canvas_->selected());
+            const LibraryPart* p = b ? catalog_.byId(b->libPart) : nullptr;
+            if (!p) return;
+            const QStringList tied = tiedContactsOf(catalog_.merged(), p->id);
+            if (tied.isEmpty()) return;
+            if (addPartToBom(tied.front(), p->wayCount()))
+                status_->setText(QStringLiteral("%1 contact(s) on the bill for %2").arg(p->wayCount()).arg(p->title()));
+            loadPanel();
+        });
+    }
+    // WHICH SIDE ITS DIMENSIONS GO.
+    partDimSide_ = new QComboBox(page);
+    partDimSide_->setObjectName(QStringLiteral("brickPartDimSide"));
+    partDimSide_->addItems({QStringLiteral("Above the part"), QStringLiteral("Below the part")});
+    partDimSide_->setToolTip(QStringLiteral("Where the dimensions put on from this part go"));
+    f->addRow(QStringLiteral("Dimensions"), partDimSide_);
+    connect(partDimSide_, &QComboBox::currentIndexChanged, this, [this](int i) {
+        Brick* b = design_.brick(canvas_->selected());
+        if (!b || b->type != BrickType::End) return;
+        b->dimBelow = i == 1;
+        // Its dimensions go that side now.
+        for (BrickDim& dm : design_.dims)
+            if (dm.a == b->id) dm.below = b->dimBelow;
+        refreshPreview();
+    });
     params_ = new QTableWidget(0, 2, page);
     params_->setObjectName(QStringLiteral("brickParams"));
     params_->setHorizontalHeaderLabels({QStringLiteral("Parameter"), QStringLiteral("Value")});
@@ -1589,6 +1626,8 @@ QWidget* BrickWizardDialog::buildEndPage() {
     connect(part_, &QComboBox::currentIndexChanged, this, [this](int) {
         writeEnd();
         loadPanel();
+        // Said at once when the part chosen is not complete on its own (a connector without its contacts).
+        if (compat_ && !compat_->text().isEmpty()) status_->setText(compat_->text());
     });
     connect(name_, &QLineEdit::textEdited, this, [this](const QString&) { writeEnd(); });
     connect(balloon_, &QCheckBox::toggled, this, [this](bool) { writeEnd(); });
@@ -2185,6 +2224,11 @@ void BrickWizardDialog::loadPanel() {
         // THE BILL: marked when it is already on it.
         const int item = p ? bomItemOf(p->id) : 0;
         bomAdd_->setEnabled(p != nullptr && document() != nullptr);
+        checkCompatibility(b);
+        {
+            const QSignalBlocker hush(partDimSide_);
+            partDimSide_->setCurrentIndex(b->dimBelow ? 1 : 0);
+        }
         bomState_->setText(!p      ? QStringLiteral("Choose a library part first")
                            : item  ? QStringLiteral("✔ In the BOM as item %1").arg(item)
                                    : QStringLiteral("Not in the BOM"));
@@ -2721,6 +2765,32 @@ int BrickWizardDialog::layerPartsFromNeighbours(const QString& special) {
     return given;
 }
 
+void BrickWizardDialog::checkCompatibility(const Brick* b) {
+    if (!compat_) return;
+    QString said;
+    bool canAdd = false;
+    const LibraryPart* p = b && !b->libPart.isEmpty() ? catalog_.byId(b->libPart) : nullptr;
+    if (p && p->kind == PartKind::Connector && !partIncludesPins(*p) && !partIsWired(*p)) {
+        // Bought without its contacts: some contact has to be on the bill for it.
+        const PartsLibrary merged = catalog_.merged();
+        const QStringList tied = tiedContactsOf(merged, p->id);
+        bool onBill = false;
+        for (const QString& id : tied) onBill = onBill || bomItemOf(id) > 0;
+        if (!onBill) {
+            QStringList names;
+            for (const QString& id : tied)
+                if (const LibraryPart* t = merged.byId(id)) names << (t->mfrPn.isEmpty() ? t->title() : t->mfrPn);
+            said = tied.isEmpty()
+                       ? QStringLiteral("This connector needs contacts - none are tied to it; tie them in the parts library")
+                       : QStringLiteral("This connector needs contacts - tied: %1").arg(names.join(QStringLiteral(", ")));
+            canAdd = !tied.isEmpty();
+        }
+    }
+    compat_->setText(said.isEmpty() ? QString() : QStringLiteral("⚠ ") + said);
+    compat_->setVisible(!said.isEmpty());
+    compatAdd_->setVisible(canAdd);
+}
+
 QString BrickWizardDialog::bridgeValue() const {
     if (!bridge_) return QString();
     const QString text = bridge_->currentText().trimmed();
@@ -3118,8 +3188,8 @@ bool BrickWizardDialog::loadFromDrawing(const QString& name) {
     design_.catalog = &catalog_;
     {
         const QSignalBlocker b1(dimFrom_), b2(dimTo_);
-        dimFrom_->setCurrentIndex(design_.dimFromFar ? 1 : 0);
-        dimTo_->setCurrentIndex(design_.dimToFar ? 1 : 0);
+        dimFrom_->setCurrentIndex(design_.dimFromMid ? 2 : design_.dimFromFar ? 1 : 0);
+        dimTo_->setCurrentIndex(design_.dimToMid ? 2 : design_.dimToFar ? 1 : 0);
     }
     currentName_ = name;
     harnessName_->setText(name);

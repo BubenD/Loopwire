@@ -1313,6 +1313,33 @@ void LibraryPart::setConnectorIds(const QStringList& ids) {
     else params.insert(QStringLiteral("connectors"), clean.join(QLatin1Char(';')));
 }
 
+void addContactTie(PartsLibrary& lib, const QString& connectorId, const QString& contactId) {
+    if (contactId.isEmpty()) return;
+    if (LibraryPart* connector = lib.byId(connectorId)) {
+        QStringList ids = connector->contactIds();
+        if (!ids.contains(contactId)) ids << contactId;
+        connector->setContactIds(ids);
+    }
+    if (LibraryPart* contact = lib.byId(contactId)) {
+        QStringList ids = contact->connectorIds();
+        if (!ids.contains(connectorId)) ids << connectorId;
+        contact->setConnectorIds(ids);
+    }
+}
+
+void removeContactTie(PartsLibrary& lib, const QString& connectorId, const QString& contactId) {
+    if (LibraryPart* connector = lib.byId(connectorId)) {
+        QStringList ids = connector->contactIds();
+        ids.removeAll(contactId);
+        connector->setContactIds(ids);
+    }
+    if (LibraryPart* contact = lib.byId(contactId)) {
+        QStringList ids = contact->connectorIds();
+        ids.removeAll(connectorId);
+        contact->setConnectorIds(ids);
+    }
+}
+
 void tieContactToConnector(PartsLibrary& lib, const QString& connectorId, const QString& contactId) {
     LibraryPart* connector = lib.byId(connectorId);
     if (!connector) return;

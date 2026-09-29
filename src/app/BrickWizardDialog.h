@@ -381,7 +381,13 @@ public:
     bool canRedo() const { return historyAt_ + 1 < static_cast<int>(history_.size()); }
 private:
     QToolButton* dimTool_ = nullptr;              // putting a dimension on by hand
-    QComboBox* dimSide_ = nullptr;                // above the parts or below them
+    QComboBox* dimSide_ = nullptr;                // (the part's own Dimensions side, on its panel)
+    QComboBox* partDimSide_ = nullptr;            // the picked part's dimensions: above it or below it
+    // WHAT GOES WITH IT: a connector bought without its contacts needs contacts on the bill - said, with the
+    // contacts tied to it offered.
+    QLabel* compat_ = nullptr;
+    QPushButton* compatAdd_ = nullptr;
+    void checkCompatibility(const Brick* b);
     QDoubleSpinBox* designatorHeight_ = nullptr;  // how tall its letters are
     QCheckBox* dimTotal_ = nullptr;
     QCheckBox* dimFans_ = nullptr;

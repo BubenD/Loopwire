@@ -377,7 +377,7 @@ QJsonObject BrickDesign::toJson() const {
                       {"libPart", b.libPart}, {"name", b.name},         {"col", b.col},
                       {"row", b.row},      {"rot", b.rot},             {"balloon", b.balloon},
                       {"showDesignator", b.showDesignator}, {"designatorHeightMm", b.designatorHeightMm},
-                      {"drawDy", b.drawDyMm}, {"z", b.z}};
+                      {"drawDy", b.drawDyMm}, {"z", b.z}, {"dimBelow", b.dimBelow}};
         if (std::abs(b.scale - 1.0) > 1e-9) o.insert(QStringLiteral("scale"), b.scale);
         if (b.autoScale) o.insert(QStringLiteral("autoScale"), true);
         if (brickIsSpecial(b.type)) {
@@ -434,13 +434,16 @@ QJsonObject BrickDesign::toJson() const {
     QJsonArray ds;
     for (const BrickDim& dm : dims) ds.append(QJsonObject{{"a", dm.a}, {"b", dm.b}, {"below", dm.below}});
     return QJsonObject{{"format", "edraw-brick-harness"}, {"bricks", bs}, {"links", ls},
-                       {"dimFromFar", dimFromFar},        {"dimToFar", dimToFar}, {"dims", ds}};
+                       {"dimFromFar", dimFromFar},        {"dimToFar", dimToFar}, {"dims", ds},
+                       {"dimFromMid", dimFromMid},        {"dimToMid", dimToMid}};
 }
 
 BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
     BrickDesign d;
     d.dimFromFar = o.value(QStringLiteral("dimFromFar")).toBool();
     d.dimToFar = o.value(QStringLiteral("dimToFar")).toBool();
+    d.dimFromMid = o.value(QStringLiteral("dimFromMid")).toBool();
+    d.dimToMid = o.value(QStringLiteral("dimToMid")).toBool();
     for (const QJsonValue v : o.value(QStringLiteral("dims")).toArray()) {
         const QJsonObject dm = v.toObject();
         d.dims.push_back({dm.value(QStringLiteral("a")).toString(), dm.value(QStringLiteral("b")).toString(),
@@ -460,6 +463,7 @@ BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
         b.balloon = bo.value(QStringLiteral("balloon")).toBool();
         b.drawDyMm = bo.value(QStringLiteral("drawDy")).toDouble(0.0);
         b.z = bo.value(QStringLiteral("z")).toInt(0);
+        b.dimBelow = bo.value(QStringLiteral("dimBelow")).toBool(false);
         b.showDesignator = bo.value(QStringLiteral("showDesignator")).toBool(false);
         b.designatorHeightMm = std::clamp(bo.value(QStringLiteral("designatorHeightMm")).toDouble(3.5), 0.5, 50.0);
         b.scale = std::clamp(bo.value(QStringLiteral("scale")).toDouble(1.0), 0.05, 20.0);
@@ -1131,6 +1135,40 @@ void stampBrick(std::vector<Entity>& ents, const QString& id) {
 
 QString faceKey(const QString& end, int port) { return end + QLatin1Char(':') + QString::number(port); }
 
+bool laidUpType(BrickType t) { return t == BrickType::TwistedPair || t == BrickType::TwistedBundle; }
+
+// A route with every corner rounded to `radius` (kept to half of the shorter side either way), as points along it.
+std::vector<Vec2> filletedRoute(const std::vector<Vec2>& r, double radius) {
+    if (r.size() < 3 || radius <= 1e-9) return r;
+    std::vector<Vec2> out{r.front()};
+    for (size_t i = 1; i + 1 < r.size(); ++i) {
+        const Vec2 a = r[i - 1], c = r[i], b = r[i + 1];
+        const Vec2 u = (a - c).normalized(), v = (b - c).normalized();
+        const double cosT = std::clamp(dot(u, v), -1.0, 1.0);
+        const double theta = std::acos(cosT);   // the angle between the two legs at the corner
+        if (theta < 1e-3 || std::abs(M_PI - theta) < 1e-3) {
+            out.push_back(c);
+            continue;
+        }
+        const double back = std::min({radius / std::tan(theta / 2.0), distance(a, c) / 2.0, distance(b, c) / 2.0});
+        const double rr = back * std::tan(theta / 2.0);
+        const Vec2 p1 = c + u * back, p2 = c + v * back;
+        const Vec2 centre = c + (u + v).normalized() * (rr / std::sin(theta / 2.0));
+        const double a1 = std::atan2(p1.y - centre.y, p1.x - centre.x);
+        double a2 = std::atan2(p2.y - centre.y, p2.x - centre.x);
+        double sweep = a2 - a1;
+        while (sweep > M_PI) sweep -= 2.0 * M_PI;
+        while (sweep < -M_PI) sweep += 2.0 * M_PI;
+        const int steps = 8;
+        for (int k = 0; k <= steps; ++k) {
+            const double t = a1 + sweep * k / steps;
+            out.push_back(centre + Vec2{std::cos(t), std::sin(t)} * rr);
+        }
+    }
+    out.push_back(r.back());
+    return out;
+}
+
 double routeLength(const std::vector<Vec2>& r) {
     double s = 0.0;
     for (size_t i = 1; i < r.size(); ++i) s += distance(r[i - 1], r[i]);
@@ -1718,8 +1756,21 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             pf.id = pf.node;
             pf.port = design.portOn(pf.node, it.value().source);
             const Vec2 at = faceAt(pf);
-            edges[pf.node] << Edge{it.key(), 0.0, at, Vec2{0.0, 0.0}, true};
-            edges[it.key()] << Edge{pf.node, 0.0, Vec2{0.0, 0.0}, at, true};
+            // AT THE CABLE'S END FACE, not at the part: the bridge comes out where the fan starts, a fan's length
+            // off the part - so its own part may stand nearer than the part the fan goes into.
+            double fan = kWiresRunEnd;
+            if (const Brick* src = design.brick(it.value().source)) {
+                const int srcPort = design.portOn(src->id, pf.node);
+                const double said = srcPort == kPortRight ? src->run.fanFinishMm : src->run.fanStartMm;
+                const auto sh = shapes.constFind(pf.node);
+                const double faceLen = sh != shapes.cend() && pf.port >= 0 && pf.port < sh->ports()
+                                           ? sh->faceLen[static_cast<size_t>(pf.port)]
+                                           : 10.0;
+                fan = said >= 0.0 ? said : std::max(kWiresRunEnd, faceLen * design.faceFanPct / 100.0 / 2.0);
+            }
+            const Vec2 face = at + faceOutOf(pf) * fan;
+            edges[pf.node] << Edge{it.key(), 0.0, face, Vec2{0.0, 0.0}, true};
+            edges[it.key()] << Edge{pf.node, 0.0, Vec2{0.0, 0.0}, face, true};
         }
         double anchorCol = 0.0;
         bool haveAnchor = false;
@@ -2233,10 +2284,10 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         else if (spreadA && jA) la.lane = std::max(la.lane, packed * 2.0);
         if (!spreadB && !loose && !intoCableB) lb.lane = packed;
         else if (spreadB && jB) lb.lane = std::max(lb.lane, packed * 2.0);
-        const double fanA = !spreadA ? 0.0
+        double fanA = !spreadA ? 0.0
                             : fanSpecA >= 0.0 ? fanSpecA
                                               : std::max(kWiresRunEnd, la.lane * (wires - 1) / 2.0);
-        const double fanB = !spreadB ? 0.0
+        double fanB = !spreadB ? 0.0
                             : fanSpecB >= 0.0 ? fanSpecB
                                               : std::max(kWiresRunEnd, lb.lane * (wires - 1) / 2.0);
         // Out of a cable's face a bridge wire turns at once: no straight lead of its own there.
@@ -2266,18 +2317,35 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             route = routeBetweenFaces(la.centre, fa.out, lb.centre, fb.out, lead, 45.0, bend, knee);
         }
         if (route.size() < 2) continue;
+        // A FAN ENDS BEFORE THE BEND: fanned wires are straight, and one run on past a knee was drawn as a spiral.
+        // And a fan AS LONG AS THE WHOLE RUN leaves no cover at all: the wires fan out of one face and gather into
+        // the other, as wires with no cable round them.
+        bool noCover = false;
+        if (!laidUpType(s.type) && wires > 1 && !isTrunk && !isSub) {
+            const double total = routeLength(route);
+            if (fanA + fanB >= total - 1.0 && (spreadA || spreadB)) {
+                noCover = true;
+                fanA = spreadA ? total / 2.0 : 0.0;
+                fanB = spreadB ? total / 2.0 : 0.0;
+            } else if (route.size() > 2) {
+                const double knee = std::max(0.0, r.kneeRadiusMm) + 2.0;
+                fanA = std::min(fanA, std::max(0.0, distance(route[0], route[1]) - knee));
+                fanB = std::min(fanB, std::max(0.0, distance(route[route.size() - 2], route.back()) - knee));
+            }
+        }
         std::vector<Entity> made;
 
         const bool laidUp = s.type == BrickType::TwistedPair || s.type == BrickType::TwistedBundle;
-        const QString outer = r.outermost();
+        const QString outer = noCover ? QStringLiteral("wires") : r.outermost();
         double bodyWidth = 0.0;
         if (wires == 1) {
             // ONE WIRE is a wire, not a bundle.
             Entity w;
             w.type = EntityType::Polyline;
-            w.points = route;
-            w.a = route.front();
-            w.b = route.back();
+            // ITS BENDS ROUNDED like a bundle's - the bend radius said, or three times the wire across.
+            w.points = filletedRoute(route, r.kneeRadiusMm >= 0.0 ? r.kneeRadiusMm : ww * 3.0);
+            w.a = w.points.front();
+            w.b = w.points.back();
             w.meta.insert(QStringLiteral("double"), true);
             w.meta.insert(QStringLiteral("gap"), ww);
             made.push_back(w);
@@ -2447,8 +2515,15 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                 const LibraryPart* p = e && catalog && !e->libPart.isEmpty() ? catalog->byId(e->libPart) : nullptr;
                 return p && partIsNominal(*p);
             };
-            const Vec2 from = design.dimFromFar && !nominal(br.a.id) ? fa.farAt : fa.nearAt;
-            const Vec2 to = design.dimToFar && !nominal(br.b.id) ? fb.farAt : fb.nearAt;
+            // Near, far, or the middle of the part (halfway between the two); a nominal part by its face.
+            const Vec2 from = nominal(br.a.id)    ? fa.nearAt
+                              : design.dimFromMid ? (fa.nearAt + fa.farAt) * 0.5
+                              : design.dimFromFar ? fa.farAt
+                                                  : fa.nearAt;
+            const Vec2 to = nominal(br.b.id)    ? fb.nearAt
+                            : design.dimToMid ? (fb.nearAt + fb.farAt) * 0.5
+                            : design.dimToFar ? fb.farAt
+                                              : fb.nearAt;
             const double along = total + distance(from, fa.centre) + distance(to, fb.centre);
             const QString said = !r.dimTextTotal.isEmpty() ? r.dimTextTotal : fmt(along);
             if (r.dimSingle) {
@@ -2605,6 +2680,8 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
     }
 
     // DRAWING ORDER: the bricks set to be drawn over others last, in the order they are told; the rest as built.
+    // And a brick BROUGHT TO THE FRONT covers what it crosses: a mask the shape of it goes down first - the part's
+    // closed outlines, a run's band along its route - so the wires and parts under it are hidden, not seen through.
     {
         bool any = false;
         for (const Brick& b : design.bricks) any = any || b.z != 0;
@@ -2615,6 +2692,49 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             };
             std::stable_sort(out.entities.begin(), out.entities.end(),
                              [&zOf](const Entity& x, const Entity& y) { return zOf(x) < zOf(y); });
+            auto maskOf = [](const Entity& e) {
+                std::vector<Entity> m;
+                auto wipe = [&m, &e](std::vector<Vec2> pts) {
+                    if (pts.size() < 3) return;
+                    Entity w;
+                    w.type = EntityType::Wipeout;
+                    w.points = std::move(pts);
+                    w.meta.insert(QStringLiteral("noFrame"), true);
+                    w.meta.insert(QStringLiteral("brickMask"), true);
+                    w.meta.insert(QStringLiteral("brickId"), e.meta.value(QStringLiteral("brickId")));
+                    m.push_back(w);
+                };
+                if (e.type == EntityType::Rect && e.points.size() >= 4) {
+                    wipe(e.points);
+                } else if (e.type == EntityType::Polyline && e.points.size() >= 4 &&
+                           (e.meta.value(QStringLiteral("closed")).toBool() || distance(e.points.front(), e.points.back()) < 1e-6)) {
+                    wipe(e.points);
+                } else if (e.type == EntityType::Circle && e.radius > 1e-9) {
+                    std::vector<Vec2> ring;
+                    for (int k = 0; k < 24; ++k)
+                        ring.push_back(e.center + Vec2{std::cos(k * M_PI / 12.0), std::sin(k * M_PI / 12.0)} * e.radius);
+                    wipe(ring);
+                } else if (e.type == EntityType::TwistedPair && e.points.size() >= 2) {
+                    // A band along the route, as wide as the body (or the wires) on it.
+                    const double half = std::max(e.meta.value(QStringLiteral("twistBodyWidth")).toDouble(0.0),
+                                                 e.meta.value(QStringLiteral("twistLane")).toDouble(1.0) *
+                                                     (e.meta.value(QStringLiteral("twistWires")).toInt(2) - 1)) / 2.0 + 1.0;
+                    for (size_t k = 0; k + 1 < e.points.size(); ++k) {
+                        const Vec2 a = e.points[k], b = e.points[k + 1];
+                        const Vec2 n = (b - a).normalized().perp() * half;
+                        wipe({a - n, b - n, b + n, a + n});
+                    }
+                }
+                return m;
+            };
+            std::vector<Entity> ordered;
+            ordered.reserve(out.entities.size() * 2);
+            for (const Entity& e : out.entities) {
+                if (zOf(e) > 0 && e.type != EntityType::Text && e.type != EntityType::Dimension)
+                    for (Entity& w : maskOf(e)) ordered.push_back(std::move(w));
+                ordered.push_back(e);
+            }
+            out.entities = std::move(ordered);
         }
     }
 
@@ -2637,7 +2757,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             const LibraryPart* p = e && catalog && !e->libPart.isEmpty() ? catalog->byId(e->libPart) : nullptr;
             return p && partIsNominal(*p);
         };
-        auto refOf = [&](const QString& id, bool far, Vec2* face) {
+        auto refOf = [&](const QString& id, bool far, bool mid, Vec2* face) {
             const auto it = out.faces.constFind(faceKey(id, 0));
             if (it == out.faces.cend()) {
                 const Bounds bx = boxOf.value(id);
@@ -2646,16 +2766,27 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                 return c;
             }
             if (face) *face = it->centre;
-            return far && !nominal(id) ? it->farAt : it->nearAt;
+            if (nominal(id)) return it->nearAt;
+            return mid ? (it->nearAt + it->farAt) * 0.5 : far ? it->farAt : it->nearAt;
         };
-        int n = 0;
+        // FIRST WHAT EACH ONE MEASURES AND WHICH SIDE IT GOES (the first part's side: above unless it says below),
+        // THEN WHERE: on each side from one line past every part dimensioned there, the shortest nearest the
+        // parts and each further one a step out wherever it would cross another - they never cross.
+        struct Planned {
+            Vec2 p0, p1;
+            bool below = false;
+            double said = 0.0;
+            double top = 0.0, bottom = 0.0;
+            int level = 0;
+        };
+        std::vector<Planned> plan;
         for (const BrickDim& dm : design.dims) {
             const Brick* ba = design.brick(dm.a);
             const Brick* bb = design.brick(dm.b);
             if (!ba || !bb || dm.a == dm.b) continue;
             Vec2 faceA, faceB;
-            Vec2 p0 = refOf(dm.a, design.dimFromFar, &faceA);
-            Vec2 p1 = refOf(dm.b, design.dimToFar, &faceB);
+            Vec2 p0 = refOf(dm.a, design.dimFromFar, design.dimFromMid, &faceA);
+            Vec2 p1 = refOf(dm.b, design.dimToFar, design.dimToMid, &faceB);
             if (p1.x < p0.x) {
                 std::swap(p0, p1);
                 std::swap(faceA, faceB);
@@ -2667,7 +2798,6 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                     top = std::max(top, bx.max.y);
                     bottom = std::min(bottom, bx.min.y);
                 }
-            const double lineY = dm.below ? bottom - 12.0 : top + 12.0;
             // On one run: the run's length, from reference to reference.
             double said = std::abs(p1.x - p0.x);
             for (const Brick& s : design.bricks) {
@@ -2677,6 +2807,39 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                 said = s.run.lengthMm + distance(p0, faceA) + distance(p1, faceB);
                 break;
             }
+            plan.push_back(Planned{p0, p1, dm.below || ba->dimBelow, said, top, bottom, 0});
+        }
+        double baseAbove = -1e300, baseBelow = 1e300;
+        for (const Planned& pl : plan) {
+            if (pl.below) baseBelow = std::min(baseBelow, pl.bottom);
+            else baseAbove = std::max(baseAbove, pl.top);
+        }
+        std::vector<size_t> byWidth(plan.size());
+        for (size_t k = 0; k < plan.size(); ++k) byWidth[k] = k;
+        std::stable_sort(byWidth.begin(), byWidth.end(), [&plan](size_t x, size_t y) {
+            return plan[x].p1.x - plan[x].p0.x < plan[y].p1.x - plan[y].p0.x;
+        });
+        std::vector<size_t> placed;
+        for (size_t k : byWidth) {
+            Planned& pl = plan[k];
+            int level = 0;
+            for (bool clash = true; clash; ++level) {
+                clash = false;
+                for (size_t q : placed) {
+                    const Planned& o = plan[q];
+                    if (o.below != pl.below || o.level != level) continue;
+                    if (pl.p0.x < o.p1.x + 2.0 && o.p0.x < pl.p1.x + 2.0) clash = true;
+                }
+                if (!clash) break;
+            }
+            pl.level = level;
+            placed.push_back(k);
+        }
+        int n = 0;
+        for (const Planned& pl : plan) {
+            const Vec2 p0 = pl.p0, p1 = pl.p1;
+            const double said = pl.said;
+            const double lineY = pl.below ? baseBelow - 12.0 - pl.level * 10.0 : baseAbove + 12.0 + pl.level * 10.0;
             Entity d;
             d.type = EntityType::Dimension;
             d.a = p0;

@@ -385,6 +385,10 @@ void tieContactToConnector(PartsLibrary& lib, const QString& connectorId, const 
 // tied the contact from the connector's side before this existed still sees the tie on the contact, because
 // the answer is worked out from both ends rather than read from one.
 QStringList tiedContactsOf(const PartsLibrary& lib, const QString& connectorId);
+// SEVERAL CONTACTS TO ONE CONNECTOR - a pin and a socket, two sizes, two makers' equivalents: one more tied (both
+// ends of the tie written), or one taken off (off at both ends).
+void addContactTie(PartsLibrary& lib, const QString& connectorId, const QString& contactId);
+void removeContactTie(PartsLibrary& lib, const QString& connectorId, const QString& contactId);
 QStringList tiedConnectorsOf(const PartsLibrary& lib, const QString& contactId);
 
 // Put the shelf in if it has never been put in. Returns how many parts it added, and marks the library so

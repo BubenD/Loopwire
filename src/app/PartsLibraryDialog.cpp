@@ -576,6 +576,14 @@ void PartsLibraryDialog::refreshLibraryChooser() {
     }
     const int at = libraryBox_->findData(catalog_.activePath());
     libraryBox_->setCurrentIndex(at >= 0 ? at : 0);
+    if (showLibBox_) {
+        const QString was = showLibBox_->currentData().toString();
+        showLibBox_->clear();
+        showLibBox_->addItem(QStringLiteral("All libraries"), QString());
+        for (const QString& p : catalog_.paths()) showLibBox_->addItem(QFileInfo(p).completeBaseName(), p);
+        const int keep = showLibBox_->findData(was);
+        showLibBox_->setCurrentIndex(keep >= 0 ? keep : 0);
+    }
     syncing_ = false;
 }
 
@@ -737,6 +745,17 @@ void PartsLibraryDialog::buildUi() {
             reloadTree();
         });
         row->addWidget(libraryBox_, 1);
+        // SHOW: every connected library together, or one of them.
+        auto* showCap = new QLabel(QStringLiteral("Show"), left);
+        setRole(showCap, "caption");
+        row->addWidget(showCap);
+        showLibBox_ = new QComboBox(left);
+        showLibBox_->setObjectName(QStringLiteral("showLibrary"));
+        showLibBox_->setToolTip(QStringLiteral("The parts of every connected library, or of one of them"));
+        connect(showLibBox_, &QComboBox::currentIndexChanged, this, [this](int) {
+            if (!syncing_) reloadTree();
+        });
+        row->addWidget(showLibBox_);
         auto* connectBtn = new QPushButton(QStringLiteral("Connect…"), left);
         connectBtn->setToolTip(QStringLiteral("Open another library alongside this one (.plb)"));
         connect(connectBtn, &QPushButton::clicked, this, [this] {
@@ -852,7 +871,8 @@ void PartsLibraryDialog::buildUi() {
     // finished and which are still just a row of numbers is the thing one most wants to see down a
     // library list, and a tooltip only says it one part at a time.
     tree_->setHeaderLabels({QStringLiteral("Part"), QStringLiteral("Manufacturer"),
-                            QStringLiteral("S"), QStringLiteral("M"), QStringLiteral("DS")});
+                            QStringLiteral("S"), QStringLiteral("M"), QStringLiteral("DS"), QStringLiteral("Library")});
+    tree_->headerItem()->setToolTip(5, QStringLiteral("The library the part comes from"));
     tree_->headerItem()->setToolTip(2, QStringLiteral("Schematic symbol"));
     tree_->headerItem()->setToolTip(3, QStringLiteral("Mechanical drawing"));
     tree_->headerItem()->setToolTip(4, QStringLiteral("Datasheet attached"));
@@ -865,6 +885,7 @@ void PartsLibraryDialog::buildUi() {
     tree_->header()->setSectionResizeMode(2, QHeaderView::Fixed);
     tree_->header()->setSectionResizeMode(3, QHeaderView::Fixed);
     tree_->header()->setSectionResizeMode(4, QHeaderView::Fixed);
+    tree_->header()->setSectionResizeMode(5, QHeaderView::ResizeToContents);
     tree_->header()->setStretchLastSection(false);
     tree_->setColumnWidth(0, 250);
     tree_->setColumnWidth(2, 30);
@@ -1577,7 +1598,38 @@ void PartsLibraryDialog::buildUi() {
             reloadTree();
         });
         crl->addWidget(contactBox_, 1);
+        // SEVERAL: the one chosen added to those tied, and one of those taken off again.
+        auto* addTie = new QPushButton(QStringLiteral("Add"), contactRow);
+        addTie->setObjectName(QStringLiteral("contactTieAdd"));
+        addTie->setToolTip(QStringLiteral("Tie the contact chosen as well as those already tied - a connector "
+                                          "may take several (pins and sockets, sizes, equivalents)"));
+        crl->addWidget(addTie);
+        auto* rmTie = new QPushButton(QStringLiteral("Remove"), contactRow);
+        rmTie->setObjectName(QStringLiteral("contactTieRemove"));
+        rmTie->setToolTip(QStringLiteral("Untie the contact picked in the list below"));
+        crl->addWidget(rmTie);
         cl->addWidget(contactRow);
+        contactList_ = new QListWidget(group);
+        contactList_->setObjectName(QStringLiteral("contactTies"));
+        contactList_->setMaximumHeight(72);
+        contactList_->setToolTip(QStringLiteral("Every contact tied to this connector"));
+        cl->addWidget(contactList_);
+        connect(addTie, &QPushButton::clicked, this, [this] {
+            LibraryPart* p = current();
+            const QString other = contactBox_->currentData().toString();
+            if (!p || p->kind != PartKind::Connector || other.isEmpty()) return;
+            addContactTie(catalog_.active(), p->id, other);
+            touched();
+            refreshContactChoice();
+        });
+        connect(rmTie, &QPushButton::clicked, this, [this] {
+            LibraryPart* p = current();
+            QListWidgetItem* it = contactList_->currentItem();
+            if (!p || !it) return;
+            removeContactTie(catalog_.active(), p->id, it->data(Qt::UserRole).toString());
+            touched();
+            refreshContactChoice();
+        });
         // THE PIN TYPES: a size, the conductor it takes and in which unit, its rating, and WHICH PINS are
         // that type. The last of those is what lets a schematic label each pin with its own size instead of
         // one figure for the whole connector - which on a connector with two sizes in it is a figure
@@ -2015,7 +2067,10 @@ void PartsLibraryDialog::reloadTree() {
     for (PartKind k : allPartKinds()) {
         const std::vector<const LibraryPart*> parts = catalog_.ofKind(k);
         std::vector<const LibraryPart*> shown;
+        // ONE LIBRARY OR ALL: the list shows the parts of every connected library, or of the one picked in Show.
+        const QString onlyLib = showLibBox_ ? showLibBox_->currentData().toString() : QString();
         for (const LibraryPart* p : parts) {
+            if (!onlyLib.isEmpty() && QFileInfo(catalog_.pathOf(p->id)) != QFileInfo(onlyLib)) continue;
             if (needle.isEmpty() ||
                 p->description.contains(needle, Qt::CaseInsensitive) ||
                 p->mfrPn.contains(needle, Qt::CaseInsensitive) ||
@@ -2035,6 +2090,9 @@ void PartsLibraryDialog::reloadTree() {
             // A part drawn to proportion is marked so down the list: "≈" - nominal size.
             it->setText(0, partIsNominal(*p) ? p->title() + QStringLiteral("  ≈") : p->title());
             it->setText(1, p->mfrName);
+            // WHICH LIBRARY IT COMES FROM, on every part - several can be connected at once.
+            it->setText(5, QFileInfo(catalog_.pathOf(p->id)).completeBaseName());
+            it->setToolTip(5, catalog_.pathOf(p->id));
             it->setData(0, Qt::UserRole, p->id);
             setPartSigns(it, *p);
             // The columns are narrow and a part number is long, so a row shows what it can and says
@@ -2075,7 +2133,11 @@ void PartsLibraryDialog::selectPart(const QString& id) {
         for (int j = 0; j < head->childCount(); ++j)
             if (head->child(j)->data(0, Qt::UserRole).toString() == id) {
                 syncing_ = true;
+                // Picking a part does not open its folded group: scrolling to it would, and the group was
+                // left folded on purpose (the first part picked on opening opened the first group every time).
+                const bool folded = !head->isExpanded();
                 tree_->setCurrentItem(head->child(j));
+                if (folded) head->setExpanded(false);
                 syncing_ = false;
                 showPart(id);
                 return;
@@ -3173,6 +3235,17 @@ void PartsLibraryDialog::refreshContactChoice() {
     // What it is tied to, worked out from BOTH ends: a tie written on the other part only still shows here.
     const QStringList tied = isContact ? tiedConnectorsOf(merged, p->id) : tiedContactsOf(merged, p->id);
     const QString chosen = tied.isEmpty() ? QString() : tied.front();
+    // All of them, listed - a connector may take several contacts.
+    if (contactList_) {
+        contactList_->clear();
+        for (const QString& id : tied) {
+            const LibraryPart* t = merged.byId(id);
+            auto* it = new QListWidgetItem(t ? t->title() : id + QStringLiteral(" - not in any library that is open"),
+                                           contactList_);
+            it->setData(Qt::UserRole, id);
+        }
+        contactList_->setVisible(isConnector && !withPins);
+    }
     const int at = contactBox_->findData(chosen);
     // Something no longer in any library that is open is still what the part says: shown as itself rather
     // than quietly cleared, because clearing it would lose what somebody chose.

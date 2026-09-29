@@ -2494,6 +2494,29 @@ int run_partspanel_tests() {
             check(n == 3 && away && fitted,
                   "wired show: the fan fits the entry face and the wires go away from the connector's direction");
         }
+        // SEVERAL CONTACTS TIED TO ONE CONNECTOR, and one untied again - both ends of each tie kept.
+        {
+            PartsLibrary lib;
+            LibraryPart conn;
+            conn.id = QStringLiteral("C1");
+            conn.kind = PartKind::Connector;
+            LibraryPart pin;
+            pin.id = QStringLiteral("PIN");
+            pin.kind = PartKind::ContactPin;
+            LibraryPart sock;
+            sock.id = QStringLiteral("SOCK");
+            sock.kind = PartKind::ContactPin;
+            lib.parts = {conn, pin, sock};
+            addContactTie(lib, QStringLiteral("C1"), QStringLiteral("PIN"));
+            addContactTie(lib, QStringLiteral("C1"), QStringLiteral("SOCK"));
+            check(tiedContactsOf(lib, QStringLiteral("C1")) == QStringList({QStringLiteral("PIN"), QStringLiteral("SOCK")}) &&
+                      tiedConnectorsOf(lib, QStringLiteral("SOCK")) == QStringList({QStringLiteral("C1")}),
+                  "contacts: several tied to one connector, each end of the tie written");
+            removeContactTie(lib, QStringLiteral("C1"), QStringLiteral("PIN"));
+            check(tiedContactsOf(lib, QStringLiteral("C1")) == QStringList({QStringLiteral("SOCK")}) &&
+                      tiedConnectorsOf(lib, QStringLiteral("PIN")).isEmpty(),
+                  "contacts: one untied, off at both ends, the other still tied");
+        }
         // COLOURED BY A CODE: pin 1 first, and a code shorter than the pins starts again.
         {
             const auto& codes = wireColorStandards();
@@ -2840,6 +2863,30 @@ int run_partspanel_tests() {
                     QApplication::processEvents();
                     check(sp && !partIsNominal(*sp), "size: as drawn again, it is its real size");
                 }
+            }
+            // THE LIBRARY EACH PART COMES FROM, and a choice of which libraries to show.
+            {
+                bool libShown = false;
+                for (QTreeWidget* t : dlg.findChildren<QTreeWidget*>())
+                    for (QTreeWidgetItemIterator it(t); *it; ++it)
+                        if ((*it)->parent() && !(*it)->text(5).isEmpty()) libShown = true;
+                auto* show = dlg.findChild<QComboBox*>(QStringLiteral("showLibrary"));
+                check(libShown && show && show->count() >= 2 && show->itemText(0) == QStringLiteral("All libraries"),
+                      "libraries: every part says its library, and Show picks all of them or one");
+            }
+            // A FOLDED GROUP STAYS FOLDED when a part in it is picked.
+            {
+                QTreeWidgetItem* head = nullptr;
+                for (QTreeWidget* t : dlg.findChildren<QTreeWidget*>())
+                    for (int i = 0; i < t->topLevelItemCount(); ++i)
+                        if (t->topLevelItem(i)->data(0, Qt::UserRole + 1).toString() == partKindName(PartKind::Heatshrink))
+                            head = t->topLevelItem(i);
+                if (head) head->setExpanded(false);
+                dlg.selectPart(QStringLiteral("P-HOSE"));
+                QApplication::processEvents();
+                check(head && !head->isExpanded(), "fold group: picking a part in a folded group leaves it folded");
+                if (head) head->setExpanded(true);
+                QSettings().remove(QStringLiteral("partsLibrary/treeFolded"));
             }
             // A Y-SPLIT SHOWS AN ENTRY PER LEG, as many as its Legs say.
             dlg.selectPart(QStringLiteral("P-YSPLIT"));

@@ -284,6 +284,8 @@ private:
     QPushButton* fanoutMirrorBtn_ = nullptr;
     QWidget* fanoutSideRow_ = nullptr;
     QComboBox* contactBox_ = nullptr;
+    QListWidget* contactList_ = nullptr;   // every contact tied to the connector - there may be several
+    QComboBox* showLibBox_ = nullptr;      // which connected library the list shows: all of them, or one
     QHash<QString, QWidget*> paramWidgets_; // field key (or key+"Min"/"Max") -> editor
 };
 

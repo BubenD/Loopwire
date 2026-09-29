@@ -2505,6 +2505,119 @@ void testRoundTwelve() {
     }
 }
 
+// ROUND THIRTEEN: a brick in front covers what it crosses; dimensions per part, stacked clear of each other, from
+// the middle too; a bridge wire shorter than the fan and with its bend rounded; fans that stop short of a bend, and
+// a fan as long as the run leaving no cover.
+void testRoundThirteen() {
+    // IN FRONT, COVERING: a mask goes down before the brick brought forward.
+    {
+        BrickDesign d;
+        const QString a = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString r = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString b = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        d.connect(a, r);
+        d.connect(r, b);
+        d.brick(r)->z = 2;
+        int masks = 0, maskBeforeRun = -1, firstRun = -1, k = 0;
+        for (const Entity& e : buildBrickHarness(d, nullptr).entities) {
+            if (e.meta.value(QStringLiteral("brickMask")).toBool()) {
+                ++masks;
+                if (maskBeforeRun < 0) maskBeforeRun = k;
+            }
+            if (e.type == EntityType::TwistedPair && firstRun < 0) firstRun = k;
+            ++k;
+        }
+        check(masks > 0 && maskBeforeRun >= 0 && maskBeforeRun < firstRun,
+              "front: a brick brought to the front covers what is under it - its mask goes down first");
+    }
+    // DIMENSIONS: each part's own side, stacked where they would cross, from the middle of a part.
+    {
+        BrickDesign d;
+        const QString x0 = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString r1 = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString x1 = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        const QString r2 = d.addBrick(BrickType::Run, PartKind::Cable, 3, 0);
+        const QString x2 = d.addBrick(BrickType::End, PartKind::Connector, 4, 0);
+        for (const auto& [a, b] : {std::pair<QString, QString>{x0, r1}, {r1, x1}, {x1, r2}, {r2, x2}}) d.connect(a, b);
+        d.dims.push_back({x0, x1, false});
+        d.dims.push_back({x0, x2, false});
+        auto dims = [&d] {
+            std::vector<Entity> out;
+            for (const Entity& e : buildBrickHarness(d, nullptr).entities)
+                if (e.meta.value(QStringLiteral("brickDim")).toString() == QStringLiteral("manual")) out.push_back(e);
+            return out;
+        };
+        std::vector<Entity> two = dims();
+        check(two.size() == 2 && std::abs(two[0].points[2].y - two[1].points[2].y) > 5.0,
+              "dims: two that would cross are put at different heights");
+        check(two.size() == 2 && two[0].points[2].y < two[1].points[2].y,
+              "dims: the shorter nearer the parts, the longer further out");
+        d.brick(x0)->dimBelow = true;
+        std::vector<Entity> below = dims();
+        check(below.size() == 2 && below[0].points[2].y < 0.0 && below[1].points[2].y < 0.0,
+              "dims: a part set to Below puts its dimensions below");
+        d.brick(x0)->dimBelow = false;
+        const double nearX = dims()[0].points[0].x;
+        d.dimFromMid = true;
+        const double midX = dims()[0].points[0].x;
+        std::printf("  dims: from the near point %.1f, from the middle %.1f\n", nearX, midX);
+        check(std::abs(midX - nearX) > 1.0, "dims: from the middle of the part, halfway between near and far");
+        check(BrickDesign::fromJson(d.toJson()).dimFromMid, "dims: the middle kept with the design");
+    }
+    // A BRIDGE WIRE SHORTER THAN THE FAN, and its bend rounded.
+    {
+        BrickDesign d;
+        const QString x0 = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString x1 = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        const QString br = d.addBrick(BrickType::Run, PartKind::Wire, 3, 1);
+        const QString f = d.addBrick(BrickType::End, PartKind::Ferrule, 4, 1);
+        makeBridgeWire(*d.brick(br));
+        d.connect(x0, c);
+        d.connect(c, x1);
+        d.connect(c, br);
+        d.connect(br, f);
+        d.brick(c)->run.stack = {QStringLiteral("wires"), QStringLiteral("cable")};
+        d.brick(br)->run.lengthMm = 10.0;
+        syncBridgeWires(d);
+        const BrickBuild b = buildBrickHarness(d, nullptr);
+        const double fx = b.faces.value(f + QStringLiteral(":0")).centre.x;
+        const double xx = b.faces.value(x1 + QStringLiteral(":0")).centre.x;
+        std::printf("  bridge: ferrule face at %.1f, the connector's at %.1f\n", fx, xx);
+        check(fx < xx, "bridge: a short bridge wire puts its part nearer than the part its cable's fan goes into");
+        int points = 0;
+        for (const Entity& e : b.entities)
+            if (e.meta.value(QStringLiteral("brickId")).toString() == br && e.type == EntityType::Polyline) points = int(e.points.size());
+        check(points > 4, "bridge: its bends rounded, not sharp corners");
+    }
+    // FANS: stopped short of a bend; as long as the whole run, no cover.
+    {
+        BrickDesign d;
+        const QString a = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString r = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString b = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        d.connect(a, r);
+        d.connect(r, b);
+        d.brick(r)->run.stack = {QStringLiteral("wires"), QStringLiteral("cable")};
+        d.brick(r)->run.fanStartMm = 500.0;
+        d.brick(r)->run.fanFinishMm = 500.0;
+        QString body = QStringLiteral("?");
+        for (const Entity& e : buildBrickHarness(d, nullptr).entities)
+            if (e.type == EntityType::TwistedPair) body = e.meta.value(QStringLiteral("twistBody")).toString();
+        check(body.isEmpty(), "fans: fans as long as the run leave no cable - wires fanned out of one face into the other");
+        d.brick(r)->run.fanStartMm = 40.0;
+        d.brick(r)->run.fanFinishMm = -1.0;
+        d.brick(b)->row = 2.0;   // a bend on the way
+        for (const Entity& e : buildBrickHarness(d, nullptr).entities)
+            if (e.type == EntityType::TwistedPair && e.points.size() > 2) {
+                const double first = distance(e.points[0], e.points[1]);
+                const double fan = e.meta.value(QStringLiteral("twistEnds")).toDouble();
+                std::printf("  fans: the fan %.1f on a first straight of %.1f\n", fan, first);
+                check(fan < first, "fans: a fan stops before the bend - no spiral round it");
+            }
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -2530,6 +2643,7 @@ int run_brickharness_tests() {
     testRoundTen();
     testRoundEleven();
     testRoundTwelve();
+    testRoundThirteen();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }
