@@ -192,6 +192,7 @@ PartsLibraryDialog::PartsLibraryDialog(Editor* editor, QWidget* parent,
     catalog_.openRemembered();
     path_ = catalog_.activePath();
     buildUi();
+    wheelScrollsNotFields(this);   // rolling the wheel down the part changes no figure
     // The roles the labels were tagged with, coloured for the scheme the window is opening in.
     setStyleSheet(roleStyle());
     // The size the window actually needs, now that everything in it exists: what the layouts ask for,

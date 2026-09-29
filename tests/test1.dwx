@@ -1,0 +1,497 @@
+{
+    "app": "Ewire",
+    "bom": {
+        "config": {
+            "columns": [
+                true,
+                true,
+                true,
+                true,
+                true,
+                true,
+                true
+            ],
+            "includeDrawing": true,
+            "lengthUnit": "mm",
+            "qtyDecimals": 2,
+            "roundUpLengths": false,
+            "sparePercent": 0,
+            "unify": true
+        },
+        "headers": [
+            "#",
+            "Description",
+            "Internal P/N",
+            "Mfr P/N",
+            "Mfr name",
+            "Qty.",
+            "Units"
+        ],
+        "rows": [
+            {
+                "description": "CONN CIRCULAR D38999 III SHELL-11 RECEPTACLE KEY-A",
+                "internalPn": "",
+                "mfrName": "GENERIC",
+                "mfrPn": "D38999/24WB35SA",
+                "partId": "connector-187",
+                "qty": 1,
+                "rowId": "r1",
+                "unit": "each"
+            },
+            {
+                "description": "METAL THREADED MICRO CIRCULAR INLINE SHELL 27 SOCKET CONTACT, WIRED",
+                "internalPn": "",
+                "mfrName": "OMNETICS",
+                "mfrPn": "A22325-001",
+                "partId": "wire-222",
+                "qty": 1,
+                "rowId": "r2",
+                "unit": "each"
+            },
+            {
+                "description": "Insulated ferrule 0.25 mm2, 8 mm sleeve, Violet",
+                "internalPn": "",
+                "mfrName": "Phoenix Contact",
+                "mfrPn": "AI 0,25-8",
+                "partId": "ferrule-31",
+                "qty": 1,
+                "rowId": "r3",
+                "unit": "each"
+            },
+            {
+                "description": "CONN CIRCULAR D38999 III SHELL-11 RECEPTACLE KEY-B",
+                "internalPn": "",
+                "mfrName": "GENERIC",
+                "mfrPn": "D38999/24WB35SB",
+                "partId": "connector-188",
+                "qty": 1,
+                "rowId": "r4",
+                "unit": "each"
+            }
+        ]
+    },
+    "entities": [
+    ],
+    "format": "DWX",
+    "layers": [
+        {
+            "color": "#ffffff",
+            "locked": false,
+            "name": "0",
+            "visible": true,
+            "weight": 0.25
+        },
+        {
+            "color": "#00f0ff",
+            "locked": false,
+            "name": "Construction",
+            "visible": true,
+            "weight": 0.25
+        },
+        {
+            "color": "#f5c66d",
+            "locked": false,
+            "name": "Dimensions",
+            "visible": true,
+            "weight": 0.25
+        }
+    ],
+    "layouts": [
+        {
+            "name": "Layout1",
+            "pageSetup": {
+                "area": "layout",
+                "centred": true,
+                "device": "",
+                "fitToPaper": false,
+                "landscape": true,
+                "monochrome": true,
+                "name": "",
+                "offsetX": 0,
+                "offsetY": 0,
+                "paper": "ISO full bleed A3 (420.00 x 297.00 MM)",
+                "plotLineweights": true,
+                "plotPaperSpaceLast": true,
+                "scale": 1,
+                "upsideDown": false,
+                "windowX1": 0,
+                "windowX2": 0,
+                "windowY1": 0,
+                "windowY2": 0
+            },
+            "paperEntities": [
+            ],
+            "paperHeight": 297,
+            "paperWidth": 420,
+            "templateName": "",
+            "viewports": [
+                {
+                    "height": 225,
+                    "id": "c3046035",
+                    "modelScale": 0,
+                    "modelX": 0,
+                    "modelY": 0,
+                    "width": 340,
+                    "x": 40,
+                    "y": 35
+                }
+            ]
+        },
+        {
+            "name": "Layout2",
+            "pageSetup": {
+                "area": "layout",
+                "centred": true,
+                "device": "",
+                "fitToPaper": false,
+                "landscape": true,
+                "monochrome": true,
+                "name": "",
+                "offsetX": 0,
+                "offsetY": 0,
+                "paper": "ISO full bleed A3 (420.00 x 297.00 MM)",
+                "plotLineweights": true,
+                "plotPaperSpaceLast": true,
+                "scale": 1,
+                "upsideDown": false,
+                "windowX1": 0,
+                "windowX2": 0,
+                "windowY1": 0,
+                "windowY2": 0
+            },
+            "paperEntities": [
+            ],
+            "paperHeight": 297,
+            "paperWidth": 420,
+            "templateName": "",
+            "viewports": [
+                {
+                    "height": 225,
+                    "id": "e1beabff",
+                    "modelScale": 0,
+                    "modelX": 0,
+                    "modelY": 0,
+                    "width": 340,
+                    "x": 40,
+                    "y": 35
+                }
+            ]
+        }
+    ],
+    "pageSetups": [
+    ],
+    "unit": "mm",
+    "version": 1,
+    "wizards": {
+        "harnesses": {
+            "W1": {
+                "bricks": [
+                    {
+                        "balloon": true,
+                        "col": 1.5,
+                        "designatorHeightMm": 3.5,
+                        "id": "B1",
+                        "kind": "connector",
+                        "libPart": "connector-187",
+                        "name": "",
+                        "rot": 0,
+                        "row": 3,
+                        "showDesignator": false,
+                        "type": "end"
+                    },
+                    {
+                        "balloon": true,
+                        "col": 2,
+                        "designatorHeightMm": 3.5,
+                        "id": "B2",
+                        "kind": "connector",
+                        "libPart": "wire-222",
+                        "name": "",
+                        "rot": 0,
+                        "row": 4.5,
+                        "showDesignator": false,
+                        "type": "end"
+                    },
+                    {
+                        "autoScale": true,
+                        "balloon": true,
+                        "col": 1.5,
+                        "designatorHeightMm": 3.5,
+                        "id": "B3",
+                        "kind": "ferrule",
+                        "libPart": "ferrule-31",
+                        "name": "",
+                        "rot": 0,
+                        "row": 1,
+                        "showDesignator": false,
+                        "type": "end"
+                    },
+                    {
+                        "balloon": true,
+                        "col": 7.5,
+                        "designatorHeightMm": 3.5,
+                        "id": "B4",
+                        "kind": "connector",
+                        "libPart": "connector-188",
+                        "name": "",
+                        "rot": 2,
+                        "row": 3.5,
+                        "showDesignator": false,
+                        "type": "end"
+                    },
+                    {
+                        "balloon": false,
+                        "col": 4.5,
+                        "designatorHeightMm": 3.5,
+                        "id": "B5",
+                        "kind": "y-split",
+                        "libPart": "y-split-193",
+                        "name": "",
+                        "rot": 2,
+                        "row": 3.5,
+                        "scale": 1.97,
+                        "showDesignator": false,
+                        "type": "end"
+                    },
+                    {
+                        "balloon": false,
+                        "col": 2.5,
+                        "designatorHeightMm": 3.5,
+                        "id": "B6",
+                        "kind": "wire",
+                        "libPart": "",
+                        "name": "",
+                        "rot": 0,
+                        "row": 1,
+                        "run": {
+                            "bodyScalePct": 60,
+                            "bodyWidthMm": 4.9,
+                            "dimBetween": false,
+                            "dimFans": false,
+                            "dimLinear": true,
+                            "dimSingle": false,
+                            "dimTextBetween": "",
+                            "dimTextFans": "",
+                            "dimTextTotal": "",
+                            "dimTotal": false,
+                            "dimTrace": false,
+                            "fanFinishMm": 0,
+                            "fanKneeMm": 47.6,
+                            "fanScalePct": 95,
+                            "fanSide": -1,
+                            "fanStartMm": 20,
+                            "kneeRadiusMm": -1,
+                            "labels": [
+                            ],
+                            "lengthMm": 50,
+                            "nets": [
+                            ],
+                            "stack": [
+                                "wires"
+                            ],
+                            "transitionWidthMm": 0,
+                            "transitions": "none",
+                            "trunkWires": 1,
+                            "wireWidthMm": 2,
+                            "wires": 1
+                        },
+                        "showDesignator": false,
+                        "type": "fanout"
+                    },
+                    {
+                        "balloon": false,
+                        "col": 3.5,
+                        "designatorHeightMm": 3.5,
+                        "id": "B7",
+                        "kind": "wire",
+                        "libPart": "",
+                        "name": "",
+                        "rot": 0,
+                        "row": 4.5,
+                        "run": {
+                            "bodyScalePct": 60,
+                            "bodyWidthMm": 4.9,
+                            "dimBetween": false,
+                            "dimFans": false,
+                            "dimLinear": true,
+                            "dimSingle": false,
+                            "dimTextBetween": "",
+                            "dimTextFans": "",
+                            "dimTextTotal": "",
+                            "dimTotal": false,
+                            "dimTrace": false,
+                            "fanFinishMm": 0,
+                            "fanKneeMm": 47.6,
+                            "fanScalePct": 95,
+                            "fanSide": -1,
+                            "fanStartMm": 20,
+                            "kneeRadiusMm": -1,
+                            "labels": [
+                            ],
+                            "lengthMm": 50,
+                            "nets": [
+                            ],
+                            "stack": [
+                                "wires",
+                                "cable"
+                            ],
+                            "transitionWidthMm": 0,
+                            "transitions": "none",
+                            "trunkWires": 0,
+                            "wireWidthMm": 2,
+                            "wires": 4
+                        },
+                        "showDesignator": false,
+                        "type": "run"
+                    },
+                    {
+                        "balloon": false,
+                        "col": 6,
+                        "designatorHeightMm": 3.5,
+                        "id": "B8",
+                        "kind": "wire",
+                        "libPart": "",
+                        "name": "",
+                        "rot": 0,
+                        "row": 3.5,
+                        "run": {
+                            "bodyScalePct": 60,
+                            "bodyWidthMm": 0,
+                            "dimBetween": false,
+                            "dimFans": false,
+                            "dimLinear": true,
+                            "dimSingle": false,
+                            "dimTextBetween": "",
+                            "dimTextFans": "",
+                            "dimTextTotal": "",
+                            "dimTotal": false,
+                            "dimTrace": false,
+                            "fanFinishMm": 0,
+                            "fanKneeMm": -1,
+                            "fanScalePct": 95,
+                            "fanSide": -1,
+                            "fanStartMm": 0,
+                            "kneeRadiusMm": -1,
+                            "labels": [
+                            ],
+                            "lengthMm": 150,
+                            "nets": [
+                            ],
+                            "stack": [
+                                "wires",
+                                "cable"
+                            ],
+                            "transitionWidthMm": 0,
+                            "transitions": "none",
+                            "trunkWires": 0,
+                            "wireWidthMm": 2,
+                            "wires": 4
+                        },
+                        "showDesignator": false,
+                        "type": "run"
+                    },
+                    {
+                        "balloon": false,
+                        "col": 3.5,
+                        "designatorHeightMm": 3.5,
+                        "id": "B9",
+                        "kind": "wire",
+                        "libPart": "",
+                        "name": "",
+                        "rot": 0,
+                        "row": 3,
+                        "run": {
+                            "bodyScalePct": 60,
+                            "bodyWidthMm": 4.9,
+                            "dimBetween": false,
+                            "dimFans": false,
+                            "dimLinear": true,
+                            "dimSingle": false,
+                            "dimTextBetween": "",
+                            "dimTextFans": "",
+                            "dimTextTotal": "",
+                            "dimTotal": false,
+                            "dimTrace": false,
+                            "fanFinishMm": 0,
+                            "fanKneeMm": 47.6,
+                            "fanScalePct": 95,
+                            "fanSide": -1,
+                            "fanStartMm": 20,
+                            "kneeRadiusMm": -1,
+                            "labels": [
+                            ],
+                            "lengthMm": 50,
+                            "nets": [
+                            ],
+                            "stack": [
+                                "wires",
+                                "cable"
+                            ],
+                            "transitionWidthMm": 0,
+                            "transitions": "none",
+                            "trunkWires": 0,
+                            "wireWidthMm": 2,
+                            "wires": 4
+                        },
+                        "showDesignator": false,
+                        "type": "run"
+                    }
+                ],
+                "dimFromFar": false,
+                "dimToFar": false,
+                "format": "edraw-brick-harness",
+                "links": [
+                    {
+                        "a": "B6",
+                        "b": "B3",
+                        "portA": 0,
+                        "portB": 0,
+                        "wires": 0
+                    },
+                    {
+                        "a": "B7",
+                        "b": "B5",
+                        "portA": 1,
+                        "portB": 1,
+                        "wires": 0
+                    },
+                    {
+                        "a": "B7",
+                        "b": "B2",
+                        "portA": 0,
+                        "portB": 0,
+                        "wires": 0
+                    },
+                    {
+                        "a": "B8",
+                        "b": "B5",
+                        "portA": 0,
+                        "portB": 0,
+                        "wires": 0
+                    },
+                    {
+                        "a": "B8",
+                        "b": "B4",
+                        "portA": 1,
+                        "portB": 0,
+                        "wires": 0
+                    },
+                    {
+                        "a": "B9",
+                        "b": "B5",
+                        "portA": 1,
+                        "portB": 2,
+                        "wires": 0
+                    },
+                    {
+                        "a": "B9",
+                        "b": "B1",
+                        "portA": 0,
+                        "portB": 0,
+                        "wires": 0
+                    }
+                ]
+            }
+        }
+    }
+}

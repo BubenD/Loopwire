@@ -102,6 +102,9 @@ struct BrickRunSpec {
     bool dimTrace = false;
     // The whole length said by a single-ended dimension: from its start, a short line with the figure.
     bool dimSingle = false;
+    // BRIDGE WIRES: which wires of the special this one is joined to it takes ("1-3,5"); empty, as many as
+    // it says of its own. Set, they decide how many wires it has and what each one's net is.
+    QString bridgeWires;
     // WHICH END A FANOUT SPREADS AT: -1 the end on a part (the start when both are), 0 the start,
     // 1 the finish.
     int fanSide = -1;
@@ -230,8 +233,39 @@ void arrangeBricks(BrickDesign& design);
 
 // THE ROUTE OF A RUN from one entry face to another: it leaves `a` along `aOut` and arrives at `b`
 // travelling against `bOut`, both square to their faces, with as few bends as that allows.
+// `bendAt` is where along the way a level shift makes its slant, 0 at `a` to 1 at `b` - where the special's
+// brick sits between its two parts on the pane.
 std::vector<Vec2> routeBetweenFaces(const Vec2& a, const Vec2& aOut, const Vec2& b, const Vec2& bOut,
-                                    double leadMm, double shiftDeg = 45.0);
+                                    double leadMm, double shiftDeg = 45.0, double bendAt = 0.5);
+
+// ---- LENGTHS ON THE PANE ----------------------------------------------------------------------------
+// A special's length and how far apart its two parts sit on the pane are one figure: 75 mm to a column. A
+// part linked to a special whose other end is on a part is put at the special's length from it; moving the
+// part changes the length; changing the length pulls or pushes the part - and everything beyond it - along.
+constexpr double kBrickMmPerCol = 75.0;
+// The one part each side of a special, when it runs from one part to one part.
+bool specialOneToOne(const BrickDesign& d, const QString& special, QString* start, QString* finish);
+// `end` (linked to `special`) put as far along from the special's other part as the special is long, on the
+// side it is already on; the special halfway between. False when there is no other part to measure from.
+bool fitEndToLength(BrickDesign& d, const QString& special, const QString& end);
+// The special's length from how far apart its two parts are on the pane, to the millimetre; the special kept
+// at the same share of the way between them (`fraction`, below nought for halfway).
+bool lengthFromPositions(BrickDesign& d, const QString& special, double fraction = -1.0);
+// The special's length changed from `oldLen`: its finish part, and everything beyond it, moved along to suit.
+bool pushForLength(BrickDesign& d, const QString& special, double oldLen);
+// Every special put at its length from the part it starts on, out from the most connected part - after the
+// bricks are arranged by columns, so the pane says the lengths again.
+void fitPositionsToLengths(BrickDesign& d);
+
+// ---- BRIDGE WIRES --------------------------------------------------------------------------------------
+// Which wires of the special it is joined to a special takes: "1-3,5" is wires 1, 2, 3 and 5, in that order,
+// none past `most` (nought: no limit) and none twice.
+QList<int> parseWireList(const QString& text, int most = 0);
+// The special joined to this one at a junction - the cable or fanout it takes its wires from - or empty.
+QString joinedSpecial(const BrickDesign& d, const QString& special);
+// Every special with bridge wires made up from them: as many wires as it takes, each with the net of the wire
+// it takes. Returns how many specials were changed.
+int syncBridgeWires(BrickDesign& d);
 
 // One entry face of an end, once the design is laid out.
 struct BrickFace {

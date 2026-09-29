@@ -99,6 +99,11 @@ QToolButton* makeEyeToggle(QWidget* parent, const QString& shownText, const QStr
 // wire's colour where a square reads as a fill.
 QIcon colorCircleIcon(const QString& hex, int size = 14);
 
+// THE WHEEL SCROLLS, IT DOES NOT CHANGE A FIGURE. In a window of fields - a column that scrolls - rolling the
+// wheel over a number box or a drop-down on the way down changed it, and nobody saw it happen. In `window`
+// (and anything it opens that is a child of it) the wheel over one of those goes to what is behind it instead.
+void wheelScrollsNotFields(QWidget* window);
+
 // The two marks a group of wires carries in the builder, drawn the way the drawing draws them: a
 // twist is two conductors crossing, a screen is a dashed outline round them. On a merged cell they
 // say what the block of rows is without spending a column on the word.

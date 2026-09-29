@@ -3,6 +3,9 @@
 #include "harness/Harness.h"
 #include "app/Chrome.h"
 
+#include <QAbstractItemView>
+#include <QAbstractSpinBox>
+#include <QApplication>
 #include <QCoreApplication>
 #include <QColorDialog>
 #include <QEvent>
@@ -665,6 +668,39 @@ QToolButton* makeEyeToggle(QWidget* parent, const QString& shownText, const QStr
 void installOpaqueMenus(QCoreApplication* app) {
     if (!app) return;
     app->installEventFilter(new OpaqueMenuFilter(app));
+}
+
+namespace {
+class WheelPassFilter : public QObject {
+public:
+    explicit WheelPassFilter(QWidget* window) : QObject(window), window_(window) {}
+    bool eventFilter(QObject* o, QEvent* e) override {
+        if (e->type() != QEvent::Wheel) return false;
+        auto* w = qobject_cast<QWidget*>(o);
+        if (!w || w->window() != window_) return false;
+        // The box itself, or the line edit inside a spin box or an editable drop-down.
+        QWidget* field = nullptr;
+        for (QWidget* at = w; at && at != window_; at = at->parentWidget())
+            if (qobject_cast<QAbstractSpinBox*>(at) || qobject_cast<QComboBox*>(at)) {
+                field = at;
+                break;
+            }
+        if (!field) return false;
+        // An open drop-down list scrolls itself - that is its own view, not the box.
+        if (auto* combo = qobject_cast<QComboBox*>(field); combo && combo->view() && combo->view()->isVisible())
+            return false;
+        if (QWidget* behind = field->parentWidget()) QCoreApplication::sendEvent(behind, e);
+        return true;
+    }
+
+private:
+    QWidget* window_;
+};
+} // namespace
+
+void wheelScrollsNotFields(QWidget* window) {
+    if (!window || !qApp) return;
+    qApp->installEventFilter(new WheelPassFilter(window));
 }
 
 } // namespace Edraw_Desktop

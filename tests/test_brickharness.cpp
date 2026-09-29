@@ -1476,6 +1476,21 @@ void testDialogMore() {
         if (auto* add = dlg.findChild<QPushButton*>(QStringLiteral("brickPartsToBom")); add && !other.isEmpty())
             add->click();
         check(!other.isEmpty() && dlg.bomItemOf(other) > 0, "bom: a part added from the parts list");
+        // DRAGGED TO A NEW PLACE: the second line put first - the item numbers and the balloon follow.
+        if (!other.isEmpty()) {
+            const int wasPart = dlg.bomItemOf(partId), wasOther = dlg.bomItemOf(other);
+            check(dlg.findChild<QWidget*>(QStringLiteral("brickBomDropLine")) != nullptr,
+                  "bom order: a white line to show where a dragged line goes");
+            const bool moved = dlg.moveBomRow(wasOther - 1, wasPart - 1);
+            std::printf("  bom order: part %d -> %d, other %d -> %d\n", wasPart, dlg.bomItemOf(partId), wasOther,
+                        dlg.bomItemOf(other));
+            check(moved && dlg.bomItemOf(other) == wasPart && dlg.bomItemOf(partId) == wasPart + 1,
+                  "bom order: a line dragged up takes the place, the others make room");
+            QString said2;
+            for (const Entity& e : dlg.drawing())
+                if (e.meta.value(QStringLiteral("balloon")).toBool()) said2 = e.meta.value(QStringLiteral("text")).toString();
+            check(said2 == QString::number(dlg.bomItemOf(partId)), "bom order: and the balloon is renumbered with it");
+        }
     } else {
         std::printf("  bom: no connector in the library here - the bill checks are skipped\n");
     }
@@ -1855,6 +1870,152 @@ void testConnectPointFacesBrick() {
     }
 }
 
+// LENGTHS ON THE PANE, the bend where the special sits, the wires gathered with no cable, and bridge wires.
+void testLengthsAndBridges() {
+    // 1. Linked, a part is put at the run's length from the other; moved, the length follows; the length
+    //    changed, the part - and what is beyond it - is pulled or pushed along.
+    BrickDesign d;
+    const QString x0 = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+    const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+    const QString x1 = d.addBrick(BrickType::End, PartKind::Connector, 5, 0);
+    const QString c2 = d.addBrick(BrickType::Run, PartKind::Cable, 6, 0);
+    const QString x2 = d.addBrick(BrickType::End, PartKind::Connector, 7, 0);
+    d.connect(x0, c);
+    d.connect(c, x1);
+    d.connect(x1, c2);
+    d.connect(c2, x2);
+    d.brick(c)->run.lengthMm = 300.0;
+    check(fitEndToLength(d, c, x1) && std::abs(d.brick(x1)->col - 300.0 / kBrickMmPerCol) < 1e-9 &&
+              std::abs(d.brick(c)->col - 2.0) < 1e-9,
+          "lengths: linked, the part is put at the run's length from the other, the run halfway");
+    d.brick(x1)->col = 6.0;   // dragged out to 450 mm
+    check(lengthFromPositions(d, c, 0.5) && std::abs(d.brick(c)->run.lengthMm - 450.0) < 1e-9,
+          "lengths: the part moved along, the run is as long as they are apart");
+    const double x2Was = d.brick(x2)->col;
+    const double old = d.brick(c)->run.lengthMm;
+    d.brick(c)->run.lengthMm = 150.0;
+    check(pushForLength(d, c, old) && std::abs(d.brick(x1)->col - 2.0) < 1e-9 &&
+              std::abs(d.brick(x2)->col - (x2Was - 4.0)) < 1e-9 && d.brick(x0)->col == 0.0,
+          "lengths: the run shortened pulls its part in, and everything beyond it, and leaves the start alone");
+    d.brick(x1)->col = 9.0;
+    d.brick(x2)->col = 20.0;
+    fitPositionsToLengths(d);
+    std::printf("  lengths: fitted to %.2f and %.2f\n", d.brick(x1)->col, d.brick(x2)->col);
+    check(std::abs(std::abs(d.brick(x1)->col - d.brick(x0)->col) - 2.0) < 1e-9 &&
+              std::abs(std::abs(d.brick(x2)->col - d.brick(x1)->col) - d.brick(c2)->run.lengthMm / kBrickMmPerCol) < 1e-9,
+          "lengths: arranged, every part is put at its runs' lengths again");
+
+    // 2. The bend where the special's brick sits between its parts.
+    {
+        const std::vector<Vec2> early = routeBetweenFaces({0, 0}, {1, 0}, {200, 40}, {-1, 0}, 10.0, 45.0, 0.2);
+        const std::vector<Vec2> late = routeBetweenFaces({0, 0}, {1, 0}, {200, 40}, {-1, 0}, 10.0, 45.0, 0.8);
+        std::printf("  bend: first bend at %.1f near the start, %.1f near the end\n", early.size() > 1 ? early[1].x : -1.0,
+                    late.size() > 1 ? late[1].x : -1.0);
+        check(early.size() == 4 && late.size() == 4 && early[1].x < 60.0 && late[1].x > 100.0,
+              "bend: the slant goes where the special is between its parts");
+        BrickDesign s;
+        const QString a = s.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString r = s.addBrick(BrickType::Run, PartKind::Wire, 1, 0.5);
+        const QString b = s.addBrick(BrickType::End, PartKind::Connector, 4, 1);
+        s.connect(a, r);
+        s.connect(r, b);
+        auto firstBend = [&] {
+            for (const Entity& e : buildBrickHarness(s, nullptr).entities)
+                if (e.type == EntityType::TwistedPair && e.points.size() > 2) return e.points[1].x;
+            return -1.0;
+        };
+        s.brick(r)->col = 0.6;
+        const double nearStart = firstBend();
+        s.brick(r)->col = 3.4;
+        const double nearEnd = firstBend();
+        check(nearStart >= 0.0 && nearEnd > nearStart + 20.0, "bend: moving the special's brick along moves its bend");
+    }
+
+    // 3. No cable: the wires gathered narrower than they fan, the fan filling the face.
+    {
+        BrickDesign w;
+        const QString a = w.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString r = w.addBrick(BrickType::Run, PartKind::Wire, 1, 0);
+        const QString b = w.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        w.connect(a, r);
+        w.connect(r, b);
+        w.brick(r)->run.wires = 6;
+        w.brick(r)->run.stack = {QStringLiteral("wires")};
+        for (const Entity& e : buildBrickHarness(w, nullptr).entities)
+            if (e.type == EntityType::TwistedPair) {
+                const double lane = e.meta.value(QStringLiteral("twistLane")).toDouble();
+                const double pitch = e.meta.value(QStringLiteral("twistBodyPitch")).toDouble();
+                std::printf("  no cable: fanned %.2f apart at the face, gathered %.2f apart\n", lane, pitch);
+                check(pitch > 0.0 && pitch < lane, "no cable: the wires gather into a bundle and fan out to the face");
+            }
+    }
+
+    // 4. Bridge wires.
+    check(parseWireList(QStringLiteral("1-3,5")) == QList<int>({1, 2, 3, 5}) &&
+              parseWireList(QStringLiteral("7-9, 2, 2"), 8) == QList<int>({7, 8, 2}),
+          "bridge: \"1-3,5\" is wires 1, 2, 3 and 5 - none past the cable's, none twice");
+    {
+        BrickDesign j;
+        const QString a = j.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString cab = j.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString fan = j.addBrick(BrickType::Fanout, PartKind::Wire, 2, 0);
+        const QString f1 = j.addBrick(BrickType::End, PartKind::Ferrule, 3, 0);
+        j.connect(a, cab);
+        QString why;
+        check(j.connect(cab, fan, &why), "bridge: a fanout joined to the cable");
+        j.connect(fan, f1);
+        j.brick(cab)->run.wires = 8;
+        for (int i = 1; i <= 8; ++i) j.brick(cab)->run.nets << QStringLiteral("N%1").arg(i);
+        j.brick(fan)->run.bridgeWires = QStringLiteral("2,4-5");
+        check(joinedSpecial(j, fan) == cab && syncBridgeWires(j) == 1, "bridge: the fanout takes its wires from the cable");
+        std::printf("  bridge: %d wire(s), nets %s\n", j.brick(fan)->run.wires, qPrintable(j.brick(fan)->run.nets.join(',')));
+        check(j.brick(fan)->run.wires == 3 &&
+                  j.brick(fan)->run.nets == QStringList({QStringLiteral("N2"), QStringLiteral("N4"), QStringLiteral("N5")}),
+              "bridge: as many wires as it takes, each with the net of the wire it takes");
+        check(BrickDesign::fromJson(j.toJson()).brick(fan)->run.bridgeWires == QStringLiteral("2,4-5"),
+              "bridge: kept with the design");
+    }
+
+    // 5. The wizard: linked on the pane, put at the length; the length typed, the part moves; the wheel over a
+    //    number does not change it.
+    {
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        BrickWizardDialog dlg(&ed);
+        dlg.show();
+        BrickDesign& w = dlg.design();
+        const QString a = w.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString r = w.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString b = w.addBrick(BrickType::End, PartKind::Connector, 3, 0);
+        w.brick(r)->run.lengthMm = 225.0;
+        w.connect(a, r);
+        w.connect(r, b);
+        emit dlg.canvas()->linked(r, b);
+        check(std::abs(w.brick(b)->col - 3.0) < 1e-9, "wizard: linked, the part is put at the run's length");
+        QHash<QString, QPointF> from;
+        from.insert(b, QPointF(w.brick(b)->col, w.brick(b)->row));
+        w.brick(b)->col = 4.0;
+        emit dlg.canvas()->bricksMoved(from);
+        check(std::abs(w.brick(r)->run.lengthMm - 300.0) < 1e-9, "wizard: the part dragged along, the run's length follows");
+        dlg.selectBrick(r);
+        QApplication::processEvents();
+        auto* len = dlg.findChild<QDoubleSpinBox*>(QStringLiteral("brickLength"));
+        if (len) len->setValue(150.0);
+        check(len && std::abs(w.brick(b)->col - 2.0) < 1e-9, "wizard: the length typed, the part is pulled in to suit");
+        auto* wires = dlg.findChild<QSpinBox*>(QStringLiteral("brickWires"));
+        if (wires) {
+            const int was = wires->value();
+            QWheelEvent wheel(QPointF(5, 5), wires->mapToGlobal(QPoint(5, 5)), QPoint(), QPoint(0, 120), Qt::NoButton,
+                              Qt::NoModifier, Qt::NoScrollPhase, false);
+            QApplication::sendEvent(wires, &wheel);
+            check(wires->value() == was, "wizard: the wheel over a number scrolls past it, and does not change it");
+        }
+        auto* bridge = dlg.findChild<QLineEdit*>(QStringLiteral("brickBridgeWires"));
+        check(bridge && !bridge->isEnabled(), "wizard: bridge wires, offered once it is joined to a cable or fanout");
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -1874,6 +2035,7 @@ int run_brickharness_tests() {
     testRoundSeven();
     testPartSizeByEntry();
     testConnectPointFacesBrick();
+    testLengthsAndBridges();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

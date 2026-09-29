@@ -2,6 +2,7 @@
 
 #include "app/DrawingPreview.h"
 #include "app/Editor.h"
+#include "app/UiBits.h"
 #include "harness/Bom.h"
 #include "model/Document.h"
 
@@ -24,6 +25,8 @@
 #include <QMessageBox>
 #include <QMimeData>
 #include <QMouseEvent>
+#include <QApplication>
+#include <limits>
 #include <QPainter>
 #include <QPushButton>
 #include <QScrollArea>
@@ -378,11 +381,14 @@ void BrickCanvas::deleteSelected() {
 
 void BrickCanvas::moveSelection(double dCol, double dRow) {
     if (sel_.isEmpty()) return;
+    QHash<QString, QPointF> from;
     for (const QString& id : sel_)
         if (Brick* b = d_->brick(id)) {
+            from.insert(id, QPointF(b->col, b->row));
             b->col += dCol;
             b->row += dRow;
         }
+    emit bricksMoved(from);
     emit designChanged();
     update();
 }
@@ -635,7 +641,10 @@ void BrickCanvas::mouseMoveEvent(QMouseEvent* e) {
         origin_ = panFrom_ + (L(e->position()) - pressAt_);
         update();
     } else if (drag_ == Drag::Move) {
-        const double dc = snapHalf((L(e->position()).x() - pressAt_.x()) / stepX_);
+        // Along the harness to ten millimetres - a column is so many millimetres of run (kBrickMmPerCol), and a
+        // part dragged along says its new length; across, to the half row as before.
+        const double tenMm = 10.0 / kBrickMmPerCol;
+        const double dc = std::round((L(e->position()).x() - pressAt_.x()) / stepX_ / tenMm) * tenMm;
         const double dr = snapHalf((L(e->position()).y() - pressAt_.y()) / stepY_);
         bool moved = false;
         for (auto it = startAt_.begin(); it != startAt_.end(); ++it)
@@ -647,7 +656,10 @@ void BrickCanvas::mouseMoveEvent(QMouseEvent* e) {
                     moved = true;
                 }
             }
-        if (moved) emit designChanged();
+        if (moved) {
+            emit bricksMoved(startAt_);
+            emit designChanged();
+        }
         update();
     } else if (drag_ == Drag::Link || drag_ == Drag::Zone) {
         update();
@@ -665,6 +677,7 @@ void BrickCanvas::mouseReleaseEvent(QMouseEvent* e) {
             QString why;
             if (d_->connect(dragId_, to, &why, dragPort_, toPort)) {
                 emit message(QStringLiteral("Linked"));
+                emit linked(dragId_, to);
                 emit designChanged();
             } else {
                 emit message(why);
@@ -951,6 +964,7 @@ BrickWizardDialog::BrickWizardDialog(Editor* editor, QWidget* parent)
     catalog_.openRemembered();
     design_.catalog = &catalog_;
     buildUi();
+    wheelScrollsNotFields(this);   // rolling the wheel down the panel changes no figure
     loadPanel();
     refreshPreview();
 }
@@ -1149,6 +1163,15 @@ void BrickWizardDialog::buildUi() {
     bom_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     bom_->setSelectionMode(QAbstractItemView::SingleSelection);
     bom_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    // DRAGGED TO A NEW PLACE: press on a line and drag it up or down - a white line shows where it will go.
+    bom_->viewport()->installEventFilter(this);
+    bom_->setToolTip(QStringLiteral("Drag a line up or down to change the order - the item numbers and the "
+                                    "balloons follow"));
+    bomDropLine_ = new QWidget(bom_->viewport());
+    bomDropLine_->setObjectName(QStringLiteral("brickBomDropLine"));
+    bomDropLine_->setStyleSheet(QStringLiteral("background:#ffffff;"));
+    bomDropLine_->setAttribute(Qt::WA_TransparentForMouseEvents);
+    bomDropLine_->hide();
     // The bill and what is done to it, moved together wherever it is put.
     bomBox_ = new QWidget(this);
     bomBox_->setObjectName(QStringLiteral("brickBomBox"));
@@ -1186,6 +1209,37 @@ void BrickWizardDialog::buildUi() {
         refreshPreview();
     });
     connect(canvas_, &BrickCanvas::linkPicked, this, [this](const QString&, const QString&) { loadPanel(); });
+    // A PART MOVED ALONG says the new length of each special it is on (the other end staying put); a special's
+    // brick moved on its own moves only where the run bends.
+    connect(canvas_, &BrickCanvas::bricksMoved, this, [this](const QHash<QString, QPointF>& from) {
+        for (auto it = from.cbegin(); it != from.cend(); ++it) {
+            const Brick* moved = design_.brick(it.key());
+            if (!moved || moved->type != BrickType::End) continue;
+            for (const QString& sid : design_.linksOf(it.key())) {
+                QString a, b;
+                if (!specialOneToOne(design_, sid, &a, &b)) continue;
+                if (from.contains(a) && from.contains(b)) continue;   // both ends moved: the same length
+                const Brick* s = design_.brick(sid);
+                // Where the special sat between its ends before, kept.
+                const double ca = from.contains(a) ? from.value(a).x() : design_.brick(a)->col;
+                const double cb = from.contains(b) ? from.value(b).x() : design_.brick(b)->col;
+                const double cs = from.contains(sid) ? from.value(sid).x() : s->col;
+                const double f = std::abs(cb - ca) > 1e-9 ? (cs - ca) / (cb - ca) : 0.5;
+                lengthFromPositions(design_, sid, f);
+            }
+        }
+    });
+    // LINKED TO A SPECIAL whose other end is on a part: put at the special's length from it.
+    connect(canvas_, &BrickCanvas::linked, this, [this](const QString& a, const QString& b) {
+        const Brick* ba = design_.brick(a);
+        const Brick* bb = design_.brick(b);
+        if (!ba || !bb) return;
+        const Brick* sp = brickIsSpecial(ba->type) ? ba : bb;
+        const Brick* en = sp == ba ? bb : ba;
+        if (!brickIsSpecial(sp->type) || en->type != BrickType::End) return;
+        if (fitEndToLength(design_, sp->id, en->id))
+            status_->setText(QStringLiteral("Linked - put at the run's %1 mm").arg(sp->run.lengthMm, 0, 'f', 0));
+    });
     connect(canvas_, &BrickCanvas::designChanged, this, &BrickWizardDialog::designChanged);
     connect(canvas_, &BrickCanvas::message, this, [this](const QString& t) { status_->setText(t); });
 
@@ -1406,6 +1460,30 @@ QWidget* BrickWizardDialog::buildRunPage() {
     form->addRow(QStringLiteral("Wires"), wires_);
     length_ = spin("brickLength", 10.0, 100000.0, 10.0, QStringLiteral(" mm"));
     form->addRow(QStringLiteral("Length"), length_);
+    // BRIDGE WIRES: which wires of the cable, fanout or heatshrink this one is joined to it takes - "1-3,5" -
+    // and so how many wires it has and what each one's net is.
+    {
+        auto* host = new QWidget(page);
+        auto* v = new QVBoxLayout(host);
+        v->setContentsMargins(0, 0, 0, 0);
+        v->setSpacing(1);
+        bridge_ = new QLineEdit(host);
+        bridge_->setObjectName(QStringLiteral("brickBridgeWires"));
+        bridge_->setPlaceholderText(QStringLiteral("all its own - or e.g. 1-3,5"));
+        bridge_->setToolTip(QStringLiteral(
+            "Bridge wires: which wires of the special this one is joined to it takes, by their numbers - "
+            "\"1-3,5\" takes wires 1, 2, 3 and 5. They set how many wires it has, and each wire's net."));
+        v->addWidget(bridge_);
+        bridgeFrom_ = new QLabel(host);
+        bridgeFrom_->setObjectName(QStringLiteral("brickBridgeFrom"));
+        bridgeFrom_->setStyleSheet(QStringLiteral("color:#8fa3b8;"));
+        v->addWidget(bridgeFrom_);
+        form->addRow(QStringLiteral("Bridge wires"), host);
+        connect(bridge_, &QLineEdit::editingFinished, this, [this] {
+            writeRun();
+            loadPanel();
+        });
+    }
     wireWidth_ = spin("brickWireWidth", 0.2, 20.0, 0.1, QStringLiteral(" mm"));
     form->addRow(QStringLiteral("Wire width"), wireWidth_);
     // How many lines the wires converge to where they are gathered.
@@ -1789,6 +1867,7 @@ void BrickWizardDialog::rotateSelected() {
 
 void BrickWizardDialog::arrange() {
     arrangeBricks(design_);
+    fitPositionsToLengths(design_);   // the columns say the lengths again
     canvas_->fit();
     designChanged();
     preview_->fitToView();
@@ -1902,7 +1981,21 @@ void BrickWizardDialog::loadPanel() {
     const BrickRunSpec& r = b->run;
     runKind_->setText(brickTypeName(b->type));
     wires_->setValue(r.wires);
-    wires_->setEnabled(b->type != BrickType::TwistedPair);
+    {
+        // Bridge wires: only for a special joined to another one, and then they decide the wire count.
+        const Brick* from = design_.brick(joinedSpecial(design_, b->id));
+        const QSignalBlocker hush(bridge_);
+        bridge_->setText(r.bridgeWires);
+        bridge_->setEnabled(from != nullptr);
+        const QList<int> take = from ? parseWireList(r.bridgeWires, from->run.wires) : QList<int>();
+        bridgeFrom_->setText(!from ? QStringLiteral("joined to no cable or fanout")
+                             : take.isEmpty()
+                                 ? QStringLiteral("from %1 (%2 wires)").arg(brickTitle(*from)).arg(from->run.wires)
+                                 : QStringLiteral("%1 of %2's %3 wires").arg(take.size()).arg(brickTitle(*from))
+                                       .arg(from->run.wires));
+    }
+    wires_->setEnabled(b->type != BrickType::TwistedPair && (r.bridgeWires.trimmed().isEmpty() ||
+                                                            !design_.brick(joinedSpecial(design_, b->id))));
     trunk_->setEnabled(b->type == BrickType::Fanout || b->type == BrickType::Run);
     trunk_->setMaximum(std::max(1, r.wires));
     length_->setValue(r.lengthMm);
@@ -2122,7 +2215,93 @@ bool BrickWizardDialog::scalePartToMatch(const QString& id, const QString& other
 
 // CTRL + THE WHEEL OVER A PART IN THE PREVIEW scales that part - and the wires meet it where its faces now
 // are. The wheel on its own still zooms the preview.
+int BrickWizardDialog::bomGapAt(const QPoint& at) const {
+    const int rows = bom_->rowCount();
+    const int r = bom_->rowAt(at.y());
+    if (r < 0) return at.y() < 0 ? 0 : rows;
+    const int top = bom_->rowViewportPosition(r);
+    return at.y() < top + bom_->rowHeight(r) / 2 ? r : r + 1;
+}
+
+bool BrickWizardDialog::moveBomRow(int from, int gap) {
+    Document* doc = document();
+    const int shown = static_cast<int>(bomShown_.size());
+    if (!doc || from < 0 || from >= shown || gap < 0 || gap > shown) return false;
+    const int to = gap > from ? gap - 1 : gap;
+    if (to == from) return false;
+    BomTable table;
+    table.fromJson(doc->bom());
+    // Only a line of the bill itself can be moved; one there because its part is on the drawing follows it.
+    bool ours = false;
+    for (const BomRow& r : table.rows) ours = ours || bomSameThing(r, bomShown_[static_cast<size_t>(from)]);
+    if (!ours) {
+        status_->setText(QStringLiteral("That line is there because its part is on the drawing - its place follows it"));
+        return false;
+    }
+    std::vector<BomRow> order = bomShown_;
+    const BomRow moved = order[static_cast<size_t>(from)];
+    order.erase(order.begin() + from);
+    order.insert(order.begin() + to, moved);
+    auto rank = [&order](const BomRow& r) {
+        for (size_t i = 0; i < order.size(); ++i)
+            if (bomSameThing(order[i], r)) return static_cast<int>(i);
+        return std::numeric_limits<int>::max();
+    };
+    std::stable_sort(table.rows.begin(), table.rows.end(),
+                     [&rank](const BomRow& x, const BomRow& y) { return rank(x) < rank(y); });
+    doc->bom() = table.toJson();
+    doc->setDirty(true);
+    emit bomChanged();
+    refreshBom();
+    refreshPreview();   // the balloons, renumbered
+    if (to < bom_->rowCount()) bom_->selectRow(to);
+    status_->setText(QStringLiteral("Item %1 is now item %2 - the balloons follow").arg(from + 1).arg(to + 1));
+    return true;
+}
+
 bool BrickWizardDialog::eventFilter(QObject* o, QEvent* e) {
+    if (bom_ && o == bom_->viewport()) {
+        switch (e->type()) {
+            case QEvent::MouseButtonPress: {
+                auto* me = static_cast<QMouseEvent*>(e);
+                if (me->button() == Qt::LeftButton) {
+                    bomDragFrom_ = bom_->rowAt(me->position().toPoint().y());
+                    bomPressAt_ = me->position().toPoint();
+                    bomDragging_ = false;
+                }
+                break;
+            }
+            case QEvent::MouseMove: {
+                auto* me = static_cast<QMouseEvent*>(e);
+                if (bomDragFrom_ < 0 || !(me->buttons() & Qt::LeftButton)) break;
+                const QPoint at = me->position().toPoint();
+                if (!bomDragging_ && (at - bomPressAt_).manhattanLength() < QApplication::startDragDistance()) break;
+                bomDragging_ = true;
+                const int gap = bomGapAt(at);
+                const int rows = bom_->rowCount();
+                const int y = gap < rows ? bom_->rowViewportPosition(gap)
+                                         : (rows > 0 ? bom_->rowViewportPosition(rows - 1) + bom_->rowHeight(rows - 1) : 0);
+                bomDropLine_->setGeometry(0, std::max(0, y - 1), bom_->viewport()->width(), 2);
+                bomDropLine_->show();
+                bomDropLine_->raise();
+                return true;
+            }
+            case QEvent::MouseButtonRelease: {
+                auto* me = static_cast<QMouseEvent*>(e);
+                const bool was = bomDragging_;
+                const int from = bomDragFrom_;
+                bomDragging_ = false;
+                bomDragFrom_ = -1;
+                bomDropLine_->hide();
+                if (was && me->button() == Qt::LeftButton) {
+                    moveBomRow(from, bomGapAt(me->position().toPoint()));
+                    return true;
+                }
+                break;
+            }
+            default: break;
+        }
+    }
     if (o == preview_ && e->type() == QEvent::Wheel) {
         auto* we = static_cast<QWheelEvent*>(e);
         if (we->modifiers() & Qt::ControlModifier) {
@@ -2163,7 +2342,17 @@ void BrickWizardDialog::writeRun() {
     if (!b || !brickIsSpecial(b->type)) return;
     BrickRunSpec& r = b->run;
     r.wires = b->type == BrickType::TwistedPair ? 2 : wires_->value();
+    const double oldLength = r.lengthMm;
     r.lengthMm = length_->value();
+    // THE LENGTH CHANGED: the part at its finish, and all beyond it, pulled in or pushed out to suit.
+    if (std::abs(r.lengthMm - oldLength) > 1e-9) pushForLength(design_, b->id, oldLength);
+    if (bridge_) {
+        r.bridgeWires = bridge_->text().trimmed();
+        if (syncBridgeWires(design_) > 0) {
+            const QSignalBlocker hush(wires_);
+            wires_->setValue(r.wires);
+        }
+    }
     r.wireWidthMm = wireWidth_->value();
     auto manual = [this](QDoubleSpinBox* s) { return !autoOf_.value(s)->isChecked(); };
     r.fanStartMm = !fanStartOn_->isChecked() ? 0.0 : manual(fanStart_) ? fanStart_->value() : -1.0;
@@ -2197,6 +2386,7 @@ void BrickWizardDialog::writeRun() {
 
 void BrickWizardDialog::refreshPreview() {
     if (editor_) design_.faceFanPct = editor_->faceFanScale();
+    syncBridgeWires(design_);   // wires taken from a joined special follow it
     const BrickBuild built = buildBrickHarness(design_, &catalog_,
                                                [this](const QString& id) { return bomItemOf(id); });
     actual_ = built.actual;

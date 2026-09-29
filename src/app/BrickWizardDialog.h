@@ -93,6 +93,10 @@ public:
 signals:
     void selectionChanged(const QString& current);
     void linkPicked(const QString& a, const QString& b);
+    // Bricks moved on the pane, with where each was before the move - so a part moved can say a new length.
+    void bricksMoved(const QHash<QString, QPointF>& from);
+    // A link made on the pane - so a part linked to a special can be put at the special's length.
+    void linked(const QString& a, const QString& b);
     void designChanged();
     void message(const QString& text);
 
@@ -189,6 +193,9 @@ public:
     // Take a line of the bill, as the table shows it, off the drawing's bill. A line the drawing
     // itself calls for cannot be - it is there because the part is on the drawing.
     bool removeFromBom(int shownRow);
+    // A LINE OF THE BILL MOVED: the one shown at `from` put in the gap before shown line `gap` (the number of
+    // lines, for the end). The item numbers - and every balloon, which is numbered by them - follow.
+    bool moveBomRow(int from, int gap);
     int bomPlace() const { return bomAt_; }
 
     // THE WIZARDS KEPT IN THE DRAWING, by name: saved with it, opened again, deleted.
@@ -238,6 +245,12 @@ private:
     QTableWidget* nets_ = nullptr;
     int bomAt_ = -1;
     QWidget* bomBox_ = nullptr;
+    // Dragging a line of the bill to a new place, the white line showing where it will go.
+    QWidget* bomDropLine_ = nullptr;
+    int bomDragFrom_ = -1;
+    bool bomDragging_ = false;
+    QPoint bomPressAt_;
+    int bomGapAt(const QPoint& at) const;
     std::vector<BomRow> bomShown_;
     QDoubleSpinBox* trunk_ = nullptr;
     QTabWidget* leftTabs_ = nullptr;
@@ -291,6 +304,8 @@ private:
     QSpinBox* wires_ = nullptr;
     QDoubleSpinBox* length_ = nullptr;
     QDoubleSpinBox* wireWidth_ = nullptr;
+    QLineEdit* bridge_ = nullptr;        // bridge wires: which wires of the joined special this one takes
+    QLabel* bridgeFrom_ = nullptr;       // and which special that is
     QDoubleSpinBox* fanStart_ = nullptr;
     QDoubleSpinBox* fanFinish_ = nullptr;
     // WHETHER THERE IS A FAN at each end at all: off, the wires go in as the bundle (fan length nought).

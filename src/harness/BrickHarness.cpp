@@ -7,6 +7,7 @@
 
 #include <QHash>
 #include <QJsonArray>
+#include <QRegularExpression>
 #include <QSet>
 
 #include <algorithm>
@@ -404,7 +405,8 @@ QJsonObject BrickDesign::toJson() const {
                                                    {"dimLinear", r.dimLinear},
                                                    {"dimTrace", r.dimTrace},
                                                    {"dimSingle", r.dimSingle},
-                                                   {"trunkWires", r.trunkWires}};
+                                                   {"trunkWires", r.trunkWires},
+                                                   {"bridgeWires", r.bridgeWires}};
         }
         bs.append(o);
     }
@@ -456,6 +458,7 @@ BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
                 if (s.stack.isEmpty()) s.stack << QStringLiteral("wires");
             }
             s.transitions = endsFromKey(r.value(QStringLiteral("transitions")).toString());
+            s.bridgeWires = r.value(QStringLiteral("bridgeWires")).toString();
             s.transitionWidthMm = std::max(0.0, r.value(QStringLiteral("transitionWidthMm")).toDouble(0.0));
             s.dimTotal = r.value(QStringLiteral("dimTotal")).toBool();
             s.dimFans = r.value(QStringLiteral("dimFans")).toBool();
@@ -498,6 +501,165 @@ BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
 }
 
 // ---- Arranging -----------------------------------------------------------------------------------
+
+bool specialOneToOne(const BrickDesign& d, const QString& special, QString* start, QString* finish) {
+    const Brick* s = d.brick(special);
+    if (!s || !brickIsSpecial(s->type)) return false;
+    const QStringList a = d.startsOf(special), b = d.finishesOf(special);
+    if (a.size() != 1 || b.size() != 1) return false;
+    // Parts on both ends - a special joined to another special at one end is measured along the harness, not
+    // from a part.
+    for (const QString& o : d.sideOf(special, 0) + d.sideOf(special, 1))
+        if (const Brick* ob = d.brick(o); ob && brickIsSpecial(ob->type)) return false;
+    if (start) *start = a.front();
+    if (finish) *finish = b.front();
+    return true;
+}
+
+namespace {
+double signOr(double v, double dflt) { return v > 1e-9 ? 1.0 : v < -1e-9 ? -1.0 : dflt; }
+} // namespace
+
+bool fitEndToLength(BrickDesign& d, const QString& special, const QString& end) {
+    Brick* s = d.brick(special);
+    if (!s || !brickIsSpecial(s->type)) return false;
+    const QStringList a = d.startsOf(special), b = d.finishesOf(special);
+    const bool atStart = a.contains(end);
+    const QStringList others = atStart ? b : a;
+    if (others.size() != 1 || others.front() == end) return false;
+    Brick* e = d.brick(end);
+    const Brick* o = d.brick(others.front());
+    if (!e || !o) return false;
+    const double along = s->run.lengthMm / kBrickMmPerCol;
+    // On the side it already is of the other part - or the side the special is on, or ahead.
+    const double side = signOr(e->col - o->col, signOr(s->col - o->col, atStart ? -1.0 : 1.0));
+    e->col = o->col + side * along;
+    s->col = (e->col + o->col) / 2.0;
+    return true;
+}
+
+bool lengthFromPositions(BrickDesign& d, const QString& special, double fraction) {
+    QString a, b;
+    if (!specialOneToOne(d, special, &a, &b)) return false;
+    Brick* s = d.brick(special);
+    const Brick* ea = d.brick(a);
+    const Brick* eb = d.brick(b);
+    const double apart = std::abs(eb->col - ea->col);
+    if (apart < 1e-9) return false;
+    s->run.lengthMm = std::max(1.0, std::round(apart * kBrickMmPerCol));
+    const double f = fraction >= 0.0 ? std::clamp(fraction, 0.0, 1.0) : 0.5;
+    s->col = ea->col + (eb->col - ea->col) * f;
+    return true;
+}
+
+bool pushForLength(BrickDesign& d, const QString& special, double oldLen) {
+    QString a, b;
+    if (!specialOneToOne(d, special, &a, &b)) return false;
+    Brick* s = d.brick(special);
+    const Brick* ea = d.brick(a);
+    Brick* eb = d.brick(b);
+    const double span = eb->col - ea->col;
+    const double dir = signOr(span, 1.0);
+    const double fraction = std::abs(span) > 1e-9 ? (s->col - ea->col) / span : 0.5;
+    const double delta = dir * (s->run.lengthMm - oldLen) / kBrickMmPerCol;
+    if (std::abs(delta) < 1e-12) return true;
+    // THE FINISH PART AND EVERYTHING BEYOND IT: out from it along every link but the one back through this
+    // special, and never back to the part it starts on.
+    QSet<QString> moving{b};
+    std::deque<QString> queue{b};
+    while (!queue.empty()) {
+        const QString n = queue.front();
+        queue.pop_front();
+        for (const QString& o : d.linksOf(n)) {
+            if (o == special || o == a || moving.contains(o)) continue;
+            moving.insert(o);
+            queue.push_back(o);
+        }
+    }
+    for (const QString& id : moving)
+        if (Brick* m = d.brick(id)) m->col += delta;
+    s->col = ea->col + (eb->col - ea->col) * fraction;
+    return true;
+}
+
+void fitPositionsToLengths(BrickDesign& d) {
+    // Out from the most linked part, each special's far parts put at its length from the near one.
+    QString root;
+    for (const Brick& b : d.bricks)
+        if (b.type == BrickType::End &&
+            (root.isEmpty() || d.linksOf(b.id).size() > d.linksOf(root).size()))
+            root = b.id;
+    if (root.isEmpty()) return;
+    QSet<QString> seen{root};
+    std::deque<QString> queue{root};
+    while (!queue.empty()) {
+        const QString e = queue.front();
+        queue.pop_front();
+        for (const QString& sid : d.linksOf(e)) {
+            Brick* s = d.brick(sid);
+            if (!s || !brickIsSpecial(s->type) || seen.contains(sid)) continue;
+            seen.insert(sid);
+            const QStringList a = d.startsOf(sid), b = d.finishesOf(sid);
+            const QStringList far = a.contains(e) ? b : a;
+            const Brick* near = d.brick(e);
+            double mid = 0.0;
+            int n = 0;
+            for (const QString& f : far) {
+                Brick* fb = d.brick(f);
+                if (!fb || seen.contains(f)) continue;
+                const double side = signOr(fb->col - near->col, a.contains(e) ? 1.0 : -1.0);
+                fb->col = near->col + side * s->run.lengthMm / kBrickMmPerCol;
+                mid += fb->col;
+                ++n;
+                seen.insert(f);
+                queue.push_back(f);
+            }
+            if (n > 0) s->col = (near->col + mid / n) / 2.0;
+        }
+    }
+}
+
+QList<int> parseWireList(const QString& text, int most) {
+    QList<int> out;
+    for (const QString& partRaw : text.split(QRegularExpression(QStringLiteral("[,; ]+")), Qt::SkipEmptyParts)) {
+        const QString part = partRaw.trimmed();
+        const QStringList ends = part.split(QLatin1Char('-'));
+        bool ok1 = false, ok2 = true;
+        const int from = ends.value(0).toInt(&ok1);
+        const int to = ends.size() > 1 ? ends.value(1).toInt(&ok2) : from;
+        if (!ok1 || !ok2) continue;
+        const int step = to >= from ? 1 : -1;
+        for (int w = from;; w += step) {
+            if (w >= 1 && (most <= 0 || w <= most) && !out.contains(w)) out << w;
+            if (w == to || out.size() > 4096) break;
+        }
+    }
+    return out;
+}
+
+QString joinedSpecial(const BrickDesign& d, const QString& special) {
+    for (const QString& o : d.linksOf(special))
+        if (const Brick* b = d.brick(o); b && brickIsSpecial(b->type)) return o;
+    return QString();
+}
+
+int syncBridgeWires(BrickDesign& d) {
+    int changed = 0;
+    for (Brick& s : d.bricks) {
+        if (!brickIsSpecial(s.type) || s.run.bridgeWires.trimmed().isEmpty()) continue;
+        const Brick* from = d.brick(joinedSpecial(d, s.id));
+        if (!from) continue;
+        const QList<int> take = parseWireList(s.run.bridgeWires, from->run.wires);
+        if (take.isEmpty()) continue;
+        QStringList nets;
+        for (int w : take) nets << from->run.nets.value(w - 1);
+        const int wires = s.type == BrickType::TwistedPair ? 2 : static_cast<int>(take.size());
+        if (s.run.wires != wires || s.run.nets != nets) ++changed;
+        s.run.wires = wires;
+        s.run.nets = nets;
+    }
+    return changed;
+}
 
 void arrangeBricks(BrickDesign& design) {
     // The ends, and which ends each is joined to through a special.
@@ -688,7 +850,7 @@ void tidyRoute(std::vector<Vec2>& p) {
 } // namespace
 
 std::vector<Vec2> routeBetweenFaces(const Vec2& a, const Vec2& aOut, const Vec2& b, const Vec2& bOut,
-                                    double leadMm, double shiftDeg) {
+                                    double leadMm, double shiftDeg, double bendAt) {
     const Vec2 u = aOut.normalized();
     const Vec2 w = bOut.normalized();
     const Vec2 left = u.perp();
@@ -715,7 +877,11 @@ std::vector<Vec2> routeBetweenFaces(const Vec2& a, const Vec2& aOut, const Vec2&
             double slant = deg >= 89.999 ? 0.0 : std::abs(side) / std::tan(deg * M_PI / 180.0);
             const double room = fwd - 2.0 * std::min(lead, fwd / 2.0);
             if (slant > room) slant = std::max(0.0, room);
-            const double leg = (fwd - slant) / 2.0;
+            // WHERE THE SLANT IS: as far along as the special's brick sits between its parts, never so near
+            // either face that the run does not leave it square.
+            const double straight = fwd - slant;
+            const double keep = std::min(lead, straight / 2.0);
+            const double leg = std::clamp(straight * std::clamp(bendAt, 0.0, 1.0), keep, straight - keep);
             const Vec2 p1 = a + u * leg;
             path.push_back(p1);
             path.push_back(p1 + u * slant + left * side);
@@ -1776,7 +1942,13 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         else if (isTrunk) route = {la.centre, splitAt[i]};
         else if (isSub) route = routeBetweenFaces(la.centre, splitDir[i], lb.centre, fb.out, fanB + 5.0);
         else if (loose) route = {la.centre, la.centre + fa.out * r.lengthMm};
-        else route = routeBetweenFaces(la.centre, fa.out, lb.centre, fb.out, lead);
+        else {
+            // The bend where the special's brick is between its two parts on the pane.
+            const double colA = gridOf(br.a.node).x, colB = gridOf(br.b.node).x;
+            const double bendAt =
+                std::abs(colB - colA) > 1e-6 ? std::clamp((s.col - colA) / (colB - colA), 0.05, 0.95) : 0.5;
+            route = routeBetweenFaces(la.centre, fa.out, lb.centre, fb.out, lead, 45.0, bendAt);
+        }
         if (route.size() < 2) continue;
         std::vector<Entity> made;
 
@@ -1857,6 +2029,14 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                                     : r.transitions == RunEnds::Both   ? QStringLiteral("both")
                                                                        : QStringLiteral("none"));
                 }
+            }
+            // NO COVER - THE WIRES GATHERED ALL THE SAME. With the cable taken off, the wires ran the whole way
+            // at the pitch they fan at, as wide as the face they left, and no fan could be seen. They gather
+            // into a bundle the width a cable would have had, and fan out from it to fill each entry face.
+            if (!laidUp && outer == QLatin1String("wires") && (spreadA || spreadB) && wires > 1) {
+                const double share = loose ? la.share : std::min(la.share, lb.share);
+                const double pitch = std::clamp(r.bodyScalePct / 100.0 * share / (wires - 1), ww, ww * 1.5);
+                run.meta.insert(QStringLiteral("twistBodyPitch"), pitch);
             }
             if (r.kneeRadiusMm >= 0.0) run.meta.insert(QStringLiteral("twistKnee"), r.kneeRadiusMm);
             // CONVERGED TO so many lines where the wires are gathered, when it is said.
