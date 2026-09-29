@@ -132,6 +132,8 @@ struct Brick {
     // THE DESIGNATOR ON THE DRAWING, part by part: written in front of the part or not (off unless asked
     // for), and how tall its letters are.
     bool showDesignator = false;
+    // MOVED UP OR DOWN ON THE DRAWING itself (dragged in the preview), off the row the pane gives it.
+    double drawDyMm = 0.0;
     double designatorHeightMm = 3.5;
     BrickRunSpec run;                      // for a special
     // HOW BIG AN END'S PART IS DRAWN, 1 = as drawn in the library. Its faces scale with it, so the wires
@@ -277,6 +279,8 @@ QString joinedSpecial(const BrickDesign& d, const QString& special);
 // Every special with bridge wires made up from them: as many wires as it takes, each with the net of the wire
 // it takes. Returns how many specials were changed.
 int syncBridgeWires(BrickDesign& d);
+// The bridge wire taken is the cable's braided SHIELD rather than one of its wires.
+constexpr char kBridgeShield[] = "shield";
 // A BRIDGE WIRE: a special that takes some of the wires of the cable it is joined to (it has bridge wires set).
 // Unlike any other special it may join a cable's end that already has its parts - the rest of the wires go on
 // to them.
@@ -295,6 +299,15 @@ struct BrickFollow {
     bool y = false;
 };
 QHash<QString, BrickFollow> bricksFollowing(const BrickDesign& d, const QStringList& moving);
+
+struct BrickBuild;
+// ---- MOVING A PART ON THE DRAWING ------------------------------------------------------------------------
+// An end part dragged on the drawing by (dx, dy) mm, `built` being the drawing it was dragged on: the run that
+// brings it from its other part is made as much longer or shorter as the move takes it away from that part or
+// toward it - along, and across (a part moved down, away from the part its cable comes from, takes more cable) -
+// and it is set that much up or down on the drawing. The bricks on the pane do not move. Returns the special
+// whose length changed, or empty when the part hangs on no run from a part.
+QString dragPartOnDrawing(BrickDesign& d, const BrickBuild& built, const QString& part, double dx, double dy);
 
 // One entry face of an end, once the design is laid out.
 struct BrickFace {

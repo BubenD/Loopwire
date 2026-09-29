@@ -1279,26 +1279,8 @@ void BrickWizardDialog::buildUi() {
         refreshPreview();
     });
     connect(canvas_, &BrickCanvas::linkPicked, this, [this](const QString&, const QString&) { loadPanel(); });
-    // A PART MOVED ALONG says the new length of each special it is on (the other end staying put); a special's
-    // brick moved on its own moves only where the run bends.
-    connect(canvas_, &BrickCanvas::bricksMoved, this, [this](const QHash<QString, QPointF>& from) {
-        for (auto it = from.cbegin(); it != from.cend(); ++it) {
-            const Brick* moved = design_.brick(it.key());
-            if (!moved || moved->type != BrickType::End) continue;
-            for (const QString& sid : design_.linksOf(it.key())) {
-                QString a, b;
-                if (!specialOneToOne(design_, sid, &a, &b)) continue;
-                if (from.contains(a) && from.contains(b)) continue;   // both ends moved: the same length
-                const Brick* s = design_.brick(sid);
-                // Where the special sat between its ends before, kept.
-                const double ca = from.contains(a) ? from.value(a).x() : design_.brick(a)->col;
-                const double cb = from.contains(b) ? from.value(b).x() : design_.brick(b)->col;
-                const double cs = from.contains(sid) ? from.value(sid).x() : s->col;
-                const double f = std::abs(cb - ca) > 1e-9 ? (cs - ca) / (cb - ca) : 0.5;
-                lengthFromPositions(design_, sid, f);
-            }
-        }
-    });
+    // THE PANE SAYS WHAT IS JOINED TO WHAT, not how long anything is: bricks moved on it change no length. A
+    // length is typed into the run, or set by dragging its part on the drawing (the preview).
     // LINKED TO A SPECIAL whose other end is on a part: put at the special's length from it.
     connect(canvas_, &BrickCanvas::linked, this, [this](const QString& a, const QString& b) {
         const Brick* ba = design_.brick(a);
@@ -1319,8 +1301,6 @@ void BrickWizardDialog::buildUi() {
             if (alone)
                 if (Brick* s = design_.brick(sp->id)) s->row = en->row;
         }
-        if (fitEndToLength(design_, sp->id, en->id))
-            status_->setText(QStringLiteral("Linked - put at the run's %1 mm").arg(sp->run.lengthMm, 0, 'f', 0));
     });
     connect(canvas_, &BrickCanvas::dimensionPicked, this, [this](const QString& a, const QString& b) {
         design_.dims.push_back({a, b, dimSide_ && dimSide_->currentIndex() == 1});
@@ -1551,6 +1531,7 @@ QWidget* BrickWizardDialog::buildRunPage() {
     QVBoxLayout* cols = sectionColumn(column);
     auto* page = new QWidget;
     auto* form = new QFormLayout(page);
+    runForm_ = form;
     runKind_ = new QLabel(page);
     form->addRow(QStringLiteral("Special"), runKind_);
     auto spin = [page](const char* name, double lo, double hi, double step, const QString& suffix,
@@ -1577,19 +1558,24 @@ QWidget* BrickWizardDialog::buildRunPage() {
         auto* v = new QVBoxLayout(host);
         v->setContentsMargins(0, 0, 0, 0);
         v->setSpacing(1);
-        bridge_ = new QLineEdit(host);
+        bridge_ = new QComboBox(host);
         bridge_->setObjectName(QStringLiteral("brickBridgeWires"));
-        bridge_->setPlaceholderText(QStringLiteral("all its own - or e.g. 1-3,5"));
+        bridge_->setEditable(true);
+        bridge_->setInsertPolicy(QComboBox::NoInsert);
         bridge_->setToolTip(QStringLiteral(
-            "Bridge wires: which wires of the special this one is joined to it takes, by their numbers - "
-            "\"1-3,5\" takes wires 1, 2, 3 and 5. They set how many wires it has, and each wire's net."));
+            "Which wire of the cable this bridge wire takes: pick one of the cable's wires (by its net, where it "
+            "has one) or its braided shield - or type several, \"1-3,5\"."));
         v->addWidget(bridge_);
         bridgeFrom_ = new QLabel(host);
         bridgeFrom_->setObjectName(QStringLiteral("brickBridgeFrom"));
         bridgeFrom_->setStyleSheet(QStringLiteral("color:#8fa3b8;"));
         v->addWidget(bridgeFrom_);
         form->addRow(QStringLiteral("Bridge wires"), host);
-        connect(bridge_, &QLineEdit::editingFinished, this, [this] {
+        connect(bridge_, &QComboBox::activated, this, [this](int) {
+            writeRun();
+            loadPanel();
+        });
+        connect(bridge_->lineEdit(), &QLineEdit::editingFinished, this, [this] {
             writeRun();
             loadPanel();
         });
@@ -1979,7 +1965,6 @@ void BrickWizardDialog::rotateSelected() {
 
 void BrickWizardDialog::arrange() {
     arrangeBricks(design_);
-    fitPositionsToLengths(design_);   // the columns say the lengths again
     canvas_->fit();
     designChanged();
     preview_->fitToView();
@@ -2095,12 +2080,32 @@ void BrickWizardDialog::loadPanel() {
     wires_->setValue(r.wires);
     {
         // Bridge wires: only for a special joined to another one, and then they decide the wire count.
+        // Only on a BRIDGE WIRE: a cable's own panel has no such thing.
+        const bool bridge = brickIsBridge(*b);
+        if (runForm_) runForm_->setRowVisible(bridge_->parentWidget(), bridge);
+        if (bridge) runKind_->setText(QStringLiteral("Bridge wire"));
         const Brick* from = design_.brick(joinedSpecial(design_, b->id));
         const QSignalBlocker hush(bridge_);
-        bridge_->setText(r.bridgeWires);
+        bridge_->clear();
+        if (from) {
+            // The cable's wires, by net where they have one - and its shield, when it has a braid.
+            for (int w = 1; w <= from->run.wires; ++w) {
+                const QString net = from->run.nets.value(w - 1);
+                bridge_->addItem(net.isEmpty() ? QStringLiteral("Wire %1").arg(w)
+                                               : QStringLiteral("Wire %1 - %2").arg(w).arg(net),
+                                 QString::number(w));
+            }
+            if (from->run.stack.contains(QStringLiteral("braid")))
+                bridge_->addItem(QStringLiteral("Shield (braid)"), QString::fromLatin1(kBridgeShield));
+        }
+        const int at = bridge_->findData(r.bridgeWires.trimmed());
+        if (at >= 0) bridge_->setCurrentIndex(at);
+        else bridge_->setEditText(r.bridgeWires);
         bridge_->setEnabled(from != nullptr);
-        const QList<int> take = from ? parseWireList(r.bridgeWires, from->run.wires) : QList<int>();
-        bridgeFrom_->setText(!from ? QStringLiteral("joined to no cable or fanout")
+        const bool shield = r.bridgeWires.trimmed() == QLatin1String(kBridgeShield);
+        const QList<int> take = from && !shield ? parseWireList(r.bridgeWires, from->run.wires) : QList<int>();
+        bridgeFrom_->setText(!from     ? QStringLiteral("link it to a cable or fanout to pick its wire")
+                             : shield ? QStringLiteral("the shield of %1").arg(brickTitle(*from))
                              : take.isEmpty()
                                  ? QStringLiteral("from %1 (%2 wires)").arg(brickTitle(*from)).arg(from->run.wires)
                                  : QStringLiteral("%1 of %2's %3 wires").arg(take.size()).arg(brickTitle(*from))
@@ -2372,6 +2377,44 @@ bool BrickWizardDialog::moveBomRow(int from, int gap) {
 }
 
 bool BrickWizardDialog::eventFilter(QObject* o, QEvent* e) {
+    // A PART DRAGGED ON THE DRAWING: pressed on an end part in the preview and moved, its run's length follows -
+    // along, and across (farther off, more cable) - and it goes up or down on the drawing with it.
+    if (o == preview_) {
+        if (e->type() == QEvent::MouseButtonPress) {
+            auto* me = static_cast<QMouseEvent*>(e);
+            if (me->button() == Qt::LeftButton && me->modifiers() == Qt::NoModifier) {
+                const QString hit = previewPartAt(me->position());
+                if (!hit.isEmpty()) {
+                    partDrag_ = hit;
+                    partDragFrom_ = preview_->worldAt(me->position());
+                    partDragDesign_ = design_;
+                    partDragBuilt_.faces = lastFaces_;
+                    selectBrick(hit);
+                    return true;
+                }
+            }
+        } else if (e->type() == QEvent::MouseMove && !partDrag_.isEmpty()) {
+            auto* me = static_cast<QMouseEvent*>(e);
+            const Vec2 now = preview_->worldAt(me->position());
+            // From where it started, each time: the design as it was, moved by the whole drag so far.
+            const QString keep = partDrag_;
+            design_ = partDragDesign_;
+            design_.catalog = &catalog_;
+            const Vec2 d = now - partDragFrom_;
+            const double dx = std::round(d.x), dy = std::round(d.y);
+            const QString sid = dragPartOnDrawing(design_, partDragBuilt_, keep, dx, dy);
+            canvas_->update();
+            refreshPreview();
+            if (const Brick* s = design_.brick(sid))
+                status_->setText(QStringLiteral("%1: %2 mm").arg(brickTitle(*s)).arg(s->run.lengthMm, 0, 'f', 0));
+            return true;
+        } else if (e->type() == QEvent::MouseButtonRelease && !partDrag_.isEmpty()) {
+            partDrag_.clear();
+            recordHistory();
+            loadPanel();
+            return true;
+        }
+    }
     if (bom_ && o == bom_->viewport()) {
         switch (e->type()) {
             case QEvent::MouseButtonPress: {
@@ -2457,9 +2500,10 @@ void BrickWizardDialog::writeRun() {
     const double oldLength = r.lengthMm;
     r.lengthMm = length_->value();
     // THE LENGTH CHANGED: the part at its finish, and all beyond it, pulled in or pushed out to suit.
-    if (std::abs(r.lengthMm - oldLength) > 1e-9) pushForLength(design_, b->id, oldLength);
-    if (bridge_) {
-        r.bridgeWires = bridge_->text().trimmed();
+    (void)oldLength;   // the drawing follows the length; the pane is left as it is
+    if (bridge_ && brickIsBridge(*b)) {
+        const QString said = bridgeValue();
+        if (!said.isEmpty()) r.bridgeWires = said;   // a bridge wire is always one: never emptied into a cable
         if (syncBridgeWires(design_) > 0) {
             const QSignalBlocker hush(wires_);
             wires_->setValue(r.wires);
@@ -2496,8 +2540,35 @@ void BrickWizardDialog::writeRun() {
     refreshPreview();
 }
 
+QString BrickWizardDialog::bridgeValue() const {
+    if (!bridge_) return QString();
+    const QString text = bridge_->currentText().trimmed();
+    const int at = bridge_->findText(text);
+    if (at >= 0 && bridge_->itemData(at).isValid()) return bridge_->itemData(at).toString();
+    return text;
+}
+
+QString BrickWizardDialog::previewPartAt(const QPointF& at) const {
+    const Vec2 w = preview_->worldAt(at);
+    QString hit;
+    double best = 1e300;
+    for (const Entity& en : preview_->entities()) {
+        const QString id = en.meta.value(QStringLiteral("brickId")).toString();
+        const Brick* b = design_.brick(id);
+        if (!b || b->type != BrickType::End) continue;
+        const Bounds bb = en.bounds();
+        if (!bb.valid || w.x < bb.min.x || w.x > bb.max.x || w.y < bb.min.y || w.y > bb.max.y) continue;
+        const double area = (bb.max.x - bb.min.x) * (bb.max.y - bb.min.y);
+        if (area < best) {
+            best = area;
+            hit = id;
+        }
+    }
+    return hit;
+}
+
 void BrickWizardDialog::recordHistory() {
-    if (restoring_ || (canvas_ && canvas_->dragging())) return;   // a drag is one step, taken when it ends
+    if (restoring_ || (canvas_ && canvas_->dragging()) || !partDrag_.isEmpty()) return;   // a drag is one step
     const QByteArray now = QJsonDocument(design_.toJson()).toJson(QJsonDocument::Compact);
     if (historyAt_ >= 0 && historyAt_ < static_cast<int>(history_.size()) && history_[historyAt_] == now) return;
     history_.resize(static_cast<size_t>(historyAt_ + 1));

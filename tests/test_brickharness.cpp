@@ -1991,18 +1991,20 @@ void testLengthsAndBridges() {
         w.brick(r)->run.lengthMm = 225.0;
         w.connect(a, r);
         w.connect(r, b);
+        // THE PANE IS WHAT IS JOINED TO WHAT: linking, moving bricks and typing a length move nothing on it.
         emit dlg.canvas()->linked(r, b);
-        check(std::abs(w.brick(b)->col - 3.0) < 1e-9, "wizard: linked, the part is put at the run's length");
+        check(std::abs(w.brick(b)->col - 3.0) < 1e-9, "wizard: linked, the part stays where it was put on the pane");
         QHash<QString, QPointF> from;
         from.insert(b, QPointF(w.brick(b)->col, w.brick(b)->row));
         w.brick(b)->col = 4.0;
         emit dlg.canvas()->bricksMoved(from);
-        check(std::abs(w.brick(r)->run.lengthMm - 300.0) < 1e-9, "wizard: the part dragged along, the run's length follows");
+        check(std::abs(w.brick(r)->run.lengthMm - 225.0) < 1e-9, "wizard: a brick moved on the pane changes no length");
         dlg.selectBrick(r);
         QApplication::processEvents();
         auto* len = dlg.findChild<QDoubleSpinBox*>(QStringLiteral("brickLength"));
         if (len) len->setValue(150.0);
-        check(len && std::abs(w.brick(b)->col - 2.0) < 1e-9, "wizard: the length typed, the part is pulled in to suit");
+        check(len && std::abs(w.brick(b)->col - 4.0) < 1e-9 && std::abs(w.brick(r)->run.lengthMm - 150.0) < 1e-9,
+              "wizard: the length typed, the drawing follows and the pane is left as it is");
         auto* wires = dlg.findChild<QSpinBox*>(QStringLiteral("brickWires"));
         if (wires) {
             const int was = wires->value();
@@ -2011,8 +2013,8 @@ void testLengthsAndBridges() {
             QApplication::sendEvent(wires, &wheel);
             check(wires->value() == was, "wizard: the wheel over a number scrolls past it, and does not change it");
         }
-        auto* bridge = dlg.findChild<QLineEdit*>(QStringLiteral("brickBridgeWires"));
-        check(bridge && !bridge->isEnabled(), "wizard: bridge wires, offered once it is joined to a cable or fanout");
+        auto* bridge = dlg.findChild<QComboBox*>(QStringLiteral("brickBridgeWires"));
+        check(bridge && !bridge->isVisibleTo(&dlg), "wizard: a cable's own panel has no bridge wires");
     }
 }
 
@@ -2252,6 +2254,102 @@ void testRoundNine() {
     }
 }
 
+// ROUND TEN: parts moved on the drawing set their run's length; the bridge wire picks its wire (or the shield);
+// Symmetric lays a harness with a bridge out without piling bricks on one another.
+void testRoundTen() {
+    // DRAGGED ON THE DRAWING: along, the run's length follows; down, farther off, more cable - and the pane stays.
+    {
+        BrickDesign d;
+        const QString x0 = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString r = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString x1 = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        d.connect(x0, r);
+        d.connect(r, x1);
+        BrickBuild b = buildBrickHarness(d, nullptr);
+        check(dragPartOnDrawing(d, b, x1, 50.0, 0.0) == r && std::abs(d.brick(r)->run.lengthMm - 200.0) < 1e-9,
+              "drag: a part dragged 50 along its run makes the run 50 longer");
+        b = buildBrickHarness(d, nullptr);
+        const double was = d.brick(r)->run.lengthMm;
+        dragPartOnDrawing(d, b, x1, 0.0, -40.0);
+        std::printf("  drag: 40 down takes the run from %.0f to %.0f\n", was, d.brick(r)->run.lengthMm);
+        check(d.brick(r)->run.lengthMm > was + 10.0 && std::abs(d.brick(x1)->drawDyMm + 40.0) < 1e-9 &&
+                  d.brick(x1)->row == 0.0 && d.brick(x1)->col == 2.0,
+              "drag: moved down, farther off, more cable - the part goes down on the drawing and not on the pane");
+        const BrickBuild after = buildBrickHarness(d, nullptr);
+        const double y1 = after.faces.value(QStringLiteral("%1:0").arg(x1)).centre.y;
+        const double y0 = after.faces.value(QStringLiteral("%1:0").arg(x0)).centre.y;
+        check(y1 < y0 - 30.0, "drag: and the drawing puts it there");
+        check(std::abs(BrickDesign::fromJson(d.toJson()).brick(x1)->drawDyMm + 40.0) < 1e-9, "drag: kept with the design");
+    }
+    // THE BRIDGE WIRE PICKS ITS WIRE: the cable's wires by net, and its shield when it has a braid.
+    {
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        BrickWizardDialog dlg(&ed);
+        dlg.show();
+        BrickDesign& w = dlg.design();
+        const QString c = w.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString x = w.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString br = w.addBrick(BrickType::Run, PartKind::Wire, 3, 1);
+        makeBridgeWire(*w.brick(br));
+        w.connect(x, c);
+        w.connect(c, br);
+        w.brick(c)->run.wires = 3;
+        w.brick(c)->run.nets = {QStringLiteral("VCC"), QStringLiteral("GND"), QStringLiteral("SIG")};
+        w.brick(c)->run.stack = {QStringLiteral("wires"), QStringLiteral("braid"), QStringLiteral("cable")};
+        dlg.selectBrick(br);
+        QApplication::processEvents();
+        auto* pick = dlg.findChild<QComboBox*>(QStringLiteral("brickBridgeWires"));
+        check(pick && pick->isVisibleTo(&dlg) && pick->count() == 4 && pick->itemText(1).contains(QStringLiteral("GND")) &&
+                  pick->itemData(3).toString() == QString::fromLatin1(kBridgeShield),
+              "bridge pick: the cable's wires by net, and its shield");
+        if (pick) {
+            pick->setCurrentIndex(3);
+            emit pick->activated(3);
+        }
+        syncBridgeWires(w);
+        check(w.brick(br)->run.bridgeWires == QString::fromLatin1(kBridgeShield) && w.brick(br)->run.wires == 1 &&
+                  w.brick(br)->run.nets == QStringList({QStringLiteral("SHIELD")}),
+              "bridge pick: the shield taken - one drain wire, off none of the cable's wires");
+        dlg.selectBrick(c);
+        QApplication::processEvents();
+        check(pick && !pick->isVisibleTo(&dlg), "bridge pick: not on the cable's own panel");
+    }
+    // SYMMETRIC with a Y-split, a bridge and short runs: no brick on top of another, the bridge's part beside its
+    // connector rather than off on its own.
+    {
+        BrickDesign d;
+        const QString p1 = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString c1 = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString y = d.addBrick(BrickType::End, PartKind::YSplit, 2, 0);
+        const QString c2 = d.addBrick(BrickType::Run, PartKind::Cable, 3, -1);
+        const QString c3 = d.addBrick(BrickType::Run, PartKind::Cable, 3, 1);
+        const QString c4 = d.addBrick(BrickType::Run, PartKind::Cable, 1, 1);
+        const QString x2 = d.addBrick(BrickType::End, PartKind::Connector, 4, -1);
+        const QString x3 = d.addBrick(BrickType::End, PartKind::Connector, 4, 1);
+        const QString x4 = d.addBrick(BrickType::End, PartKind::Connector, 0, 1);
+        const QString br = d.addBrick(BrickType::Run, PartKind::Wire, 1, 3);
+        const QString fe = d.addBrick(BrickType::End, PartKind::Ferrule, 0, 3);
+        makeBridgeWire(*d.brick(br));
+        for (const auto& [a, b] : {std::pair<QString, QString>{p1, c1}, {c1, y}, {y, c2}, {y, c3}, {c2, x2}, {c3, x3},
+                                   {x4, c4}, {c4, y}})
+            d.connect(a, b);
+        d.brick(c1)->run.lengthMm = 50.0;
+        d.connect(c4, br);
+        d.connect(br, fe);
+        arrangeBricks(d);
+        int clash = 0;
+        for (size_t i = 0; i < d.bricks.size(); ++i)
+            for (size_t j = i + 1; j < d.bricks.size(); ++j)
+                if (std::abs(d.bricks[i].col - d.bricks[j].col) < 0.5 && std::abs(d.bricks[i].row - d.bricks[j].row) < 0.5)
+                    ++clash;
+        std::printf("  symmetric: %d brick(s) on top of another; ferrule at %.1f,%.1f\n", clash, d.brick(fe)->col,
+                    d.brick(fe)->row);
+        check(clash == 0, "symmetric: no brick is put on top of another");
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -2274,6 +2372,7 @@ int run_brickharness_tests() {
     testLengthsAndBridges();
     testRoundEight();
     testRoundNine();
+    testRoundTen();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

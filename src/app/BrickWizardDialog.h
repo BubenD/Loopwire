@@ -17,6 +17,7 @@ class QComboBox;
 class QDoubleSpinBox;
 class QLabel;
 class QLineEdit;
+class QFormLayout;
 class QMenu;
 class QPushButton;
 class QSpinBox;
@@ -314,7 +315,17 @@ private:
     QSpinBox* wires_ = nullptr;
     QDoubleSpinBox* length_ = nullptr;
     QDoubleSpinBox* wireWidth_ = nullptr;
-    QLineEdit* bridge_ = nullptr;        // bridge wires: which wires of the joined special this one takes
+    // BRIDGE WIRES, on a bridge wire only: which wire of the cable it is joined to it takes - picked from that
+    // cable's wires (by net, where they have one) or its braided shield, or typed ("1-3,5").
+    QComboBox* bridge_ = nullptr;
+    QFormLayout* runForm_ = nullptr;
+    QString bridgeValue() const;
+    // A PART DRAGGED ON THE DRAWING (the preview): its run's length follows, the pane stays as it is.
+    QString partDrag_;
+    Vec2 partDragFrom_;
+    BrickDesign partDragDesign_;
+    BrickBuild partDragBuilt_;
+    QString previewPartAt(const QPointF& at) const;
     QLabel* bridgeFrom_ = nullptr;       // and which special that is
     QDoubleSpinBox* fanStart_ = nullptr;
     QDoubleSpinBox* fanFinish_ = nullptr;
