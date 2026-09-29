@@ -141,6 +141,11 @@ private:
     QPointF cursor_;
     QHash<QString, QPointF> startAt_;   // where each picked brick was when the drag began
     QHash<QString, BrickFollow> follow_;   // what goes with the picked bricks, and on which axes
+    // A BRICK MOVED ON THE PANE STAYS WHERE IT IS ON THE DRAWING: how far up or down each part was drawn when the
+    // move began, and how far apart the rows are drawn - so its move on the pane is taken back off the drawing.
+    QHash<QString, double> startDy_;
+    double rowPitchMm_ = 0.0;
+    void keepOnDrawing(const QHash<QString, QPointF>& from);
     bool dimMode_ = false;                 // putting a dimension on: two clicks, two bricks
     QString dimFirst_;
 public:
@@ -326,6 +331,15 @@ private:
     BrickDesign partDragDesign_;
     BrickBuild partDragBuilt_;
     QString previewPartAt(const QPointF& at) const;
+    // THE DRAWING ENLARGED to the whole window, the pane small beside it, and a button to go back.
+    QSplitter* mainSplit_ = nullptr;
+    QToolButton* enlargeBtn_ = nullptr;
+    QList<int> savedMainSizes_, savedMiddleSizes_;
+    void placeEnlargeButton();
+public:
+    void setDrawingEnlarged(bool on);
+    bool drawingEnlarged() const;
+private:
     QLabel* bridgeFrom_ = nullptr;       // and which special that is
     QDoubleSpinBox* fanStart_ = nullptr;
     QDoubleSpinBox* fanFinish_ = nullptr;

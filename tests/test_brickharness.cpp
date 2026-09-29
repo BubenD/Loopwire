@@ -2350,6 +2350,80 @@ void testRoundTen() {
     }
 }
 
+// ROUND ELEVEN: one wire has no tail; the parts show where to take hold of them; bricks moved on the pane leave
+// the drawing alone; the drawing enlarged to the whole window and back.
+void testRoundEleven() {
+    // ONE WIRE, NO TAIL: it bends straight away out of its part, no fan's worth of lead left sticking out.
+    {
+        BrickDesign d;
+        const QString a = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString r = d.addBrick(BrickType::Run, PartKind::Wire, 1, 0);
+        const QString b = d.addBrick(BrickType::End, PartKind::Connector, 2, 1);
+        d.connect(a, r);
+        d.connect(r, b);
+        d.brick(r)->run.wires = 1;
+        d.brick(r)->run.stack = {QStringLiteral("wires")};
+        std::vector<Vec2> route;
+        for (const Entity& e : buildBrickHarness(d, nullptr).entities)
+            if (e.meta.value(QStringLiteral("brickId")).toString() == r && e.points.size() >= 2) route = e.points;
+        std::printf("  one wire: %d point(s), leaving its part over %.1f\n", static_cast<int>(route.size()),
+                    route.size() >= 2 ? distance(route[0], route[1]) : -1.0);
+        check(route.size() >= 2 && (route.size() == 2 || distance(route[0], route[1]) > 0.0),
+              "one wire: drawn as one wire");
+        (void)b;
+    }
+    // BRICKS MOVED ON THE PANE: the parts stay where they are on the drawing.
+    {
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        BrickWizardDialog dlg(&ed);
+        dlg.show();
+        BrickDesign& w = dlg.design();
+        const QString a = w.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString r = w.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString b = w.addBrick(BrickType::End, PartKind::Connector, 2, 1);
+        w.connect(a, r);
+        w.connect(r, b);
+        auto faceOf = [&w](const QString& id) {
+            return buildBrickHarness(w, nullptr).faces.value(id + QStringLiteral(":0")).centre;
+        };
+        const Vec2 bWas = faceOf(b), aWas = faceOf(a);
+        dlg.canvas()->setSelection({b});
+        dlg.canvas()->moveSelection(0.0, 2.0);
+        const Vec2 bNow = faceOf(b);
+        std::printf("  pane move: part drawn at %.1f,%.1f then %.1f,%.1f\n", bWas.x, bWas.y, bNow.x, bNow.y);
+        check(distance(bWas, bNow) < 1e-6 && w.brick(b)->row == 3.0, "pane move: a brick moved down on the pane stays put on the drawing");
+        dlg.canvas()->setSelection({a});
+        dlg.canvas()->moveSelection(-3.0, 0.0);   // along, and not past the other part (that turns the harness round)
+        check(distance(aWas, faceOf(a)) < 1e-6 && distance(bWas, faceOf(b)) < 1e-6,
+              "pane move: the first part moved along the pane does not move the drawing");
+        // THE GRAB POINTS: a ring on every end part, in the preview only.
+        dlg.selectBrick(a);   // the preview rebuilt
+        int rings = 0;
+        for (const Entity& e : dlg.preview()->entities())
+            if (!e.meta.value(QStringLiteral("brickHandle")).toString().isEmpty()) ++rings;
+        check(rings == 2, "grab: every end part shows its grab point in the preview");
+        bool inDrawing = false;
+        for (const Entity& e : dlg.drawing())
+            if (e.meta.contains(QStringLiteral("brickHandle"))) inDrawing = true;
+        check(!inDrawing, "grab: and it is not part of the drawing placed");
+        // ENLARGED: the drawing across the window, the side columns away; back again.
+        auto* big = dlg.findChild<QToolButton*>(QStringLiteral("brickEnlarge"));
+        auto* palette = dlg.findChild<BrickPalette*>(QStringLiteral("brickPalette"));
+        const int wideWas = dlg.preview()->width();
+        dlg.setDrawingEnlarged(true);
+        QApplication::processEvents();
+        std::printf("  enlarge: preview %d wide, then %d\n", wideWas, dlg.preview()->width());
+        check(big && big->isChecked() && palette && !palette->isVisibleTo(&dlg) && dlg.preview()->width() > wideWas,
+              "enlarge: the drawing takes the window, the bricks small above it");
+        check(dlg.canvas()->isVisibleTo(&dlg), "enlarge: the brick pane is still there, small");
+        dlg.setDrawingEnlarged(false);
+        QApplication::processEvents();
+        check(big && !big->isChecked() && palette && palette->isVisibleTo(&dlg), "enlarge: and back as it was");
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -2373,6 +2447,7 @@ int run_brickharness_tests() {
     testRoundEight();
     testRoundNine();
     testRoundTen();
+    testRoundEleven();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

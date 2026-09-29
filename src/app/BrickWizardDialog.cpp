@@ -380,6 +380,17 @@ void BrickCanvas::deleteSelected() {
     update();
 }
 
+void BrickCanvas::keepOnDrawing(const QHash<QString, QPointF>& from) {
+    if (rowPitchMm_ <= 0.0) rowPitchMm_ = brickRowPitchMm(*d_);
+    for (auto it = from.cbegin(); it != from.cend(); ++it) {
+        Brick* b = d_->brick(it.key());
+        if (!b || b->type != BrickType::End) continue;
+        if (!startDy_.contains(it.key())) startDy_.insert(it.key(), b->drawDyMm);
+        // Drawn at -row x pitch + dy: the row changed, dy changes the other way, and it is drawn where it was.
+        b->drawDyMm = startDy_.value(it.key()) + (b->row - it.value().y()) * rowPitchMm_;
+    }
+}
+
 void BrickCanvas::setDimensionMode(bool on) {
     dimMode_ = on;
     dimFirst_.clear();
@@ -404,6 +415,9 @@ void BrickCanvas::moveSelection(double dCol, double dRow) {
             b->col += dCol;
             b->row += dRow;
         }
+    startDy_.clear();
+    rowPitchMm_ = 0.0;
+    keepOnDrawing(from);
     emit bricksMoved(from);
     emit designChanged();
     update();
@@ -653,6 +667,8 @@ void BrickCanvas::mousePressEvent(QMouseEvent* e) {
         follow_ = bricksFollowing(*d_, sel_);
         for (auto it = follow_.cbegin(); it != follow_.cend(); ++it)
             if (const Brick* b = d_->brick(it.key())) startAt_.insert(it.key(), QPointF(b->col, b->row));
+        startDy_.clear();
+        rowPitchMm_ = 0.0;
         update();
         return;
     }
@@ -700,6 +716,7 @@ void BrickCanvas::mouseMoveEvent(QMouseEvent* e) {
                 }
             }
         if (moved) {
+            keepOnDrawing(startAt_);
             emit bricksMoved(startAt_);
             emit designChanged();
         }
@@ -1156,6 +1173,7 @@ void BrickWizardDialog::buildUi() {
     root->addLayout(bar);
 
     auto* split = new QSplitter(Qt::Horizontal, this);
+    mainSplit_ = split;
     root->addWidget(split, 1);
 
     // THE LEFT: the bricks and the parts list - and the bill, as a tab or under them.
@@ -1222,6 +1240,19 @@ void BrickWizardDialog::buildUi() {
     preview_->setKeepView(true);   // choosing a part must not make the drawing jump
     preview_->installEventFilter(this);   // Ctrl + wheel over a part scales it
     preview_->setFitButtonShown(true);
+    preview_->setMouseTracking(true);     // the hand over a part's grab point
+    // ENLARGE: the drawing takes the whole window, the pane kept small above it; pressed again, back as it was.
+    enlargeBtn_ = new QToolButton(preview_);
+    enlargeBtn_->setObjectName(QStringLiteral("brickEnlarge"));
+    enlargeBtn_->setCheckable(true);
+    enlargeBtn_->setAutoRaise(true);
+    enlargeBtn_->setFocusPolicy(Qt::NoFocus);
+    enlargeBtn_->setText(QStringLiteral("Enlarge"));
+    enlargeBtn_->setToolTip(QStringLiteral("The drawing across the whole window, the bricks small above it"));
+    enlargeBtn_->setStyleSheet(QStringLiteral("QToolButton{color:#8fb0d6;font-size:10px;padding:1px 4px;}"
+                                              "QToolButton:checked{color:#ffffff;background:#2b6cb0;}"));
+    connect(enlargeBtn_, &QToolButton::toggled, this, [this](bool on) { setDrawingEnlarged(on); });
+    enlargeBtn_->show();
     // THE BILL, LIVE: every line of the drawing's bill of materials as it stands, the parts this
     // harness uses in bold - so what adding a part did is seen as it is done. Where it sits is chosen.
     bom_ = new QTableWidget(0, 5, this);
@@ -1965,6 +1996,8 @@ void BrickWizardDialog::rotateSelected() {
 
 void BrickWizardDialog::arrange() {
     arrangeBricks(design_);
+    // Symmetric means the drawing too: parts moved up or down on it go back onto their rows.
+    for (Brick& b : design_.bricks) b.drawDyMm = 0.0;
     canvas_->fit();
     designChanged();
     preview_->fitToView();
@@ -2380,6 +2413,13 @@ bool BrickWizardDialog::eventFilter(QObject* o, QEvent* e) {
     // A PART DRAGGED ON THE DRAWING: pressed on an end part in the preview and moved, its run's length follows -
     // along, and across (farther off, more cable) - and it goes up or down on the drawing with it.
     if (o == preview_) {
+        if (e->type() == QEvent::Resize || e->type() == QEvent::Show) placeEnlargeButton();
+        // The hand over a part's grab point, so it is seen it can be taken hold of.
+        if (e->type() == QEvent::MouseMove && partDrag_.isEmpty() &&
+            !(static_cast<QMouseEvent*>(e)->buttons() & Qt::LeftButton)) {
+            const QString over = previewPartAt(static_cast<QMouseEvent*>(e)->position());
+            preview_->setCursor(over.isEmpty() ? Qt::ArrowCursor : Qt::OpenHandCursor);
+        }
         if (e->type() == QEvent::MouseButtonPress) {
             auto* me = static_cast<QMouseEvent*>(e);
             if (me->button() == Qt::LeftButton && me->modifiers() == Qt::NoModifier) {
@@ -2548,8 +2588,63 @@ QString BrickWizardDialog::bridgeValue() const {
     return text;
 }
 
+bool BrickWizardDialog::drawingEnlarged() const { return enlargeBtn_ && enlargeBtn_->isChecked(); }
+
+void BrickWizardDialog::placeEnlargeButton() {
+    if (!enlargeBtn_) return;
+    // Beside Fit, to its left.
+    int right = preview_->width() - 6;
+    if (auto* fit = preview_->findChild<QToolButton*>(QStringLiteral("previewFit"))) right = fit->x() - 4;
+    enlargeBtn_->adjustSize();
+    enlargeBtn_->move(right - enlargeBtn_->width(), 4 + 14);
+    enlargeBtn_->raise();
+}
+
+void BrickWizardDialog::setDrawingEnlarged(bool on) {
+    if (!mainSplit_ || !middle_) return;
+    if (enlargeBtn_ && enlargeBtn_->isChecked() != on) {
+        const QSignalBlocker hush(enlargeBtn_);
+        enlargeBtn_->setChecked(on);
+    }
+    if (on) {
+        savedMainSizes_ = mainSplit_->sizes();
+        savedMiddleSizes_ = middle_->sizes();
+        leftSplit_->hide();
+        rightSplit_->hide();
+        const int tall = std::max(400, middle_->height());
+        middle_->setSizes({std::min(170, tall / 5), tall - std::min(170, tall / 5)});
+        enlargeBtn_->setText(QStringLiteral("Exit enlarged"));
+        status_->setText(QStringLiteral("The drawing enlarged - Exit enlarged goes back"));
+    } else {
+        leftSplit_->show();
+        rightSplit_->show();
+        if (!savedMainSizes_.isEmpty()) mainSplit_->setSizes(savedMainSizes_);
+        if (!savedMiddleSizes_.isEmpty()) middle_->setSizes(savedMiddleSizes_);
+        enlargeBtn_->setText(QStringLiteral("Enlarge"));
+    }
+    placeEnlargeButton();
+    canvas_->fit();
+}
+
 QString BrickWizardDialog::previewPartAt(const QPointF& at) const {
     const Vec2 w = preview_->worldAt(at);
+    // ITS GRAB POINT first - the blue ring drawn on every end part - then anywhere on the part.
+    {
+        QString near;
+        double best = 1e300;
+        const double reach = 4.0;
+        for (const Brick& b : design_.bricks) {
+            if (b.type != BrickType::End) continue;
+            const auto f = lastFaces_.constFind(b.id + QStringLiteral(":0"));
+            if (f == lastFaces_.cend()) continue;
+            const double d = distance(f->centre, w);
+            if (d < reach && d < best) {
+                best = d;
+                near = b.id;
+            }
+        }
+        if (!near.isEmpty()) return near;
+    }
     QString hit;
     double best = 1e300;
     for (const Entity& en : preview_->entities()) {
@@ -2625,6 +2720,22 @@ void BrickWizardDialog::refreshPreview() {
     for (Entity& e : ents)
         if (sel.contains(e.meta.value(QStringLiteral("brickId")).toString()))
             e.meta.insert(QLatin1String(kPreviewSelectedKey), true);
+    // THE GRAB POINT OF EVERY END PART, on the preview only: a blue ring where its run meets it - press there and
+    // drag to move the part on the drawing (its run's length follows).
+    for (const Brick& b : design_.bricks) {
+        if (b.type != BrickType::End) continue;
+        const auto f = built.faces.constFind(b.id + QStringLiteral(":0"));
+        if (f == built.faces.cend()) continue;
+        Entity ring;
+        ring.type = EntityType::Circle;
+        ring.center = f->centre;
+        ring.a = f->centre;
+        ring.radius = 2.0;
+        ring.color = QStringLiteral("#5aa0ff");
+        ring.meta.insert(QLatin1String(kPreviewMarkKey), true);
+        ring.meta.insert(QStringLiteral("brickHandle"), b.id);
+        ents.push_back(ring);
+    }
     preview_->setEntities(ents);
     refreshBom();
     showActuals();

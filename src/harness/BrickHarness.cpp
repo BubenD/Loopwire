@@ -690,6 +690,17 @@ int syncBridgeWires(BrickDesign& d) {
 
 bool brickIsTied(const Brick& b) { return b.type == BrickType::End && !brickKindIsJoint(b.kind); }
 
+double brickRowPitchMm(const BrickDesign& d) {
+    // The same figure the drawing lays its rows out at (see buildBrickHarness).
+    double widest = 0.0;
+    for (const Brick& b : d.bricks) {
+        if (b.type != BrickType::End) continue;
+        const BrickShape s = d.shapeOf(b);
+        widest = std::max({widest, s.half.x * 2.0, s.half.y * 2.0});
+    }
+    return std::max(40.0, widest + 25.0);
+}
+
 QString dragPartOnDrawing(BrickDesign& d, const BrickBuild& built, const QString& part, double dx, double dy) {
     auto faceKey = [](const QString& end, int port) { return end + QLatin1Char(':') + QString::number(port); };
     Brick* p = d.brick(part);
@@ -1672,6 +1683,8 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             edges[pf.node] << Edge{it.key(), 0.0, at, Vec2{0.0, 0.0}, true};
             edges[it.key()] << Edge{pf.node, 0.0, Vec2{0.0, 0.0}, at, true};
         }
+        double anchorCol = 0.0;
+        bool haveAnchor = false;
         QStringList nodes;
         for (const Brick& b : design.bricks)
             if (b.type == BrickType::End) nodes << b.id;
@@ -1685,7 +1698,13 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                     root = n;
             }
             if (root.isEmpty()) break;
-            xOf.insert(root, gridOf(root).x * 75.0);
+            // THE FIRST PART ANCHORS THE DRAWING: it is at nought whatever column its brick is moved to on the
+            // pane - moving bricks there does not move the drawing - and any other harness keeps its distance.
+            if (!haveAnchor) {
+                anchorCol = gridOf(root).x;
+                haveAnchor = true;
+            }
+            xOf.insert(root, (gridOf(root).x - anchorCol) * 75.0);
             std::deque<QString> queue{root};
             while (!queue.empty()) {
                 const QString n = queue.front();
@@ -2162,6 +2181,8 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         const double fanSpecA = br.flipped ? r.fanFinishMm : r.fanStartMm;
         const double fanSpecB = br.flipped ? r.fanStartMm : r.fanFinishMm;
         if (fanSpecA == 0.0) spreadA = false;
+        // ONE WIRE HAS NO FAN: nothing to spread, and no tail of fan left sticking out of the part.
+        if (wires == 1) spreadA = spreadB = false;
         if (fanSpecB == 0.0) spreadB = false;
         // Where it does not spread its wires are packed - except where a fan goes into a cable, which
         // it enters across the drawing's share of the cable's width (the junction's landing).
@@ -2178,7 +2199,8 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                             : fanSpecB >= 0.0 ? fanSpecB
                                               : std::max(kWiresRunEnd, lb.lane * (wires - 1) / 2.0);
         // Out of a fan a bridge wire turns at once: no straight lead of its own there.
-        const double lead = bridgeOut ? 3.0 : std::max({fanA, fanB, 10.0}) + std::max(0.0, r.kneeRadiusMm) + 5.0;
+        const double lead = bridgeOut || wires == 1 ? 3.0
+                                                    : std::max({fanA, fanB, 10.0}) + std::max(0.0, r.kneeRadiusMm) + 5.0;
         std::vector<Vec2> route;
         if (isTrunk && br.freeStart) route = {splitAt[i], splitAt[i] + splitDir[i] * r.lengthMm};
         else if (isTrunk) route = {la.centre, splitAt[i]};

@@ -308,6 +308,9 @@ struct BrickBuild;
 // and it is set that much up or down on the drawing. The bricks on the pane do not move. Returns the special
 // whose length changed, or empty when the part hangs on no run from a part.
 QString dragPartOnDrawing(BrickDesign& d, const BrickBuild& built, const QString& part, double dx, double dy);
+// How far apart the pane's rows are on the drawing - so a brick moved a row on the pane can be kept where it was
+// on the drawing.
+double brickRowPitchMm(const BrickDesign& d);
 
 // One entry face of an end, once the design is laid out.
 struct BrickFace {
