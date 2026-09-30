@@ -75,6 +75,9 @@ public:
     void deleteSelected();
     void moveSelection(double dCol, double dRow);
     void rotateSelection();
+    // ON THE DRAWING ONLY: the picked parts turned (R 45, Space 90) or mirrored (M).
+    void turnOnDrawing(double deg);
+    void mirrorOnDrawing();
     // THE MAP: the whole of it small in a corner, with the part in view marked; a click on it goes there.
     void setMinimap(bool on);
     bool minimap() const { return minimap_; }

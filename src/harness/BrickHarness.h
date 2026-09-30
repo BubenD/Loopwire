@@ -138,6 +138,10 @@ struct Brick {
     double col = 0.0;                      // along the harness, in grid steps
     double row = 0.0;                      // across it; down the pane is +
     int rot = 0;                           // quarter turns clockwise on the pane
+    // TURNED AND MIRRORED ON THE DRAWING ONLY (R 45 degrees, Space 90, M mirror on the wizard's pane): the part as
+    // drawn, on top of its quarter turns - the brick on the pane is not turned by it.
+    double drawTurnDeg = 0.0;              // clockwise
+    bool drawMirror = false;               // flipped across its own length (top for bottom)
     bool balloon = false;
     // THE DESIGNATOR ON THE DRAWING, part by part: written in front of the part or not (off unless asked
     // for), and how tall its letters are.
@@ -251,6 +255,9 @@ BrickShape specialShape();
 BrickShape endShape(const Brick& b, const PartsCatalog* catalog);
 // A drawing direction turned `rot` quarters clockwise.
 Vec2 turnQuarters(const Vec2& v, int rot);
+// A point or direction of an end's own drawing as it is on the harness drawing: mirrored, turned its quarters, then
+// by its drawing turn - and by `extraRad` more (counter-clockwise), for a part lined up with a face at a slant.
+Vec2 turnOnDrawing(const Brick& b, const Vec2& v, double extraRad = 0.0);
 
 // SYMMETRIC. The ends are laid out from the one most connected: it is column 0 on the axis, what its
 // runs reach is the next column out, and so on; the ends of a column are spread evenly either side

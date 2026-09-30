@@ -3001,6 +3001,162 @@ void testRoundSixteen() {
     }
 }
 
+// ROUND SEVENTEEN: runs sharing a Y-split's leg and a connector keep their order all the way (no crossing) and go
+// straight; a part pulled in too close to bend lines up with the face it meets; R / Space / M turn and mirror a part
+// on the drawing only.
+void testRoundSeventeen() {
+    // How high a route is a share of the way along it.
+    auto yAlong = [](const std::vector<Vec2>& r, double t) {
+        double total = 0.0;
+        for (size_t i = 1; i < r.size(); ++i) total += distance(r[i - 1], r[i]);
+        double s = total * t;
+        for (size_t i = 1; i < r.size(); ++i) {
+            const double d = distance(r[i - 1], r[i]);
+            if (s <= d && d > 1e-12) return r[i - 1].y + (r[i].y - r[i - 1].y) * s / d;
+            s -= d;
+        }
+        return r.back().y;
+    };
+    // Two connectors on cables into a Y-split; from its leg a twisted pair and a fanout to one connector - and a third
+    // run of wires - with the pair above or below on the pane.
+    auto yHarness = [](BrickDesign& d, int variant, QString& tp, QString& fo, QString& wr, QString& far) {
+        const QString c1 = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString k1 = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString c2 = d.addBrick(BrickType::End, PartKind::Connector, 0, 1);
+        const QString k2 = d.addBrick(BrickType::Run, PartKind::Cable, 1, 1);
+        const QString y = d.addBrick(BrickType::End, PartKind::YSplit, 2, 0.4);
+        tp = d.addBrick(BrickType::TwistedPair, PartKind::Wire, 3, variant == 1 ? 0.7 : 0.0);
+        fo = d.addBrick(BrickType::Fanout, PartKind::Wire, 3, variant == 1 ? 0.0 : 0.7);
+        far = d.addBrick(BrickType::End, PartKind::Connector, 4, 0.3);
+        d.connect(c1, k1);
+        d.connect(k1, y);
+        d.connect(c2, k2);
+        d.connect(k2, y);
+        d.connect(y, tp);
+        d.connect(tp, far);
+        d.connect(y, fo);
+        d.connect(fo, far);
+        d.brick(fo)->run.wires = 4;
+        d.brick(tp)->run.lengthMm = d.brick(fo)->run.lengthMm = 150;
+        if (variant >= 2) {
+            wr = d.addBrick(BrickType::Run, PartKind::Wire, 3, variant == 2 ? 0.35 : -0.3);
+            d.connect(y, wr);
+            d.connect(wr, far);
+            d.brick(wr)->run.wires = 3;
+            d.brick(wr)->run.lengthMm = 150;
+        }
+    };
+    for (int variant = 0; variant < 4; ++variant) {
+        BrickDesign d;
+        QString tp, fo, wr, far;
+        yHarness(d, variant, tp, fo, wr, far);
+        std::vector<std::vector<Vec2>> routes;
+        for (const Entity& e : buildBrickHarness(d, nullptr).entities) {
+            const QString id = e.meta.value(QStringLiteral("brickId")).toString();
+            if (e.type == EntityType::TwistedPair && (id == tp || id == fo || (!wr.isEmpty() && id == wr)))
+                routes.push_back(e.points);
+        }
+        bool inOrder = routes.size() == (wr.isEmpty() ? 2u : 3u);
+        size_t most = 0;
+        for (size_t i = 0; inOrder && i < routes.size(); ++i) {
+            most = std::max(most, routes[i].size());
+            for (size_t j = i + 1; j < routes.size(); ++j) {
+                const auto& p = routes[i];
+                const auto& q = routes[j];
+                // Above or below at the start, and the same at every station along the way.
+                const bool above = p.front().y > q.front().y;
+                for (int k = 0; k <= 20; ++k) {
+                    const double t = k / 20.0;
+                    if ((yAlong(p, t) > yAlong(q, t)) != above && std::abs(yAlong(p, t) - yAlong(q, t)) > 1e-6)
+                        inOrder = false;
+                }
+            }
+        }
+        std::printf("  shared leg, variant %d: %s, at most %zu points\n", variant, inOrder ? "in order" : "CROSSING", most);
+        check(inOrder, "shared faces: the runs off a Y-split's leg keep their order all the way - they never cross");
+        check(most <= 6, "shared faces: no bends that are not needed - out of the fan, into the bundle, straight on");
+    }
+    // PULLED IN TOO CLOSE TO BEND: lined up with the face it meets.
+    {
+        auto lined = [](double length, double turnDeg) {
+            BrickDesign d;
+            const QString a = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+            const QString r = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0.5);
+            const QString b = d.addBrick(BrickType::End, PartKind::Connector, 2, 1);
+            d.connect(a, r);
+            d.connect(r, b);
+            d.brick(r)->run.lengthMm = length;
+            d.brick(a)->drawTurnDeg = turnDeg;
+            const BrickBuild bb = buildBrickHarness(d, nullptr);
+            const BrickFace fa = bb.faces.value(QStringLiteral("%1:%2").arg(a).arg(d.portOn(a, r)));
+            const BrickFace fb = bb.faces.value(QStringLiteral("%1:%2").arg(b).arg(d.portOn(b, r)));
+            return std::pair<BrickFace, BrickFace>{fa, fb};
+        };
+        {
+            const auto [fa, fb] = lined(8.0, 0.0);
+            std::printf("  lined up: faces %.1f,%.1f and %.1f,%.1f\n", fa.centre.x, fa.centre.y, fb.centre.x, fb.centre.y);
+            check(std::abs(fa.centre.y - fb.centre.y) < 1e-6 && std::abs(distance(fa.centre, fb.centre) - 8.0) < 1e-6 &&
+                      dot(fa.out, fb.out) < -0.999,
+                  "lined up: a part too close to bend is set straight out of the face it meets, at the run's length");
+        }
+        {
+            const auto [fa, fb] = lined(400.0, 0.0);
+            check(std::abs(fa.centre.y - fb.centre.y) > 1.0, "lined up: with room to bend it stays on its own row");
+        }
+        {
+            const auto [fa, fb] = lined(6.0, 45.0);
+            std::printf("  lined up at a slant: out %.2f,%.2f and %.2f,%.2f\n", fa.out.x, fa.out.y, fb.out.x, fb.out.y);
+            check(dot(fa.out, fb.out) < -0.999 && distance(fa.centre + fa.out * 6.0, fb.centre) < 1e-6,
+                  "lined up: to a face at a slant it turns to the face's angle");
+        }
+    }
+    // TURNED AND MIRRORED ON THE DRAWING ONLY.
+    {
+        BrickDesign d;
+        const QString y = d.addBrick(BrickType::End, PartKind::YSplit, 0, 0);
+        const QString r = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        d.connect(y, r);
+        auto faceOf = [&](int port) {
+            return buildBrickHarness(d, nullptr).faces.value(QStringLiteral("%1:%2").arg(y).arg(port));
+        };
+        const BrickFace plain1 = faceOf(1);
+        d.brick(y)->drawTurnDeg = 90.0;
+        const BrickFace turned1 = faceOf(1);
+        check(std::abs(turned1.out.x - plain1.out.y) < 1e-6 && std::abs(turned1.out.y + plain1.out.x) < 1e-6,
+              "on the drawing: turned 90 degrees clockwise, its faces look a quarter round");
+        d.brick(y)->drawTurnDeg = 0.0;
+        d.brick(y)->drawMirror = true;
+        const BrickFace mirrored1 = faceOf(1);
+        check(std::abs(mirrored1.out.x - plain1.out.x) < 1e-6 && std::abs(mirrored1.out.y + plain1.out.y) < 1e-6,
+              "on the drawing: mirrored, top for bottom");
+        d.brick(y)->drawTurnDeg = 45.0;
+        const BrickDesign back = BrickDesign::fromJson(d.toJson());
+        check(back.brick(y) && back.brick(y)->drawMirror && std::abs(back.brick(y)->drawTurnDeg - 45.0) < 1e-9,
+              "on the drawing: its turn and mirror are saved with the harness");
+    }
+    // THE KEYS on the pane: R 45, Space 90, M mirror - the brick itself not turned.
+    {
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        BrickWizardDialog dlg(&ed);
+        BrickDesign& w = dlg.design();
+        const QString x = w.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        dlg.canvas()->setSelection({x});
+        auto press = [&](int key) {
+            QKeyEvent ev(QEvent::KeyPress, key, Qt::NoModifier);
+            QApplication::sendEvent(dlg.canvas(), &ev);
+        };
+        press(Qt::Key_R);
+        check(std::abs(w.brick(x)->drawTurnDeg - 45.0) < 1e-9 && w.brick(x)->rot == 0,
+              "keys: R turns the part 45 degrees on the drawing, the brick not turned");
+        press(Qt::Key_Space);
+        check(std::abs(w.brick(x)->drawTurnDeg - 135.0) < 1e-9, "keys: Space turns it 90 more");
+        press(Qt::Key_M);
+        check(w.brick(x)->drawMirror, "keys: M mirrors it");
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -3031,6 +3187,7 @@ int run_brickharness_tests() {
     testRoundFourteen();
     testRoundFifteen();
     testRoundSixteen();
+    testRoundSeventeen();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

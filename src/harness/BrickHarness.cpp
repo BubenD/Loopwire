@@ -84,6 +84,15 @@ Vec2 turnQuarters(const Vec2& v, int rot) {
     return d;
 }
 
+Vec2 turnOnDrawing(const Brick& b, const Vec2& v, double extraRad) {
+    Vec2 d = b.drawMirror ? Vec2{v.x, -v.y} : v;
+    d = turnQuarters(d, b.rot);
+    const double a = -b.drawTurnDeg * M_PI / 180.0 + extraRad;
+    if (std::abs(a) < 1e-12) return d;
+    const double c = std::cos(a), s = std::sin(a);
+    return Vec2{d.x * c - d.y * s, d.x * s + d.y * c};
+}
+
 Vec2 BrickDesign::portWorldDir(const Brick& b, int port) const {
     const BrickShape s = shapeOf(b);
     if (port < 0 || port >= s.ports()) return Vec2{1.0, 0.0};
@@ -417,6 +426,8 @@ QJsonObject BrickDesign::toJson() const {
                       {"drawDy", b.drawDyMm}, {"z", b.z}, {"dimBelow", b.dimBelow}};
         if (std::abs(b.scale - 1.0) > 1e-9) o.insert(QStringLiteral("scale"), b.scale);
         if (b.autoScale) o.insert(QStringLiteral("autoScale"), true);
+        if (std::abs(b.drawTurnDeg) > 1e-9) o.insert(QStringLiteral("drawTurn"), b.drawTurnDeg);
+        if (b.drawMirror) o.insert(QStringLiteral("drawMirror"), true);
         if (brickIsSpecial(b.type)) {
             const BrickRunSpec& r = b.run;
             QJsonArray labels;
@@ -503,6 +514,8 @@ BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
         b.rot = bo.value(QStringLiteral("rot")).toInt();
         b.balloon = bo.value(QStringLiteral("balloon")).toBool();
         b.drawDyMm = bo.value(QStringLiteral("drawDy")).toDouble(0.0);
+        b.drawTurnDeg = bo.value(QStringLiteral("drawTurn")).toDouble(0.0);
+        b.drawMirror = bo.value(QStringLiteral("drawMirror")).toBool(false);
         b.z = bo.value(QStringLiteral("z")).toInt(0);
         b.dimBelow = bo.value(QStringLiteral("dimBelow")).toBool(false);
         b.showDesignator = bo.value(QStringLiteral("showDesignator")).toBool(false);
@@ -1770,7 +1783,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             if (!b || b->type != BrickType::End || it == shapes.constEnd() || f.port < 0 ||
                 f.port >= it->ports())
                 return Vec2{0.0, 0.0};
-            return turnQuarters(it->faceMid[static_cast<size_t>(f.port)], b->rot);
+            return turnOnDrawing(*b, it->faceMid[static_cast<size_t>(f.port)]);
         };
         // A RUN'S LENGTH IS FROM FACE TO FACE, and it goes across the harness as well as along it: a run
         // to a part a row or two away climbs that far, so only what is left of its length is laid along
@@ -1789,7 +1802,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             if (!b || b->type != BrickType::End || it == shapes.constEnd() || f.port < 0 ||
                 f.port >= it->ports())
                 return Vec2{0.0, 0.0};
-            return turnQuarters(it->faceOut[static_cast<size_t>(f.port)], b->rot).normalized();
+            return turnOnDrawing(*b, it->faceOut[static_cast<size_t>(f.port)]).normalized();
         };
         for (const Branch& br : branches) {
             if (br.a.node.isEmpty() || br.b.node.isEmpty()) continue;
@@ -1928,13 +1941,77 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             }
         }
     }
+    // LINED UP WITH THE FACE IT MEETS: a part on a run too short to bend - pulled in toward nought - is set straight
+    // out of the face at the run's length, turned to look back into it (at a slant too, a Y-split's leg), rather than
+    // left beside it with no room for the wires to get across. Where it goes, and the turn it takes for it.
+    struct Lined {
+        Vec2 at;
+        double turn = 0.0;   // counter-clockwise, on top of its own
+    };
+    QHash<QString, Lined> linedUp;
     auto posOf = [&](const QString& node) {
+        if (linedUp.contains(node)) return linedUp.value(node).at;
         if (yLock.contains(node)) {
             const auto& lock = yLock.value(node);
             return Vec2{xOf.value(node), -gridOf(lock.first).y * rowPitch + drawDyOf(lock.first) + lock.second};
         }
         return Vec2{xOf.value(node), -gridOf(node).y * rowPitch + drawDyOf(node)};
     };
+    {
+        // How many runs each part is on: only a part on one run and nothing else is lined up.
+        QHash<QString, int> runsOn;
+        for (const Branch& br : branches) {
+            if (!br.a.node.isEmpty()) ++runsOn[br.a.node];
+            if (!br.b.node.isEmpty()) ++runsOn[br.b.node];
+        }
+        for (const BrickLink& l : design.links) {
+            const Brick* la = design.brick(l.a);
+            const Brick* lb = design.brick(l.b);
+            if (la && lb && la->type == BrickType::End && lb->type == BrickType::End) {
+                runsOn[l.a] += 2;
+                runsOn[l.b] += 2;
+            }
+        }
+        for (const Branch& br : branches) {
+            if (br.a.node.isEmpty() || br.b.node.isEmpty() || br.trunk || br.splitOf >= 0) continue;
+            if (brickIsBridge(*br.special)) continue;
+            const Brick* ba = design.brick(br.a.node);
+            const Brick* bb = design.brick(br.b.node);
+            if (!ba || !bb || ba->type != BrickType::End || bb->type != BrickType::End) continue;
+            // The part that moves: the one on this run alone - of two, the one further along the pane.
+            const bool aAlone = runsOn.value(br.a.node) == 1, bAlone = runsOn.value(br.b.node) == 1;
+            if (!aAlone && !bAlone) continue;
+            const bool moveB = bAlone && (!aAlone || bb->col >= ba->col);
+            const FaceRef& mine = moveB ? br.b : br.a;
+            const FaceRef& other = moveB ? br.a : br.b;
+            const Brick* mb = moveB ? bb : ba;
+            const Brick* ob = moveB ? ba : bb;
+            if (linedUp.contains(other.node) || yLock.contains(mine.node)) continue;
+            const auto ms = shapes.constFind(mine.node);
+            const auto os = shapes.constFind(other.node);
+            if (ms == shapes.cend() || os == shapes.cend() || mine.port < 0 || mine.port >= ms->ports() ||
+                other.port < 0 || other.port >= os->ports())
+                continue;
+            const Vec2 oOut = turnOnDrawing(*ob, os->faceOut[static_cast<size_t>(other.port)]).normalized();
+            const Vec2 oFace = posOf(other.node) + turnOnDrawing(*ob, os->faceMid[static_cast<size_t>(other.port)]);
+            const Vec2 mOut = turnOnDrawing(*mb, ms->faceOut[static_cast<size_t>(mine.port)]).normalized();
+            const Vec2 mFace = posOf(mine.node) + turnOnDrawing(*mb, ms->faceMid[static_cast<size_t>(mine.port)]);
+            // Room to bend: each end straight for its fan and its bend. Pulled in shorter than that there is no bending
+            // across to it at all. (Longer, a run short for how far across it goes is drawn longer than it is, its
+            // rows kept - see stretchOf.)
+            const BrickRunSpec& r = br.special->run;
+            const double across = std::abs(dot(mFace - oFace, oOut.perp()));
+            const bool turned = dot(mOut, oOut * -1.0) < std::cos(1.0 * M_PI / 180.0);
+            if (across < 0.5 && !turned) continue;
+            const double straight = 15.0 + std::max(0.0, r.kneeRadiusMm);
+            if (r.lengthMm >= 2.0 * straight) continue;
+            Lined ln;
+            ln.turn = angleOf(oOut * -1.0) - angleOf(mOut);
+            const Vec2 target = oFace + oOut * std::max(0.0, r.lengthMm);
+            ln.at = target - turnOnDrawing(*mb, ms->faceMid[static_cast<size_t>(mine.port)], ln.turn);
+            linedUp.insert(mine.node, ln);
+        }
+    }
 
     // THE ENDS: each its shape turned by the brick's quarters and set down on its place, a face for
     // every port, and its designator in front of it.
@@ -1942,14 +2019,16 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         if (b.type != BrickType::End) continue;
         const BrickShape& shape = shapes[b.id];
         const Vec2 at = posOf(b.id);
-        const double turn = -b.rot * M_PI / 2.0;
-        auto place = [&](const Vec2& v) { return at + turnQuarters(v, b.rot); };
+        const double extra = linedUp.contains(b.id) ? linedUp.value(b.id).turn : 0.0;
+        const double turn = -b.rot * M_PI / 2.0 - b.drawTurnDeg * M_PI / 180.0 + extra;
+        auto place = [&](const Vec2& v) { return at + turnOnDrawing(b, v, extra); };
         std::vector<Entity> body;
         for (Entity e : shape.drawing) {
             // The placeholder's own caption gives way to the designator, written below.
             if (e.type == EntityType::Text && !b.libPart.isEmpty()) continue;
             if (e.type == EntityType::Text) continue;
-            if (b.rot % 4 != 0) rotateEntity(e, Vec2{0.0, 0.0}, turn);
+            if (b.drawMirror) mirrorEntity(e, Vec2{0.0, 0.0}, Vec2{1.0, 0.0});
+            if (std::abs(turn) > 1e-12) rotateEntity(e, Vec2{0.0, 0.0}, turn);
             translateEntity(e, at);
             e.layer = opt.layer;
             body.push_back(e);
@@ -1957,7 +2036,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         for (int p = 0; p < shape.ports(); ++p) {
             BrickFace f;
             f.centre = place(shape.faceMid[static_cast<size_t>(p)]);
-            f.out = turnQuarters(shape.faceOut[static_cast<size_t>(p)], b.rot);
+            f.out = turnOnDrawing(b, shape.faceOut[static_cast<size_t>(p)], extra).normalized();
             f.lengthMm = shape.faceLen[static_cast<size_t>(p)];
             const Vec2 o = shape.faceOut[static_cast<size_t>(p)];
             const double depth = std::abs(o.x) * shape.half.x * 2.0 + std::abs(o.y) * shape.half.y * 2.0;
@@ -1975,7 +2054,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             const double tall = std::max(0.5, b.designatorHeightMm);
             Entity t;
             if (shape.ports() == 1 && bb.valid) {
-                const Vec2 out1 = turnQuarters(shape.faceOut[0], b.rot);
+                const Vec2 out1 = turnOnDrawing(b, shape.faceOut[0], extra).normalized();
                 const Vec2 c = (bb.min + bb.max) * 0.5;
                 const double reach = std::abs(out1.x) * (bb.max.x - bb.min.x) / 2.0 +
                                      std::abs(out1.y) * (bb.max.y - bb.min.y) / 2.0;
@@ -2091,6 +2170,9 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         // across the face from its middle - once they have left their fans.
         bool shared = false;
         double compact = 0.0;
+        // Never wider than they land: on a small face (a Y-split's leg) the bundle is taken in to the width they
+        // land across, so they go straight on rather than spreading out after the face.
+        double compactScale = 1.0;
     };
     std::vector<Landing> atA(branches.size()), atB(branches.size());
     auto isJunction = [](const FaceRef& f) { return f.id.startsWith(QLatin1String("~J")); };
@@ -2160,6 +2242,15 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             }
             int k = 0;
             double stacked = -bundle / 2.0;
+            // The span of their landings' middles against the span of their places in the bundle.
+            double compactScale = 1.0;
+            if (uses.size() > 1) {
+                const double landFirst = -(total - 1) / 2.0 + (uses.front().wires - 1) / 2.0;
+                const double landLast = (total - 1) / 2.0 - (uses.back().wires - 1) / 2.0;
+                const double landSpan = (landLast - landFirst) * lane;
+                const double bundleSpan = bundle - widths.front() / 2.0 - widths.back() / 2.0;
+                if (bundleSpan > 1e-9) compactScale = std::clamp(landSpan / bundleSpan, 0.0, 1.0);
+            }
             for (size_t n = 0; n < uses.size(); ++n) {
                 const Use& u = uses[n];
                 Landing l;
@@ -2170,6 +2261,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                 l.share = f.lengthMm * u.wires / std::max(1, total);
                 l.shared = uses.size() > 1 && !junction;
                 l.compact = stacked + widths[n] / 2.0;
+                l.compactScale = compactScale;
                 stacked += widths[n];
                 (u.isB ? atB : atA)[u.branch] = l;
                 k += u.wires;
@@ -2475,16 +2567,29 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             // (along the route of the faces' middles, offset by that place), and back out to its share of the other
             // face before its fan there.
             if (!bridgeOut && la.shared && lb.shared && !jA && !jB) {
-                const std::vector<Vec2> trunk = routeBetweenFaces(fa.centre, fa.out, fb.centre, fb.out, lead, 45.0, bend, knee);
-                std::vector<Vec2> off = offsetPolyline(trunk, la.compact);
-                const Vec2 wantStart = fa.centre + fa.out.perp() * la.compact;
-                if (!off.empty() && distance(off.front(), wantStart) > 1e-3) off = offsetPolyline(trunk, -la.compact);
+                // Faces facing each other nearly in line: the bundle goes STRAIGHT across - no jog of its own for an
+                // offset of a millimetre or two.
+                const double sideways = dot(fb.centre - fa.centre, fa.out.perp());
+                std::vector<Vec2> trunk;
+                if (dot(fa.out, fb.out) < -0.999 && std::abs(sideways) < 3.0)
+                    trunk = {fa.centre, fa.centre + fa.out * dot(fb.centre - fa.centre, fa.out)};
+                else
+                    trunk = routeBetweenFaces(fa.centre, fa.out, fb.centre, fb.out, lead, 45.0, bend, knee);
+                // No point twice: a segment of no length has no side, and one at the start put the run on the wrong
+                // side of the bundle - the runs crossing over each other on the way.
+                std::vector<Vec2> clean;
+                for (const Vec2& p : trunk)
+                    if (clean.empty() || distance(clean.back(), p) > 1e-6) clean.push_back(p);
+                // Offset square to the way out of the face A: this run's place in the bundle, the same side all along.
+                const double place = la.compact * std::min(la.compactScale, lb.compactScale);
+                const std::vector<Vec2> off = clean.size() >= 2 ? offsetPolyline(clean, place) : clean;
                 if (off.size() >= 2) {
                     const double L1 = fanA + 2.0, L2 = fanB + 2.0;
                     const double dA = std::abs(dot(la.centre - off.front(), fa.out.perp()));
                     const double dB = std::abs(dot(lb.centre - off.back(), fb.out.perp()));
                     const double length = routeLength(off);
-                    const double sA = L1 + dA, sB = length - (L2 + dB);
+                    // Converging gently - over twice the distance it moves across - not in a sharp jog.
+                    const double sA = L1 + 2.0 * dA, sB = length - (L2 + 2.0 * dB);
                     if (sB > sA + 1.0) {
                         std::vector<Vec2> together{la.centre, la.centre + fa.out * L1, pointAlong(off, sA)};
                         double at = 0.0;
@@ -2495,7 +2600,32 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                         together.push_back(pointAlong(off, sB));
                         together.push_back(lb.centre + fb.out * L2);
                         together.push_back(lb.centre);
-                        route = together;
+                        // NO BEND THAT IS NOT NEEDED: a point where the run goes straight on is dropped, so a run
+                        // already in its place goes straight through.
+                        // The straight out of each face is kept: the wires settle from the face into the bundle along it.
+                        const Vec2 keepA = la.centre + fa.out * L1, keepB = lb.centre + fb.out * L2;
+                        auto kept = [&](const Vec2& p) { return distance(p, keepA) < 1e-6 || distance(p, keepB) < 1e-6; };
+                        route.clear();
+                        for (const Vec2& p : together) {
+                            if (!route.empty() && distance(route.back(), p) < 1e-6) continue;
+                            if (route.size() >= 2) {
+                                const Vec2 d1 = (route.back() - route[route.size() - 2]).normalized();
+                                const Vec2 d2 = (p - route.back()).normalized();
+                                if (std::abs(cross(d1, d2)) < 1e-3 && dot(d1, d2) > 0.0 && !kept(route.back())) route.back() = p;
+                                else route.push_back(p);
+                            } else {
+                                route.push_back(p);
+                            }
+                        }
+                        // Nor a jog of a fraction of a millimetre: a point hardly off the line from the one before it
+                        // to the one after it is dropped - the run goes straight on there.
+                        for (size_t k = 1; k + 1 < route.size();) {
+                            const Vec2 a = route[k - 1], c = route[k + 1];
+                            const double len = distance(a, c);
+                            const double off = len > 1e-9 ? std::abs(cross(c - a, route[k] - a)) / len : 0.0;
+                            if (off < 0.5 && dot(route[k] - a, c - route[k]) > 0.0 && !kept(route[k])) route.erase(route.begin() + static_cast<long>(k));
+                            else ++k;
+                        }
                     }
                 }
             }

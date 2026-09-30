@@ -437,6 +437,38 @@ void BrickCanvas::moveSelection(double dCol, double dRow) {
     update();
 }
 
+void BrickCanvas::turnOnDrawing(double deg) {
+    bool any = false;
+    for (const QString& id : sel_)
+        if (Brick* b = d_->brick(id); b && b->type == BrickType::End) {
+            b->drawTurnDeg = std::fmod(b->drawTurnDeg + deg + 360.0, 360.0);
+            any = true;
+        }
+    if (!any) {
+        emit message(QStringLiteral("Pick a part to turn on the drawing"));
+        return;
+    }
+    emit designChanged();
+    emit message(QStringLiteral("Turned %1 degrees on the drawing").arg(deg));
+    update();
+}
+
+void BrickCanvas::mirrorOnDrawing() {
+    bool any = false;
+    for (const QString& id : sel_)
+        if (Brick* b = d_->brick(id); b && b->type == BrickType::End) {
+            b->drawMirror = !b->drawMirror;
+            any = true;
+        }
+    if (!any) {
+        emit message(QStringLiteral("Pick a part to mirror on the drawing"));
+        return;
+    }
+    emit designChanged();
+    emit message(QStringLiteral("Mirrored on the drawing"));
+    update();
+}
+
 void BrickCanvas::rotateSelection() {
     if (sel_.isEmpty()) return;
     for (const QString& id : sel_)
@@ -828,7 +860,10 @@ void BrickCanvas::fillContextMenu(QMenu& menu) {
                        [this] { setMinimap(!minimap_); });
         return;
     }
-    menu.addAction(QStringLiteral("Rotate a quarter\tR"), this, [this] { rotateSelection(); });
+    menu.addAction(QStringLiteral("Rotate a quarter"), this, [this] { rotateSelection(); });
+    menu.addAction(QStringLiteral("Turn on the drawing 45°\tR"), this, [this] { turnOnDrawing(45.0); });
+    menu.addAction(QStringLiteral("Turn on the drawing 90°\tSpace"), this, [this] { turnOnDrawing(90.0); });
+    menu.addAction(QStringLiteral("Mirror on the drawing\tM"), this, [this] { mirrorOnDrawing(); });
     QMenu* move = menu.addMenu(QStringLiteral("Move"));
     move->addAction(QStringLiteral("Left\t←"), this, [this] { moveSelection(-1.0, 0.0); });
     move->addAction(QStringLiteral("Right\t→"), this, [this] { moveSelection(1.0, 0.0); });
@@ -996,8 +1031,17 @@ void BrickCanvas::keyPressEvent(QKeyEvent* e) {
         deleteSelected();
         return;
     }
-    if (e->key() == Qt::Key_R) {
-        rotateSelection();
+    // ON THE DRAWING: R turns what is picked 45 degrees, Space 90, M mirrors it - the bricks on the pane stay as they are.
+    if (e->key() == Qt::Key_R && !(e->modifiers() & (Qt::ControlModifier | Qt::AltModifier))) {
+        turnOnDrawing(45.0);
+        return;
+    }
+    if (e->key() == Qt::Key_Space) {
+        turnOnDrawing(90.0);
+        return;
+    }
+    if (e->key() == Qt::Key_M && !(e->modifiers() & (Qt::ControlModifier | Qt::AltModifier))) {
+        mirrorOnDrawing();
         return;
     }
     if (e->matches(QKeySequence::Copy)) {
@@ -1183,7 +1227,8 @@ void BrickWizardDialog::buildUi() {
         bar->addWidget(b);
         return b;
     };
-    button("brickRotate", QStringLiteral("⟳ Rotate"), QStringLiteral("Turn what is picked a quarter (R)"),
+    button("brickRotate", QStringLiteral("⟳ Rotate"),
+           QStringLiteral("Turn the brick a quarter. On the drawing only: R turns 45°, Space 90°, M mirrors"),
            [this] { rotateSelected(); });
     for (auto [name, text, dc, dr] : {std::tuple<const char*, const char*, double, double>{"brickLeft", "←", -1, 0},
                                       {"brickRight", "→", 1, 0},
