@@ -141,7 +141,7 @@ struct Brick {
     // TURNED AND MIRRORED ON THE DRAWING ONLY (R 45 degrees, Space 90, M mirror on the wizard's pane): the part as
     // drawn, on top of its quarter turns - the brick on the pane is not turned by it.
     double drawTurnDeg = 0.0;              // clockwise
-    bool drawMirror = false;               // flipped across its own length (top for bottom)
+    bool drawMirror = false;               // flipped left for right on the sheet
     bool balloon = false;
     // THE DESIGNATOR ON THE DRAWING, part by part: written in front of the part or not (off unless asked
     // for), and how tall its letters are.

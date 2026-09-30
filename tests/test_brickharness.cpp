@@ -3127,8 +3127,8 @@ void testRoundSeventeen() {
         d.brick(y)->drawTurnDeg = 0.0;
         d.brick(y)->drawMirror = true;
         const BrickFace mirrored1 = faceOf(1);
-        check(std::abs(mirrored1.out.x - plain1.out.x) < 1e-6 && std::abs(mirrored1.out.y + plain1.out.y) < 1e-6,
-              "on the drawing: mirrored, top for bottom");
+        check(std::abs(mirrored1.out.x + plain1.out.x) < 1e-6 && std::abs(mirrored1.out.y - plain1.out.y) < 1e-6,
+              "on the drawing: mirrored, left for right");
         d.brick(y)->drawTurnDeg = 45.0;
         const BrickDesign back = BrickDesign::fromJson(d.toJson());
         check(back.brick(y) && back.brick(y)->drawMirror && std::abs(back.brick(y)->drawTurnDeg - 45.0) < 1e-9,

@@ -85,12 +85,15 @@ Vec2 turnQuarters(const Vec2& v, int rot) {
 }
 
 Vec2 turnOnDrawing(const Brick& b, const Vec2& v, double extraRad) {
-    Vec2 d = b.drawMirror ? Vec2{v.x, -v.y} : v;
-    d = turnQuarters(d, b.rot);
-    const double a = -b.drawTurnDeg * M_PI / 180.0 + extraRad;
-    if (std::abs(a) < 1e-12) return d;
-    const double c = std::cos(a), s = std::sin(a);
-    return Vec2{d.x * c - d.y * s, d.x * s + d.y * c};
+    auto rotate = [](const Vec2& p, double a) {
+        if (std::abs(a) < 1e-12) return p;
+        const double c = std::cos(a), s = std::sin(a);
+        return Vec2{p.x * c - p.y * s, p.x * s + p.y * c};
+    };
+    Vec2 d = rotate(turnQuarters(v, b.rot), -b.drawTurnDeg * M_PI / 180.0);
+    // Mirrored LEFT FOR RIGHT on the sheet, as it is turned there.
+    if (b.drawMirror) d.x = -d.x;
+    return rotate(d, extraRad);
 }
 
 Vec2 BrickDesign::portWorldDir(const Brick& b, int port) const {
@@ -2020,15 +2023,17 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         const BrickShape& shape = shapes[b.id];
         const Vec2 at = posOf(b.id);
         const double extra = linedUp.contains(b.id) ? linedUp.value(b.id).turn : 0.0;
-        const double turn = -b.rot * M_PI / 2.0 - b.drawTurnDeg * M_PI / 180.0 + extra;
+        const double turn = -b.rot * M_PI / 2.0 - b.drawTurnDeg * M_PI / 180.0;
         auto place = [&](const Vec2& v) { return at + turnOnDrawing(b, v, extra); };
         std::vector<Entity> body;
         for (Entity e : shape.drawing) {
             // The placeholder's own caption gives way to the designator, written below.
             if (e.type == EntityType::Text && !b.libPart.isEmpty()) continue;
             if (e.type == EntityType::Text) continue;
-            if (b.drawMirror) mirrorEntity(e, Vec2{0.0, 0.0}, Vec2{1.0, 0.0});
+            // As turnOnDrawing: turned, mirrored left for right on the sheet, then lined up with a face.
             if (std::abs(turn) > 1e-12) rotateEntity(e, Vec2{0.0, 0.0}, turn);
+            if (b.drawMirror) mirrorEntity(e, Vec2{0.0, 0.0}, Vec2{0.0, 1.0});
+            if (std::abs(extra) > 1e-12) rotateEntity(e, Vec2{0.0, 0.0}, extra);
             translateEntity(e, at);
             e.layer = opt.layer;
             body.push_back(e);
