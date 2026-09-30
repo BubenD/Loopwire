@@ -3068,10 +3068,31 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                     made.push_back(t);
                 }
             } else {
-                // LINEAR along the way the harness leaves, or at the angle from one point to the other.
-                const Vec2 toAlong = straight || !r.dimLinear ? to : from + fa.out * dot(to - from, fa.out);
-                dim(from, toAlong, sideOff(from, toAlong, gapOut + 10.0, r.dimTotalBelow), along, !straight,
-                    r.dimTextTotal, "total");
+                // LINEAR: level along the harness (or up it, where it runs up the sheet), its two extension lines
+                // down to the two points it measures between - its line above both or below both. Or ALIGNED, at the
+                // angle from one point to the other.
+                if (r.dimLinear) {
+                    const bool acrossX = std::abs(fa.out.x) >= std::abs(fa.out.y);
+                    const double reach = gapOut + 10.0;
+                    Vec2 at;
+                    if (acrossX) {
+                        const double y = r.dimTotalBelow ? std::min(from.y, to.y) - reach : std::max(from.y, to.y) + reach;
+                        at = Vec2{(from.x + to.x) / 2.0, y};
+                    } else {
+                        const double x = r.dimTotalBelow ? std::min(from.x, to.x) - reach : std::max(from.x, to.x) + reach;
+                        at = Vec2{x, (from.y + to.y) / 2.0};
+                    }
+                    Entity d = makeDim(from, to, 0.0, !r.dimTextTotal.isEmpty() ? r.dimTextTotal : fmt(along));
+                    d.points = {from, to, at};
+                    d.meta.insert(QStringLiteral("dimType"), QStringLiteral("linear"));
+                    d.meta.insert(QStringLiteral("dimAcross"), acrossX);
+                    d.meta.insert(QStringLiteral("brickDim"), QStringLiteral("total"));
+                    d.meta.insert(QStringLiteral("brickMeasured"), along);
+                    made.push_back(d);
+                } else {
+                    dim(from, to, sideOff(from, to, gapOut + 10.0, r.dimTotalBelow), along, !straight, r.dimTextTotal,
+                        "total");
+                }
             }
         }
         if (r.dimFans) {
@@ -3188,24 +3209,26 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                     for (int k = 0; k < 24; ++k)
                         ring.push_back(e.center + Vec2{std::cos(k * M_PI / 12.0), std::sin(k * M_PI / 12.0)} * e.radius);
                     wipe(ring);
-                } else if (e.type == EntityType::Polyline && e.points.size() >= 2 && e.meta.value(QStringLiteral("double")).toBool()) {
-                    // ONE WIRE (a bridge wire): a band as wide as it is drawn, along it.
-                    const double half = e.meta.value(QStringLiteral("gap")).toDouble(1.0) / 2.0 + 0.6;
-                    for (size_t k = 0; k + 1 < e.points.size(); ++k) {
-                        const Vec2 a = e.points[k], b = e.points[k + 1];
-                        if (distance(a, b) < 1e-9) continue;
-                        const Vec2 n = (b - a).normalized().perp() * half;
-                        wipe({a - n, b - n, b + n, a + n});
-                    }
-                } else if (e.type == EntityType::TwistedPair && e.points.size() >= 2) {
-                    // A band along the route, as wide as the body (or the wires) on it.
-                    const double half = std::max(e.meta.value(QStringLiteral("twistBodyWidth")).toDouble(0.0),
-                                                 e.meta.value(QStringLiteral("twistLane")).toDouble(1.0) *
-                                                     (e.meta.value(QStringLiteral("twistWires")).toInt(2) - 1)) / 2.0 + 1.0;
-                    for (size_t k = 0; k + 1 < e.points.size(); ++k) {
-                        const Vec2 a = e.points[k], b = e.points[k + 1];
-                        const Vec2 n = (b - a).normalized().perp() * half;
-                        wipe({a - n, b - n, b + n, a + n});
+                } else if ((e.type == EntityType::Polyline && e.points.size() >= 2 &&
+                            e.meta.value(QStringLiteral("double")).toBool()) ||
+                           (e.type == EntityType::TwistedPair && e.points.size() >= 2)) {
+                    // A BAND ALONG IT, ONE PIECE: as wide as one wire is drawn (a bridge wire), or as the body - or the
+                    // wires - of a run. In one piece round every bend: a piece to each short stretch of a rounded bend
+                    // left their joins showing as lines across the wire.
+                    const double half =
+                        e.type == EntityType::Polyline
+                            ? e.meta.value(QStringLiteral("gap")).toDouble(1.0) / 2.0 + 0.6
+                            : std::max(e.meta.value(QStringLiteral("twistBodyWidth")).toDouble(0.0),
+                                       e.meta.value(QStringLiteral("twistLane")).toDouble(1.0) *
+                                           (e.meta.value(QStringLiteral("twistWires")).toInt(2) - 1)) / 2.0 + 1.0;
+                    std::vector<Vec2> path;
+                    for (const Vec2& q : e.points)
+                        if (path.empty() || distance(path.back(), q) > 1e-6) path.push_back(q);
+                    if (path.size() >= 2) {
+                        std::vector<Vec2> band = offsetPolyline(path, half);
+                        const std::vector<Vec2> other = offsetPolyline(path, -half);
+                        band.insert(band.end(), other.rbegin(), other.rend());
+                        wipe(band);
                     }
                 }
                 return m;
@@ -3318,7 +3341,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                     top = std::max(top, bx.max.y);
                     bottom = std::min(bottom, bx.min.y);
                 }
-            plan.push_back(Planned{p0, p1, dm.below || ba->dimBelow, said, top, bottom, 0});
+            plan.push_back(Planned{p0, p1, dm.below, said, top, bottom, 0});
         }
         double baseAbove = -1e300, baseBelow = 1e300;
         for (const Planned& pl : plan) {

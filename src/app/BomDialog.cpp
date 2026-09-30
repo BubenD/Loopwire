@@ -68,6 +68,7 @@ void BomDialog::buildUi() {
     auto* lv = new QVBoxLayout(left);
     lv->setContentsMargins(0, 0, 0, 0);
     view_ = new QTableWidget(left);
+    view_->horizontalHeader()->setHighlightSections(false);   // rows lit do not bold the headings
     view_->setColumnCount(bomColumnCount());
     // Dragging a line moves the part up or down the list. The "#" column is the row's PLACE, so it
     // simply follows - a part is never carried about by its number.

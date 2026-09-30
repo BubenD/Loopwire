@@ -357,7 +357,12 @@ void DrawingPreview::paintEvent(QPaintEvent*) {
         // colour chart, and it was being applied to the marks as well - so the manager's blue connection
         // point, its orange and green ends and its purple output faces all came out the same grey as the
         // part, which is three or four marks nobody can tell apart.
-        if (e.meta.value(QLatin1String(kPreviewMarkKey)).toBool())
+        // A MASK THAT SAYS IT HAS NO FRAME IS DRAWN WITHOUT ONE: a colour laid over it is what asks the renderer to
+        // frame a mask (so a picked one can be seen) - and every mask here was coming out framed, lines across a
+        // bridge wire's bend and down the middle of what it covers.
+        if (e.type == EntityType::Wipeout && e.meta.value(QStringLiteral("noFrame")).toBool())
+            EntityRenderer::draw(p, e, doc, vt, QColor());
+        else if (e.meta.value(QLatin1String(kPreviewMarkKey)).toBool())
             EntityRenderer::draw(p, e, doc, vt, QColor());
         else if (conn) EntityRenderer::draw(p, e, doc, vt, QColor("#ff9f40"));
         // NOT APPLIED YET - see kPreviewGhostKey. Dimmed to about a third of the contrast the applied

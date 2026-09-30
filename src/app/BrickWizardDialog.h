@@ -116,6 +116,8 @@ signals:
     void bricksMoved(const QHash<QString, QPointF>& from);
     // A brick double-clicked: its part brought up on the drawing.
     void brickDoubleClicked(const QString& id);
+    // "Open in library" on a brick: its part (or one of its layers' parts) to be shown in the parts library.
+    void openInLibrary(const QString& partId);
     // Two bricks clicked while putting a dimension on: the dimension goes between them.
     void dimensionPicked(const QString& a, const QString& b);
     // A brick clicked while setting another's drawing order: `source` goes above (or under) `other`.
@@ -266,6 +268,8 @@ public:
 signals:
     // The bill was changed from here, so the window showing it can catch up.
     void bomChanged();
+    // A brick's part asked to be opened in the parts library.
+    void openInLibraryRequested(const QString& partId);
 
 protected:
     void keyPressEvent(QKeyEvent* e) override;
@@ -375,6 +379,12 @@ private:
     QString bridgeValue() const;
     // A PART DRAGGED ON THE DRAWING (the preview): its run's length follows, the pane stays as it is.
     QString partDrag_;
+    // A RUN BEING SHORTENED by Ctrl + dragging its end on the drawing: the run, the way that end points, its length
+    // when the drag began and where the drag began.
+    QString runDrag_;
+    Vec2 runDragDir_{1.0, 0.0};
+    double runDragLen0_ = 0.0;
+    Vec2 runDragFrom_;
     Vec2 partDragFrom_;
     BrickDesign partDragDesign_;
     BrickBuild partDragBuilt_;

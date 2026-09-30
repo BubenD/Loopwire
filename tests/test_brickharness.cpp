@@ -973,9 +973,13 @@ void testRoundFive() {
         auto lin = total();
         s.dimLinear = false;
         auto ang = total();
-        check(!lin.empty() && !ang.empty() && std::abs(lin[0].b.y - lin[0].a.y) < 1e-6 &&
+        // Linear: it measures along the harness, level - and its two points are the run's two real ends, so its
+        // extension lines go down to them (the end a row lower than the start).
+        check(!lin.empty() && !ang.empty() && lin[0].meta.value(QStringLiteral("dimType")).toString() == QLatin1String("linear") &&
+                  lin[0].meta.value(QStringLiteral("dimAcross")).toBool() && std::abs(lin[0].b.y - lin[0].a.y) > 1.0 &&
+                  ang[0].meta.value(QStringLiteral("dimType")).toString() == QLatin1String("aligned") &&
                   std::abs(ang[0].b.y - ang[0].a.y) > 1.0,
-              "dimension: linear along the harness; not linear, at the angle between its points");
+              "dimension: linear along the harness to the real end points; not linear, at the angle between its points");
         s.dimTrace = true;
         auto tr = total();
         bool traced = false;
@@ -2571,7 +2575,9 @@ void testRoundThirteen() {
               "dims: two that would cross are put at different heights");
         check(two.size() == 2 && two[0].points[2].y < two[1].points[2].y,
               "dims: the shorter nearer the parts, the longer further out");
-        d.brick(x0)->dimBelow = true;
+        d.brick(x0)->dimBelow = true;   // as the part's panel does: its dimensions go below with it
+        for (BrickDim& dm : d.dims)
+            if (dm.a == x0) dm.below = true;
         std::vector<Entity> below = dims();
         check(below.size() == 2 && below[0].points[2].y < 0.0 && below[1].points[2].y < 0.0,
               "dims: a part set to Below puts its dimensions below");
@@ -3559,6 +3565,74 @@ void testRoundNineteen() {
     }
 }
 
+// ROUND TWENTY: a dimension's line taken hold of anywhere along it; a dimension between two bricks goes the side it is
+// set, whatever its part says; a bridge wire's mask one piece round its bend.
+void testRoundTwenty() {
+    // THE LINE OF A PICKED DIMENSION, pressed anywhere along it and pulled, moves off with the pointer.
+    {
+        Document d;
+        d.entities().clear();
+        Entity dim;
+        dim.id = QStringLiteral("dm");
+        dim.type = EntityType::Dimension;
+        dim.meta.insert(QStringLiteral("dimType"), QStringLiteral("linear"));
+        dim.meta.insert(QStringLiteral("dimAcross"), true);
+        dim.a = {0, 0};
+        dim.b = {100, 0};
+        dim.points = {{0, 0}, {100, 0}, {50, 40}};
+        d.entities().push_back(dim);
+        Editor ed;
+        ed.setDocument(&d);
+        ed.selectById(QStringLiteral("dm"));
+        ed.onPointerPress({20, 40}, Qt::LeftButton, Qt::NoModifier);   // on the line, far from its middle joint
+        ed.onPointerMove({20, 70});
+        ed.onPointerPress({20, 70}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerRelease({20, 70}, Qt::LeftButton);
+        const Entity& after = d.entities().front();
+        std::printf("  dimension line: taken at 20,40, now at y %.1f\n", after.points.size() > 2 ? after.points[2].y : -1.0);
+        check(after.points.size() > 2 && std::abs(after.points[2].y - 70.0) < 1.0 && std::abs(after.a.x) < 1e-6 &&
+                  std::abs(after.b.x - 100.0) < 1e-6,
+              "dimension: pulled by its line anywhere along it, the line moves - what it measures does not");
+    }
+    // A DIMENSION'S OWN SIDE: set above, it is above even from a part set to Below.
+    {
+        BrickDesign d;
+        const QString x0 = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString r = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString x1 = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        d.connect(x0, r);
+        d.connect(r, x1);
+        d.brick(x0)->dimBelow = true;
+        d.dims.push_back({x0, x1, false});
+        double y = 0.0;
+        for (const Entity& e : buildBrickHarness(d, nullptr).entities)
+            if (e.meta.value(QStringLiteral("brickDim")).toString() == QLatin1String("manual")) y = e.points[2].y;
+        check(y > 0.0, "dims: a dimension set Above is above, though its part says Below");
+    }
+    // A BRIDGE WIRE'S MASK: one piece.
+    {
+        BrickDesign d;
+        const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString y = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        const QString br = d.addBrick(BrickType::Run, PartKind::Wire, 1, 1);
+        const QString f = d.addBrick(BrickType::End, PartKind::Ferrule, 0, 1);
+        d.connect(x, c);
+        d.connect(c, y);
+        d.brick(c)->run.wires = 4;
+        makeBridgeWire(*d.brick(br));
+        d.connect(c, br, nullptr, 0, 1);
+        d.connect(br, f);
+        syncBridgeWires(d);
+        int masks = 0;
+        for (const Entity& e : buildBrickHarness(d, nullptr).entities)
+            if (e.type == EntityType::Wipeout && e.meta.value(QStringLiteral("brickMask")).toBool() &&
+                e.meta.value(QStringLiteral("brickId")).toString() == br)
+                ++masks;
+        check(masks == 1, "bridge: its mask is one piece round its bend - no joins drawn across the wire");
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -3592,6 +3666,7 @@ int run_brickharness_tests() {
     testRoundSeventeen();
     testRoundEighteen();
     testRoundNineteen();
+    testRoundTwenty();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

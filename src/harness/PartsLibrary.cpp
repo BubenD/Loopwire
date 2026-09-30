@@ -878,7 +878,15 @@ std::vector<PartField> partFields(PartKind kind) {
                     choice("plating", "Plating", kMetals),
                     text("spec", "Specification")};
         case PartKind::Ferrule:
-            return {text("size", "Size"),
+            // THE WIRE IT TAKES, picked from the ferrule sizes there are (or typed): its entry size.
+            return {choice("size", "Entry size",
+                           {QStringLiteral("0.25 mm2 (24 AWG)"), QStringLiteral("0.34 mm2 (22 AWG)"),
+                            QStringLiteral("0.5 mm2 (20 AWG)"), QStringLiteral("0.75 mm2 (18 AWG)"),
+                            QStringLiteral("1.0 mm2 (18 AWG)"), QStringLiteral("1.5 mm2 (16 AWG)"),
+                            QStringLiteral("2.5 mm2 (14 AWG)"), QStringLiteral("4 mm2 (12 AWG)"),
+                            QStringLiteral("6 mm2 (10 AWG)"), QStringLiteral("10 mm2 (8 AWG)"),
+                            QStringLiteral("16 mm2 (6 AWG)"), QStringLiteral("25 mm2 (4 AWG)"),
+                            QStringLiteral("35 mm2 (2 AWG)"), QStringLiteral("50 mm2 (1 AWG)")}),
                     range("stud", "Stud insertion size", "mm"),
                     choice("material", "Material", kMetals),
                     choice("insulated", "Insulated",

@@ -7236,6 +7236,8 @@ void MainWindow::buildPanels() {
     bv->setContentsMargins(4, 4, 4, 4);
     bv->setSpacing(4);
     bomPanel_ = new QTableWidget(bomWidget);
+    // Rows lit (Alt over a part) do not make the column headings bold.
+    bomPanel_->horizontalHeader()->setHighlightSections(false);
     bomPanel_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     bomPanel_->setSelectionBehavior(QAbstractItemView::SelectRows);
     bomPanel_->verticalHeader()->setVisible(false);
@@ -11371,10 +11373,13 @@ int MainWindow::bomHoverAt(const Vec2& world, bool alt) {
             for (const QJsonValue v : e->meta.value(QStringLiteral("stackParts")).toArray())
                 if (!v.toString().isEmpty() && !ids.contains(v.toString())) ids << v.toString();
             if (!ids.isEmpty()) {
-                const QString copy = e->meta.value(QStringLiteral("blockInst")).toString();
+                // The whole of the one copy: a block put down, or a part of a harness the wizard placed.
+                const QString key = e->meta.contains(QStringLiteral("partCopy")) ? QStringLiteral("partCopy")
+                                                                                 : QStringLiteral("blockInst");
+                const QString copy = e->meta.value(key).toString();
                 if (!copy.isEmpty() && editor_->document()) {
                     for (const Entity& o : editor_->document()->entities())
-                        if (o.meta.value(QStringLiteral("blockInst")).toString() == copy) lit.push_back(o.id);
+                        if (o.meta.value(key).toString() == copy) lit.push_back(o.id);
                 } else {
                     lit.push_back(e->id);
                 }
@@ -15246,6 +15251,11 @@ void MainWindow::showMechWizard() {
         connect(brickWizard_, &BrickWizardDialog::bomChanged, this, [this] {
             refreshBomPanel();
             if (bomDlg_) bomDlg_->reload();
+        });
+        // "Open in library" on a brick: the parts library, on that part.
+        connect(brickWizard_, &BrickWizardDialog::openInLibraryRequested, this, [this](const QString& partId) {
+            showPartsLibrary();
+            if (libraryDlg_) libraryDlg_->selectPart(partId);
         });
     }
     brickWizard_->show();

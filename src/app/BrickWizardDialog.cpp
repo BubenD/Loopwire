@@ -52,6 +52,7 @@
 #include <QGuiApplication>
 #include <QJsonDocument>
 #include <QTimer>
+#include <QUuid>
 #include <QToolTip>
 #include <QHelpEvent>
 #include <QShortcut>
@@ -904,6 +905,22 @@ void BrickCanvas::fillContextMenu(QMenu& menu) {
                        [this] { setMinimap(!minimap_); });
         return;
     }
+    // OPEN IN LIBRARY: the part of the brick right-clicked - an end's part, or one of a run's layers.
+    if (const Brick* b = d_->brick(sel_.front())) {
+        if (b->type == BrickType::End) {
+            QAction* a = menu.addAction(QStringLiteral("Open in library"), this, [this, id = b->libPart] { emit openInLibrary(id); });
+            a->setEnabled(!b->libPart.isEmpty());
+        } else if (brickIsSpecial(b->type)) {
+            QMenu* lib = menu.addMenu(QStringLiteral("Open in library"));
+            for (const QString& layer : b->run.stack) {
+                const QString id = b->run.stackParts.value(layer);
+                if (id.isEmpty()) continue;
+                lib->addAction(QStringLiteral("%1 - %2").arg(layer, id), this, [this, id] { emit openInLibrary(id); });
+            }
+            lib->setEnabled(!lib->actions().isEmpty());
+        }
+        menu.addSeparator();
+    }
     menu.addAction(QStringLiteral("Rotate a quarter"), this, [this] { rotateSelection(); });
     menu.addAction(QStringLiteral("Turn on the drawing 45°\tR"), this, [this] { turnOnDrawing(45.0); });
     menu.addAction(QStringLiteral("Turn on the drawing 90°\tSpace"), this, [this] { turnOnDrawing(90.0); });
@@ -1428,6 +1445,7 @@ void BrickWizardDialog::buildUi() {
     // THE BILL, LIVE: every line of the drawing's bill of materials as it stands, the parts this
     // harness uses in bold - so what adding a part did is seen as it is done. Where it sits is chosen.
     bom_ = new QTableWidget(0, 5, this);
+    bom_->horizontalHeader()->setHighlightSections(false);   // rows picked do not bold the headings
     bom_->setObjectName(QStringLiteral("brickBom"));
     bom_->setHorizontalHeaderLabels({QStringLiteral("Item"), QStringLiteral("Qty"), QStringLiteral("Unit"),
                                      QStringLiteral("P/N"), QStringLiteral("Description")});
@@ -1533,6 +1551,7 @@ void BrickWizardDialog::buildUi() {
                                                                                       : QStringLiteral("under"),
                                                               brickTitle(*o)));
     });
+    connect(canvas_, &BrickCanvas::openInLibrary, this, &BrickWizardDialog::openInLibraryRequested);
     connect(canvas_, &BrickCanvas::dimensionPicked, this, [this](const QString& a, const QString& b) {
         // Which side is the part's own (its Dimensions setting): above unless it says below.
         design_.dims.push_back({a, b, design_.brick(a) && design_.brick(a)->dimBelow});
@@ -3051,6 +3070,52 @@ bool BrickWizardDialog::eventFilter(QObject* o, QEvent* e) {
                 showGrabRings();
             }
         }
+        // CTRL ON AN END OF A RUN - a cable's, a heatshrink's, a fanout's, loose or on a part: dragged, the run is
+        // shortened or lengthened, its length following the drag along the way that end points.
+        if (e->type() == QEvent::MouseButtonPress) {
+            auto* me = static_cast<QMouseEvent*>(e);
+            if (me->button() == Qt::LeftButton && (me->modifiers() & Qt::ControlModifier)) {
+                const Vec2 at = preview_->worldAt(me->position());
+                const double reach = std::max(1.5, handleMm_ * 1.5);
+                double best = reach;
+                for (const Entity& en : lastEnts_) {
+                    const Brick* s = design_.brick(en.meta.value(QStringLiteral("brickId")).toString());
+                    if (!s || !brickIsSpecial(s->type) || en.points.size() < 2) continue;
+                    if (en.type != EntityType::TwistedPair &&
+                        !(en.type == EntityType::Polyline && en.meta.value(QStringLiteral("double")).toBool()))
+                        continue;
+                    const size_t n = en.points.size();
+                    for (bool last : {false, true}) {
+                        const Vec2 end = last ? en.points[n - 1] : en.points[0];
+                        const double dd = distance(at, end);
+                        if (dd >= best) continue;
+                        best = dd;
+                        runDrag_ = s->id;
+                        runDragDir_ = (last ? en.points[n - 1] - en.points[n - 2] : en.points[0] - en.points[1]).normalized();
+                        runDragLen0_ = s->run.lengthMm;
+                        runDragFrom_ = at;
+                    }
+                }
+                if (!runDrag_.isEmpty()) {
+                    selectBrick(runDrag_);
+                    return true;
+                }
+            }
+        } else if (e->type() == QEvent::MouseMove && !runDrag_.isEmpty()) {
+            const Vec2 now = preview_->worldAt(static_cast<QMouseEvent*>(e)->position());
+            if (Brick* s = design_.brick(runDrag_)) {
+                s->run.lengthMm = std::max(0.0, std::round(runDragLen0_ + dot(now - runDragFrom_, runDragDir_)));
+                canvas_->update();
+                refreshPreview();
+                status_->setText(QStringLiteral("%1: %2 mm").arg(brickTitle(*s)).arg(s->run.lengthMm, 0, 'f', 0));
+            }
+            return true;
+        } else if (e->type() == QEvent::MouseButtonRelease && !runDrag_.isEmpty()) {
+            runDrag_.clear();
+            recordHistory();
+            loadPanel();
+            return true;
+        }
         if (e->type() == QEvent::MouseButtonPress) {
             auto* me = static_cast<QMouseEvent*>(e);
             if (me->button() == Qt::LeftButton && me->modifiers() == Qt::NoModifier) {
@@ -3470,7 +3535,7 @@ void BrickWizardDialog::syncLiveBom() {
 }
 
 void BrickWizardDialog::recordHistory() {
-    if (restoring_ || (canvas_ && canvas_->dragging()) || !partDrag_.isEmpty()) return;   // a drag is one step
+    if (restoring_ || (canvas_ && canvas_->dragging()) || !partDrag_.isEmpty() || !runDrag_.isEmpty()) return;   // a drag is one step
     const QByteArray now = QJsonDocument(design_.toJson()).toJson(QJsonDocument::Compact);
     if (historyAt_ >= 0 && historyAt_ < static_cast<int>(history_.size()) && history_[historyAt_] == now) return;
     history_.resize(static_cast<size_t>(historyAt_ + 1));
@@ -3890,6 +3955,12 @@ BrickMark BrickWizardDialog::compatibilityOf(const Brick& b) const {
         QList<double> a = gaugeAreas(q.value(QStringLiteral("gaugeMin")), awg) +
                           gaugeAreas(q.value(QStringLiteral("gaugeMax")), awg);
         if (a.isEmpty()) a = gaugeAreas(q.value(QStringLiteral("gauge")), awg);
+        // A FERRULE BY ITS ENTRY SIZE - "0.5 mm2 (20 AWG)": the first figure, in the unit it is written in.
+        if (a.isEmpty() && q.kind == PartKind::Ferrule) {
+            const QString size = q.value(QStringLiteral("size"));
+            const QList<double> all = gaugeAreas(size, !size.contains(QLatin1String("mm"), Qt::CaseInsensitive));
+            if (!all.isEmpty()) a = {all.front()};
+        }
         const QString unit = awg ? QStringLiteral(" AWG") : QStringLiteral(" mm²");
         const QString said = (q.mfrPn.isEmpty() ? q.title() : q.mfrPn) + QStringLiteral(" ") +
                              QStringList{q.value(QStringLiteral("gaugeMin")), q.value(QStringLiteral("gaugeMax"))}.join(QLatin1Char('-')) + unit;
@@ -4237,7 +4308,24 @@ void BrickWizardDialog::place() {
         status_->setText(QStringLiteral("Nothing to place yet"));
         return;
     }
+    // WHAT EACH OBJECT IS PART OF goes down with it, so Alt over any line of a part on the sheet finds it: an end's
+    // library part on every object of that end (its outline, its mask, its designator), and a run's layers (already
+    // on it, stackParts) - with one copy mark per brick, so the whole of the part lights up together.
+    QHash<QString, QString> copyOf;
     for (Entity& e : ents) {
+        const QString bid = e.meta.value(QStringLiteral("brickId")).toString();
+        if (const Brick* b = design_.brick(bid)) {
+            if (!copyOf.contains(bid)) copyOf.insert(bid, QUuid::createUuid().toString(QUuid::WithoutBraces));
+            e.meta.insert(QStringLiteral("partCopy"), copyOf.value(bid));
+            if (b->type == BrickType::End && !b->libPart.isEmpty() && !e.meta.contains(QStringLiteral("libPart")))
+                e.meta.insert(QStringLiteral("libPart"), b->libPart);
+            if (brickIsSpecial(b->type) && !b->run.stackParts.isEmpty() && !e.meta.contains(QStringLiteral("stackParts"))) {
+                QJsonArray ids;
+                for (const QString& layer : b->run.stack)
+                    if (!b->run.stackParts.value(layer).isEmpty()) ids.append(b->run.stackParts.value(layer));
+                if (!ids.isEmpty()) e.meta.insert(QStringLiteral("stackParts"), ids);
+            }
+        }
         e.meta.remove(QStringLiteral("brickId"));
         e.meta.remove(QStringLiteral("brickBranch"));
     }

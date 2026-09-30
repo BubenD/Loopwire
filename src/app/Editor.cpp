@@ -6604,6 +6604,27 @@ bool Editor::beginGripGrab(const Vec2& at, bool shift) {
             if (d <= bestDist) { bestDist = d; bestId = id; bestGrip = gr; found = true; }
         }
     }
+    // A DIMENSION'S LINE IS TAKEN HOLD OF ANYWHERE ALONG IT, not only by the joint at its middle: pressing on the
+    // line of a picked linear or aligned dimension and pulling moves the line off (or in) from what it measures,
+    // exactly as that joint does.
+    if (!found && !shift) {
+        for (const auto& id : selected_) {
+            Entity* e = entityById(id);
+            if (!e || e->type != EntityType::Dimension || e->points.size() < 3) continue;
+            const QString dty = e->meta.value("dimType").toString(QStringLiteral("linear"));
+            if (dty != QLatin1String("linear") && dty != QLatin1String("aligned")) continue;
+            Vec2 d1, d2;
+            if (!dimensionLineEnds(*e, d1, d2)) continue;
+            if (distance(at, closestPointOnSegment(at, d1, d2).point) > tol) continue;
+            for (const auto& gr : gripsOf(*e, pinEnds, doc_))
+                if (gr.role == GripRole::Vertex && gr.index == 2) {
+                    bestId = id;
+                    bestGrip = gr;
+                    found = true;
+                }
+            if (found) break;
+        }
+    }
     // A balloon's centre grip is grabbable even with Shift held (Shift = move just
     // that circle). For any OTHER grip, Shift is reserved for selection — don't grab.
     const bool balloonCenter = found && [&] {
@@ -19541,28 +19562,14 @@ void Editor::setLookupHighlight(const std::vector<QString>& ids) {
 }
 
 void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
-    // THE PART LOOKED UP (Alt + the pointer): the box round all of it, in a very light orange.
-    if (!lookupHighlight_.empty()) {
-        Bounds all;
+    // THE PART LOOKED UP (Alt + the pointer): its own lines drawn over in a light orange - every object of it, the
+    // part's outline, a run's wires and body - not a box round it.
+    if (!lookupHighlight_.empty() && doc_) {
+        p.save();
         for (const QString& id : lookupHighlight_)
-            if (const Entity* e = entityById(id)) {
-                const Bounds b = e->bounds();
-                if (b.valid) {
-                    all.expand(b.min);
-                    all.expand(b.max);
-                }
-            }
-        if (all.valid) {
-            const QRectF box = QRectF(vt.toScreen(all.min), vt.toScreen(all.max)).normalized().adjusted(-3, -3, 3, 3);
-            p.save();
-            QPen op(QColor(255, 176, 90, 200));
-            op.setCosmetic(true);
-            op.setWidthF(1.4);
-            p.setPen(op);
-            p.setBrush(QColor(255, 200, 140, 55));
-            p.drawRect(box);
-            p.restore();
-        }
+            if (const Entity* e = entityById(id); e && e->type != EntityType::Wipeout)
+                EntityRenderer::draw(p, *e, *doc_, vt, QColor(255, 176, 90));
+        p.restore();
     }
     // The block under the cursor, in a soft grey over its box - not when it is already picked, which
     // says more.
