@@ -3147,11 +3147,31 @@ void testRoundSeventeen() {
             QKeyEvent ev(QEvent::KeyPress, key, Qt::NoModifier);
             QApplication::sendEvent(dlg.canvas(), &ev);
         };
+        const Vec2 dir0 = w.portPaneDir(*w.brick(x), 0);
         press(Qt::Key_R);
         check(std::abs(w.brick(x)->drawTurnDeg - 45.0) < 1e-9 && w.brick(x)->rot == 0,
-              "keys: R turns the part 45 degrees on the drawing, the brick not turned");
+              "keys: R turns the part 45 degrees on the drawing");
+        const Vec2 dir45 = w.portPaneDir(*w.brick(x), 0);
+        check(std::abs(dot(dir45, dir0) - std::sqrt(0.5)) < 1e-6,
+              "keys: R turns the brick's connection 45 degrees round it too");
         press(Qt::Key_Space);
         check(std::abs(w.brick(x)->drawTurnDeg - 135.0) < 1e-9, "keys: Space turns it 90 more");
+        check(std::abs(dot(w.portPaneDir(*w.brick(x), 0), dir45)) < 1e-6,
+              "keys: Space turns the brick's connection a quarter round it too");
+        const QRectF box = dlg.canvas()->brickRect(*w.brick(x));
+        const QPointF on = dlg.canvas()->portPoint(*w.brick(x), 0);
+        check(on.x() >= box.left() - 1e-6 && on.x() <= box.right() + 1e-6 && on.y() >= box.top() - 1e-6 &&
+                  on.y() <= box.bottom() + 1e-6,
+              "keys: the turned connection still sits on the brick");
+        // THE TICK: untied, the turn is the drawing's alone - the brick's connection back as it was.
+        auto* tie = dlg.findChild<QCheckBox*>(QStringLiteral("brickTieTurn"));
+        check(tie && tie->isChecked(), "tie: the bricks turn with the drawing unless told not to");
+        if (tie) tie->setChecked(false);
+        check(!w.tieBrickTurn && std::abs(dot(w.portPaneDir(*w.brick(x), 0), dir0) - 1.0) < 1e-6 &&
+                  std::abs(w.brick(x)->drawTurnDeg - 135.0) < 1e-9,
+              "tie: unticked, the brick is not turned - the drawing still is");
+        check(!BrickDesign::fromJson(w.toJson()).tieBrickTurn, "tie: kept with the harness");
+        if (tie) tie->setChecked(true);
         const Vec2 dirWas = w.portPaneDir(*w.brick(x), 0);
         const QPointF dotWas = dlg.canvas()->portPoint(*w.brick(x), 0);
         const QPointF mid = dlg.canvas()->brickRect(*w.brick(x)).center();

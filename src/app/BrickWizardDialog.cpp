@@ -250,17 +250,19 @@ QPointF BrickCanvas::portPoint(const Brick& b, int port) const {
     const Vec2 across = o.perp();
     const double reach = std::abs(across.x) * s.half.x + std::abs(across.y) * s.half.y;
     const double t = std::clamp(reach > 1e-9 ? dot(m, across) / reach : 0.0, -1.0, 1.0);
-    Vec2 wo = turnQuarters(o, b.rot), wa = turnQuarters(across, b.rot);
-    // MIRRORED ON THE DRAWING, mirrored here too: its connections left for right.
-    if (b.drawMirror) {
-        wo.x = -wo.x;
-        wa.x = -wa.x;
-    }
+    // TURNED AND MIRRORED AS ON THE DRAWING (R 45, Space 90, M): its connections go round the brick with it.
+    const Brick shown = d_->asOnPane(b);
+    const Vec2 wo = Edraw_Desktop::turnOnDrawing(shown, o).normalized();
+    const Vec2 wa = Edraw_Desktop::turnOnDrawing(shown, across).normalized();
     const QPointF d(wo.x, -wo.y), a(wa.x, -wa.y);
-    const bool sideways = std::abs(d.x()) > 0.5;
-    const double halfAlong = sideways ? r.width() / 2.0 : r.height() / 2.0;
-    const double halfAcross = sideways ? r.height() / 2.0 : r.width() / 2.0;
-    return r.center() + d * halfAlong + a * (t * halfAcross * 0.75);
+    // Out to the edge of the brick the way the connection looks - at a slant, to its corner side.
+    auto toEdge = [&r](const QPointF& u) {
+        const double kx = std::abs(u.x()) > 1e-9 ? r.width() / 2.0 / std::abs(u.x()) : 1e300;
+        const double ky = std::abs(u.y()) > 1e-9 ? r.height() / 2.0 / std::abs(u.y()) : 1e300;
+        return std::min(kx, ky);
+    };
+    const QPointF at = r.center() + d * toEdge(d) + a * (t * toEdge(a) * 0.75);
+    return QPointF(std::clamp(at.x(), r.left(), r.right()), std::clamp(at.y(), r.top(), r.bottom()));
 }
 
 std::pair<QString, int> BrickCanvas::portAt(const QPointF& at) const {
@@ -1252,6 +1254,19 @@ void BrickWizardDialog::buildUi() {
                           "part on the axis, the rest evenly either side, every brick turned to face what it "
                           "is linked to - then both panes fitted to show it all"),
            [this] { arrange(); });
+    // THE BRICKS TURN WITH THE DRAWING, or not: R and Space turn the part on the drawing, and - ticked - its brick's
+    // connections round it on the pane too.
+    tieTurn_ = new QCheckBox(QStringLiteral("Bricks turn with drawing"), this);
+    tieTurn_->setObjectName(QStringLiteral("brickTieTurn"));
+    tieTurn_->setToolTip(QStringLiteral("Ticked, R (45°) and Space (90°) turn the brick's connections on this pane as "
+                                        "well as the part on the drawing. Unticked, only the drawing turns."));
+    tieTurn_->setChecked(design_.tieBrickTurn);
+    connect(tieTurn_, &QCheckBox::toggled, this, [this](bool on) {
+        design_.tieBrickTurn = on;
+        canvas_->update();
+        designChanged();
+    });
+    bar->addWidget(tieTurn_);
     // A DIMENSION BY HAND: pressed, click two bricks - it goes between them, above them or below.
     dimTool_ = new QToolButton(this);
     dimTool_->setObjectName(QStringLiteral("brickDimTool"));
@@ -2273,6 +2288,11 @@ std::vector<Entity> BrickWizardDialog::drawing() const {
 }
 
 void BrickWizardDialog::designChanged() {
+    // A harness opened, a new one, an undo: the tick as that design says.
+    if (tieTurn_ && tieTurn_->isChecked() != design_.tieBrickTurn) {
+        const QSignalBlocker hush(tieTurn_);
+        tieTurn_->setChecked(design_.tieBrickTurn);
+    }
     canvas_->update();
     loadPanel();
     refreshPreview();

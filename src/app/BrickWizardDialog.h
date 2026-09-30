@@ -407,6 +407,7 @@ private:
     QComboBox* dimSide_ = nullptr;                // (the part's own Dimensions side, on its panel)
     QComboBox* partDimSide_ = nullptr;            // the picked part's dimensions: above it or below it
     std::function<QString(const QStringList&)> chooseContact_;
+    QCheckBox* tieTurn_ = nullptr;   // the bricks turn with the drawing
     // THE LIVE BILL: how many bricks use each part, last time the bill was brought into step with them.
     QHash<QString, int> liveCounts_;
     bool liveInit_ = false;

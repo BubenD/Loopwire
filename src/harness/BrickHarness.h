@@ -209,6 +209,15 @@ struct BrickDesign {
     // Or from the MIDDLE of each part - halfway between its near point and its far point.
     bool dimFromMid = false;
     bool dimToMid = false;
+    // THE BRICKS TURN WITH THE DRAWING: a part turned there (R 45, Space 90) has its brick's connections turned round
+    // it on the pane as well. Off, the turn is the drawing's alone. (Mirroring is on the brick either way.)
+    bool tieBrickTurn = true;
+    // The part as its brick shows it: turned on the pane with the drawing only while they are tied.
+    Brick asOnPane(const Brick& b) const {
+        Brick t = b;
+        if (!tieBrickTurn) t.drawTurnDeg = 0.0;
+        return t;
+    }
 
     Brick* brick(const QString& id);
     const Brick* brick(const QString& id) const;

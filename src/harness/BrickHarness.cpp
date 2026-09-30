@@ -99,10 +99,8 @@ Vec2 turnOnDrawing(const Brick& b, const Vec2& v, double extraRad) {
 Vec2 BrickDesign::portWorldDir(const Brick& b, int port) const {
     const BrickShape s = shapeOf(b);
     if (port < 0 || port >= s.ports()) return Vec2{1.0, 0.0};
-    // Mirrored on the drawing, its connections are mirrored on the brick too: left for right.
-    Vec2 w = turnQuarters(s.faceOut[static_cast<size_t>(port)], b.rot);
-    if (b.drawMirror) w.x = -w.x;
-    return w;
+    // Turned and mirrored on the drawing (R, Space, M), its connections are turned and mirrored on the brick too.
+    return turnOnDrawing(asOnPane(b), s.faceOut[static_cast<size_t>(port)]).normalized();
 }
 
 Vec2 BrickDesign::portPaneDir(const Brick& b, int port) const {
@@ -493,7 +491,8 @@ QJsonObject BrickDesign::toJson() const {
     for (const BrickDim& dm : dims) ds.append(QJsonObject{{"a", dm.a}, {"b", dm.b}, {"below", dm.below}});
     return QJsonObject{{"format", "edraw-brick-harness"}, {"bricks", bs}, {"links", ls},
                        {"dimFromFar", dimFromFar},        {"dimToFar", dimToFar}, {"dims", ds},
-                       {"dimFromMid", dimFromMid},        {"dimToMid", dimToMid}};
+                       {"dimFromMid", dimFromMid},        {"dimToMid", dimToMid},
+                       {"tieBrickTurn", tieBrickTurn}};
 }
 
 BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
@@ -502,6 +501,7 @@ BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
     d.dimToFar = o.value(QStringLiteral("dimToFar")).toBool();
     d.dimFromMid = o.value(QStringLiteral("dimFromMid")).toBool();
     d.dimToMid = o.value(QStringLiteral("dimToMid")).toBool();
+    d.tieBrickTurn = o.value(QStringLiteral("tieBrickTurn")).toBool(true);
     for (const QJsonValue v : o.value(QStringLiteral("dims")).toArray()) {
         const QJsonObject dm = v.toObject();
         d.dims.push_back({dm.value(QStringLiteral("a")).toString(), dm.value(QStringLiteral("b")).toString(),
