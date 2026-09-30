@@ -1525,6 +1525,14 @@ BrickShape BrickDesign::shapeOf(const Brick& b) const {
     return s;
 }
 
+// THE STRAIGHT A RUN KEEPS OUT OF A FACE before it may bend: its fan there, the bend's radius, and a little -
+// what the drawing routes it with. A run shorter than two of these has no room to bend at all.
+static double runLeadMm(const BrickRunSpec& r) {
+    const double fanA = r.fanStartMm < 0.0 ? kWiresRunEnd : r.fanStartMm;
+    const double fanB = r.fanFinishMm < 0.0 ? kWiresRunEnd : r.fanFinishMm;
+    return std::max({fanA, fanB, 10.0}) + std::max(0.0, r.kneeRadiusMm) + 5.0;
+}
+
 BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* catalog,
                              const std::function<int(const QString& libPart)>& itemOf) {
     // AUTO SCALE: an end left on Auto is made the size of the drawing's usual entry - its entry faces as
@@ -1628,9 +1636,11 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         return junctions.value(node).grid;
     };
     // Up or down on the drawing, as a part was dragged there.
+    // PULLED IN ACROSS the harness, off its row, where its run is too short to reach that far (see the layout).
+    QHash<QString, double> pullAcross;
     auto drawDyOf = [&](const QString& node) {
         const Brick* b = design.brick(node);
-        return b && b->type == BrickType::End ? b->drawDyMm : 0.0;
+        return b && b->type == BrickType::End ? b->drawDyMm + pullAcross.value(node) : 0.0;
     };
 
     // THE BRANCHES: every stretch of harness from one face to another. A run is one; a fanout is one
@@ -1766,6 +1776,21 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         branches.push_back(br);
     }
 
+    // How many runs each part is on: only a part on one run and nothing else is moved for its run's sake.
+    QHash<QString, int> runsOn;
+    for (const Branch& br : branches) {
+        if (!br.a.node.isEmpty()) ++runsOn[br.a.node];
+        if (!br.b.node.isEmpty()) ++runsOn[br.b.node];
+    }
+    for (const BrickLink& l : design.links) {
+        const Brick* la = design.brick(l.a);
+        const Brick* lb = design.brick(l.b);
+        if (la && lb && la->type == BrickType::End && lb->type == BrickType::End) {
+            runsOn[l.a] += 2;
+            runsOn[l.b] += 2;
+        }
+    }
+
     // WHERE EVERYTHING IS: laid out by the LENGTHS of the runs from the part they share, not by the
     // columns of the pane - two runs of different lengths to one connector put their far ends at
     // different distances from it. Across the harness, the rows of the pane stand.
@@ -1815,9 +1840,9 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             const double real = br.special->run.lengthMm;
             const Vec2 fa = faceAt(br.a);
             const Vec2 fb = faceAt(br.b);
-            const double dy = (-gridOf(br.b.node).y * rowPitch + drawDyOf(br.b.node) + fb.y) -
-                              (-gridOf(br.a.node).y * rowPitch + drawDyOf(br.a.node) + fa.y);
-            const double across = std::abs(dy);
+            double dy = (-gridOf(br.b.node).y * rowPitch + drawDyOf(br.b.node) + fb.y) -
+                        (-gridOf(br.a.node).y * rowPitch + drawDyOf(br.a.node) + fa.y);
+            double across = std::abs(dy);
             // AS FEW BENDS AS THE LENGTH ALLOWS. A face that looks out on the slant - a Y-split's leg - toward
             // the part: the run goes straight on out of it up to the other part's height and makes ONE bend
             // into it, so the part is put where that one-bend run is the run's length. Put anywhere nearer, the
@@ -1831,14 +1856,48 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             };
             const Vec2 ua = faceOutOf(br.a), ub = faceOutOf(br.b);
             const bool slantA = slanted(ua, dy, ahead), slantB = slanted(ub, -dy, -ahead);
+            // TOO SHORT TO REACH ITS ROW: a part on this run alone is pulled in across, as near the face as its length
+            // lets the run reach - so a short cable is drawn short, not stretched out to the row its brick is on (its
+            // dimension saying one length and the drawing showing another).
+            double straightIn = kStraightIn;
+            {
+                const Brick* ba = design.brick(br.a.node);
+                const Brick* bb = design.brick(br.b.node);
+                const bool aAlone = ba && ba->type == BrickType::End && runsOn.value(br.a.node) == 1;
+                const bool bAlone = bb && bb->type == BrickType::End && runsOn.value(br.b.node) == 1;
+                const bool moveB = bAlone && (!aAlone || bb->col >= ba->col);
+                const QString mover = moveB ? br.b.node : aAlone ? br.a.node : QString();
+                if (!mover.isEmpty() && !brickIsBridge(*br.special) && across > 1e-6) {
+                    const double kShortStraight = runLeadMm(br.special->run);   // the least straight into the part after its bend
+                    double reach;
+                    if (slantA || slantB) {
+                        const Vec2 u = slantA ? ua : ub;
+                        reach = across / std::abs(u.y) + kStraightIn > real
+                                    ? std::max(0.0, real - kShortStraight) * std::abs(u.y)
+                                    : across;
+                    } else {
+                        reach = std::max(0.0, real - 2.0 * kStraightIn) / std::sqrt(2.0);
+                    }
+                    if (reach < across - 1e-6) {
+                        const double sign = dy >= 0.0 ? 1.0 : -1.0;
+                        pullAcross[mover] += (mover == br.b.node ? -sign : sign) * (across - reach);
+                        across = reach;
+                        dy = sign * reach;
+                        if (slantA || slantB) {
+                            const Vec2 u = slantA ? ua : ub;
+                            straightIn = std::max(0.0, std::min(kStraightIn, real - across / std::abs(u.y)));
+                        }
+                    }
+                }
+            }
             double gap = 0.0, drawn = 0.0;
             // A bridge wire may bring its part level with the part its cable goes to: no room kept between.
             const double room = brickIsBridge(*br.special) ? 0.0 : kRoomBetween;
-            if (slantA || slantB) {
+            if ((slantA || slantB) && across > 1e-6) {
                 const Vec2 u = slantA ? ua : ub;
                 const double leg = across / std::abs(u.y);           // on the slant
                 const double legAlong = across * std::abs(u.x) / std::abs(u.y);
-                gap = std::max({real - leg + legAlong, legAlong + kStraightIn, room});
+                gap = std::max({real - leg + legAlong, legAlong + straightIn, room});
                 drawn = leg + gap - legAlong;
             } else {
                 // Square out of both faces: out, across on the slant (45 degrees), and in - which is longer than
@@ -1964,20 +2023,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         return Vec2{xOf.value(node), -gridOf(node).y * rowPitch + drawDyOf(node)};
     };
     {
-        // How many runs each part is on: only a part on one run and nothing else is lined up.
-        QHash<QString, int> runsOn;
-        for (const Branch& br : branches) {
-            if (!br.a.node.isEmpty()) ++runsOn[br.a.node];
-            if (!br.b.node.isEmpty()) ++runsOn[br.b.node];
-        }
-        for (const BrickLink& l : design.links) {
-            const Brick* la = design.brick(l.a);
-            const Brick* lb = design.brick(l.b);
-            if (la && lb && la->type == BrickType::End && lb->type == BrickType::End) {
-                runsOn[l.a] += 2;
-                runsOn[l.b] += 2;
-            }
-        }
+        // Only a part on one run and nothing else is lined up (runsOn, above).
         for (const Branch& br : branches) {
             if (br.a.node.isEmpty() || br.b.node.isEmpty() || br.trunk || br.splitOf >= 0) continue;
             if (brickIsBridge(*br.special)) continue;
@@ -2003,13 +2049,13 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             const Vec2 mOut = turnOnDrawing(*mb, ms->faceOut[static_cast<size_t>(mine.port)]).normalized();
             const Vec2 mFace = posOf(mine.node) + turnOnDrawing(*mb, ms->faceMid[static_cast<size_t>(mine.port)]);
             // Room to bend: each end straight for its fan and its bend. Pulled in shorter than that there is no bending
-            // across to it at all. (Longer, a run short for how far across it goes is drawn longer than it is, its
-            // rows kept - see stretchOf.)
+            // across to it at all. (Longer, a part on a run short for how far across it goes is pulled in across as far as
+            // its length reaches - see pullAcross.)
             const BrickRunSpec& r = br.special->run;
             const double across = std::abs(dot(mFace - oFace, oOut.perp()));
             const bool turned = dot(mOut, oOut * -1.0) < std::cos(1.0 * M_PI / 180.0);
             if (across < 0.5 && !turned) continue;
-            const double straight = 15.0 + std::max(0.0, r.kneeRadiusMm);
+            const double straight = runLeadMm(r);
             if (r.lengthMm >= 2.0 * straight) continue;
             Lined ln;
             ln.turn = angleOf(oOut * -1.0) - angleOf(mOut);

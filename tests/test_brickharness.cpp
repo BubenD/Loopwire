@@ -1362,7 +1362,7 @@ void testDialogMore() {
             if (it.key().startsWith(x1 + QLatin1Char(':'))) xl = it.value().lengthMm;
         }
         std::printf("  match: ferrule entry %.2f, connector entry %.2f\n", fl, xl);
-        check(xl > 0.0 && std::abs(fl - xl) < 0.02 * xl, "match: its entry now as long as the other's");
+        check(xl > 0.0 && std::abs(fl - xl * 0.5) < 0.02 * xl, "match: a ferrule matched to a connector - its entry half the connector's");
         d.brick(f1)->scale = 1.0;
     }
 
@@ -3075,6 +3075,38 @@ void testRoundSeventeen() {
         std::printf("  shared leg, variant %d: %s, at most %zu points\n", variant, inOrder ? "in order" : "CROSSING", most);
         check(inOrder, "shared faces: the runs off a Y-split's leg keep their order all the way - they never cross");
         check(most <= 6, "shared faces: no bends that are not needed - out of the fan, into the bundle, straight on");
+    }
+    // TWO CABLES OF VERY DIFFERENT LENGTHS off a Y-split's legs are drawn at their lengths - the short one's part
+    // pulled in off its row, not left level with the long one's.
+    {
+        BrickDesign d;
+        const QString p1 = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString k1 = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString p2 = d.addBrick(BrickType::End, PartKind::Connector, 0, 1);
+        const QString k2 = d.addBrick(BrickType::Run, PartKind::Cable, 1, 1);
+        const QString y = d.addBrick(BrickType::End, PartKind::YSplit, 2, 0.5);
+        const QString k3 = d.addBrick(BrickType::Run, PartKind::Cable, 3, 0.5);
+        const QString p3 = d.addBrick(BrickType::End, PartKind::Connector, 4, 0.5);
+        d.connect(p1, k1);
+        d.connect(k1, y);
+        d.connect(p2, k2);
+        d.connect(k2, y);
+        d.connect(y, k3);
+        d.connect(k3, p3);
+        d.brick(k1)->run.lengthMm = 107.0;
+        d.brick(k2)->run.lengthMm = 32.0;
+        double l1 = 0.0, l2 = 0.0;
+        for (const Entity& e : buildBrickHarness(d, nullptr).entities) {
+            if (e.type != EntityType::TwistedPair) continue;
+            double len = 0.0;
+            for (size_t i = 1; i < e.points.size(); ++i) len += distance(e.points[i - 1], e.points[i]);
+            if (e.meta.value(QStringLiteral("brickId")).toString() == k1) l1 = len;
+            if (e.meta.value(QStringLiteral("brickId")).toString() == k2) l2 = len;
+        }
+        std::printf("  y-split legs: 107 drawn %.1f, 32 drawn %.1f\n", l1, l2);
+        // (Within where each lands across the one face they share on this placeholder Y-split.)
+        check(std::abs(l1 - 107.0) < 5.0 && std::abs(l2 - 32.0) < 5.0,
+              "lengths: a long and a short cable off a Y-split are each drawn at their own length");
     }
     // PULLED IN TOO CLOSE TO BEND: lined up with the face it meets.
     {

@@ -2660,10 +2660,19 @@ bool BrickWizardDialog::scalePartToMatch(const QString& id, const QString& other
     if (!mine || !theirs || mine->lengthMm <= 1e-6 || theirs->lengthMm <= 1e-6) return false;
     const double now = b->autoScale ? drawnScales_.value(b->id, b->scale) : b->scale;
     b->autoScale = false;
-    b->scale = std::clamp(now * theirs->lengthMm / mine->lengthMm, 0.1, 10.0);
-    status_->setText(QStringLiteral("Scaled to %1 % - its entry as long as the other's (%2 mm)")
-                         .arg(qRound(b->scale * 100.0))
-                         .arg(theirs->lengthMm, 0, 'f', 1));
+    // A FERRULE (or a crimp terminal, a contact) MATCHED TO A CONNECTOR is half its size: it goes on one wire of it,
+    // not the whole of its entry.
+    const Brick* ob = design_.brick(other);
+    const bool small = (b->kind == PartKind::Ferrule || b->kind == PartKind::Crimp || b->kind == PartKind::ContactPin) &&
+                       ob && ob->kind == PartKind::Connector;
+    const double share = small ? 0.5 : 1.0;
+    b->scale = std::clamp(now * theirs->lengthMm * share / mine->lengthMm, 0.1, 10.0);
+    status_->setText(small ? QStringLiteral("Scaled to %1 % - its entry half the connector's (%2 mm)")
+                                 .arg(qRound(b->scale * 100.0))
+                                 .arg(theirs->lengthMm * share, 0, 'f', 1)
+                           : QStringLiteral("Scaled to %1 % - its entry as long as the other's (%2 mm)")
+                                 .arg(qRound(b->scale * 100.0))
+                                 .arg(theirs->lengthMm, 0, 'f', 1));
     return true;
 }
 
