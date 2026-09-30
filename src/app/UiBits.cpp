@@ -673,11 +673,13 @@ void installOpaqueMenus(QCoreApplication* app) {
 namespace {
 class WheelPassFilter : public QObject {
 public:
-    explicit WheelPassFilter(QWidget* window) : QObject(window), window_(window) {}
+    explicit WheelPassFilter(QWidget* window)
+        : QObject(window ? static_cast<QObject*>(window) : static_cast<QObject*>(qApp)), window_(window) {}
     bool eventFilter(QObject* o, QEvent* e) override {
         if (e->type() != QEvent::Wheel) return false;
         auto* w = qobject_cast<QWidget*>(o);
-        if (!w || w->window() != window_) return false;
+        // window_ null: in every window of the app.
+        if (!w || (window_ && w->window() != window_)) return false;
         // The box itself, or the line edit inside a spin box or an editable drop-down.
         QWidget* field = nullptr;
         for (QWidget* at = w; at && at != window_; at = at->parentWidget())
@@ -701,6 +703,11 @@ private:
 void wheelScrollsNotFields(QWidget* window) {
     if (!window || !qApp) return;
     qApp->installEventFilter(new WheelPassFilter(window));
+}
+
+void wheelScrollsNotFieldsAnywhere() {
+    if (!qApp) return;
+    qApp->installEventFilter(new WheelPassFilter(nullptr));
 }
 
 } // namespace Edraw_Desktop

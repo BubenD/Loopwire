@@ -349,6 +349,11 @@ double brickRowPitchMm(const BrickDesign& d);
 // SYMMETRIC ON THE DRAWING ONLY: every part set up or down on the drawing to where a symmetric layout puts it, the
 // bricks on the pane left exactly where they are. `rowPitch` is how far apart the drawing's rows are.
 void symmetricOnDrawing(BrickDesign& d, double rowPitch);
+// EVERY DIMENSION TO ONE SIDE: each part's, each run's (whole length, fans, between) and each put on by hand - above
+// the objects, or below them.
+void setAllDimensionsBelow(BrickDesign& d, bool below);
+// Whether every dimension there is goes below (none of them above).
+bool allDimensionsBelow(const BrickDesign& d);
 
 // One entry face of an end, once the design is laid out.
 struct BrickFace {

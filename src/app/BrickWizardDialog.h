@@ -206,6 +206,10 @@ public:
     void arrange();
     std::vector<Entity> drawing() const;
     void place();
+    // THE DIMENSION WIZARD: every dimension of the harness in one window - which runs are dimensioned and how, those
+    // put on by hand, the points they are measured from, and the side they all go.
+    void openDimensionWizard();
+    QDialog* dimensionWizard() const { return dimWizard_; }
 
     // THE BILL. Puts one of a part on the drawing's bill of materials. A part the bill already lists
     // is not added without asking; `ask` answers the question (the window asks the user when none is
@@ -408,6 +412,16 @@ private:
     QComboBox* partDimSide_ = nullptr;            // the picked part's dimensions: above it or below it
     std::function<QString(const QStringList&)> chooseContact_;
     QCheckBox* tieTurn_ = nullptr;   // the bricks turn with the drawing
+    QComboBox* dimAllSide_ = nullptr;   // every dimension above the objects, or below
+    QDialog* dimWizard_ = nullptr;
+    QTableWidget* dimRuns_ = nullptr;
+    QTableWidget* dimHand_ = nullptr;
+    QComboBox* dimWizFrom_ = nullptr;
+    QComboBox* dimWizTo_ = nullptr;
+    QComboBox* dimWizSide_ = nullptr;
+    bool dimWizQueued_ = false;
+    void refreshDimensionWizard();
+    void setAllDimsSide(bool below);
     // THE LIVE BILL: how many bricks use each part, last time the bill was brought into step with them.
     QHash<QString, int> liveCounts_;
     bool liveInit_ = false;

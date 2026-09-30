@@ -103,6 +103,9 @@ QIcon colorCircleIcon(const QString& hex, int size = 14);
 // wheel over a number box or a drop-down on the way down changed it, and nobody saw it happen. In `window`
 // (and anything it opens that is a child of it) the wheel over one of those goes to what is behind it instead.
 void wheelScrollsNotFields(QWidget* window);
+// THE SAME RULE IN EVERY WINDOW OF THE APP: the wheel never changes a number box or a drop-down - an open drop-down
+// list still scrolls. Installed once, at start.
+void wheelScrollsNotFieldsAnywhere();
 
 // The two marks a group of wires carries in the builder, drawn the way the drawing draws them: a
 // twist is two conductors crossing, a screen is a dashed outline round them. On a merged cell they

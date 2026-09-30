@@ -51,6 +51,7 @@
 #include <QClipboard>
 #include <QGuiApplication>
 #include <QJsonDocument>
+#include <QTimer>
 #include <QShortcut>
 
 namespace Edraw_Desktop {
@@ -1286,6 +1287,14 @@ void BrickWizardDialog::buildUi() {
                design_.dims.clear();
                designChanged();
            });
+    // WHERE EVERY DIMENSION GOES: above the objects or under them - all of them at once.
+    bar->addWidget(new QLabel(QStringLiteral("Dims"), this));
+    dimAllSide_ = new QComboBox(this);
+    dimAllSide_->setObjectName(QStringLiteral("brickDimSide"));
+    dimAllSide_->addItems({QStringLiteral("Above"), QStringLiteral("Below")});
+    dimAllSide_->setToolTip(QStringLiteral("Put every dimension above the objects, or under them"));
+    connect(dimAllSide_, &QComboBox::activated, this, [this](int i) { setAllDimsSide(i == 1); });
+    bar->addWidget(dimAllSide_);
     bar->addSpacing(18);
     bar->addWidget(new QLabel(QStringLiteral("Dimensions from"), this));
     dimFrom_ = new QComboBox(this);
@@ -1549,6 +1558,11 @@ void BrickWizardDialog::buildUi() {
     status_ = new QLabel(this);
     status_->setObjectName(QStringLiteral("brickStatus"));
     bottom->addWidget(status_, 1);
+    auto* dimsBtn = new QPushButton(QStringLiteral("Dimensions…"), this);
+    dimsBtn->setObjectName(QStringLiteral("brickDimensions"));
+    dimsBtn->setToolTip(QStringLiteral("The dimension wizard: every dimension of the harness in one place"));
+    connect(dimsBtn, &QPushButton::clicked, this, [this] { openDimensionWizard(); });
+    bottom->addWidget(dimsBtn);
     auto* placeBtn = new QPushButton(QStringLiteral("Place the drawing"), this);
     placeBtn->setObjectName(QStringLiteral("brickPlace"));
     connect(placeBtn, &QPushButton::clicked, this, [this] { place(); });
@@ -2287,7 +2301,201 @@ std::vector<Entity> BrickWizardDialog::drawing() const {
         .entities;
 }
 
+void BrickWizardDialog::setAllDimsSide(bool below) {
+    setAllDimensionsBelow(design_, below);
+    designChanged();
+    status_->setText(below ? QStringLiteral("Every dimension below the objects")
+                           : QStringLiteral("Every dimension above the objects"));
+}
+
+void BrickWizardDialog::openDimensionWizard() {
+    if (!dimWizard_) {
+        dimWizard_ = new QDialog(this);
+        dimWizard_->setObjectName(QStringLiteral("brickDimWizard"));
+        dimWizard_->setWindowTitle(QStringLiteral("Dimensions"));
+        dimWizard_->setModal(false);
+        dimWizard_->resize(720, 560);
+        auto* lay = new QVBoxLayout(dimWizard_);
+        // WHAT IS MEASURED: only the runs between two parts - a cable, a fanout, wires - never a joint or a part on
+        // the way; and each end from its near point, far point or middle (a joint from its face toward the other end).
+        auto* note = new QLabel(QStringLiteral("A dimension measures only the cables, fanouts and wires between its two "
+                                               "bricks - Y-splits, heatshrinks and other parts on the way add nothing. "
+                                               "A joint at an end is measured from its face nearest the other end. On "
+                                               "the placed drawing every dimension says its figure as a text override."),
+                                dimWizard_);
+        note->setWordWrap(true);
+        lay->addWidget(note);
+        auto* top = new QHBoxLayout;
+        top->addWidget(new QLabel(QStringLiteral("All dimensions"), dimWizard_));
+        dimWizSide_ = new QComboBox(dimWizard_);
+        dimWizSide_->setObjectName(QStringLiteral("dimWizSide"));
+        dimWizSide_->addItems({QStringLiteral("Above the objects"), QStringLiteral("Below the objects")});
+        connect(dimWizSide_, &QComboBox::activated, this, [this](int i) { setAllDimsSide(i == 1); });
+        top->addWidget(dimWizSide_);
+        top->addSpacing(16);
+        top->addWidget(new QLabel(QStringLiteral("From"), dimWizard_));
+        dimWizFrom_ = new QComboBox(dimWizard_);
+        dimWizFrom_->setObjectName(QStringLiteral("dimWizFrom"));
+        dimWizFrom_->addItems({QStringLiteral("Near point"), QStringLiteral("Far point"), QStringLiteral("Mid point")});
+        top->addWidget(dimWizFrom_);
+        top->addWidget(new QLabel(QStringLiteral("to"), dimWizard_));
+        dimWizTo_ = new QComboBox(dimWizard_);
+        dimWizTo_->setObjectName(QStringLiteral("dimWizTo"));
+        dimWizTo_->addItems({QStringLiteral("Near point"), QStringLiteral("Far point"), QStringLiteral("Mid point")});
+        top->addWidget(dimWizTo_);
+        // The same as the bar's: the bar's box is set, and it sets the design.
+        connect(dimWizFrom_, &QComboBox::activated, this, [this](int i) { dimFrom_->setCurrentIndex(i); });
+        connect(dimWizTo_, &QComboBox::activated, this, [this](int i) { dimTo_->setCurrentIndex(i); });
+        top->addStretch(1);
+        lay->addLayout(top);
+
+        auto* runsBox = new QGroupBox(QStringLiteral("Runs"), dimWizard_);
+        auto* rl = new QVBoxLayout(runsBox);
+        dimRuns_ = new QTableWidget(0, 6, runsBox);
+        dimRuns_->setObjectName(QStringLiteral("dimWizRuns"));
+        dimRuns_->setHorizontalHeaderLabels({QStringLiteral("Run"), QStringLiteral("Length"),
+                                             QStringLiteral("Whole length"), QStringLiteral("Fans"),
+                                             QStringLiteral("Between fans"), QStringLiteral("Side")});
+        dimRuns_->verticalHeader()->setVisible(false);
+        dimRuns_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+        dimRuns_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        rl->addWidget(dimRuns_);
+        lay->addWidget(runsBox, 1);
+
+        auto* handBox = new QGroupBox(QStringLiteral("Between two bricks"), dimWizard_);
+        auto* hl = new QVBoxLayout(handBox);
+        dimHand_ = new QTableWidget(0, 4, handBox);
+        dimHand_->setObjectName(QStringLiteral("dimWizHand"));
+        dimHand_->setHorizontalHeaderLabels(
+            {QStringLiteral("From"), QStringLiteral("To"), QStringLiteral("Measures"), QStringLiteral("Side")});
+        dimHand_->verticalHeader()->setVisible(false);
+        dimHand_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+        dimHand_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+        dimHand_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        dimHand_->setSelectionBehavior(QAbstractItemView::SelectRows);
+        hl->addWidget(dimHand_);
+        auto* hb = new QHBoxLayout;
+        auto* add = new QPushButton(QStringLiteral("Add: click 2 bricks"), handBox);
+        add->setObjectName(QStringLiteral("dimWizAdd"));
+        connect(add, &QPushButton::clicked, this, [this] {
+            if (dimTool_) dimTool_->setChecked(true);
+            status_->setText(QStringLiteral("Click the two bricks to dimension between"));
+        });
+        hb->addWidget(add);
+        auto* del = new QPushButton(QStringLiteral("Delete"), handBox);
+        del->setObjectName(QStringLiteral("dimWizDelete"));
+        connect(del, &QPushButton::clicked, this, [this] {
+            const int row = dimHand_->currentRow();
+            if (row < 0 || row >= static_cast<int>(design_.dims.size())) return;
+            design_.dims.erase(design_.dims.begin() + row);
+            designChanged();
+        });
+        hb->addWidget(del);
+        auto* clear = new QPushButton(QStringLiteral("Clear all"), handBox);
+        connect(clear, &QPushButton::clicked, this, [this] {
+            design_.dims.clear();
+            designChanged();
+        });
+        hb->addWidget(clear);
+        hb->addStretch(1);
+        hl->addLayout(hb);
+        lay->addWidget(handBox, 1);
+
+        auto* close = new QPushButton(QStringLiteral("Close"), dimWizard_);
+        close->setAutoDefault(false);
+        connect(close, &QPushButton::clicked, dimWizard_, &QDialog::hide);
+        auto* cl = new QHBoxLayout;
+        cl->addStretch(1);
+        cl->addWidget(close);
+        lay->addLayout(cl);
+        for (QPushButton* b : dimWizard_->findChildren<QPushButton*>()) b->setAutoDefault(false);
+    }
+    refreshDimensionWizard();
+    dimWizard_->show();
+    dimWizard_->raise();
+    dimWizard_->activateWindow();
+}
+
+void BrickWizardDialog::refreshDimensionWizard() {
+    if (!dimWizard_) return;
+    {
+        const QSignalBlocker a(dimWizSide_), b(dimWizFrom_), c(dimWizTo_);
+        dimWizSide_->setCurrentIndex(allDimensionsBelow(design_) ? 1 : 0);
+        dimWizFrom_->setCurrentIndex(design_.dimFromMid ? 2 : design_.dimFromFar ? 1 : 0);
+        dimWizTo_->setCurrentIndex(design_.dimToMid ? 2 : design_.dimToFar ? 1 : 0);
+    }
+    // A change made from a box in the table rebuilds the table - later, never under the box's own signal.
+    auto later = [this](std::function<void()> fn) {
+        QTimer::singleShot(0, this, [this, fn] {
+            fn();
+            designChanged();
+        });
+    };
+    // THE RUNS: each special, its length, which of its dimensions are on, and their side.
+    std::vector<const Brick*> runs;
+    for (const Brick& b : design_.bricks)
+        if (brickIsSpecial(b.type)) runs.push_back(&b);
+    dimRuns_->setRowCount(static_cast<int>(runs.size()));
+    for (int r = 0; r < static_cast<int>(runs.size()); ++r) {
+        const Brick& b = *runs[static_cast<size_t>(r)];
+        const QString id = b.id;
+        dimRuns_->setItem(r, 0, new QTableWidgetItem(b.name.isEmpty() ? brickTitle(b) : b.name));
+        dimRuns_->setItem(r, 1, new QTableWidgetItem(QStringLiteral("%1 mm").arg(b.run.lengthMm, 0, 'f', 1)));
+        int col = 2;
+        for (int which = 0; which < 3; ++which, ++col) {
+            auto* box = new QCheckBox(dimRuns_);
+            box->setChecked(which == 0 ? b.run.dimTotal : which == 1 ? b.run.dimFans : b.run.dimBetween);
+            connect(box, &QCheckBox::toggled, this, [this, id, which, later](bool on) {
+                later([this, id, which, on] {
+                    if (Brick* s = design_.brick(id)) (which == 0 ? s->run.dimTotal : which == 1 ? s->run.dimFans
+                                                                                                 : s->run.dimBetween) = on;
+                });
+            });
+            dimRuns_->setCellWidget(r, col, box);
+        }
+        auto* side = new QComboBox(dimRuns_);
+        side->addItems({QStringLiteral("Above"), QStringLiteral("Below")});
+        side->setCurrentIndex(b.run.dimTotalBelow && b.run.dimFansBelow && b.run.dimBetweenBelow ? 1 : 0);
+        connect(side, &QComboBox::activated, this, [this, id, later](int i) {
+            later([this, id, i] {
+                if (Brick* s = design_.brick(id)) s->run.dimTotalBelow = s->run.dimFansBelow = s->run.dimBetweenBelow = i == 1;
+            });
+        });
+        dimRuns_->setCellWidget(r, 5, side);
+    }
+    // BETWEEN TWO BRICKS: what each measures, as the drawing works it out.
+    QHash<int, double> measured;
+    for (const Entity& e : lastEnts_)
+        if (e.meta.value(QStringLiteral("brickDim")).toString() == QLatin1String("manual"))
+            measured.insert(e.meta.value(QStringLiteral("brickDimIndex")).toInt(), e.meta.value(QStringLiteral("brickMeasured")).toDouble());
+    dimHand_->setRowCount(static_cast<int>(design_.dims.size()));
+    for (int r = 0; r < static_cast<int>(design_.dims.size()); ++r) {
+        const BrickDim& dm = design_.dims[static_cast<size_t>(r)];
+        auto title = [this](const QString& id) {
+            const Brick* b = design_.brick(id);
+            return !b ? id : !b->name.isEmpty() ? b->name : brickTitle(*b);
+        };
+        dimHand_->setItem(r, 0, new QTableWidgetItem(title(dm.a)));
+        dimHand_->setItem(r, 1, new QTableWidgetItem(title(dm.b)));
+        dimHand_->setItem(r, 2, new QTableWidgetItem(measured.contains(r) ? QStringLiteral("%1 mm").arg(measured.value(r), 0, 'f', 1)
+                                                                          : QStringLiteral("-")));
+        auto* side = new QComboBox(dimHand_);
+        side->addItems({QStringLiteral("Above"), QStringLiteral("Below")});
+        side->setCurrentIndex(dm.below ? 1 : 0);
+        connect(side, &QComboBox::activated, this, [this, r, later](int i) {
+            later([this, r, i] {
+                if (r < static_cast<int>(design_.dims.size())) design_.dims[static_cast<size_t>(r)].below = i == 1;
+            });
+        });
+        dimHand_->setCellWidget(r, 3, side);
+    }
+}
+
 void BrickWizardDialog::designChanged() {
+    if (dimAllSide_) {
+        const QSignalBlocker hush(dimAllSide_);
+        dimAllSide_->setCurrentIndex(allDimensionsBelow(design_) ? 1 : 0);
+    }
     // A harness opened, a new one, an undo: the tick as that design says.
     if (tieTurn_ && tieTurn_->isChecked() != design_.tieBrickTurn) {
         const QSignalBlocker hush(tieTurn_);
@@ -3223,6 +3431,14 @@ void BrickWizardDialog::refreshPreview() {
     showGrabRings();
     refreshBom();
     showActuals();
+    // The dimension wizard, open, kept to the drawing - once the change has settled.
+    if (dimWizard_ && dimWizard_->isVisible() && !dimWizQueued_) {
+        dimWizQueued_ = true;
+        QTimer::singleShot(0, this, [this] {
+            dimWizQueued_ = false;
+            refreshDimensionWizard();
+        });
+    }
 }
 
 void BrickWizardDialog::placeBom(int where) {

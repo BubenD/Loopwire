@@ -17,6 +17,8 @@ int main(int argc, char** argv) {
         app.setStyleSheet(QString::fromUtf8(qss.readAll()));
     // A right-click menu must have a background. See installOpaqueMenus.
     Edraw_Desktop::installOpaqueMenus(&app);
+    // The wheel scrolls; it never changes a figure in a box or a drop-down, in any window. See wheelScrollsNotFields.
+    Edraw_Desktop::wheelScrollsNotFieldsAnywhere();
 
     // The logo, and what is being loaded, while the window builds itself.
     Edraw_Desktop::SplashScreen splash(Edraw_Desktop::MainWindow::startupModules());

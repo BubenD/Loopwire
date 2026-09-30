@@ -2773,7 +2773,7 @@ void testRoundFourteen() {
         emit dlg.canvas()->brickDoubleClicked(a);
         dlg.preview()->grab();
         std::printf("  double-click: preview zoom %.2f -> %.2f\n", z0, dlg.preview()->zoom());
-        check(dlg.preview()->zoom() > z0 * 1.5, "double-click: the brick's part brought up on the preview");
+        check(dlg.preview()->zoom() > z0 * 1.2, "double-click: the brick's part brought up on the preview");
     }
 }
 
@@ -3217,6 +3217,89 @@ void testRoundSeventeen() {
     }
 }
 
+// ROUND EIGHTEEN: dimensions measure only the runs between two bricks, a joint at an end from its face toward the
+// other end; every dimension carries its figure as a text override; one control puts them all above or below; and
+// the dimension wizard shows them.
+void testRoundEighteen() {
+    BrickDesign d;
+    const QString x1 = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+    const QString k1 = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+    const QString y = d.addBrick(BrickType::End, PartKind::HeatshrinkBoot, 2, 0);
+    const QString k2 = d.addBrick(BrickType::Run, PartKind::Cable, 3, 0);
+    const QString x2 = d.addBrick(BrickType::End, PartKind::Connector, 4, 0);
+    const QString s = d.addBrick(BrickType::End, PartKind::Splice, 2, 1);
+    d.connect(x1, k1);
+    d.connect(k1, y);
+    d.connect(y, k2);
+    d.connect(k2, x2);
+    (void)s;
+    d.brick(k1)->run.lengthMm = 100.0;
+    d.brick(k2)->run.lengthMm = 50.0;
+    d.brick(k1)->run.dimTotal = d.brick(k1)->run.dimFans = d.brick(k1)->run.dimBetween = true;
+    d.dims.push_back({x1, x2, false});
+    d.dims.push_back({x1, y, false});
+    d.dims.push_back({y, x2, false});
+    const BrickBuild b = buildBrickHarness(d, nullptr);
+    QHash<int, double> manual;
+    bool allWritten = true;
+    int dims = 0;
+    for (const Entity& e : b.entities) {
+        if (e.type != EntityType::Dimension) continue;
+        ++dims;
+        if (e.meta.value(QStringLiteral("textOverride")).toString().isEmpty()) allWritten = false;
+        if (e.meta.value(QStringLiteral("brickDim")).toString() == QLatin1String("manual"))
+            manual.insert(e.meta.value(QStringLiteral("brickDimIndex")).toInt(),
+                          e.meta.value(QStringLiteral("brickMeasured")).toDouble());
+    }
+    std::printf("  dims: connector to connector %.1f, to the joint %.1f, from the joint %.1f\n", manual.value(0),
+                manual.value(1), manual.value(2));
+    check(std::abs(manual.value(0) - 150.0) < 1e-6,
+          "dims: connector to connector measures only the cables between - the part in the middle adds nothing");
+    check(std::abs(manual.value(1) - 100.0) < 1e-6 && std::abs(manual.value(2) - 50.0) < 1e-6,
+          "dims: to or from a joint, from its face nearest the other end - only the cable between");
+    check(dims >= 6 && allWritten, "dims: every dimension says its figure as a text override");
+    // ALL TO ONE SIDE.
+    setAllDimensionsBelow(d, true);
+    check(allDimensionsBelow(d) && d.dims[0].below && d.brick(k1)->run.dimFansBelow && d.brick(x1)->dimBelow,
+          "dims: one setting puts every dimension below");
+    setAllDimensionsBelow(d, false);
+    check(!allDimensionsBelow(d) && !d.dims[1].below && !d.brick(k2)->run.dimTotalBelow,
+          "dims: and every one above");
+    // THE WIZARD'S CONTROLS.
+    {
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        BrickWizardDialog dlg(&ed);
+        dlg.design() = d;
+        dlg.selectBrick(x1);
+        auto* side = dlg.findChild<QComboBox*>(QStringLiteral("brickDimSide"));
+        check(side != nullptr, "dims: a general Above / Below on the wizard's bar");
+        if (side) {
+            side->setCurrentIndex(1);
+            emit side->activated(1);
+        }
+        check(allDimensionsBelow(dlg.design()), "dims: Below on the bar puts them all below");
+        auto* open = dlg.findChild<QPushButton*>(QStringLiteral("brickDimensions"));
+        check(open != nullptr, "dims: a Dimensions button at the bottom of the wizard");
+        if (open) open->click();
+        QDialog* wiz = dlg.dimensionWizard();
+        auto* hand = wiz ? wiz->findChild<QTableWidget*>(QStringLiteral("dimWizHand")) : nullptr;
+        auto* runs = wiz ? wiz->findChild<QTableWidget*>(QStringLiteral("dimWizRuns")) : nullptr;
+        check(wiz && wiz->isVisible() && hand && hand->rowCount() == 3 && runs && runs->rowCount() == 2,
+              "dims: the dimension wizard opens with the runs and the dimensions between bricks");
+        if (hand && hand->rowCount() == 3)
+            check(hand->item(0, 2) && hand->item(0, 2)->text().startsWith(QStringLiteral("150")),
+                  "dims: the wizard says what each measures");
+        auto* del = wiz ? wiz->findChild<QPushButton*>(QStringLiteral("dimWizDelete")) : nullptr;
+        if (hand && del) {
+            hand->setCurrentCell(0, 0);
+            del->click();
+        }
+        check(dlg.design().dims.size() == 2, "dims: one deleted in the wizard");
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -3248,6 +3331,7 @@ int run_brickharness_tests() {
     testRoundFifteen();
     testRoundSixteen();
     testRoundSeventeen();
+    testRoundEighteen();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

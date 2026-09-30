@@ -769,6 +769,30 @@ int syncBridgeWires(BrickDesign& d) {
 
 bool brickIsTied(const Brick& b) { return b.type == BrickType::End && !brickKindIsJoint(b.kind); }
 
+void setAllDimensionsBelow(BrickDesign& d, bool below) {
+    for (Brick& b : d.bricks) {
+        b.dimBelow = below;
+        b.run.dimTotalBelow = b.run.dimFansBelow = b.run.dimBetweenBelow = below;
+    }
+    for (BrickDim& dm : d.dims) dm.below = below;
+}
+
+bool allDimensionsBelow(const BrickDesign& d) {
+    bool any = false;
+    for (const Brick& b : d.bricks) {
+        if (b.type == BrickType::End) {
+            if (!b.dimBelow) return false;
+            any = true;
+        } else if (brickIsSpecial(b.type)) {
+            if (!b.run.dimTotalBelow || !b.run.dimFansBelow || !b.run.dimBetweenBelow) return false;
+            any = true;
+        }
+    }
+    for (const BrickDim& dm : d.dims)
+        if (!dm.below) return false;
+    return any;
+}
+
 void symmetricOnDrawing(BrickDesign& d, double rowPitch) {
     if (rowPitch <= 0.0) rowPitch = brickRowPitchMm(d);
     BrickDesign laid = d;
@@ -2879,8 +2903,10 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         };
         auto dim = [&](const Vec2& p0, const Vec2& p1, double offset, double measured, bool sayMeasured,
                        const QString& written, const char* kind) {
-            Entity d = makeDim(p0, p1, offset,
-                               !written.isEmpty() ? written : sayMeasured ? fmt(measured) : QString());
+            // EVERY DIMENSION SAYS ITS FIGURE IN WORDS (its text override): the length the harness is built to, not
+            // whatever the drawing happens to measure - a run drawn longer for room, a part drawn to proportion.
+            (void)sayMeasured;
+            Entity d = makeDim(p0, p1, offset, !written.isEmpty() ? written : fmt(measured));
             d.meta.insert(QStringLiteral("brickDim"), QLatin1String(kind));
             d.meta.insert(QStringLiteral("brickMeasured"), measured);
             made.push_back(d);
@@ -2910,7 +2936,9 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                             : design.dimToMid ? (fb.nearAt + fb.farAt) * 0.5
                             : design.dimToFar ? fb.farAt
                                               : fb.nearAt;
-            const double along = total + distance(from, fa.centre) + distance(to, fb.centre);
+            // What the run IS - its length - not what it was drawn: from part to part only the run is measured.
+            const double runIs = !isTrunk && !isSub && !loose ? r.lengthMm : total;
+            const double along = runIs + distance(from, fa.centre) + distance(to, fb.centre);
             const QString said = !r.dimTextTotal.isEmpty() ? r.dimTextTotal : fmt(along);
             if (r.dimSingle) {
                 // SINGLE-ENDED: from the start, a short line with one arrow and the figure over it.
@@ -3006,8 +3034,9 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         }
         if (r.dimBetween && !loose && !isSub && total > fanA + fanB) {
             const Vec2 p0 = pointAlong(route, fanA), p1 = pointAlong(route, total - fanB);
-            dim(p0, p1, sideOff(p0, p1, gapOut, r.dimBetweenBelow), total - fanA - fanB, !straight, r.dimTextBetween,
-                "between");
+            const double runIs = !isTrunk ? r.lengthMm : total;
+            dim(p0, p1, sideOff(p0, p1, gapOut, r.dimBetweenBelow), std::max(0.0, runIs - fanA - fanB), !straight,
+                r.dimTextBetween, "between");
         }
 
         // LABELS: on the whole bundle, or on one wire of a fan, so far along from the end chosen -
@@ -3157,8 +3186,31 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             const LibraryPart* p = e && catalog && !e->libPart.isEmpty() ? catalog->byId(e->libPart) : nullptr;
             return p && partIsNominal(*p);
         };
-        auto refOf = [&](const QString& id, bool far, bool mid, Vec2* face) {
-            const auto it = out.faces.constFind(faceKey(id, 0));
+        // THE WAY FROM ONE BRICK TO THE OTHER, brick by brick through what they are linked to.
+        auto pathBetween = [&](const QString& from, const QString& to) {
+            QHash<QString, QString> prev;
+            prev.insert(from, QString());
+            std::deque<QString> queue{from};
+            while (!queue.empty()) {
+                const QString n = queue.front();
+                queue.pop_front();
+                if (n == to) break;
+                for (const QString& o : design.linksOf(n))
+                    if (!prev.contains(o)) {
+                        prev.insert(o, n);
+                        queue.push_back(o);
+                    }
+            }
+            QStringList path;
+            if (!prev.contains(to)) return path;
+            for (QString at = to; !at.isEmpty(); at = prev.value(at)) path.prepend(at);
+            return path;
+        };
+        // Measured from the face that looks along the way: a joint's - a Y-split's, a heatshrink's - is its near
+        // point, the end of it nearest where the dimension comes from.
+        auto refOf = [&](const QString& id, int port, bool far, bool mid, Vec2* face) {
+            auto it = out.faces.constFind(faceKey(id, std::max(0, port)));
+            if (it == out.faces.cend()) it = out.faces.constFind(faceKey(id, 0));
             if (it == out.faces.cend()) {
                 const Bounds bx = boxOf.value(id);
                 const Vec2 c = bx.valid ? (bx.min + bx.max) * 0.5 : Vec2{};
@@ -3187,9 +3239,20 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             const Brick* ba = design.brick(dm.a);
             const Brick* bb = design.brick(dm.b);
             if (!ba || !bb || dm.a == dm.b) continue;
+            // ONLY THE RUNS BETWEEN THEM ARE MEASURED: from one to the other through what joins them, each cable, fanout
+            // or wire run its length - a joint, a heatshrink, any part on the way adds nothing.
+            const QStringList path = pathBetween(dm.a, dm.b);
+            const int portA = path.size() > 1 ? design.portOn(dm.a, path[1]) : 0;
+            const int portB = path.size() > 1 ? design.portOn(dm.b, path[path.size() - 2]) : 0;
             Vec2 faceA, faceB;
-            Vec2 p0 = refOf(dm.a, design.dimFromFar, design.dimFromMid, &faceA);
-            Vec2 p1 = refOf(dm.b, design.dimToFar, design.dimToMid, &faceB);
+            Vec2 p0 = refOf(dm.a, portA, design.dimFromFar, design.dimFromMid, &faceA);
+            Vec2 p1 = refOf(dm.b, portB, design.dimToFar, design.dimToMid, &faceB);
+            double runs = 0.0;
+            for (const QString& n : path)
+                if (const Brick* s = design.brick(n); s && brickIsSpecial(s->type)) runs += s->run.lengthMm;
+            // The runs, and from each end's face to the point it is measured from (near, far or mid).
+            const double said = path.size() > 1 ? runs + distance(p0, faceA) + distance(p1, faceB)
+                                                 : std::abs(p1.x - p0.x);
             if (p1.x < p0.x) {
                 std::swap(p0, p1);
                 std::swap(faceA, faceB);
@@ -3201,15 +3264,6 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                     top = std::max(top, bx.max.y);
                     bottom = std::min(bottom, bx.min.y);
                 }
-            // On one run: the run's length, from reference to reference.
-            double said = std::abs(p1.x - p0.x);
-            for (const Brick& s : design.bricks) {
-                QString sa, sb;
-                if (!brickIsSpecial(s.type) || !specialOneToOne(design, s.id, &sa, &sb)) continue;
-                if (!((sa == dm.a && sb == dm.b) || (sa == dm.b && sb == dm.a))) continue;
-                said = s.run.lengthMm + distance(p0, faceA) + distance(p1, faceB);
-                break;
-            }
             plan.push_back(Planned{p0, p1, dm.below || ba->dimBelow, said, top, bottom, 0});
         }
         double baseAbove = -1e300, baseBelow = 1e300;
