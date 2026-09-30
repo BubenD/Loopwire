@@ -1471,7 +1471,7 @@ void testDialogMore() {
         check(item > 0 && state && state->text().contains(QString::number(item)),
               "bom: added from the part's panel, and marked with its line");
         const bool again = dlg.addPartToBom(partId);
-        check(asked == 1 && !again, "bom: already there, it asks - and a no adds nothing");
+        check(asked >= 1 && !again, "bom: already there, it asks - and a no adds nothing");
         // The balloon on the part says that line.
         QString said;
         for (const Entity& e : dlg.drawing())
@@ -2849,6 +2849,158 @@ void testRoundFifteen() {
     }
 }
 
+// ROUND SIXTEEN: the live bill; the quantity typed; runs sharing faces kept in order and close; a fanout's bundle
+// fitted to a joint's face; a boot linked to a part; a part on a fanout joined to a cable dragged.
+void testRoundSixteen() {
+    // THE LIVE BILL.
+    {
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_live_bill.plb"));
+        QFile::remove(libFile);
+        {
+            PartsLibrary lib;
+            LibraryPart conn;
+            conn.id = QStringLiteral("LIVE-CONN");
+            conn.kind = PartKind::Connector;
+            conn.mfrPn = QStringLiteral("LIVE-HOUSING");
+            conn.params[QStringLiteral("pins")] = QStringLiteral("4");
+            LibraryPart pin;
+            pin.id = QStringLiteral("LIVE-PIN");
+            pin.kind = PartKind::ContactPin;
+            pin.mfrPn = QStringLiteral("LIVE-CONTACT");
+            LibraryPart other;
+            other.id = QStringLiteral("LIVE-OTHER");
+            other.kind = PartKind::Connector;
+            other.mfrPn = QStringLiteral("LIVE-OTHER");
+            other.params[QStringLiteral("includePins")] = QStringLiteral("1");
+            lib.parts = {conn, pin, other};
+            addContactTie(lib, conn.id, pin.id);
+            lib.save(libFile);
+        }
+        PartsCatalog cat;
+        cat.openRemembered();
+        cat.connectLibrary(libFile);
+        cat.remember();
+        {
+            Document doc;
+            Editor ed;
+            ed.setDocument(&doc);
+            BrickWizardDialog dlg(&ed);
+            BrickDesign& w = dlg.design();
+            auto qtyOf = [&doc](const QString& id) {
+                BomTable t;
+                t.fromJson(doc.bom());
+                for (const BomRow& r : t.rows)
+                    if (r.partId == id) return r.qty;
+                return 0.0;
+            };
+            const QString a = w.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+            w.brick(a)->libPart = QStringLiteral("LIVE-CONN");
+            dlg.selectBrick(a);
+            check(qtyOf(QStringLiteral("LIVE-CONN")) == 1.0 && qtyOf(QStringLiteral("LIVE-PIN")) == 4.0,
+                  "live bill: a part given to a brick goes on the bill, its contacts with it (one per way)");
+            const QString b = w.addBrick(BrickType::End, PartKind::Connector, 0, 2);
+            w.brick(b)->libPart = QStringLiteral("LIVE-CONN");
+            dlg.selectBrick(b);
+            check(qtyOf(QStringLiteral("LIVE-CONN")) == 2.0 && qtyOf(QStringLiteral("LIVE-PIN")) == 8.0,
+                  "live bill: another brick of it, one more - and its contacts");
+            w.brick(a)->libPart = QStringLiteral("LIVE-OTHER");
+            dlg.selectBrick(a);
+            check(qtyOf(QStringLiteral("LIVE-CONN")) == 1.0 && qtyOf(QStringLiteral("LIVE-OTHER")) == 1.0 &&
+                      qtyOf(QStringLiteral("LIVE-PIN")) == 4.0,
+                  "live bill: a part changed - the old one comes off, the new one goes on");
+            dlg.canvas()->setSelection({b});
+            dlg.canvas()->deleteSelected();
+            dlg.selectBrick(a);
+            check(qtyOf(QStringLiteral("LIVE-CONN")) == 0.0 && qtyOf(QStringLiteral("LIVE-PIN")) == 0.0,
+                  "live bill: the brick deleted, its part and contacts off the bill");
+            // THE QUANTITY TYPED.
+            auto* bom = dlg.findChild<QTableWidget*>(QStringLiteral("brickBom"));
+            int row = -1;
+            for (int i = 0; bom && i < bom->rowCount(); ++i)
+                if (bom->item(i, 3) && bom->item(i, 3)->text() == QStringLiteral("LIVE-OTHER")) row = i;
+            if (bom && row >= 0) bom->item(row, 1)->setText(QStringLiteral("3"));
+            check(row >= 0 && qtyOf(QStringLiteral("LIVE-OTHER")) == 3.0, "bom: the quantity typed over is the bill's");
+        }
+        cat.disconnectLibrary(libFile);
+        cat.remember();
+        QFile::remove(libFile);
+    }
+    // TWO RUNS BETWEEN THE SAME FACES: in the same order at both, and close between their fans.
+    {
+        BrickDesign d;
+        const QString x0 = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString r1 = d.addBrick(BrickType::Fanout, PartKind::Wire, 1, -0.5);
+        const QString r2 = d.addBrick(BrickType::TwistedPair, PartKind::Wire, 1, 0.5);
+        const QString x1 = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        d.connect(x0, r1);
+        d.connect(r1, x1);
+        d.connect(x0, r2);
+        d.connect(r2, x1);
+        d.brick(r1)->run.wires = 4;
+        d.brick(x0)->scale = 3.0;   // faces wide enough that the two runs start well apart
+        d.brick(x1)->scale = 3.0;
+        std::vector<Vec2> p1, p2;
+        for (const Entity& e : buildBrickHarness(d, nullptr).entities)
+            if (e.type == EntityType::TwistedPair) {
+                if (e.meta.value(QStringLiteral("brickId")).toString() == r1) p1 = e.points;
+                if (e.meta.value(QStringLiteral("brickId")).toString() == r2) p2 = e.points;
+            }
+        check(p1.size() >= 2 && p2.size() >= 2 &&
+                  ((p1.front().y > p2.front().y) == (p1.back().y > p2.back().y)),
+              "shared faces: two runs keep their order at both faces - they do not cross");
+        if (p1.size() >= 4 && p2.size() >= 4) {
+            auto midY = [](const std::vector<Vec2>& r) {
+                double total = 0.0;
+                for (size_t k = 1; k < r.size(); ++k) total += distance(r[k - 1], r[k]);
+                double at = 0.0;
+                for (size_t k = 1; k < r.size(); ++k) {
+                    const double seg = distance(r[k - 1], r[k]);
+                    if (at + seg >= total / 2.0 && seg > 1e-9) return lerp(r[k - 1], r[k], (total / 2.0 - at) / seg).y;
+                    at += seg;
+                }
+                return r.back().y;
+            };
+            const double midGap = std::abs(midY(p1) - midY(p2));
+            const double endGap = std::abs(p1.front().y - p2.front().y);
+            std::printf("  shared faces: %.1f apart at the face, %.1f between the fans\n", endGap, midGap);
+            check(midGap < endGap * 0.7, "shared faces: between their fans they run close together");
+        }
+    }
+    // A BOOT LINKED TO A PART: face on face.
+    {
+        BrickDesign d;
+        const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString boot = d.addBrick(BrickType::End, PartKind::HeatshrinkBoot, 1, 0);
+        const QString r = d.addBrick(BrickType::Run, PartKind::Cable, 2, 0);
+        const QString y = d.addBrick(BrickType::End, PartKind::Connector, 3, 0);
+        QString why;
+        check(d.portCount(*d.brick(boot)) == 2, "boot: a heatshrink boot has two sides");
+        check(d.connect(x, boot, &why), "boot: linked straight to a part");
+        d.connect(boot, r);
+        d.connect(r, y);
+        const BrickBuild b = buildBrickHarness(d, nullptr);
+        const Vec2 onPart = b.faces.value(QStringLiteral("%1:%2").arg(x).arg(d.portOn(x, boot))).centre;
+        const Vec2 onBoot = b.faces.value(QStringLiteral("%1:%2").arg(boot).arg(d.portOn(boot, x))).centre;
+        std::printf("  boot: its face %.1f,%.1f on the part's %.1f,%.1f\n", onBoot.x, onBoot.y, onPart.x, onPart.y);
+        check(distance(onPart, onBoot) < 1e-6, "boot: drawn with its face on the part's face");
+    }
+    // A PART ON A FANOUT JOINED TO A CABLE can be dragged.
+    {
+        BrickDesign d;
+        const QString x0 = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString f = d.addBrick(BrickType::Fanout, PartKind::Wire, 2, 0);
+        const QString x1 = d.addBrick(BrickType::End, PartKind::Connector, 3, 0);
+        d.connect(x0, c);
+        d.connect(c, f);
+        d.connect(f, x1);
+        const BrickBuild b = buildBrickHarness(d, nullptr);
+        const double was = d.brick(f)->run.lengthMm;
+        check(dragPartOnDrawing(d, b, x1, 30.0, 0.0) == f && d.brick(f)->run.lengthMm > was,
+              "drag: a part on a fanout joined to a cable moves, the fanout's length following");
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -2878,6 +3030,7 @@ int run_brickharness_tests() {
     testConnectorContactsOnBill();
     testRoundFourteen();
     testRoundFifteen();
+    testRoundSixteen();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

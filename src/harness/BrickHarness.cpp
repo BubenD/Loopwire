@@ -276,6 +276,32 @@ bool BrickDesign::connect(const QString& a, const QString& b, QString* why, int 
         if (why) why->clear();
         return true;
     }
+    // A HEATSHRINK BOOT GOES ON A PART: linked straight to it - a connector, a backshell, any part - its face on the
+    // part's face, and the cable out of its other side.
+    if (x->type == BrickType::End && y->type == BrickType::End &&
+        (x->kind == PartKind::HeatshrinkBoot || y->kind == PartKind::HeatshrinkBoot)) {
+        if (linked(a, b)) return refuse(QStringLiteral("Those two are already linked"));
+        auto usedPorts = [&](const QString& id) {
+            QSet<int> used;
+            for (const BrickLink& l : links) {
+                if (l.a == id) used.insert(portOn(id, l.b));
+                if (l.b == id) used.insert(portOn(id, l.a));
+            }
+            return used;
+        };
+        auto pick = [&](const Brick& self, const Brick& other, int asked) {
+            if (asked >= 0) return asked;
+            const QSet<int> used = usedPorts(self.id);
+            const int facing = std::max(0, facingPort(self, Vec2{other.col - self.col, other.row - self.row}));
+            if (!used.contains(facing)) return facing;
+            for (int p = 0; p < portCount(self); ++p)
+                if (!used.contains(p)) return p;
+            return facing;
+        };
+        links.push_back({a, b, pick(*x, *y, portA), pick(*y, *x, portB), 0});
+        if (why) why->clear();
+        return true;
+    }
     if (brickIsSpecial(x->type) == brickIsSpecial(y->type))
         return refuse(x->type == BrickType::End
                           ? QStringLiteral("Two end parts are joined by a harness: put a special "
@@ -781,6 +807,24 @@ QString dragPartOnDrawing(BrickDesign& d, const BrickBuild& built, const QString
                 return sid;
             }
         }
+        // JOINED TO ANOTHER RUN at that end (a fanout carried on into a cable): measured from where the two join.
+        if (other.isEmpty()) {
+            const QString j = joinedSpecial(d, sid);
+            if (!j.isEmpty()) {
+                const QString jk = QStringLiteral("~J") + (sid < j ? sid + QLatin1Char('|') + j : j + QLatin1Char('|') + sid);
+                const auto of = built.faces.constFind(jk + QLatin1Char('@') + sid + QStringLiteral(":0"));
+                const auto mine = built.faces.constFind(faceKey(part, d.portOn(part, sid)));
+                if (of != built.faces.cend() && mine != built.faces.cend()) {
+                    const Vec2 from = of->centre, was = mine->centre, now = was + Vec2{dx, dy};
+                    const double k = std::sqrt(2.0) - 1.0;
+                    const double before = std::abs(was.x - from.x) + std::abs(was.y - from.y) * k;
+                    const double after = std::abs(now.x - from.x) + std::abs(now.y - from.y) * k;
+                    s->run.lengthMm = std::max(0.0, std::round(s->run.lengthMm + after - before));
+                    p->drawDyMm += dy;
+                    return sid;
+                }
+            }
+        }
         if (other.size() != 1) continue;
         const auto of = built.faces.constFind(faceKey(other.front(), d.portOn(other.front(), sid)));
         const auto mine = built.faces.constFind(faceKey(part, d.portOn(part, sid)));
@@ -1279,6 +1323,13 @@ BrickShape endShapeAsDrawn(const Brick& b, const PartsCatalog* catalog);
 // so what joins it meets it at the faces where they now are.
 BrickShape endShape(const Brick& b, const PartsCatalog* catalog) {
     BrickShape s = endShapeAsDrawn(b, catalog);
+    // A HEATSHRINK BOOT HAS TWO SIDES: the part it goes over, and the cable out of it - even where its drawing
+    // marks only the one face.
+    if (b.kind == PartKind::HeatshrinkBoot && s.ports() == 1) {
+        s.faceMid.push_back(Vec2{-s.faceMid[0].x, s.faceMid[0].y});
+        s.faceOut.push_back(Vec2{-s.faceOut[0].x, -s.faceOut[0].y});
+        s.faceLen.push_back(s.faceLen[0] * 1.3);
+    }
     const double k = std::clamp(b.scale, 0.05, 20.0);
     if (std::abs(k - 1.0) < 1e-9) return s;
     for (Entity& e : s.drawing) scaleEntity(e, Vec2{0.0, 0.0}, k);
@@ -1700,6 +1751,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
     // columns of the pane - two runs of different lengths to one connector put their far ends at
     // different distances from it. Across the harness, the rows of the pane stand.
     QHash<QString, double> xOf;
+    QHash<QString, QPair<QString, double>> yLock;   // a boot drawn level with the part it is on: that part, and how far off
     QHash<QString, double> stretchOf;   // how much longer a run is drawn than it is, for room to see it
     {
         struct Edge {
@@ -1782,6 +1834,24 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             edges[br.a.node] << Edge{br.b.node, gap, fa, fb, false, ua};
             edges[br.b.node] << Edge{br.a.node, gap, fb, fa, false, ub};
         }
+        // A BOOT ON A PART: face on face, level with it - wherever the two bricks are on the pane.
+        for (const BrickLink& l : design.links) {
+            const Brick* ba = design.brick(l.a);
+            const Brick* bb = design.brick(l.b);
+            if (!ba || !bb || ba->type != BrickType::End || bb->type != BrickType::End) continue;
+            FaceRef fa;
+            fa.id = fa.node = l.a;
+            fa.port = design.portOn(l.a, l.b);
+            FaceRef fb;
+            fb.id = fb.node = l.b;
+            fb.port = design.portOn(l.b, l.a);
+            const Vec2 pa = faceAt(fa), pb = faceAt(fb);
+            edges[l.a] << Edge{l.b, 0.0, pa, pb, true};
+            edges[l.b] << Edge{l.a, 0.0, pb, pa, true};
+            const bool bootIsA = ba->kind == PartKind::HeatshrinkBoot;
+            if (bootIsA) yLock.insert(l.a, {l.b, pb.y - pa.y});
+            else yLock.insert(l.b, {l.a, pa.y - pb.y});
+        }
         // A BRIDGE WIRE STARTS AT ITS CABLE'S PART - where that fan is - so its own part can stand level with it.
         for (auto it = bridgeOff.cbegin(); it != bridgeOff.cend(); ++it) {
             if (it.value().partThere.isEmpty()) continue;
@@ -1859,6 +1929,10 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         }
     }
     auto posOf = [&](const QString& node) {
+        if (yLock.contains(node)) {
+            const auto& lock = yLock.value(node);
+            return Vec2{xOf.value(node), -gridOf(lock.first).y * rowPitch + drawDyOf(lock.first) + lock.second};
+        }
         return Vec2{xOf.value(node), -gridOf(node).y * rowPitch + drawDyOf(node)};
     };
 
@@ -2013,6 +2087,10 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         Vec2 centre;
         double lane = 1.0;
         double share = 1.0;
+        // SEVERAL RUNS ON ONE FACE: where this one lies in the bundle they make together, side by side and close -
+        // across the face from its middle - once they have left their fans.
+        bool shared = false;
+        double compact = 0.0;
     };
     std::vector<Landing> atA(branches.size()), atB(branches.size());
     auto isJunction = [](const FaceRef& f) { return f.id.startsWith(QLatin1String("~J")); };
@@ -2022,6 +2100,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             bool isB;
             int wires;
             double order;
+            double tie = 0.0;   // for runs going the same way: the same order at both their faces
         };
         QHash<QString, std::vector<Use>> byFace;
         for (size_t i = 0; i < branches.size(); ++i) {
@@ -2030,20 +2109,31 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                 const QString ka = faceKey(br.a.id, br.a.port);
                 const BrickFace fa = out.faces.value(ka);
                 const Vec2 toB = br.b.id.isEmpty() ? fa.centre + fa.out : posOf(br.b.node);
-                byFace[ka].push_back({i, false, br.wires, dot(toB, fa.out.perp())});
+                // Two runs going to the same place: ordered across the face by where their bricks are, measured
+                // the same way on the drawing at both ends - so the one along the bottom here is along the bottom
+                // there too, and they do not cross on the way.
+                const Vec2 perp = fa.out.perp();
+                const double tie = dot(Vec2{br.special->col, -br.special->row * 10.0}, perp) +
+                                   (perp.y >= 0.0 ? 1e-3 : -1e-3) * static_cast<double>(i);
+                byFace[ka].push_back({i, false, br.wires, dot(toB, perp), tie});
             }
             if (!br.b.id.isEmpty()) {
                 const QString kb = faceKey(br.b.id, br.b.port);
                 const BrickFace fb = out.faces.value(kb);
                 const Vec2 toA = br.a.node.isEmpty() ? fb.centre + fb.out : posOf(br.a.node);
-                byFace[kb].push_back({i, true, br.wires, dot(toA, fb.out.perp())});
+                const Vec2 perp = fb.out.perp();
+                const double tie = dot(Vec2{br.special->col, -br.special->row * 10.0}, perp) +
+                                   (perp.y >= 0.0 ? 1e-3 : -1e-3) * static_cast<double>(i);
+                byFace[kb].push_back({i, true, br.wires, dot(toA, perp), tie});
             }
         }
         for (auto it = byFace.begin(); it != byFace.end(); ++it) {
             const BrickFace f = out.faces.value(it.key());
             std::vector<Use>& uses = it.value();
-            std::stable_sort(uses.begin(), uses.end(),
-                             [](const Use& x, const Use& y) { return x.order < y.order; });
+            std::stable_sort(uses.begin(), uses.end(), [](const Use& x, const Use& y) {
+                if (std::abs(x.order - y.order) > 1e-6) return x.order < y.order;
+                return x.tie < y.tie;
+            });
             int total = 0;
             double scale = 100.0;
             double ww = 0.1;
@@ -2060,14 +2150,27 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                                   : cableSide ? ww * 1.5 * (total - 1) + ww
                                               : design.faceFanPct / 100.0 * f.lengthMm;
             const double lane = total > 1 ? std::max(0.0, spread - ww) / (total - 1) : 0.0;
-            int k = 0;
+            // The bundle they make together once out of their fans: each as wide as its wires packed, side by side.
+            double bundle = 0.0;
+            std::vector<double> widths;
             for (const Use& u : uses) {
+                const double w = ww * 1.5 * (std::max(1, u.wires) - 1) + ww;   // touching, no gap
+                widths.push_back(w);
+                bundle += w;
+            }
+            int k = 0;
+            double stacked = -bundle / 2.0;
+            for (size_t n = 0; n < uses.size(); ++n) {
+                const Use& u = uses[n];
                 Landing l;
                 const double first = -(total - 1) / 2.0 + k;
                 const double mid = first + (u.wires - 1) / 2.0;
                 l.centre = f.centre + f.out.perp() * (mid * lane);
                 l.lane = lane;
                 l.share = f.lengthMm * u.wires / std::max(1, total);
+                l.shared = uses.size() > 1 && !junction;
+                l.compact = stacked + widths[n] / 2.0;
+                stacked += widths[n];
                 (u.isB ? atB : atA)[u.branch] = l;
                 k += u.wires;
             }
@@ -2327,9 +2430,14 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         // it enters across the drawing's share of the cable's width (the junction's landing).
         const bool intoCableA = jA && s.type != BrickType::Run;
         const bool intoCableB = jB && s.type != BrickType::Run;
-        if (!spreadA && !intoCableA) la.lane = packed;
+        // GATHERED INTO A PART'S FACE, the bundle is never wider than the face: it converges to fit it (a Y-split's
+        // leg is often narrower than the wires would lie packed).
+        auto fitFace = [wires, ww](double share) {
+            return wires > 1 ? std::max(ww * 0.6, (share * 0.95 - ww) / (wires - 1)) : 1.0;
+        };
+        if (!spreadA && !intoCableA) la.lane = jA ? packed : std::min(packed, fitFace(la.share));
         else if (spreadA && jA) la.lane = std::max(la.lane, packed * 2.0);
-        if (!spreadB && !loose && !intoCableB) lb.lane = packed;
+        if (!spreadB && !loose && !intoCableB) lb.lane = jB ? packed : std::min(packed, fitFace(lb.share));
         else if (spreadB && jB) lb.lane = std::max(lb.lane, packed * 2.0);
         double fanA = !spreadA ? 0.0
                             : fanSpecA >= 0.0 ? fanSpecA
@@ -2362,6 +2470,35 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                 bend = bridgeAtA ? 0.0 : 1.0;
             }
             route = routeBetweenFaces(la.centre, fa.out, lb.centre, fb.out, lead, 45.0, bend, knee);
+            // SEVERAL RUNS BETWEEN THE SAME TWO FACES run together, close, not each straight from its own share of
+            // the face with the face's width between them: out of its fan, over to its place in the bundle they make
+            // (along the route of the faces' middles, offset by that place), and back out to its share of the other
+            // face before its fan there.
+            if (!bridgeOut && la.shared && lb.shared && !jA && !jB) {
+                const std::vector<Vec2> trunk = routeBetweenFaces(fa.centre, fa.out, fb.centre, fb.out, lead, 45.0, bend, knee);
+                std::vector<Vec2> off = offsetPolyline(trunk, la.compact);
+                const Vec2 wantStart = fa.centre + fa.out.perp() * la.compact;
+                if (!off.empty() && distance(off.front(), wantStart) > 1e-3) off = offsetPolyline(trunk, -la.compact);
+                if (off.size() >= 2) {
+                    const double L1 = fanA + 2.0, L2 = fanB + 2.0;
+                    const double dA = std::abs(dot(la.centre - off.front(), fa.out.perp()));
+                    const double dB = std::abs(dot(lb.centre - off.back(), fb.out.perp()));
+                    const double length = routeLength(off);
+                    const double sA = L1 + dA, sB = length - (L2 + dB);
+                    if (sB > sA + 1.0) {
+                        std::vector<Vec2> together{la.centre, la.centre + fa.out * L1, pointAlong(off, sA)};
+                        double at = 0.0;
+                        for (size_t k = 1; k + 1 < off.size(); ++k) {
+                            at += distance(off[k - 1], off[k]);
+                            if (at > sA + 1e-6 && at < sB - 1e-6) together.push_back(off[k]);
+                        }
+                        together.push_back(pointAlong(off, sB));
+                        together.push_back(lb.centre + fb.out * L2);
+                        together.push_back(lb.centre);
+                        route = together;
+                    }
+                }
+            }
         }
         if (route.size() < 2) continue;
         // A FAN ENDS BEFORE THE BEND: fanned wires are straight, and one run on past a knee was drawn as a spiral.

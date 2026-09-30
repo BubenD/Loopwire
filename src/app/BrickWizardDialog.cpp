@@ -1165,6 +1165,7 @@ void BrickWizardDialog::buildUi() {
         currentName_.clear();
         harnessName_->clear();
         canvas_->setSelection({});
+        liveInit_ = false;   // the last harness's parts stay on the bill: a new one starts counting afresh
         designChanged();
         status_->setText(QStringLiteral("A new harness"));
     });
@@ -1331,7 +1332,30 @@ void BrickWizardDialog::buildUi() {
                                      QStringLiteral("P/N"), QStringLiteral("Description")});
     bom_->horizontalHeader()->setStretchLastSection(true);
     bom_->verticalHeader()->setVisible(false);
-    bom_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    // THE QUANTITY CAN BE CHANGED: a double-click on it (only on lines of the bill itself, not those there because
+    // their part is on the drawing).
+    bom_->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
+    connect(bom_, &QTableWidget::itemChanged, this, [this](QTableWidgetItem* it) {
+        if (!it || it->column() != 1) return;
+        const int row = it->row();
+        Document* doc = document();
+        if (!doc || row < 0 || row >= static_cast<int>(bomShown_.size())) return;
+        bool ok = false;
+        const double qty = it->text().trimmed().toDouble(&ok);
+        if (!ok || qty < 0.0) {
+            refreshBom();
+            return;
+        }
+        BomTable table;
+        table.fromJson(doc->bom());
+        for (BomRow& r : table.rows)
+            if (bomSameThing(r, bomShown_[static_cast<size_t>(row)])) r.qty = qty;
+        doc->bom() = table.toJson();
+        doc->setDirty(true);
+        emit bomChanged();
+        refreshBom();
+        status_->setText(QStringLiteral("Item %1: quantity %2").arg(row + 1).arg(qty));
+    });
     bom_->setSelectionMode(QAbstractItemView::SingleSelection);
     bom_->setSelectionBehavior(QAbstractItemView::SelectRows);
     // DRAGGED TO A NEW PLACE: press on a line and drag it up or down - a white line shows where it will go.
@@ -2980,6 +3004,78 @@ QString BrickWizardDialog::previewPartAt(const QPointF& at) const {
     return hit;
 }
 
+QHash<QString, int> BrickWizardDialog::partCounts() const {
+    QHash<QString, int> n;
+    for (const Brick& b : design_.bricks)
+        if (b.type == BrickType::End && !b.libPart.isEmpty()) ++n[b.libPart];
+    return n;
+}
+
+void BrickWizardDialog::syncLiveBom() {
+    Document* doc = document();
+    if (!doc) return;
+    const QHash<QString, int> now = partCounts();
+    if (!liveInit_) {
+        liveCounts_ = now;
+        liveInit_ = true;
+        return;
+    }
+    if (now == liveCounts_) return;
+    // THE BILL KEPT WITH THE BRICKS: a part given to a brick goes on it, one more brick of it is one more on it,
+    // a part changed or a brick deleted comes off it (the line gone at nought) - and a connector's contacts go on
+    // and come off with it, one per way.
+    QSet<QString> ids;
+    for (auto it = now.cbegin(); it != now.cend(); ++it) ids.insert(it.key());
+    for (auto it = liveCounts_.cbegin(); it != liveCounts_.cend(); ++it) ids.insert(it.key());
+    BomTable table;
+    table.fromJson(doc->bom());
+    const PartsLibrary merged = catalog_.merged();
+    QList<const LibraryPart*> needContacts;
+    bool changed = false;
+    for (const QString& id : ids) {
+        const int delta = now.value(id) - liveCounts_.value(id);
+        if (delta == 0) continue;
+        const LibraryPart* p = merged.byId(id);
+        if (!p) continue;
+        auto adjust = [&](const QString& partId, double by, const LibraryPart* part) {
+            for (size_t k = 0; k < table.rows.size(); ++k)
+                if (table.rows[k].partId == partId) {
+                    table.rows[k].qty += by;
+                    if (table.rows[k].qty <= 1e-9) table.rows.erase(table.rows.begin() + static_cast<long>(k));
+                    changed = true;
+                    return true;
+                }
+            if (by > 0.0 && part) {
+                BomRow row = bomRowFromPart(*part, by);
+                row.rowId = bomNextRowId(table.rows);
+                table.rows.push_back(row);
+                changed = true;
+                return true;
+            }
+            return false;
+        };
+        adjust(id, delta, p);
+        // Its contacts, as many ways more or fewer.
+        if (p->kind == PartKind::Connector && !partIncludesPins(*p) && !partIsWired(*p)) {
+            bool had = false;
+            for (const QString& c : tiedContactsOf(merged, id))
+                if (adjust(c, static_cast<double>(delta) * p->wayCount(), nullptr)) {
+                    had = true;
+                    break;
+                }
+            if (!had && delta > 0) needContacts << p;
+        }
+    }
+    liveCounts_ = now;
+    if (changed) {
+        doc->bom() = table.toJson();
+        doc->setDirty(true);
+        emit bomChanged();
+        refreshBom();
+    }
+    for (const LibraryPart* p : needContacts) addContactsFor(*p);   // which one, asked when several are tied
+}
+
 void BrickWizardDialog::recordHistory() {
     if (restoring_ || (canvas_ && canvas_->dragging()) || !partDrag_.isEmpty()) return;   // a drag is one step
     const QByteArray now = QJsonDocument(design_.toJson()).toJson(QJsonDocument::Compact);
@@ -3028,6 +3124,7 @@ void BrickWizardDialog::refreshPreview() {
     if (editor_) design_.faceFanPct = editor_->faceFanScale();
     syncBridgeWires(design_);   // wires taken from a joined special follow it
     recordHistory();
+    if (partDrag_.isEmpty()) syncLiveBom();
     const BrickBuild built = buildBrickHarness(design_, &catalog_,
                                                [this](const QString& id) { return bomItemOf(id); });
     actual_ = built.actual;
@@ -3110,12 +3207,10 @@ bool BrickWizardDialog::assignPart(const QString& partId) {
     // The brick becomes that part - and that part's kind.
     b->kind = p->kind;
     b->libPart = partId;
-    const bool added = addPartToBom(partId);
-    status_->setText(added ? QStringLiteral("%1 is %2, and on the BOM").arg(brickTitle(*b), p->title())
-                           : QStringLiteral("%1 is %2").arg(brickTitle(*b), p->title()));
     canvas_->update();
+    refreshPreview();   // the live bill puts it on (see syncLiveBom)
     loadPanel();
-    refreshPreview();
+    status_->setText(QStringLiteral("%1 is %2, and on the BOM").arg(brickTitle(*b), p->title()));
     return true;
 }
 
@@ -3145,6 +3240,7 @@ void BrickWizardDialog::showEvent(QShowEvent* e) {
 
 void BrickWizardDialog::refreshBom() {
     if (!bom_) return;
+    const QSignalBlocker hush(bom_);   // filling it is not somebody typing a quantity
     bom_->setRowCount(0);
     const Document* doc = document();
     if (!doc) return;
@@ -3168,6 +3264,11 @@ void BrickWizardDialog::refreshBom() {
                                 r.mfrPn.isEmpty() ? r.internalPn : r.mfrPn, r.description};
         for (int c = 0; c < cells.size(); ++c) {
             auto* it = new QTableWidgetItem(cells[c]);
+            // Only the quantity of a line of the bill itself may be typed over.
+            const bool editable = c == 1 && !r.fromDrawing;
+            it->setFlags(editable ? (Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsEditable)
+                                  : (Qt::ItemIsEnabled | Qt::ItemIsSelectable));
+            if (editable) it->setToolTip(QStringLiteral("Double-click to change the quantity"));
             if (used.contains(r.partId)) {
                 QFont f = it->font();
                 f.setBold(true);
@@ -3288,6 +3389,7 @@ bool BrickWizardDialog::loadFromDrawing(const QString& name) {
     harnessName_->setText(name);
     canvas_->setSelection({});
     canvas_->centreView();
+    liveInit_ = false;   // an opened harness brings its own bill: counted from here, not added again
     designChanged();
     refreshSaved();
     status_->setText(QStringLiteral("Opened \"%1\"").arg(name));

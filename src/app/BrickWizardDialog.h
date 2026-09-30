@@ -404,6 +404,11 @@ private:
     QComboBox* dimSide_ = nullptr;                // (the part's own Dimensions side, on its panel)
     QComboBox* partDimSide_ = nullptr;            // the picked part's dimensions: above it or below it
     std::function<QString(const QStringList&)> chooseContact_;
+    // THE LIVE BILL: how many bricks use each part, last time the bill was brought into step with them.
+    QHash<QString, int> liveCounts_;
+    bool liveInit_ = false;
+    QHash<QString, int> partCounts() const;
+    void syncLiveBom();
     // A connector just put on the bill: its contacts with it, as the connector needs them (one per way).
     void addContactsFor(const LibraryPart& connector);
     // WHAT GOES WITH IT: a connector bought without its contacts needs contacts on the bill - said, with the
