@@ -2553,6 +2553,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         // goes into - and makes one bend into its part.
         bool bridgeOut = false;
         bool bridgeAtA = false;
+        Vec2 looseSide{0.0, 0.0};   // a loose bridge wire: the side it goes off to
         if (brickIsBridge(s)) {
             // OUT OF THE CABLE'S END FACE: on the face - the square end of the cover - toward the side its part is
             // on, both its lines leaving that face square to it, and turning at once toward its part.
@@ -2563,7 +2564,18 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             };
             if (jA && bridgeStart.contains(br.a.node)) {
                 const BridgeStart st = bridgeStart.value(br.a.node);
-                la.centre = onFace(st, lb.centre);
+                // With nothing at its other end it goes off to the side its brick is on the pane (below the cable's
+                // brick, below the cable).
+                Vec2 target = lb.centre;
+                if (loose) {
+                    const Brick* cable = design.brick(joinedSpecial(design, s.id));
+                    const double down = cable && s.row > cable->row + 1e-6 ? -1.0 : 1.0;
+                    Vec2 side = st.dir.perp();
+                    if (side.y * down < 0.0) side = side * -1.0;
+                    target = st.at + side * 10.0;
+                    looseSide = side;
+                }
+                la.centre = onFace(st, target);
                 fa.out = st.dir;
                 bridgeOut = true;
                 bridgeAtA = true;
@@ -2596,6 +2608,13 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         const double fanSpecB = br.flipped ? r.fanStartMm : r.fanFinishMm;
         if (fanSpecA == 0.0) spreadA = false;
         if (fanSpecB == 0.0) spreadB = false;
+        // A FANOUT OR A BRIDGE WIRE WITH NOTHING AT ITS END: its wires spread there, each stripped - ready to be
+        // landed on whatever they go to.
+        const bool strippedEnd = loose && (s.type == BrickType::Fanout || brickIsBridge(s)) && !isTrunk && !isSub;
+        if (strippedEnd) {
+            spreadB = true;
+            lb.lane = std::max(lb.lane, packed * 2.0);
+        }
         // Where it does not spread its wires are packed - except where a fan goes into a cable, which
         // it enters across the drawing's share of the cable's width (the junction's landing).
         const bool intoCableA = jA && s.type != BrickType::Run;
@@ -2621,6 +2640,12 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         if (isTrunk && br.freeStart) route = {splitAt[i], splitAt[i] + splitDir[i] * r.lengthMm};
         else if (isTrunk) route = {la.centre, splitAt[i]};
         else if (isSub) route = routeBetweenFaces(la.centre, splitDir[i], lb.centre, fb.out, fanB + 5.0);
+        else if (loose && bridgeOut && looseSide.length() > 1e-9) {
+            // OFF THE CABLE'S FACE ON THE SLANT, then on alongside it for the rest of its length.
+            const double slant = std::min(15.0, r.lengthMm * 0.35);
+            const Vec2 bend = la.centre + (fa.out + looseSide).normalized() * slant;
+            route = {la.centre, bend, bend + fa.out * std::max(1.0, r.lengthMm - slant)};
+        }
         else if (loose) route = {la.centre, la.centre + fa.out * r.lengthMm};
         else {
             // The bend where the special's brick is between its two parts on the pane.
@@ -2740,7 +2765,27 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             w.b = w.points.back();
             w.meta.insert(QStringLiteral("double"), true);
             w.meta.insert(QStringLiteral("gap"), ww);
-            made.push_back(w);
+            // STRIPPED at a loose end: the insulation stops short and the bare conductor runs on, one line.
+            if (strippedEnd && w.points.size() >= 2) {
+                const Vec2 tip = w.points.back();
+                const Vec2 prev = w.points[w.points.size() - 2];
+                const double strip = std::min(5.0, distance(prev, tip) * 0.4);
+                if (strip > 0.2) {
+                    w.points.back() = tip + (prev - tip).normalized() * strip;
+                    w.b = w.points.back();
+                    Entity bare;
+                    bare.type = EntityType::Line;
+                    bare.a = w.points.back();
+                    bare.b = tip;
+                    bare.meta.insert(QStringLiteral("mechRole"), QStringLiteral("strip"));
+                    made.push_back(w);
+                    made.push_back(bare);
+                } else {
+                    made.push_back(w);
+                }
+            } else {
+                made.push_back(w);
+            }
         } else {
             Entity run;
             run.type = EntityType::TwistedPair;
@@ -2767,6 +2812,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                 run.meta.insert(QStringLiteral("twistLaneFinish"), std::max(1e-3, lb.lane));
                 run.meta.insert(QStringLiteral("twistEnds"), fanA);
                 run.meta.insert(QStringLiteral("twistEndsFinish"), fanB);
+                if (strippedEnd) run.meta.insert(QStringLiteral("twistStripFinish"), true);
                 if (r.fanKneeMm >= 0.0) {
                     run.meta.insert(QStringLiteral("twistFanKnee"), r.fanKneeMm);
                     run.meta.insert(QStringLiteral("twistFanKneeFinish"), r.fanKneeMm);
@@ -2788,14 +2834,20 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                     run.meta.insert(QStringLiteral("twistBodyWidth"), bodyWidth);
                     // AT AN END THAT DOES NOT FAN - joined to a fanout, or where it splits - the
                     // transition is the end boot, so one asked for at both ends is at both.
-                    const bool wantA = r.transitions == RunEnds::Start || r.transitions == RunEnds::Both;
-                    const bool wantB = r.transitions == RunEnds::Finish || r.transitions == RunEnds::Both;
+                    // IN THE SPECIAL'S OWN TERMS: its start is where its brick says, even where the run was built from
+                    // its finish (on one part only, at its finish, the loose end is its start).
+                    const RunEnds ends = !br.flipped ? r.transitions
+                                         : r.transitions == RunEnds::Start  ? RunEnds::Finish
+                                         : r.transitions == RunEnds::Finish ? RunEnds::Start
+                                                                            : r.transitions;
+                    const bool wantA = ends == RunEnds::Start || ends == RunEnds::Both;
+                    const bool wantB = ends == RunEnds::Finish || ends == RunEnds::Both;
                     if ((wantA && !spreadA) || (wantB && !spreadB && !loose)) {
                         run.meta.insert(QStringLiteral("twistEndBoot"), true);
                         run.meta.insert(QStringLiteral("twistEndBootRecovered"), true);
                     }
                     // THE TRANSITION'S ENTRY the size of the bundle going into it.
-                    if (r.transitions != RunEnds::None) {
+                    if (ends != RunEnds::None) {
                         const double entry = std::min(bodyWidth, packed * (wires - 1) + ww);
                         run.meta.insert(QStringLiteral("twistBodyFace"), entry);
                         // Its width as said - held at the cable's width if it is asked to be narrower.
@@ -2803,9 +2855,9 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                             run.meta.insert(QStringLiteral("twistBootWidth"), std::max(r.transitionWidthMm, bodyWidth));
                     }
                     run.meta.insert(QStringLiteral("twistBodyTransitionSides"),
-                                    r.transitions == RunEnds::Start    ? QStringLiteral("start")
-                                    : r.transitions == RunEnds::Finish ? QStringLiteral("finish")
-                                    : r.transitions == RunEnds::Both   ? QStringLiteral("both")
+                                    ends == RunEnds::Start    ? QStringLiteral("start")
+                                    : ends == RunEnds::Finish ? QStringLiteral("finish")
+                                    : ends == RunEnds::Both   ? QStringLiteral("both")
                                                                        : QStringLiteral("none"));
                 }
             }
@@ -3103,12 +3155,14 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
     // And a brick BROUGHT TO THE FRONT covers what it crosses: a mask the shape of it goes down first - the part's
     // closed outlines, a run's band along its route - so the wires and parts under it are hidden, not seen through.
     {
+        // A BRIDGE WIRE IS OVER WHAT IT CROSSES unless told otherwise: half a step up - so the fan it leaves is hidden
+        // under it, and a cable brought to the front (a whole step) is over it instead.
         bool any = false;
-        for (const Brick& b : design.bricks) any = any || b.z != 0;
+        for (const Brick& b : design.bricks) any = any || b.z != 0 || brickIsBridge(b);
         if (any) {
             auto zOf = [&design](const Entity& e) {
                 const Brick* b = design.brick(e.meta.value(QStringLiteral("brickId")).toString());
-                return b ? b->z : 0;
+                return b ? b->z + (brickIsBridge(*b) ? 0.5 : 0.0) : 0.0;
             };
             std::stable_sort(out.entities.begin(), out.entities.end(),
                              [&zOf](const Entity& x, const Entity& y) { return zOf(x) < zOf(y); });

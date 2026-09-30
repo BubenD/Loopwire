@@ -37,6 +37,15 @@ class Editor;
 // What a palette drag carries: "<brick type key>|<part kind key>".
 inline constexpr char kBrickMime[] = "application/x-edraw-brick";
 
+// THE MARKS ON A BRICK: whether its part is on the bill (-1 no part to put on it, 0 not on it, 1 on it), and how
+// well it suits what is linked to it (-1 not checked, 0 suits, 1 something unknown or not linked yet, 2 does not
+// suit) - with why.
+struct BrickMark {
+    int bom = -1;
+    int compat = -1;
+    QString why;
+};
+
 // ==================================================================================================
 // THE LOW-DETAIL PANE: the bricks of a harness on a coarse grid, each with a port on its left and its
 // right, and the links between ports as lines.
@@ -66,6 +75,12 @@ public:
     QPointF portPoint(const Brick& b, int port) const;
     // The port under a point, as its brick and side, or an empty id.
     std::pair<QString, int> portAt(const QPointF& at) const;
+    // THE MARKS ON EACH BRICK: a dot for the bill and one for how well its part suits what it is linked to.
+    void setMarks(const QHash<QString, BrickMark>& marks) {
+        marks_ = marks;
+        update();
+    }
+    BrickMark markOf(const QString& id) const { return marks_.value(id); }
     // Zoomed and centred so every brick is in view - the Fit button.
     void fit();
     // Centred on the bricks at the zoom it is at - what arranging or loading a design does.
@@ -118,6 +133,7 @@ protected:
     void keyPressEvent(QKeyEvent* e) override;
     void keyReleaseEvent(QKeyEvent* e) override;
     void mouseDoubleClickEvent(QMouseEvent* e) override;
+    bool event(QEvent* e) override;
 public:
     // How far apart the drawing's rows were last drawn - what a brick moved a row is kept still on the drawing by.
     void setDrawingRowPitch(double mm) { drawnRowPitch_ = mm; }
@@ -158,6 +174,7 @@ private:
     QHash<QString, double> startDy_;
     double rowPitchMm_ = 0.0;
     double drawnRowPitch_ = 0.0;
+    QHash<QString, BrickMark> marks_;
     void keepOnDrawing(const QHash<QString, QPointF>& from);
     bool dimMode_ = false;                 // putting a dimension on: two clicks, two bricks
     QString dimFirst_;
@@ -422,6 +439,10 @@ private:
     bool dimWizQueued_ = false;
     void refreshDimensionWizard();
     void setAllDimsSide(bool below);
+    // THE MARKS ON THE BRICKS: on the bill or not, and whether the part suits what is linked to it.
+    void refreshBrickMarks();
+    BrickMark compatibilityOf(const Brick& b) const;
+    QToolButton* bridgeMany_ = nullptr;   // a bridge wire taking several of the cable's wires
     // THE LIVE BILL: how many bricks use each part, last time the bill was brought into step with them.
     QHash<QString, int> liveCounts_;
     bool liveInit_ = false;

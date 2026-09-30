@@ -2338,12 +2338,13 @@ void testRoundTen() {
         dlg.selectBrick(br);
         QApplication::processEvents();
         auto* pick = dlg.findChild<QComboBox*>(QStringLiteral("brickBridgeWires"));
-        check(pick && pick->isVisibleTo(&dlg) && pick->count() == 4 && pick->itemText(1).contains(QStringLiteral("GND")) &&
-                  pick->itemData(3).toString() == QString::fromLatin1(kBridgeShield),
-              "bridge pick: the cable's wires by net, and its shield");
+        check(pick && pick->isVisibleTo(&dlg) && pick->count() == 5 && pick->itemText(1).contains(QStringLiteral("GND")) &&
+                  pick->itemData(3).toString() == QStringLiteral("1-3") &&
+                  pick->itemData(4).toString() == QString::fromLatin1(kBridgeShield),
+              "bridge pick: the cable's wires by net, all of them, and its shield");
         if (pick) {
-            pick->setCurrentIndex(3);
-            emit pick->activated(3);
+            pick->setCurrentIndex(4);
+            emit pick->activated(4);
         }
         syncBridgeWires(w);
         check(w.brick(br)->run.bridgeWires == QString::fromLatin1(kBridgeShield) && w.brick(br)->run.wires == 1 &&
@@ -3300,6 +3301,264 @@ void testRoundEighteen() {
     }
 }
 
+// ROUND NINETEEN: the dots on the bricks (on the bill; suits what it is linked to), loose fanouts and bridge wires
+// with stripped ends, a transition at the start of a run built from its finish, a ferrule half any part's size, a
+// bridge wire taking several wires and drawn over what it crosses, and the dimensions off the bar.
+void testRoundNineteen() {
+    // THE DOTS.
+    {
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_marks.plb"));
+        QFile::remove(libFile);
+        {
+            PartsLibrary lib;
+            LibraryPart conn;
+            conn.id = QStringLiteral("MARK-CONN");
+            conn.kind = PartKind::Connector;
+            conn.mfrPn = QStringLiteral("MARK-CONN");
+            conn.params[QStringLiteral("pins")] = QStringLiteral("4");
+            LibraryPart pin;
+            pin.id = QStringLiteral("MARK-PIN");
+            pin.kind = PartKind::ContactPin;
+            pin.mfrPn = QStringLiteral("MARK-PIN");
+            pin.params[QStringLiteral("gaugeMode")] = QStringLiteral("AWG");
+            pin.params[QStringLiteral("gaugeMin")] = QStringLiteral("24");
+            pin.params[QStringLiteral("gaugeMax")] = QStringLiteral("20");
+            LibraryPart thin;
+            thin.id = QStringLiteral("MARK-WIRE22");
+            thin.kind = PartKind::Wire;
+            thin.mfrPn = QStringLiteral("MARK-WIRE22");
+            thin.params[QStringLiteral("gaugeMode")] = QStringLiteral("AWG");
+            thin.params[QStringLiteral("gauge")] = QStringLiteral("22");
+            LibraryPart thick = thin;
+            thick.id = thick.mfrPn = QStringLiteral("MARK-WIRE16");
+            thick.params[QStringLiteral("gauge")] = QStringLiteral("16");
+            lib.parts = {conn, pin, thin, thick};
+            addContactTie(lib, conn.id, pin.id);
+            lib.save(libFile);
+        }
+        PartsCatalog cat;
+        cat.openRemembered();
+        cat.connectLibrary(libFile);
+        cat.remember();
+        {
+            Document doc;
+            Editor ed;
+            ed.setDocument(&doc);
+            BrickWizardDialog dlg(&ed);
+            BrickDesign& w = dlg.design();
+            const QString x = w.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+            const QString bare = w.addBrick(BrickType::End, PartKind::Connector, 0, 2);
+            dlg.selectBrick(x);
+            check(dlg.canvas()->markOf(bare).bom == -1 && dlg.canvas()->markOf(bare).compat == 1,
+                  "dots: no part yet - nothing for the bill, and orange: not known yet");
+            w.brick(x)->libPart = QStringLiteral("MARK-CONN");
+            dlg.selectBrick(x);   // the live bill puts it on, with its contacts
+            check(dlg.canvas()->markOf(x).bom == 1, "dots: green - on the BOM");
+            check(dlg.canvas()->markOf(x).compat == 1, "dots: orange - not linked to anything yet");
+            const QString c = w.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+            const QString y = w.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+            w.connect(x, c);
+            w.connect(c, y);
+            w.brick(c)->run.wires = 4;
+            dlg.selectBrick(c);
+            std::printf("  dots: wire size unknown - %d (%s)\n", dlg.canvas()->markOf(x).compat,
+                        qPrintable(dlg.canvas()->markOf(x).why));
+            check(dlg.canvas()->markOf(x).compat == 1, "dots: orange - the wires' size is not known");
+            w.brick(c)->run.stackParts.insert(QStringLiteral("wires"), QStringLiteral("MARK-WIRE22"));
+            dlg.selectBrick(c);
+            std::printf("  dots: 22 AWG into 20-24 AWG contacts - %d (%s)\n", dlg.canvas()->markOf(x).compat,
+                        qPrintable(dlg.canvas()->markOf(x).why));
+            check(dlg.canvas()->markOf(x).compat == 0, "dots: green - its contacts on the BOM take the wires' size");
+            w.brick(c)->run.stackParts.insert(QStringLiteral("wires"), QStringLiteral("MARK-WIRE16"));
+            dlg.selectBrick(c);
+            check(dlg.canvas()->markOf(x).compat == 2, "dots: red - wires too big for its contacts");
+            w.brick(c)->run.stackParts.insert(QStringLiteral("wires"), QStringLiteral("MARK-WIRE22"));
+            w.brick(c)->run.wires = 6;
+            dlg.selectBrick(c);
+            std::printf("  dots: six wires into four ways - %d (%s)\n", dlg.canvas()->markOf(x).compat,
+                        qPrintable(dlg.canvas()->markOf(x).why));
+            check(dlg.canvas()->markOf(x).compat == 2, "dots: red - more wires than the connector has ways");
+            // A run's own dot: its layers' parts on the bill or not.
+            check(dlg.canvas()->markOf(c).bom == 0, "dots: a run whose wire is not on the BOM - red");
+        }
+        cat.disconnectLibrary(libFile);
+        cat.remember();
+        QFile::remove(libFile);
+    }
+    // THE STACK FITS TOGETHER, AND GOES INTO WHAT IT GOES INTO.
+    {
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_stack.plb"));
+        QFile::remove(libFile);
+        {
+            PartsLibrary lib;
+            auto part = [](const char* id, PartKind k, std::initializer_list<std::pair<const char*, const char*>> ps) {
+                LibraryPart p;
+                p.id = p.mfrPn = QString::fromLatin1(id);
+                p.kind = k;
+                for (const auto& [key, v] : ps) p.params[QString::fromLatin1(key)] = QString::fromLatin1(v);
+                return p;
+            };
+            lib.parts = {part("ST-WIRE", PartKind::Wire, {{"od", "1.5"}}),
+                         part("ST-BRAID", PartKind::ShieldBraid, {{"diameterMin", "3"}, {"diameterMax", "6"}}),
+                         part("ST-BRAIDBIG", PartKind::ShieldBraid, {{"diameterMin", "10"}, {"diameterMax", "20"}}),
+                         part("ST-SHRINK", PartKind::Heatshrink, {{"entryMin", "3"}, {"entryMax", "9"}, {"wall", "0.5"}}),
+                         part("ST-Y", PartKind::YSplit, {{"mainMin", "4"}, {"mainMax", "12"}, {"leg1Min", "4"},
+                                                          {"leg1Max", "9"}, {"leg2Min", "1"}, {"leg2Max", "3"}})};
+            lib.save(libFile);
+        }
+        PartsCatalog cat;
+        cat.openRemembered();
+        cat.connectLibrary(libFile);
+        cat.remember();
+        {
+            Document doc;
+            Editor ed;
+            ed.setDocument(&doc);
+            BrickWizardDialog dlg(&ed);
+            BrickDesign& w = dlg.design();
+            const QString c = w.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+            const QString y = w.addBrick(BrickType::End, PartKind::YSplit, 2, 0);
+            const QString x = w.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+            w.connect(x, c);
+            w.connect(c, y, nullptr, 1, 1);
+            w.brick(y)->libPart = QStringLiteral("ST-Y");
+            BrickRunSpec& r = w.brick(c)->run;
+            r.wires = 4;
+            r.stack = {QStringLiteral("wires"), QStringLiteral("braid"), QStringLiteral("heatshrink")};
+            r.stackParts.insert(QStringLiteral("wires"), QStringLiteral("ST-WIRE"));
+            r.stackParts.insert(QStringLiteral("braid"), QStringLiteral("ST-BRAID"));
+            r.stackParts.insert(QStringLiteral("heatshrink"), QStringLiteral("ST-SHRINK"));
+            dlg.selectBrick(c);
+            std::printf("  stack: %d (%s); into the leg: %d (%s)\n", dlg.canvas()->markOf(c).compat,
+                        qPrintable(dlg.canvas()->markOf(c).why), dlg.canvas()->markOf(y).compat,
+                        qPrintable(dlg.canvas()->markOf(y).why));
+            check(dlg.canvas()->markOf(c).compat == 0, "stack: wires, braid and heatshrink that fit one over another - green");
+            check(dlg.canvas()->markOf(y).compat != 2, "stack: the whole bundle goes into its Y-split leg");
+            r.stackParts.insert(QStringLiteral("braid"), QStringLiteral("ST-BRAIDBIG"));
+            dlg.selectBrick(c);
+            check(dlg.canvas()->markOf(c).compat == 2, "stack: a braid too big for the bundle under it - red");
+            r.stackParts.insert(QStringLiteral("braid"), QStringLiteral("ST-BRAID"));
+            w.disconnect(c, y);
+            w.connect(c, y, nullptr, 1, 2);
+            dlg.selectBrick(c);
+            std::printf("  stack: into the small leg: %d (%s)\n", dlg.canvas()->markOf(y).compat,
+                        qPrintable(dlg.canvas()->markOf(y).why));
+            check(dlg.canvas()->markOf(y).compat == 2, "stack: a bundle too big for the leg it goes into - red");
+        }
+        cat.disconnectLibrary(libFile);
+        cat.remember();
+        QFile::remove(libFile);
+    }
+    // A LOOSE FANOUT: its wires stripped at the free end.
+    {
+        BrickDesign d;
+        const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString f = d.addBrick(BrickType::Fanout, PartKind::Wire, 1, 0);
+        d.connect(x, f);
+        d.brick(f)->run.wires = 4;
+        bool stripped = false;
+        for (const Entity& e : buildBrickHarness(d, nullptr).entities)
+            if (e.type == EntityType::TwistedPair && e.meta.value(QStringLiteral("brickId")).toString() == f)
+                stripped = e.meta.value(QStringLiteral("twistStripFinish")).toBool() &&
+                           e.meta.value(QStringLiteral("twistSpread")).toString() != QLatin1String("start");
+        check(stripped, "loose: a fanout with nothing at its end spreads there, its wires stripped");
+    }
+    // A LOOSE BRIDGE WIRE: off its cable's face, a stripped end; several wires taken; over what it crosses.
+    {
+        BrickDesign d;
+        const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString y = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        const QString br = d.addBrick(BrickType::Run, PartKind::Wire, 1, 1);
+        d.connect(x, c);
+        d.connect(c, y);
+        d.brick(c)->run.wires = 4;
+        makeBridgeWire(*d.brick(br));
+        QString why;
+        check(d.connect(c, br, &why), "loose: a bridge wire linked to its cable alone");
+        syncBridgeWires(d);
+        const BrickBuild b = buildBrickHarness(d, nullptr);
+        bool bare = false, masked = false, drawn = false;
+        for (size_t k = 0; k < b.entities.size(); ++k) {
+            const Entity& e = b.entities[k];
+            if (e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("strip")) bare = true;
+            if (e.type == EntityType::Wipeout && e.meta.value(QStringLiteral("brickMask")).toBool() &&
+                e.meta.value(QStringLiteral("brickId")).toString() == br)
+                masked = true;
+            if (e.meta.value(QStringLiteral("brickId")).toString() == br && e.type == EntityType::Polyline) drawn = true;
+        }
+        check(drawn && bare, "loose: a bridge wire with nothing at its end is drawn, its end stripped");
+        check(masked, "order: a bridge wire covers what it crosses - a mask goes down under it");
+        d.brick(br)->run.bridgeWires = QStringLiteral("1,3");
+        syncBridgeWires(d);
+        check(d.brick(br)->run.wires == 2, "bridge: takes several of the cable's wires");
+    }
+    // A TRANSITION AT THE START of a run on a part at its finish only: at the loose end, its start.
+    {
+        auto sideOfBoot = [](bool linkAtFinish) {
+            BrickDesign d;
+            const QString x = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+            const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+            d.connect(c, x, nullptr, linkAtFinish ? 1 : 0, -1);
+            d.brick(c)->run.transitions = RunEnds::Start;
+            QString side;
+            Vec2 first;
+            for (const Entity& e : buildBrickHarness(d, nullptr).entities)
+                if (e.type == EntityType::TwistedPair) {
+                    side = e.meta.value(QStringLiteral("twistBodyTransitionSides")).toString();
+                    first = e.points.front();
+                }
+            return side;
+        };
+        const QString atFinish = sideOfBoot(true);
+        std::printf("  transition: on a part at its finish - drawn at the run's %s\n", qPrintable(atFinish));
+        check(atFinish == QLatin1String("finish"),
+              "transition: asked at the start of a run linked at its finish, it is at the loose end");
+        check(sideOfBoot(false) == QLatin1String("start"), "transition: linked at its start, at the part");
+    }
+    // A FERRULE MATCHED TO ANY PART: half its size across.
+    {
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        BrickWizardDialog dlg(&ed);
+        BrickDesign& w = dlg.design();
+        const QString x = w.addBrick(BrickType::End, PartKind::YSplit, 0, 0);
+        const QString f = w.addBrick(BrickType::Fanout, PartKind::Wire, 1, 0);
+        const QString fe = w.addBrick(BrickType::End, PartKind::Ferrule, 2, 0);
+        w.connect(x, f);
+        w.connect(f, fe);
+        dlg.selectBrick(f);
+        check(dlg.scalePartToMatch(fe, x), "match: a ferrule matched to a Y-split");
+        dlg.selectBrick(f);
+        const BrickBuild b = buildBrickHarness(w, nullptr);
+        auto height = [&b](const QString& id) {
+            Bounds box;
+            for (const Entity& e : b.entities)
+                if (e.meta.value(QStringLiteral("brickId")).toString() == id && e.type != EntityType::Text &&
+                    e.type != EntityType::Dimension && e.meta.value(QStringLiteral("mechRole")).toString() != QLatin1String("dim"))
+                    box.expand(e.bounds());
+            return box.valid ? box.height() : 0.0;
+        };
+        std::printf("  match: ferrule %.1f across, the part %.1f\n", height(fe), height(x));
+        check(height(x) > 0.0 && std::abs(height(fe) - 0.5 * height(x)) < 0.1 * height(x),
+              "match: a ferrule is half the size of any part it is matched to");
+    }
+    // THE BAR: no dimension controls - only the Dimensions button.
+    {
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        BrickWizardDialog dlg(&ed);
+        dlg.show();
+        auto* tool = dlg.findChild<QToolButton*>(QStringLiteral("brickDimTool"));
+        auto* from = dlg.findChild<QComboBox*>(QStringLiteral("brickDimFrom"));
+        check(tool && !tool->isVisible() && from && !from->isVisible() &&
+                  dlg.findChild<QPushButton*>(QStringLiteral("brickDimensions")),
+              "bar: the dimension controls are in the Dimensions wizard, not on the bar");
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -3332,6 +3591,7 @@ int run_brickharness_tests() {
     testRoundSixteen();
     testRoundSeventeen();
     testRoundEighteen();
+    testRoundNineteen();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

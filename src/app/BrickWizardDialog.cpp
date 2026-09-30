@@ -52,6 +52,8 @@
 #include <QGuiApplication>
 #include <QJsonDocument>
 #include <QTimer>
+#include <QToolTip>
+#include <QHelpEvent>
 #include <QShortcut>
 
 namespace Edraw_Desktop {
@@ -445,6 +447,23 @@ void BrickCanvas::moveSelection(double dCol, double dRow) {
     update();
 }
 
+bool BrickCanvas::event(QEvent* e) {
+    // WHAT THE MARKS SAY, held over a brick.
+    if (e->type() == QEvent::ToolTip) {
+        auto* he = static_cast<QHelpEvent*>(e);
+        const QString id = brickAt(L(QPointF(he->pos())));
+        const BrickMark mk = marks_.value(id);
+        QStringList said;
+        if (mk.bom == 1) said << QStringLiteral("● On the BOM");
+        if (mk.bom == 0) said << QStringLiteral("● Not on the BOM");
+        if (mk.compat >= 0 && !mk.why.isEmpty()) said << QStringLiteral("● ") + mk.why;
+        if (said.isEmpty()) QToolTip::hideText();
+        else QToolTip::showText(he->globalPos(), said.join(QLatin1Char('\n')), this);
+        return true;
+    }
+    return QWidget::event(e);
+}
+
 void BrickCanvas::turnOnDrawing(double deg) {
     bool any = false;
     for (const QString& id : sel_)
@@ -589,13 +608,30 @@ void BrickCanvas::paintEvent(QPaintEvent*) {
         p.setPen(QColor(0xb8, 0xc0, 0xcc));
         p.drawText(bottom, Qt::AlignCenter,
                    p.fontMetrics().elidedText(sub, Qt::ElideRight, int(bottom.width())));
-        // THE TWO PORTS: filled where something is linked.
+        // THE BILL'S MARK, top right: green on the BOM, red not on it.
+        {
+            const BrickMark mk = marks_.value(b.id);
+            auto dot = [&p](const QPointF& at, const QColor& c) {
+                p.setPen(QPen(QColor(0x14, 0x18, 0x1e), 1.0));
+                p.setBrush(c);
+                p.drawEllipse(at, 3.6, 3.6);
+            };
+            if (mk.bom >= 0)
+                dot(QPointF(r.right() - 6.0, r.top() + 6.0), mk.bom ? QColor(0x4c, 0xd0, 0x7a) : QColor(0xe0, 0x4a, 0x4a));
+        }
+        // THE PORTS - the brick's joints - ARE ITS COMPATIBILITY MARK: a linked one filled green where the part suits
+        // what it is linked to, orange where something is not known or not linked yet, red where it does not suit.
+        // One with nothing linked stays empty.
+        const int suits = marks_.value(b.id).compat;
+        const QColor jointColour = suits == 1   ? QColor(0xf0, 0xa0, 0x30)
+                             : suits == 2 ? QColor(0xe0, 0x4a, 0x4a)
+                                          : QColor(0x7e, 0xe0, 0xa0);
         for (int port = 0; port < d_->portCount(b); ++port) {
             bool used = false;
             for (const QString& o : d_->linksOf(b.id))
                 if (d_->portOn(b.id, o) == port) used = true;
-            p.setPen(QPen(QColor(0x7e, 0xe0, 0xa0), 1.2));
-            p.setBrush(used ? QColor(0x7e, 0xe0, 0xa0) : QColor(0x23, 0x2a, 0x33));
+            p.setPen(QPen(used ? jointColour : QColor(0x7e, 0xe0, 0xa0), 1.2));
+            p.setBrush(used ? jointColour : QColor(0x23, 0x2a, 0x33));
             p.drawEllipse(portPoint(b, port), 4.0, 4.0);
         }
     }
@@ -1281,31 +1317,22 @@ void BrickWizardDialog::buildUi() {
                                            "QToolButton:hover{background:#34475a;}"
                                            "QToolButton:checked{background:#2b6cb0;color:white;border-color:#2b6cb0;}"));
     connect(dimTool_, &QToolButton::toggled, this, [this](bool on) { canvas_->setDimensionMode(on); });
-    bar->addWidget(dimTool_);
-    button("brickDimClear", QStringLiteral("Clear dims"), QStringLiteral("Take off every dimension put on by hand"),
-           [this] {
-               design_.dims.clear();
-               designChanged();
-           });
-    // WHERE EVERY DIMENSION GOES: above the objects or under them - all of them at once.
-    bar->addWidget(new QLabel(QStringLiteral("Dims"), this));
+    // THE DIMENSIONS ARE ALL IN THE DIMENSION WIZARD (its button at the bottom): the pick, the side, the points -
+    // none of them on this bar. These stay, out of sight, as what the wizard works.
+    dimTool_->hide();
     dimAllSide_ = new QComboBox(this);
     dimAllSide_->setObjectName(QStringLiteral("brickDimSide"));
     dimAllSide_->addItems({QStringLiteral("Above"), QStringLiteral("Below")});
-    dimAllSide_->setToolTip(QStringLiteral("Put every dimension above the objects, or under them"));
     connect(dimAllSide_, &QComboBox::activated, this, [this](int i) { setAllDimsSide(i == 1); });
-    bar->addWidget(dimAllSide_);
-    bar->addSpacing(18);
-    bar->addWidget(new QLabel(QStringLiteral("Dimensions from"), this));
+    dimAllSide_->hide();
     dimFrom_ = new QComboBox(this);
     dimFrom_->setObjectName(QStringLiteral("brickDimFrom"));
     dimFrom_->addItems({QStringLiteral("Near point"), QStringLiteral("Far point"), QStringLiteral("Mid point")});
-    bar->addWidget(dimFrom_);
-    bar->addWidget(new QLabel(QStringLiteral("to"), this));
+    dimFrom_->hide();
     dimTo_ = new QComboBox(this);
     dimTo_->setObjectName(QStringLiteral("brickDimTo"));
     dimTo_->addItems({QStringLiteral("Near point"), QStringLiteral("Far point"), QStringLiteral("Mid point")});
-    bar->addWidget(dimTo_);
+    dimTo_->hide();
     for (QComboBox* c : {dimFrom_, dimTo_})
         connect(c, &QComboBox::currentIndexChanged, this, [this](int) {
             design_.dimFromFar = dimFrom_->currentIndex() == 1;
@@ -1835,7 +1862,51 @@ QWidget* BrickWizardDialog::buildRunPage() {
         bridge_->setToolTip(QStringLiteral(
             "Which wire of the cable this bridge wire takes: pick one of the cable's wires (by its net, where it "
             "has one) or its braided shield - or type several, \"1-3,5\"."));
-        v->addWidget(bridge_);
+        // SEVERAL OF THE CABLE'S WIRES: ticked one by one from a list of them.
+        auto* pickRow = new QHBoxLayout;
+        pickRow->setContentsMargins(0, 0, 0, 0);
+        pickRow->addWidget(bridge_, 1);
+        bridgeMany_ = new QToolButton(host);
+        bridgeMany_->setObjectName(QStringLiteral("brickBridgeMany"));
+        bridgeMany_->setText(QStringLiteral("Wires…"));
+        bridgeMany_->setToolTip(QStringLiteral("Take several of the cable's wires: tick each one"));
+        bridgeMany_->setPopupMode(QToolButton::InstantPopup);
+        auto* manyMenu = new QMenu(bridgeMany_);
+        bridgeMany_->setMenu(manyMenu);
+        connect(manyMenu, &QMenu::aboutToShow, this, [this, manyMenu] {
+            manyMenu->clear();
+            const Brick* b = design_.brick(canvas_->selected());
+            const Brick* from = b ? design_.brick(joinedSpecial(design_, b->id)) : nullptr;
+            if (!b || !from) {
+                manyMenu->addAction(QStringLiteral("Link it to a cable first"))->setEnabled(false);
+                return;
+            }
+            const QList<int> taken = parseWireList(b->run.bridgeWires, from->run.wires);
+            for (int w = 1; w <= from->run.wires; ++w) {
+                const QString net = from->run.nets.value(w - 1);
+                QAction* a = manyMenu->addAction(net.isEmpty() ? QStringLiteral("Wire %1").arg(w)
+                                                               : QStringLiteral("Wire %1 - %2").arg(w).arg(net));
+                a->setCheckable(true);
+                a->setChecked(taken.contains(w));
+                connect(a, &QAction::toggled, this, [this, w](bool on) {
+                    Brick* bb = design_.brick(canvas_->selected());
+                    const Brick* src = bb ? design_.brick(joinedSpecial(design_, bb->id)) : nullptr;
+                    if (!bb || !src) return;
+                    QList<int> now = parseWireList(bb->run.bridgeWires, src->run.wires);
+                    if (on && !now.contains(w)) now << w;
+                    if (!on) now.removeAll(w);
+                    if (now.isEmpty()) return;   // a bridge wire takes at least one
+                    std::sort(now.begin(), now.end());
+                    QStringList said;
+                    for (int x : now) said << QString::number(x);
+                    bridge_->setEditText(said.join(QLatin1Char(',')));
+                    writeRun();
+                    loadPanel();
+                });
+            }
+        });
+        pickRow->addWidget(bridgeMany_);
+        v->addLayout(pickRow);
         bridgeFrom_ = new QLabel(host);
         bridgeFrom_->setObjectName(QStringLiteral("brickBridgeFrom"));
         bridgeFrom_->setStyleSheet(QStringLiteral("color:#8fa3b8;"));
@@ -2375,11 +2446,19 @@ void BrickWizardDialog::openDimensionWizard() {
         dimHand_->setSelectionBehavior(QAbstractItemView::SelectRows);
         hl->addWidget(dimHand_);
         auto* hb = new QHBoxLayout;
+        // Pressed, it stays pressed: every two bricks clicked get a dimension, till it is pressed again.
         auto* add = new QPushButton(QStringLiteral("Add: click 2 bricks"), handBox);
         add->setObjectName(QStringLiteral("dimWizAdd"));
-        connect(add, &QPushButton::clicked, this, [this] {
-            if (dimTool_) dimTool_->setChecked(true);
-            status_->setText(QStringLiteral("Click the two bricks to dimension between"));
+        add->setCheckable(true);
+        add->setChecked(dimTool_ && dimTool_->isChecked());
+        connect(add, &QPushButton::toggled, this, [this](bool on) {
+            if (dimTool_) dimTool_->setChecked(on);
+            status_->setText(on ? QStringLiteral("Click two bricks on the pane to dimension between them")
+                                : QStringLiteral("Dimensioning off"));
+        });
+        connect(dimTool_, &QToolButton::toggled, add, [add](bool on) {
+            const QSignalBlocker hush(add);
+            add->setChecked(on);
         });
         hb->addWidget(add);
         auto* del = new QPushButton(QStringLiteral("Delete"), handBox);
@@ -2630,6 +2709,9 @@ void BrickWizardDialog::loadPanel() {
                                                : QStringLiteral("Wire %1 - %2").arg(w).arg(net),
                                  QString::number(w));
             }
+            if (from->run.wires > 1)
+                bridge_->addItem(QStringLiteral("All %1 wires").arg(from->run.wires),
+                                 QStringLiteral("1-%1").arg(from->run.wires));
             if (from->run.stack.contains(QStringLiteral("braid")))
                 bridge_->addItem(QStringLiteral("Shield (braid)"), QString::fromLatin1(kBridgeShield));
         }
@@ -2868,19 +2950,43 @@ bool BrickWizardDialog::scalePartToMatch(const QString& id, const QString& other
     if (!mine || !theirs || mine->lengthMm <= 1e-6 || theirs->lengthMm <= 1e-6) return false;
     const double now = b->autoScale ? drawnScales_.value(b->id, b->scale) : b->scale;
     b->autoScale = false;
-    // A FERRULE (or a crimp terminal, a contact) MATCHED TO A CONNECTOR is half its size: it goes on one wire of it,
-    // not the whole of its entry.
+    // A FERRULE (or a crimp terminal, a contact, a terminal) MATCHED TO ANY END PART is half ITS BODY in size - as
+    // big across as half the other part is, the way it is drawn: it goes on one wire, not the whole of the part.
+    // Its entry face is no measure of that: a circular connector's is its small rear thread.
     const Brick* ob = design_.brick(other);
-    const bool small = (b->kind == PartKind::Ferrule || b->kind == PartKind::Crimp || b->kind == PartKind::ContactPin) &&
-                       ob && ob->kind == PartKind::Connector;
-    const double share = small ? 0.5 : 1.0;
-    b->scale = std::clamp(now * theirs->lengthMm * share / mine->lengthMm, 0.1, 10.0);
-    status_->setText(small ? QStringLiteral("Scaled to %1 % - its entry half the connector's (%2 mm)")
+    const bool small = (b->kind == PartKind::Ferrule || b->kind == PartKind::Crimp || b->kind == PartKind::ContactPin ||
+                        b->kind == PartKind::Terminal) &&
+                       ob && ob->type == BrickType::End;
+    if (small) {
+        // How big each is across the way its wires come in, as drawn: its outline, not its dimensions or its words.
+        auto across = [this](const QString& brickId, const Vec2& out) {
+            Bounds box;
+            for (const Entity& e : lastEnts_) {
+                if (e.meta.value(QStringLiteral("brickId")).toString() != brickId) continue;
+                const QString role = e.meta.value(QStringLiteral("mechRole")).toString();
+                if (role == QLatin1String("dim") || role == QLatin1String("designator") || role == QLatin1String("label") ||
+                    e.type == EntityType::Text || e.type == EntityType::Dimension || e.type == EntityType::Wipeout ||
+                    e.meta.value(QStringLiteral("balloon")).toBool())
+                    continue;
+                box.expand(e.bounds());
+            }
+            if (!box.valid) return 0.0;
+            return std::abs(out.x) * box.height() + std::abs(out.y) * box.width();
+        };
+        const double mineAcross = across(id, mine->out), theirsAcross = across(other, theirs->out);
+        if (mineAcross > 1e-6 && theirsAcross > 1e-6) {
+            b->scale = std::clamp(now * theirsAcross * 0.5 / mineAcross, 0.05, 10.0);
+            status_->setText(QStringLiteral("Scaled to %1 % - half the size of %2 (%3 mm across)")
                                  .arg(qRound(b->scale * 100.0))
-                                 .arg(theirs->lengthMm * share, 0, 'f', 1)
-                           : QStringLiteral("Scaled to %1 % - its entry as long as the other's (%2 mm)")
-                                 .arg(qRound(b->scale * 100.0))
-                                 .arg(theirs->lengthMm, 0, 'f', 1));
+                                 .arg(brickTitle(*ob))
+                                 .arg(theirsAcross * 0.5, 0, 'f', 1));
+            return true;
+        }
+    }
+    b->scale = std::clamp(now * theirs->lengthMm / mine->lengthMm, 0.1, 10.0);
+    status_->setText(QStringLiteral("Scaled to %1 % - its entry as long as the other's (%2 mm)")
+                         .arg(qRound(b->scale * 100.0))
+                         .arg(theirs->lengthMm, 0, 'f', 1));
     return true;
 }
 
@@ -3533,8 +3639,331 @@ void BrickWizardDialog::showEvent(QShowEvent* e) {
     refreshBom();
 }
 
+namespace {
+// A conductor in square millimetres, from a gauge in AWG or in mm2.
+double gaugeAreaMm2(double v, bool awg) {
+    if (v <= 0.0) return 0.0;
+    if (!awg) return v;
+    const double dmm = 0.127 * std::pow(92.0, (36.0 - v) / 39.0);
+    return M_PI * dmm * dmm / 4.0;
+}
+bool gaugeIsAwg(const QString& mode) { return !mode.contains(QLatin1String("mm"), Qt::CaseInsensitive); }
+// Every figure in a gauge as written - "20-24", "24 to 20", "0.5" - as conductor areas.
+QList<double> gaugeAreas(const QString& text, bool awg) {
+    QList<double> out;
+    static const QRegularExpression num(QStringLiteral("\\d+(?:\\.\\d+)?"));
+    for (auto it = num.globalMatch(text); it.hasNext();)
+        if (const double a = gaugeAreaMm2(it.next().captured(0).toDouble(), awg); a > 0.0) out << a;
+    return out;
+}
+struct GaugeRange {
+    double lo = 0.0, hi = 0.0;
+    QString said;
+};
+// A range from its figures (one figure is a range of one), a little either side for rounding.
+std::optional<GaugeRange> rangeOf(const QList<double>& areas, const QString& said) {
+    if (areas.isEmpty()) return std::nullopt;
+    const auto [lo, hi] = std::minmax_element(areas.begin(), areas.end());
+    return GaugeRange{*lo * 0.97, *hi * 1.03, said};
+}
+} // namespace
+
+BrickMark BrickWizardDialog::compatibilityOf(const Brick& b) const {
+    BrickMark m;
+    const PartsLibrary merged = catalog_.merged();
+    auto partOf = [&merged](const QString& idOrPn) -> const LibraryPart* {
+        if (idOrPn.isEmpty()) return nullptr;
+        if (const LibraryPart* p = merged.byId(idOrPn)) return p;
+        for (const LibraryPart& p : merged.parts)
+            if (p.mfrPn == idOrPn) return &p;
+        return nullptr;
+    };
+    // A size range of a part - "entry" read from entryMin / entryMax; one of them alone is both ends.
+    auto rangeMm = [](const LibraryPart& q, const QString& key, double& lo, double& hi) {
+        bool okLo = false, okHi = false;
+        lo = q.value(key + QStringLiteral("Min")).toDouble(&okLo);
+        hi = q.value(key + QStringLiteral("Max")).toDouble(&okHi);
+        if (!okLo && !okHi) {
+            bool one = false;
+            lo = hi = q.value(key).toDouble(&one);
+            return one && lo > 0.0;
+        }
+        if (!okLo) lo = hi;
+        if (!okHi) hi = lo;
+        if (lo > hi) std::swap(lo, hi);
+        return hi > 0.0;
+    };
+    // THE STACK OF A RUN, from the inside out: the bundle its wires make (D), the cable over them, the braid over
+    // that, the heatshrink over all - each layer's part checked to fit over what is inside it, and the size the run
+    // comes to at the outside.
+    struct Bundle {
+        double d = 0.0;      // across the outside, mm; 0 = not known
+        int level = -1;      // as a mark's compat
+        QString why;
+    };
+    auto bundleOf = [&](const Brick& s) {
+        Bundle out;
+        auto say = [&out](int level, const QString& why) {
+            if (level > out.level) {
+                out.level = level;
+                out.why = why;
+            }
+        };
+        const BrickRunSpec& r = s.run;
+        const QString name = s.name.isEmpty() ? brickTitle(s) : s.name;
+        const int wires = s.type == BrickType::TwistedPair ? 2 * std::max(1, r.pairs) : std::max(1, r.wires);
+        double d = 0.0;
+        for (const QString& layer : r.stack) {
+            const LibraryPart* lp = partOf(r.stackParts.value(layer));
+            const QString lname = lp ? (lp->mfrPn.isEmpty() ? lp->title() : lp->mfrPn) : layer;
+            if (layer == QLatin1String("wires")) {
+                // THE D-BUNDLE: so many wires of their diameter, packed round.
+                const double od = lp ? lp->value(QStringLiteral("od")).toDouble() : 0.0;
+                if (od > 0.0) d = od * std::sqrt(wires / 0.7);
+                else say(1, QStringLiteral("%1: the wires' diameter is not known").arg(name));
+            } else if (layer == QLatin1String("cable")) {
+                // A cable is its own outside, whatever is in it.
+                const double od = lp ? lp->value(QStringLiteral("od")).toDouble() : 0.0;
+                if (od > 0.0) {
+                    if (d > 0.0 && od < d * 0.95)
+                        say(2, QStringLiteral("%1: cable %2 (%3 mm) is smaller than its wires (%4 mm)")
+                                   .arg(name, lname).arg(od, 0, 'f', 1).arg(d, 0, 'f', 1));
+                    d = od;
+                } else if (lp) {
+                    say(1, QStringLiteral("%1: the diameter of cable %2 is not known").arg(name, lname));
+                }
+            } else if (layer == QLatin1String("braid")) {
+                double lo = 0.0, hi = 0.0;
+                if (!lp) {
+                    if (d > 0.0) d += 1.0;
+                    continue;
+                }
+                if (!rangeMm(*lp, QStringLiteral("diameter"), lo, hi)) {
+                    say(1, QStringLiteral("%1: the size of braid %2 is not known").arg(name, lname));
+                } else if (d > 0.0 && (d < lo * 0.95 || d > hi * 1.05)) {
+                    say(2, QStringLiteral("%1: braid %2 is for %3-%4 mm, over %5 mm").arg(name, lname).arg(lo, 0, 'f', 1)
+                               .arg(hi, 0, 'f', 1).arg(d, 0, 'f', 1));
+                }
+                if (d > 0.0) d += 1.0;   // the braid over it, about half a millimetre a side
+            } else if (layer == QLatin1String("heatshrink")) {
+                double lo = 0.0, hi = 0.0;
+                const double wall = lp ? std::max(0.0, lp->value(QStringLiteral("wall")).toDouble()) : 0.0;
+                if (!lp) {
+                    continue;
+                }
+                if (!rangeMm(*lp, QStringLiteral("entry"), lo, hi)) {
+                    say(1, QStringLiteral("%1: the size of heatshrink %2 is not known").arg(name, lname));
+                } else if (d > 0.0 && d > hi * 1.02) {
+                    say(2, QStringLiteral("%1: heatshrink %2 opens to %3 mm - too small for %4 mm").arg(name, lname)
+                               .arg(hi, 0, 'f', 1).arg(d, 0, 'f', 1));
+                } else if (d > 0.0 && d < lo * 0.98) {
+                    say(2, QStringLiteral("%1: heatshrink %2 shrinks only to %3 mm - loose on %4 mm").arg(name, lname)
+                               .arg(lo, 0, 'f', 1).arg(d, 0, 'f', 1));
+                }
+                if (d > 0.0) d += 2.0 * (wall > 0.0 ? wall : 0.5);
+            }
+        }
+        out.d = d;
+        return out;
+    };
+    if (brickIsSpecial(b.type)) {
+        // A run: on the bill when every layer given a part number is.
+        bool any = false, all = true;
+        for (auto it = b.run.stackParts.cbegin(); it != b.run.stackParts.cend(); ++it) {
+            const LibraryPart* p = partOf(it.value());
+            if (!p) continue;
+            any = true;
+            all = all && bomItemOf(p->id) > 0;
+        }
+        if (any) m.bom = all ? 1 : 0;
+        // AND WHETHER ITS STACK FITS TOGETHER: each layer over what is inside it. Checked once any layer has a part.
+        if (any) {
+            const Bundle bu = bundleOf(b);
+            m.compat = std::max(0, bu.level);
+            m.why = bu.level > 0 ? bu.why
+                                 : bu.d > 0.0 ? QStringLiteral("Its layers fit one over another - %1 mm across").arg(bu.d, 0, 'f', 1)
+                                              : QStringLiteral("Its layers fit one over another");
+        }
+        return m;
+    }
+    if (b.type != BrickType::End) return m;
+    const LibraryPart* p = partOf(b.libPart);
+    if (p) m.bom = bomItemOf(p->id) > 0 ? 1 : 0;
+    // The worst thing found is what the mark says.
+    auto say = [&m](int level, const QString& why) {
+        if (level > m.compat) {
+            m.compat = level;
+            m.why = why;
+        }
+    };
+    if (b.libPart.isEmpty()) {
+        say(1, QStringLiteral("No part chosen yet"));
+        return m;
+    }
+    if (!p) {
+        say(1, QStringLiteral("Its part is not in the library"));
+        return m;
+    }
+    // WHAT COMES INTO IT: the wires of each run linked to it - how many, and how big.
+    struct In {
+        int wires = 0;
+        double area = 0.0;
+        QString from;
+    };
+    QList<In> ins;
+    int used = 0;
+    const int ports = design_.portCount(b);
+    QSet<int> portsUsed;
+    for (const QString& o : design_.linksOf(b.id)) {
+        portsUsed.insert(design_.portOn(b.id, o));
+        ++used;
+        const Brick* s = design_.brick(o);
+        if (!s || !brickIsSpecial(s->type)) continue;
+        const BrickLink* l = design_.link(b.id, o);
+        int w = l && l->wires > 0 ? l->wires : 0;
+        if (w == 0) {
+            int parts = 0;
+            for (const QString& e : design_.sideOf(o, design_.portOn(o, b.id)))
+                if (const Brick* eb = design_.brick(e); eb && eb->type == BrickType::End) ++parts;
+            const int all = s->type == BrickType::TwistedPair ? 2 * std::max(1, s->run.pairs) : std::max(1, s->run.wires);
+            w = std::max(1, all / std::max(1, parts));
+        }
+        In in;
+        in.wires = w;
+        in.from = s->name.isEmpty() ? brickTitle(*s) : s->name;
+        if (const LibraryPart* wp = partOf(s->run.stackParts.value(QStringLiteral("wires")))) {
+            const QList<double> a = gaugeAreas(wp->value(QStringLiteral("gauge")), gaugeIsAwg(wp->value(QStringLiteral("gaugeMode"))));
+            if (!a.isEmpty()) in.area = a.front();
+        }
+        ins << in;
+    }
+    if (used == 0) {
+        say(1, QStringLiteral("Not linked to anything yet"));
+        return m;
+    }
+    if (portsUsed.size() < ports) say(1, QStringLiteral("Not every side of it is linked yet"));
+    // WHAT GOES INTO EACH OF ITS ENTRIES: the whole bundle of the run there - the D-bundle, braid, heatshrink over
+    // it - must go into that entry of a Y-split (its main side or a leg), a heatshrink, a boot, a backshell, a gland;
+    // and into a connector's cable entry where the library gives one.
+    {
+        const bool sized = p->kind == PartKind::YSplit || p->kind == PartKind::Heatshrink ||
+                           p->kind == PartKind::HeatshrinkBoot || p->kind == PartKind::Backshell ||
+                           p->kind == PartKind::Grommet || p->kind == PartKind::CableGland ||
+                           p->kind == PartKind::Overmould;
+        for (const QString& o : design_.linksOf(b.id)) {
+            const Brick* s = design_.brick(o);
+            if (!s || !brickIsSpecial(s->type)) continue;
+            const int port = design_.portOn(b.id, o);
+            const QString key = p->kind == PartKind::YSplit ? (port <= 0 ? QStringLiteral("main")
+                                                                         : QStringLiteral("leg%1").arg(port))
+                                : p->kind == PartKind::Heatshrink ? QStringLiteral("entry")
+                                                                  : QStringLiteral("cableEntry");
+            const QString where = p->kind == PartKind::YSplit ? (port <= 0 ? QStringLiteral("its main side")
+                                                                           : QStringLiteral("leg %1").arg(port))
+                                                              : QStringLiteral("its entry");
+            const QString sname = s->name.isEmpty() ? brickTitle(*s) : s->name;
+            double lo = 0.0, hi = 0.0;
+            if (!rangeMm(*p, key, lo, hi)) {
+                if (sized) say(1, QStringLiteral("The size of %1 is not in the library").arg(where));
+                continue;
+            }
+            const Bundle bu = bundleOf(*s);
+            if (bu.d <= 0.0) {
+                say(1, QStringLiteral("How big %1 is across is not known - give its layers part numbers").arg(sname));
+                continue;
+            }
+            if (bu.d > hi * 1.05)
+                say(2, QStringLiteral("%1 (%2 mm across) does not go into %3 (%4-%5 mm)").arg(sname).arg(bu.d, 0, 'f', 1)
+                           .arg(where).arg(lo, 0, 'f', 1).arg(hi, 0, 'f', 1));
+            else if (bu.d < lo * 0.95)
+                say(2, QStringLiteral("%1 (%2 mm across) is loose in %3 (%4-%5 mm)").arg(sname).arg(bu.d, 0, 'f', 1)
+                           .arg(where).arg(lo, 0, 'f', 1).arg(hi, 0, 'f', 1));
+        }
+    }
+    int total = 0;
+    for (const In& in : ins) total += in.wires;
+    // WHAT IT TAKES: the gauge ranges its wires must fall in.
+    QList<GaugeRange> takes;
+    bool takesKnown = true;
+    auto rangeFromPart = [&](const LibraryPart& q) {
+        const bool awg = gaugeIsAwg(q.value(QStringLiteral("gaugeMode")));
+        QList<double> a = gaugeAreas(q.value(QStringLiteral("gaugeMin")), awg) +
+                          gaugeAreas(q.value(QStringLiteral("gaugeMax")), awg);
+        if (a.isEmpty()) a = gaugeAreas(q.value(QStringLiteral("gauge")), awg);
+        const QString unit = awg ? QStringLiteral(" AWG") : QStringLiteral(" mm²");
+        const QString said = (q.mfrPn.isEmpty() ? q.title() : q.mfrPn) + QStringLiteral(" ") +
+                             QStringList{q.value(QStringLiteral("gaugeMin")), q.value(QStringLiteral("gaugeMax"))}.join(QLatin1Char('-')) + unit;
+        return rangeOf(a, said);
+    };
+    if (p->kind == PartKind::Connector) {
+        const int ways = p->wayCount();
+        if (ways > 0 && total > ways)
+            say(2, QStringLiteral("%1 wires into a %2-way connector").arg(total).arg(ways));
+        if (partIsWired(*p)) {
+            takesKnown = false;   // it comes with its own wires: nothing to size
+        } else if (partIncludesPins(*p)) {
+            // WITH ITS PINS: the wires must suit the pins it comes with.
+            for (const QString& g : partPinGauges(*p)) {
+                if (g.isEmpty()) continue;
+                const bool awg = gaugeIsAwg(g);
+                if (auto r = rangeOf(gaugeAreas(g, awg), g)) takes << *r;
+            }
+            if (takes.isEmpty()) say(1, QStringLiteral("The size of its pins is not in the library"));
+        } else {
+            // WITHOUT ITS PINS: its contacts must be on the bill, and the wires must suit them.
+            QList<const LibraryPart*> onBill;
+            for (const QString& id : tiedContactsOf(merged, p->id))
+                if (bomItemOf(id) > 0)
+                    if (const LibraryPart* c = merged.byId(id)) onBill << c;
+            if (onBill.isEmpty()) {
+                say(1, QStringLiteral("Its contacts are not on the BOM yet"));
+                takesKnown = false;
+            }
+            for (const LibraryPart* c : onBill)
+                if (auto r = rangeFromPart(*c)) takes << *r;
+            if (!onBill.isEmpty() && takes.isEmpty()) say(1, QStringLiteral("The size of its contacts is not in the library"));
+        }
+    } else if (p->kind == PartKind::Ferrule || p->kind == PartKind::Crimp || p->kind == PartKind::ContactPin ||
+               p->kind == PartKind::Splice || p->kind == PartKind::Terminal) {
+        if (auto r = rangeFromPart(*p)) takes << *r;
+        else say(1, QStringLiteral("Its wire size is not in the library"));
+    } else {
+        takesKnown = false;   // a Y-split, a heatshrink, a boot: sized to the bundle, not to a wire
+    }
+    // THE WIRES AGAINST WHAT IT TAKES.
+    if (takesKnown && !takes.isEmpty()) {
+        for (const In& in : ins) {
+            if (in.area <= 0.0) {
+                say(1, QStringLiteral("The wire size of %1 is not known - give its wires a part number").arg(in.from));
+                continue;
+            }
+            bool fits = false;
+            for (const GaugeRange& r : takes) fits = fits || (in.area >= r.lo && in.area <= r.hi);
+            if (!fits) {
+                QStringList said;
+                for (const GaugeRange& r : takes) said << r.said;
+                say(2, QStringLiteral("The wires of %1 (%2 mm²) do not suit %3").arg(in.from).arg(in.area, 0, 'f', 2)
+                           .arg(said.join(QStringLiteral(", "))));
+            }
+        }
+    }
+    if (m.compat < 0) {
+        m.compat = 0;
+        m.why = QStringLiteral("Suits what it is linked to");
+    }
+    return m;
+}
+
+void BrickWizardDialog::refreshBrickMarks() {
+    if (!canvas_) return;
+    QHash<QString, BrickMark> marks;
+    for (const Brick& b : design_.bricks) marks.insert(b.id, compatibilityOf(b));
+    canvas_->setMarks(marks);
+}
+
 void BrickWizardDialog::refreshBom() {
     if (!bom_) return;
+    refreshBrickMarks();   // the dots on the bricks follow the bill
     const QSignalBlocker hush(bom_);   // filling it is not somebody typing a quantity
     bom_->setRowCount(0);
     const Document* doc = document();
