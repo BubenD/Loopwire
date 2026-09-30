@@ -3152,8 +3152,16 @@ void testRoundSeventeen() {
               "keys: R turns the part 45 degrees on the drawing, the brick not turned");
         press(Qt::Key_Space);
         check(std::abs(w.brick(x)->drawTurnDeg - 135.0) < 1e-9, "keys: Space turns it 90 more");
+        const Vec2 dirWas = w.portPaneDir(*w.brick(x), 0);
+        const QPointF dotWas = dlg.canvas()->portPoint(*w.brick(x), 0);
+        const QPointF mid = dlg.canvas()->brickRect(*w.brick(x)).center();
         press(Qt::Key_M);
         check(w.brick(x)->drawMirror, "keys: M mirrors it");
+        const Vec2 dirNow = w.portPaneDir(*w.brick(x), 0);
+        const QPointF dotNow = dlg.canvas()->portPoint(*w.brick(x), 0);
+        check(std::abs(dirNow.x + dirWas.x) < 1e-6 && std::abs(dirNow.y - dirWas.y) < 1e-6 &&
+                  (dotNow.x() - mid.x()) * (dotWas.x() - mid.x()) < 0.0,
+              "keys: mirrored, the brick's connection is mirrored too - on its other side");
     }
 }
 

@@ -99,7 +99,10 @@ Vec2 turnOnDrawing(const Brick& b, const Vec2& v, double extraRad) {
 Vec2 BrickDesign::portWorldDir(const Brick& b, int port) const {
     const BrickShape s = shapeOf(b);
     if (port < 0 || port >= s.ports()) return Vec2{1.0, 0.0};
-    return turnQuarters(s.faceOut[static_cast<size_t>(port)], b.rot);
+    // Mirrored on the drawing, its connections are mirrored on the brick too: left for right.
+    Vec2 w = turnQuarters(s.faceOut[static_cast<size_t>(port)], b.rot);
+    if (b.drawMirror) w.x = -w.x;
+    return w;
 }
 
 Vec2 BrickDesign::portPaneDir(const Brick& b, int port) const {
@@ -114,7 +117,7 @@ int BrickDesign::facingPort(const Brick& self, const Vec2& toward,
     double bestDot = -1e300;
     for (int p = 0; p < s.ports(); ++p) {
         if (allowed && !allowed(p)) continue;
-        const Vec2 w = turnQuarters(s.faceOut[static_cast<size_t>(p)], self.rot);
+        const Vec2 w = portWorldDir(self, p);
         const double d = dot(Vec2{w.x, -w.y}, toward);
         if (d > bestDot + 1e-9) {
             bestDot = d;

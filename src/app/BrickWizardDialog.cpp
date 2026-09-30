@@ -250,7 +250,12 @@ QPointF BrickCanvas::portPoint(const Brick& b, int port) const {
     const Vec2 across = o.perp();
     const double reach = std::abs(across.x) * s.half.x + std::abs(across.y) * s.half.y;
     const double t = std::clamp(reach > 1e-9 ? dot(m, across) / reach : 0.0, -1.0, 1.0);
-    const Vec2 wo = turnQuarters(o, b.rot), wa = turnQuarters(across, b.rot);
+    Vec2 wo = turnQuarters(o, b.rot), wa = turnQuarters(across, b.rot);
+    // MIRRORED ON THE DRAWING, mirrored here too: its connections left for right.
+    if (b.drawMirror) {
+        wo.x = -wo.x;
+        wa.x = -wa.x;
+    }
     const QPointF d(wo.x, -wo.y), a(wa.x, -wa.y);
     const bool sideways = std::abs(d.x()) > 0.5;
     const double halfAlong = sideways ? r.width() / 2.0 : r.height() / 2.0;
