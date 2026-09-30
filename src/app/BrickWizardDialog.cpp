@@ -1207,8 +1207,12 @@ void BrickWizardDialog::buildUi() {
     dimTool_->setText(QStringLiteral("Dimension"));
     dimTool_->setCheckable(true);
     dimTool_->setToolTip(QStringLiteral("Put a dimension on: press, then click two bricks"));
-    dimTool_->setStyleSheet(QStringLiteral("QToolButton{padding:2px 6px;}"
-                                           "QToolButton:checked{background:#2b6cb0;color:white;}"));
+    // A BUTTON THAT LOOKS LIKE ONE: plain text in the bar was not seen to be something to press.
+    dimTool_->setText(QStringLiteral("Dimension: click 2 bricks"));
+    dimTool_->setStyleSheet(QStringLiteral("QToolButton{padding:3px 10px;border:1px solid #5a6b7d;border-radius:3px;"
+                                           "background:#2c3947;color:#e6e9ef;}"
+                                           "QToolButton:hover{background:#34475a;}"
+                                           "QToolButton:checked{background:#2b6cb0;color:white;border-color:#2b6cb0;}"));
     connect(dimTool_, &QToolButton::toggled, this, [this](bool on) { canvas_->setDimensionMode(on); });
     bar->addWidget(dimTool_);
     button("brickDimClear", QStringLiteral("Clear dims"), QStringLiteral("Take off every dimension put on by hand"),
@@ -1712,7 +1716,7 @@ QWidget* BrickWizardDialog::buildRunPage() {
         writeRun();
         loadPanel();
     });
-    length_ = spin("brickLength", 10.0, 100000.0, 10.0, QStringLiteral(" mm"));
+    length_ = spin("brickLength", 0.0, 100000.0, 10.0, QStringLiteral(" mm"));   // down to nought: parts face to face
     form->addRow(QStringLiteral("Length"), length_);
     // BRIDGE WIRES: which wires of the cable, fanout or heatshrink this one is joined to it takes - "1-3,5" -
     // and so how many wires it has and what each one's net is.
@@ -1993,14 +1997,28 @@ QWidget* BrickWizardDialog::buildRunPage() {
     dimTextTotal_ = sayEdit("brickDimTextTotal");
     dimTextFans_ = sayEdit("brickDimTextFans");
     dimTextBetween_ = sayEdit("brickDimTextBetween");
+    // EACH ONE ABOVE OR BELOW the run, as picked beside it.
+    auto sideBox = [dims](const char* name) {
+        auto* s = new QComboBox(dims);
+        s->setObjectName(QLatin1String(name));
+        s->addItems({QStringLiteral("Above"), QStringLiteral("Below")});
+        s->setToolTip(QStringLiteral("Which side of the run this dimension goes"));
+        return s;
+    };
+    dimSideTotal_ = sideBox("brickDimSideTotal");
+    dimSideFans_ = sideBox("brickDimSideFans");
+    dimSideBetween_ = sideBox("brickDimSideBetween");
     int dr = 0;
-    for (auto [c, e] : {std::pair<QCheckBox*, QLineEdit*>{dimTotal_, dimTextTotal_}, {dimFans_, dimTextFans_},
-                        {dimBetween_, dimTextBetween_}}) {
+    for (auto [c, e, sb] : {std::tuple<QCheckBox*, QLineEdit*, QComboBox*>{dimTotal_, dimTextTotal_, dimSideTotal_},
+                            {dimFans_, dimTextFans_, dimSideFans_},
+                            {dimBetween_, dimTextBetween_, dimSideBetween_}}) {
         dv->addWidget(c, dr, 0);
         dv->addWidget(e, dr, 1);
+        dv->addWidget(sb, dr, 2);
         ++dr;
         connect(c, &QCheckBox::toggled, this, [this](bool) { writeRun(); });
         connect(e, &QLineEdit::textEdited, this, [this](const QString&) { writeRun(); });
+        connect(sb, &QComboBox::currentIndexChanged, this, [this](int) { writeRun(); });
     }
     // HOW THE WHOLE LENGTH IS DRAWN: linear along the harness, or at the angle between its points -
     // tracing the run round its bends, if asked - or single-ended.
@@ -2018,7 +2036,7 @@ QWidget* BrickWizardDialog::buildRunPage() {
     styleRow->addWidget(dimTrace_);
     styleRow->addWidget(dimSingle_);
     styleRow->addStretch(1);
-    dv->addLayout(styleRow, dr, 0, 1, 2);
+    dv->addLayout(styleRow, dr, 0, 1, 3);
     for (QCheckBox* c : {dimLinear_, dimTrace_, dimSingle_})
         connect(c, &QCheckBox::toggled, this, [this](bool) {
             dimTrace_->setVisible(!dimLinear_->isChecked());
@@ -2369,6 +2387,11 @@ void BrickWizardDialog::loadPanel() {
     transitionWidth_->setEnabled(r.transitions != RunEnds::None);
     autoOf_.value(transitionWidth_)->setEnabled(r.transitions != RunEnds::None);
     dimTotal_->setChecked(r.dimTotal);
+    for (auto [sb, below] : {std::pair<QComboBox*, bool>{dimSideTotal_, r.dimTotalBelow}, {dimSideFans_, r.dimFansBelow},
+                             {dimSideBetween_, r.dimBetweenBelow}}) {
+        const QSignalBlocker hush(sb);
+        sb->setCurrentIndex(below ? 1 : 0);
+    }
     dimFans_->setChecked(r.dimFans);
     dimBetween_->setChecked(r.dimBetween);
     for (auto [e, t] : {std::pair<QLineEdit*, QString>{dimTextTotal_, r.dimTextTotal}, {dimTextFans_, r.dimTextFans},
@@ -2763,6 +2786,9 @@ void BrickWizardDialog::writeRun() {
                     : transitions_->currentIndex() == 3 ? RunEnds::Both
                                                         : RunEnds::None;
     r.dimTotal = dimTotal_->isChecked();
+    r.dimTotalBelow = dimSideTotal_->currentIndex() == 1;
+    r.dimFansBelow = dimSideFans_->currentIndex() == 1;
+    r.dimBetweenBelow = dimSideBetween_->currentIndex() == 1;
     r.dimFans = dimFans_->isChecked();
     r.dimBetween = dimBetween_->isChecked();
     r.dimTextTotal = dimTextTotal_->text().trimmed();

@@ -339,6 +339,9 @@ private:
     // cable's wires (by net, where they have one) or its braided shield, or typed ("1-3,5").
     QComboBox* bridge_ = nullptr;
     QFormLayout* runForm_ = nullptr;
+    QComboBox* dimSideTotal_ = nullptr;     // each run dimension above or below the run
+    QComboBox* dimSideFans_ = nullptr;
+    QComboBox* dimSideBetween_ = nullptr;
     QSpinBox* pairs_ = nullptr;          // a twisted pair's number of pairs
     // THE DRAWING AS LAST BUILT, without the grab rings - which are shown only for the part picked or pointed at.
     std::vector<Entity> lastEnts_;

@@ -219,6 +219,17 @@ int BrickDesign::fanoutSpreadSide(const Brick& s) const {
         return n;
     };
     const int l = parts(kPortLeft), r = parts(kPortRight);
+    // A JOINT AT ONE END (a Y-split, a splice) takes the wires as a bundle: it spreads at the other end, the part
+    // the wires go into one by one - not across the joint's leg.
+    auto joints = [&](int port) {
+        int n = 0;
+        for (const QString& o : sideOf(s.id, port))
+            if (const Brick* b = brick(o); b && b->type == BrickType::End && brickKindIsJoint(b->kind)) ++n;
+        return n;
+    };
+    const int jl = joints(kPortLeft), jr = joints(kPortRight);
+    if (l > 0 && r > 0 && jl == l && jr < r) return 1;
+    if (l > 0 && r > 0 && jr == r && jl < l) return 0;
     if (r > 1 && l <= 1) return 1;
     if (l > 1 && r <= 1) return 0;
     if (r > 0 && l == 0) return 1;
@@ -418,6 +429,9 @@ QJsonObject BrickDesign::toJson() const {
                                                    {"dimSingle", r.dimSingle},
                                                    {"trunkWires", r.trunkWires},
                                                    {"pairs", r.pairs},
+                                                   {"dimTotalBelow", r.dimTotalBelow},
+                                                   {"dimFansBelow", r.dimFansBelow},
+                                                   {"dimBetweenBelow", r.dimBetweenBelow},
                                                    {"bridgeWires", r.bridgeWires},
                                                    {"stackParts", [&r] {
                                                         QJsonObject sp;
@@ -520,6 +534,9 @@ BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
             s.dimSingle = r.value(QStringLiteral("dimSingle")).toBool(false);
             s.trunkWires = r.value(QStringLiteral("trunkWires")).toInt(0);
             s.pairs = std::max(1, r.value(QStringLiteral("pairs")).toInt(1));
+            s.dimTotalBelow = r.value(QStringLiteral("dimTotalBelow")).toBool(true);
+            s.dimFansBelow = r.value(QStringLiteral("dimFansBelow")).toBool(false);
+            s.dimBetweenBelow = r.value(QStringLiteral("dimBetweenBelow")).toBool(false);
         }
         d.bricks.push_back(b);
     }
@@ -759,7 +776,7 @@ QString dragPartOnDrawing(BrickDesign& d, const BrickBuild& built, const QString
                 const double k = std::sqrt(2.0) - 1.0;
                 const double before = std::abs(was.x - from.x) + std::abs(was.y - from.y) * k;
                 const double after = std::abs(now.x - from.x) + std::abs(now.y - from.y) * k;
-                s->run.lengthMm = std::max(1.0, std::round(s->run.lengthMm + after - before));
+                s->run.lengthMm = std::max(0.0, std::round(s->run.lengthMm + after - before));
                 p->drawDyMm += dy;
                 return sid;
             }
@@ -777,7 +794,7 @@ QString dragPartOnDrawing(BrickDesign& d, const BrickBuild& built, const QString
         // (kBrickRoomBetween), so a part dragged closer than that stops there - and so does the length. Below it the
         // run was still drawn at that room while its brick said one millimetre.
         const double least = (brickIsBridge(*s) ? 0.0 : kBrickRoomBetween) + std::abs(now.y - from.y) * k;
-        s->run.lengthMm = std::max({1.0, std::round(least), std::round(s->run.lengthMm + after - before)});
+        s->run.lengthMm = std::max({0.0, std::round(least), std::round(s->run.lengthMm + after - before)});
         p->drawDyMm += dy;
         (void)pf;
         return sid;
@@ -2532,6 +2549,13 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         const double gapOut = std::max(bodyWidth, la.lane * (wires - 1) + ww) / 2.0 + 10.0;
         auto fmt = [](double v) { return QString::number(v, 'f', 1); };
         const bool straight = route.size() == 2;
+        // ABOVE OR BELOW, as each dimension is told: the offset's sign that puts the line on that side, whichever
+        // way the two points it measures between run.
+        auto sideOff = [](const Vec2& p0, const Vec2& p1, double mag, bool below) {
+            const Vec2 n = (p1 - p0).normalized().perp();
+            const double up = std::abs(n.y) > 1e-9 ? (n.y > 0.0 ? 1.0 : -1.0) : (n.x < 0.0 ? 1.0 : -1.0);
+            return up * (below ? -mag : mag);
+        };
         auto dim = [&](const Vec2& p0, const Vec2& p1, double offset, double measured, bool sayMeasured,
                        const QString& written, const char* kind) {
             Entity d = makeDim(p0, p1, offset,
@@ -2548,12 +2572,20 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                 const LibraryPart* p = e && catalog && !e->libPart.isEmpty() ? catalog->byId(e->libPart) : nullptr;
                 return p && partIsNominal(*p);
             };
-            // Near, far, or the middle of the part (halfway between the two); a nominal part by its face.
-            const Vec2 from = nominal(br.a.id)    ? fa.nearAt
+            // Near, far, or the middle of the part (halfway between the two); a nominal part by its face. And a
+            // JOINT - a Y-split, a splice, anything with several faces - by the face this run goes into: its near and
+            // far points are its own ends, and the run ends at its leg.
+            auto byFace = [&](const QString& id) {
+                const Brick* e = design.brick(id);
+                return !e || e->type != BrickType::End || brickKindIsJoint(e->kind) || design.portCount(*e) > 1;
+            };
+            const Vec2 from = byFace(br.a.id) ? fa.centre
+                              : nominal(br.a.id)    ? fa.nearAt
                               : design.dimFromMid ? (fa.nearAt + fa.farAt) * 0.5
                               : design.dimFromFar ? fa.farAt
                                                   : fa.nearAt;
-            const Vec2 to = nominal(br.b.id)    ? fb.nearAt
+            const Vec2 to = byFace(br.b.id) ? fb.centre
+                            : nominal(br.b.id)    ? fb.nearAt
                             : design.dimToMid ? (fb.nearAt + fb.farAt) * 0.5
                             : design.dimToFar ? fb.farAt
                                               : fb.nearAt;
@@ -2637,19 +2669,24 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             } else {
                 // LINEAR along the way the harness leaves, or at the angle from one point to the other.
                 const Vec2 toAlong = straight || !r.dimLinear ? to : from + fa.out * dot(to - from, fa.out);
-                dim(from, toAlong, -(gapOut + 10.0), along, !straight, r.dimTextTotal, "total");
+                dim(from, toAlong, sideOff(from, toAlong, gapOut + 10.0, r.dimTotalBelow), along, !straight,
+                    r.dimTextTotal, "total");
             }
         }
         if (r.dimFans) {
-            if (fanA > 1e-9)
-                dim(route.front(), pointAlong(route, fanA), gapOut, fanA, false, r.dimTextFans, "fanStart");
-            if (fanB > 1e-9)
-                dim(pointAlong(route, total - fanB), route.back(), gapOut, fanB, false, r.dimTextFans,
-                    "fanFinish");
+            if (fanA > 1e-9) {
+                const Vec2 p0 = route.front(), p1 = pointAlong(route, fanA);
+                dim(p0, p1, sideOff(p0, p1, gapOut, r.dimFansBelow), fanA, false, r.dimTextFans, "fanStart");
+            }
+            if (fanB > 1e-9) {
+                const Vec2 p0 = pointAlong(route, total - fanB), p1 = route.back();
+                dim(p0, p1, sideOff(p0, p1, gapOut, r.dimFansBelow), fanB, false, r.dimTextFans, "fanFinish");
+            }
         }
         if (r.dimBetween && !loose && !isSub && total > fanA + fanB) {
-            dim(pointAlong(route, fanA), pointAlong(route, total - fanB), gapOut, total - fanA - fanB,
-                !straight, r.dimTextBetween, "between");
+            const Vec2 p0 = pointAlong(route, fanA), p1 = pointAlong(route, total - fanB);
+            dim(p0, p1, sideOff(p0, p1, gapOut, r.dimBetweenBelow), total - fanA - fanB, !straight, r.dimTextBetween,
+                "between");
         }
 
         // LABELS: on the whole bundle, or on one wire of a fan, so far along from the end chosen -
@@ -2747,6 +2784,15 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                     for (int k = 0; k < 24; ++k)
                         ring.push_back(e.center + Vec2{std::cos(k * M_PI / 12.0), std::sin(k * M_PI / 12.0)} * e.radius);
                     wipe(ring);
+                } else if (e.type == EntityType::Polyline && e.points.size() >= 2 && e.meta.value(QStringLiteral("double")).toBool()) {
+                    // ONE WIRE (a bridge wire): a band as wide as it is drawn, along it.
+                    const double half = e.meta.value(QStringLiteral("gap")).toDouble(1.0) / 2.0 + 0.6;
+                    for (size_t k = 0; k + 1 < e.points.size(); ++k) {
+                        const Vec2 a = e.points[k], b = e.points[k + 1];
+                        if (distance(a, b) < 1e-9) continue;
+                        const Vec2 n = (b - a).normalized().perp() * half;
+                        wipe({a - n, b - n, b + n, a + n});
+                    }
                 } else if (e.type == EntityType::TwistedPair && e.points.size() >= 2) {
                     // A band along the route, as wide as the body (or the wires) on it.
                     const double half = std::max(e.meta.value(QStringLiteral("twistBodyWidth")).toDouble(0.0),
@@ -2799,6 +2845,9 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                 return c;
             }
             if (face) *face = it->centre;
+            if (const Brick* e = design.brick(id);
+                e && (brickKindIsJoint(e->kind) || design.portCount(*e) > 1))
+                return it->centre;   // a joint by its face
             if (nominal(id)) return it->nearAt;
             return mid ? (it->nearAt + it->farAt) * 0.5 : far ? it->farAt : it->nearAt;
         };

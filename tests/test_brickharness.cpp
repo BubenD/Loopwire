@@ -923,7 +923,7 @@ void testRoundFive() {
                 if (e.meta.value(QStringLiteral("brickDim")).toString() == QStringLiteral("total"))
                     said = e.meta.value(QStringLiteral("brickMeasured")).toDouble();
             std::printf("  spacing: faces %.1f apart for a 5 mm run, dimension says %.1f\n", gap, said);
-            check(gap > 40.0, "spacing: connectors on a short run are drawn apart, with room to see");
+            check(gap < 40.0, "spacing: a short run brings its connectors as close as it says - down to nought");
             check(said >= 0.0 && said < 40.0, "spacing: and the dimension still gives the run's own length");
             d.brick(c)->run.lengthMm = 150.0;
             d.brick(c)->run.dimTotal = false;
@@ -2314,8 +2314,8 @@ void testRoundTen() {
             const BrickBuild near = buildBrickHarness(e, nullptr);
             dragPartOnDrawing(e, near, x1, -200.0, 0.0);   // to within a few mm of it, not out past it
             std::printf("  drag: pushed right up to its other part, the run stops at %.0f\n", e.brick(r)->run.lengthMm);
-            check(std::abs(e.brick(r)->run.lengthMm - kBrickRoomBetween) < 1e-9,
-                  "drag: pushed past what can be drawn, the length stops there with the part - the brick says what is drawn");
+            check(e.brick(r)->run.lengthMm < 30.0,
+                  "drag: pushed right up to the other part, the run comes down with it - towards nought");
         }
     }
     // THE BRIDGE WIRE PICKS ITS WIRE: the cable's wires by net, and its shield when it has a braid.
@@ -2777,6 +2777,78 @@ void testRoundFourteen() {
     }
 }
 
+// ROUND FIFTEEN: a fanout between a joint and a part spreads at the part; the whole length to a joint ends at its
+// face; each run dimension on the side it is told; a bridge wire in front covers the wires it crosses.
+void testRoundFifteen() {
+    {
+        BrickDesign d;
+        const QString y = d.addBrick(BrickType::End, PartKind::YSplit, 0, 0);
+        const QString f = d.addBrick(BrickType::Fanout, PartKind::Wire, 1, 0);
+        const QString x = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        d.connect(y, f);
+        d.connect(f, x);
+        const int side = d.fanoutSpreadSide(*d.brick(f));
+        const bool xAtFinish = d.finishesOf(f).contains(x);
+        check(side == (xAtFinish ? 1 : 0),
+              "fanout: between a Y-split and a connector it spreads at the connector - the wires a bundle at the joint");
+    }
+    {
+        BrickDesign d;
+        const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString r = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString y = d.addBrick(BrickType::End, PartKind::YSplit, 2, 0);
+        d.connect(x, r);
+        d.connect(r, y);
+        d.brick(r)->run.dimTotal = true;
+        d.brick(r)->run.dimFans = true;
+        const BrickBuild b = buildBrickHarness(d, nullptr);
+        const BrickFace yf = b.faces.value(QStringLiteral("%1:%2").arg(y).arg(d.portOn(y, r)));
+        const Entity* total = nullptr;
+        const Entity* fan = nullptr;
+        double runY = 0.0;
+        for (const Entity& e : b.entities) {
+            const QString kind = e.meta.value(QStringLiteral("brickDim")).toString();
+            if (kind == QStringLiteral("total") && e.type == EntityType::Dimension) total = &e;
+            if (kind == QStringLiteral("fanStart")) fan = &e;
+            if (e.type == EntityType::TwistedPair) runY = e.points.front().y;
+        }
+        check(total && std::abs(std::max(total->a.x, total->b.x) - yf.centre.x) < 1.0,
+              "dims: the whole length to a Y-split ends where the cable goes into it");
+        check(total && fan && total->points[2].y < runY && fan->points[2].y > runY,
+              "dims: by default the whole length below the run, the fans above");
+        d.brick(r)->run.dimTotalBelow = false;
+        d.brick(r)->run.dimFansBelow = true;
+        for (const Entity& e : buildBrickHarness(d, nullptr).entities) {
+            const QString kind = e.meta.value(QStringLiteral("brickDim")).toString();
+            if (kind == QStringLiteral("total") && e.type == EntityType::Dimension)
+                check(e.points[2].y > runY, "dims: the whole length told above goes above");
+            if (kind == QStringLiteral("fanStart")) check(e.points[2].y < runY, "dims: the fans told below go below");
+        }
+        check(!BrickDesign::fromJson(d.toJson()).brick(r)->run.dimTotalBelow, "dims: the side kept with the design");
+    }
+    {
+        BrickDesign d;
+        const QString x0 = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString x1 = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        const QString br = d.addBrick(BrickType::Run, PartKind::Wire, 3, 1);
+        const QString f = d.addBrick(BrickType::End, PartKind::Ferrule, 4, 1);
+        makeBridgeWire(*d.brick(br));
+        d.connect(x0, c);
+        d.connect(c, x1);
+        d.connect(c, br);
+        d.connect(br, f);
+        syncBridgeWires(d);
+        d.brick(br)->z = 3;
+        int masks = 0;
+        for (const Entity& e : buildBrickHarness(d, nullptr).entities)
+            if (e.meta.value(QStringLiteral("brickMask")).toBool() &&
+                e.meta.value(QStringLiteral("brickId")).toString() == br)
+                ++masks;
+        check(masks > 0, "front: a bridge wire brought to the front covers the wires it crosses");
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -2805,6 +2877,7 @@ int run_brickharness_tests() {
     testRoundThirteen();
     testConnectorContactsOnBill();
     testRoundFourteen();
+    testRoundFifteen();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

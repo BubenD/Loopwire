@@ -103,6 +103,11 @@ struct BrickRunSpec {
     bool dimTrace = false;
     // The whole length said by a single-ended dimension: from its start, a short line with the figure.
     bool dimSingle = false;
+    // WHICH SIDE each dimension goes: below the run, or above it. The whole length below, the fans and between them
+    // above, unless told.
+    bool dimTotalBelow = true;
+    bool dimFansBelow = false;
+    bool dimBetweenBelow = false;
     // BRIDGE WIRES: which wires of the special this one is joined to it takes ("1-3,5"); empty, as many as
     // it says of its own. Set, they decide how many wires it has and what each one's net is.
     QString bridgeWires;
@@ -269,7 +274,7 @@ std::vector<Vec2> routeBetweenFaces(const Vec2& a, const Vec2& aOut, const Vec2&
 // part changes the length; changing the length pulls or pushes the part - and everything beyond it - along.
 constexpr double kBrickMmPerCol = 75.0;
 // The least room the drawing keeps between two parts facing each other along a run - for the fans between them.
-constexpr double kBrickRoomBetween = 60.0;
+constexpr double kBrickRoomBetween = 0.0;   // none: a part may come right up to the other, the run down to nought
 // The one part each side of a special, when it runs from one part to one part.
 bool specialOneToOne(const BrickDesign& d, const QString& special, QString* start, QString* finish);
 // `end` (linked to `special`) put as far along from the special's other part as the special is long, on the
