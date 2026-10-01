@@ -2938,6 +2938,23 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                     if (wantA || wantB) {
                         const double entry = std::min(bodyWidth, packed * (wires - 1) + ww);
                         run.meta.insert(QStringLiteral("twistBodyFace"), entry);
+                        // KEPT ON THE STRAIGHT IT SITS ON: a transition is a straight sleeve, and one longer than the
+                        // straight out of its end - a short cable bending soon after its part - ran on past the bend,
+                        // the fan, the sleeve and the cable no longer meeting. At each end it is as long as it would be,
+                        // or as the straight there leaves room for after the fan and the bend's radius.
+                        {
+                            const double knee = r.kneeRadiusMm >= 0.0 ? r.kneeRadiusMm : bodyWidth;
+                            auto room = [&](bool atEnd) {
+                                if (route.size() < 3) return 1e300;   // straight all the way
+                                const double straightLen = atEnd ? distance(route[route.size() - 2], route.back())
+                                                                 : distance(route[0], route[1]);
+                                return straightLen - (atEnd ? fanB : fanA) - knee - 1.0;
+                            };
+                            const double want = 3.0 * entry;
+                            run.meta.insert(QStringLiteral("twistBodySidesSame"), false);
+                            run.meta.insert(QStringLiteral("twistBoot"), std::max(2.0, std::min(want, room(false))));
+                            run.meta.insert(QStringLiteral("twistBootFinish"), std::max(2.0, std::min(want, room(true))));
+                        }
                         // Its width as said - held at the cable's width if it is asked to be narrower.
                         if (r.transitionWidthMm > 1e-9)
                             run.meta.insert(QStringLiteral("twistBootWidth"), std::max(r.transitionWidthMm, bodyWidth));

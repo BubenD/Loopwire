@@ -179,6 +179,35 @@ QVBoxLayout* sectionColumn(QWidget* column) {
     return lay;
 }
 
+// THE FIELDS OF A PANEL, ALL ONE SHORT WIDTH: a figure or a choice is a few characters, and stretched across the panel
+// each was a long empty bar of its own length. Fields in a table are left to the table; an open drop-down's list is
+// as wide as it needs to be read.
+void tidyFields(QWidget* root, int width) {
+    auto inTable = [](QWidget* w) {
+        for (QWidget* at = w->parentWidget(); at; at = at->parentWidget())
+            if (qobject_cast<QAbstractItemView*>(at)) return true;
+        return false;
+    };
+    for (QFormLayout* f : root->findChildren<QFormLayout*>()) f->setFieldGrowthPolicy(QFormLayout::FieldsStayAtSizeHint);
+    for (QAbstractSpinBox* s : root->findChildren<QAbstractSpinBox*>())
+        if (!inTable(s)) {
+            s->setMinimumWidth(width);
+            s->setMaximumWidth(width);
+        }
+    for (QComboBox* c : root->findChildren<QComboBox*>())
+        if (!inTable(c)) {
+            c->setMinimumWidth(width);
+            c->setMaximumWidth(width);
+            c->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+            if (c->view()) c->view()->setMinimumWidth(std::max(width, 380));
+        }
+    for (QLineEdit* e : root->findChildren<QLineEdit*>())
+        if (!inTable(e) && !qobject_cast<QAbstractSpinBox*>(e->parentWidget()) && !qobject_cast<QComboBox*>(e->parentWidget())) {
+            e->setMinimumWidth(width);
+            e->setMaximumWidth(width);
+        }
+}
+
 QWidget* scrolled(QWidget* w) {
     auto* sa = new QScrollArea;
     sa->setWidgetResizable(true);
@@ -1602,6 +1631,7 @@ void BrickWizardDialog::buildUi() {
     panel_->addWidget(buildEndPage());
     panel_->addWidget(buildRunPage());
     panel_->addWidget(buildLinkPage());
+    tidyFields(panel_, 180);   // every field in the panels one short width
 
     split->addWidget(leftSplit_);
     split->addWidget(middle_);
