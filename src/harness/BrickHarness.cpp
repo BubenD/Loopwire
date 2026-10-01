@@ -462,6 +462,8 @@ QJsonObject BrickDesign::toJson() const {
                                                    {"fanEndShrink", r.fanEndShrink},
                                                    {"fanEndShrinkMm", r.fanEndShrinkMm},
                                                    {"fanEndShrinkPart", r.fanEndShrinkPart},
+                                                   {"transitionLenStartMm", r.transitionLenStartMm},
+                                                   {"transitionLenFinishMm", r.transitionLenFinishMm},
                                                    {"dimTotal", r.dimTotal},
                                                    {"dimFans", r.dimFans},
                                                    {"dimBetween", r.dimBetween},
@@ -497,6 +499,8 @@ QJsonObject BrickDesign::toJson() const {
         if (l.lengthMm > 1e-9) lo.insert(QStringLiteral("lengthMm"), l.lengthMm);
         if (!l.wireList.isEmpty()) lo.insert(QStringLiteral("wireList"), l.wireList);
         if (l.endBoot) lo.insert(QStringLiteral("endBoot"), true);
+        if (l.endBootLenMm > 1e-9) lo.insert(QStringLiteral("endBootLenMm"), l.endBootLenMm);
+        if (l.noEndShrink) lo.insert(QStringLiteral("noEndShrink"), true);
         ls.append(lo);
     }
     QJsonArray ds;
@@ -573,6 +577,8 @@ BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
             s.fanEndShrink = r.value(QStringLiteral("fanEndShrink")).toBool(false);
             s.fanEndShrinkMm = std::max(0.5, r.value(QStringLiteral("fanEndShrinkMm")).toDouble(10.0));
             s.fanEndShrinkPart = r.value(QStringLiteral("fanEndShrinkPart")).toString();
+            s.transitionLenStartMm = std::max(0.0, r.value(QStringLiteral("transitionLenStartMm")).toDouble(0.0));
+            s.transitionLenFinishMm = std::max(0.0, r.value(QStringLiteral("transitionLenFinishMm")).toDouble(0.0));
             s.dimTotal = r.value(QStringLiteral("dimTotal")).toBool();
             s.dimFans = r.value(QStringLiteral("dimFans")).toBool();
             s.dimBetween = r.value(QStringLiteral("dimBetween")).toBool();
@@ -615,6 +621,8 @@ BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
         l.lengthMm = std::max(0.0, lo.value(QStringLiteral("lengthMm")).toDouble(0.0));
         l.wireList = lo.value(QStringLiteral("wireList")).toString();
         l.endBoot = lo.value(QStringLiteral("endBoot")).toBool(false);
+        l.endBootLenMm = std::max(0.0, lo.value(QStringLiteral("endBootLenMm")).toDouble(0.0));
+        l.noEndShrink = lo.value(QStringLiteral("noEndShrink")).toBool(false);
         d.links.push_back(l);
     }
     return d;
@@ -2952,8 +2960,18 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                             };
                             const double want = 3.0 * entry;
                             run.meta.insert(QStringLiteral("twistBodySidesSame"), false);
-                            run.meta.insert(QStringLiteral("twistBoot"), std::max(2.0, std::min(want, room(false))));
-                            run.meta.insert(QStringLiteral("twistBootFinish"), std::max(2.0, std::min(want, room(true))));
+                            // EACH ONE ITS OWN LENGTH where it is given one: the run's start and finish in its own terms
+                            // (turned round where it was built from its finish), a branch's end by its link.
+                            double askedA = br.flipped ? r.transitionLenFinishMm : r.transitionLenStartMm;
+                            double askedB = br.flipped ? r.transitionLenStartMm : r.transitionLenFinishMm;
+                            if (isSub) {
+                                const BrickLink* bl = design.link(s.id, br.b.node);
+                                askedB = bl ? bl->endBootLenMm : 0.0;
+                            }
+                            run.meta.insert(QStringLiteral("twistBoot"),
+                                            askedA > 1e-9 ? askedA : std::max(2.0, std::min(want, room(false))));
+                            run.meta.insert(QStringLiteral("twistBootFinish"),
+                                            askedB > 1e-9 ? askedB : std::max(2.0, std::min(want, room(true))));
                         }
                         // Its width as said - held at the cable's width if it is asked to be narrower.
                         if (r.transitionWidthMm > 1e-9)
@@ -2981,7 +2999,19 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             made.push_back(run);
             // HEATSHRINK OVER EACH WIRE'S END where they fan out into a part: a sleeve on the last so many millimetres
             // of every wire, its own outline round the wire.
-            if (r.fanEndShrink && !laidUp && (spreadA || spreadB)) {
+            // AT WHICH PARTS: every part the run goes into, unless left out there - a part the cable goes into with no
+            // fan included (its wire ends inside the part: on the bill, not drawn).
+            const bool aIsPart = !br.a.id.isEmpty() && br.a.node == br.a.id && !isSub && !br.freeStart;
+            const bool bIsPart = !loose && br.b.node == br.b.id;
+            auto shrinkAt = [&](const QString& part) {
+                const BrickLink* bl = design.link(s.id, part);
+                return !(bl && bl->noEndShrink);
+            };
+            const bool shrinkA = r.fanEndShrink && aIsPart && shrinkAt(br.a.node);
+            const bool shrinkB = r.fanEndShrink && bIsPart && shrinkAt(br.b.node);
+            if (!laidUp && shrinkA && !spreadA) out.fanEndCount[s.id] += wires;
+            if (!laidUp && shrinkB && !spreadB) out.fanEndCount[s.id] += wires;
+            if (!laidUp && ((spreadA && shrinkA) || (spreadB && shrinkB))) {
                 const std::vector<std::vector<Vec2>> strands = twistedPairStrands(run);
                 const double len = std::max(0.5, r.fanEndShrinkMm);
                 const double half = ww / 2.0 + 0.5;
@@ -3021,8 +3051,8 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                     if (ea.size() != eb.size() || ea.size() < 2) continue;
                     std::vector<Vec2> c(ea.size());
                     for (size_t q = 0; q < ea.size(); ++q) c[q] = (ea[q] + eb[q]) * 0.5;
-                    if (spreadA) sleeve(c, false);
-                    if (spreadB) sleeve(c, true);
+                    if (spreadA && shrinkA) sleeve(c, false);
+                    if (spreadB && shrinkB) sleeve(c, true);
                 }
             }
         }

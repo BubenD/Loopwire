@@ -482,6 +482,9 @@ private:
     QCheckBox* fanShrink_ = nullptr;
     QDoubleSpinBox* fanShrinkLen_ = nullptr;
     QComboBox* fanShrinkPart_ = nullptr;
+    QDoubleSpinBox* transLenStart_ = nullptr;   // each transition's own length, 0 Auto
+    QDoubleSpinBox* transLenFinish_ = nullptr;
+    QListWidget* fanShrinkParts_ = nullptr;     // the parts whose wire ends get heatshrink
     void loadBranches();
     bool liveInit_ = false;
     QHash<QString, int> partCounts() const;

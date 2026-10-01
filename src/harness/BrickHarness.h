@@ -99,6 +99,10 @@ struct BrickRunSpec {
     // HEATSHRINK OVER EACH WIRE'S END where the wires fan out: on or off, how long from the end, and its part number.
     bool fanEndShrink = false;
     double fanEndShrinkMm = 10.0;
+    // HOW LONG EACH TRANSITION HEATSHRINK IS, at the run's start and at its finish: 0, as long as the drawing makes
+    // it (three times the bundle across, never past the straight it sits on).
+    double transitionLenStartMm = 0.0;
+    double transitionLenFinishMm = 0.0;
     QString fanEndShrinkPart;
     // Dimensions: the whole run, each fan, and what is between the fans.
     bool dimTotal = false;
@@ -188,6 +192,10 @@ struct BrickLink {
     QString wireList;
     // A TRANSITION HEATSHRINK AT THE END OF THIS BRANCH, before it fans out into the part.
     bool endBoot = false;
+    double endBootLenMm = 0.0;   // its length; 0 as the drawing makes it
+    // NO HEATSHRINK OVER THE WIRE ENDS AT THIS PART, where the run has them: they go on at every part it is linked to
+    // unless the part is left out here.
+    bool noEndShrink = false;
 };
 
 // WHAT A BRICK LOOKS LIKE UNTURNED: its connection faces - where, which way they look, how long -
