@@ -111,6 +111,9 @@ struct BrickRunSpec {
     // BRIDGE WIRES: which wires of the special this one is joined to it takes ("1-3,5"); empty, as many as
     // it says of its own. Set, they decide how many wires it has and what each one's net is.
     QString bridgeWires;
+    // A BRIDGE WIRE'S BRANCH: which of its cable's parts at that end it comes out beside (of a cable going to several
+    // there) - empty, the first.
+    QString bridgeAt;
     // WHICH END A FANOUT SPREADS AT: -1 the end on a part (the start when both are), 0 the start,
     // 1 the finish.
     int fanSide = -1;
@@ -167,6 +170,9 @@ struct BrickLink {
     int portA = -1;    // the port of `a` it is on; -1 = whichever faces the other brick
     int portB = -1;
     int wires = 0;     // wires a fanout gives the end at this link; 0 = an even share
+    // ITS OWN LENGTH, where a cable goes to several parts at one end: 0 = locked to the run's length with the others;
+    // set (Shift and the part dragged on the drawing), this branch is that long whatever the others are.
+    double lengthMm = 0.0;
 };
 
 // WHAT A BRICK LOOKS LIKE UNTURNED: its connection faces - where, which way they look, how long -
@@ -342,7 +348,13 @@ struct BrickBuild;
 // toward it - along, and across (a part moved down, away from the part its cable comes from, takes more cable) -
 // and it is set that much up or down on the drawing. The bricks on the pane do not move. Returns the special
 // whose length changed, or empty when the part hangs on no run from a part.
-QString dragPartOnDrawing(BrickDesign& d, const BrickBuild& built, const QString& part, double dx, double dy);
+QString dragPartOnDrawing(BrickDesign& d, const BrickBuild& built, const QString& part, double dx, double dy,
+                          bool ownLength = false);
+// HOW LONG A RUN IS TO EACH OF ITS PARTS, and the longest: a branch with a length of its own, or the run's.
+double runLengthTo(const BrickDesign& d, const Brick& special, const QString& part);
+double runLongestMm(const BrickDesign& d, const Brick& special);
+// Whether a part's branch shares its length with the others on that end of its run (and with which of them).
+QStringList lengthLockedWith(const BrickDesign& d, const QString& part);
 // How far apart the pane's rows are on the drawing - so a brick moved a row on the pane can be kept where it was
 // on the drawing.
 double brickRowPitchMm(const BrickDesign& d);

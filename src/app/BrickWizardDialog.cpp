@@ -605,6 +605,9 @@ void BrickCanvas::paintEvent(QPaintEvent*) {
         else sub = b.type == BrickType::TwistedPair
                        ? QStringLiteral("%1 pr · L-%2").arg(std::max(1, b.run.pairs)).arg(b.run.lengthMm, 0, 'f', 0)
                        : QStringLiteral("%1 w · L-%2").arg(b.run.wires).arg(b.run.lengthMm, 0, 'f', 0);
+        // A branch with a length of its own: the longest said too.
+        if (!end && runLongestMm(*d_, b) > b.run.lengthMm + 0.5)
+            sub += QStringLiteral("/%1").arg(runLongestMm(*d_, b), 0, 'f', 0);
         const QRectF bottom(r.left() + 3, r.center().y(), r.width() - 6, r.height() / 2.0 - 2);
         p.setPen(QColor(0xb8, 0xc0, 0xcc));
         p.drawText(bottom, Qt::AlignCenter,
@@ -1277,6 +1280,7 @@ void BrickWizardDialog::buildUi() {
         harnessName_->clear();
         canvas_->setSelection({});
         liveInit_ = false;   // the last harness's parts stay on the bill: a new one starts counting afresh
+        liveLenInit_ = false;
         designChanged();
         status_->setText(QStringLiteral("A new harness"));
     });
@@ -1933,6 +1937,17 @@ QWidget* BrickWizardDialog::buildRunPage() {
         });
         pickRow->addWidget(bridgeMany_);
         v->addLayout(pickRow);
+        // WHICH BRANCH IT COMES OUT OF, where its cable goes to several parts at that end.
+        bridgeAt_ = new QComboBox(host);
+        bridgeAt_->setObjectName(QStringLiteral("brickBridgeAt"));
+        bridgeAt_->setToolTip(QStringLiteral("Which of the cable's parts at that end the bridge wire comes out beside"));
+        v->addWidget(bridgeAt_);
+        connect(bridgeAt_, &QComboBox::activated, this, [this](int i) {
+            Brick* b = design_.brick(canvas_->selected());
+            if (!b) return;
+            b->run.bridgeAt = bridgeAt_->itemData(i).toString();
+            designChanged();
+        });
         bridgeFrom_ = new QLabel(host);
         bridgeFrom_->setObjectName(QStringLiteral("brickBridgeFrom"));
         bridgeFrom_->setStyleSheet(QStringLiteral("color:#8fa3b8;"));
@@ -2794,6 +2809,22 @@ void BrickWizardDialog::loadPanel() {
         if (at >= 0) bridge_->setCurrentIndex(at);
         else bridge_->setEditText(r.bridgeWires);
         bridge_->setEnabled(from != nullptr);
+        // The branches it can come out of: the cable's parts at the end it is joined on, when there are several.
+        {
+            const QSignalBlocker hushAt(bridgeAt_);
+            bridgeAt_->clear();
+            QStringList parts;
+            if (from)
+                for (const QString& o : design_.sideOf(from->id, design_.portOn(from->id, b->id)))
+                    if (const Brick* ob = design_.brick(o); ob && ob->type == BrickType::End) parts << o;
+            for (const QString& o : parts) {
+                const Brick* ob = design_.brick(o);
+                bridgeAt_->addItem(QStringLiteral("Out of the branch to %1").arg(ob->name.isEmpty() ? brickTitle(*ob) : ob->name), o);
+            }
+            const int at = bridgeAt_->findData(r.bridgeAt);
+            bridgeAt_->setCurrentIndex(at >= 0 ? at : parts.size() > 0 ? parts.size() - 1 : -1);
+            bridgeAt_->setVisible(parts.size() > 1);
+        }
         const bool shield = r.bridgeWires.trimmed() == QLatin1String(kBridgeShield);
         const QList<int> take = from && !shield ? parseWireList(r.bridgeWires, from->run.wires) : QList<int>();
         bridgeFrom_->setText(!from     ? QStringLiteral("link it to a cable or fanout to pick its wire")
@@ -3121,6 +3152,16 @@ bool BrickWizardDialog::eventFilter(QObject* o, QEvent* e) {
             !(static_cast<QMouseEvent*>(e)->buttons() & Qt::LeftButton)) {
             const QString over = previewPartAt(static_cast<QMouseEvent*>(e)->position());
             preview_->setCursor(over.isEmpty() ? Qt::ArrowCursor : Qt::OpenHandCursor);
+            // LOCKED TO THE OTHERS: said over a part whose branch is as long as the others' at that end of its cable.
+            {
+                QStringList with;
+                for (const QString& o : lengthLockedWith(design_, over))
+                    if (const Brick* ob = design_.brick(o)) with << (ob->name.isEmpty() ? brickTitle(*ob) : ob->name);
+                preview_->setToolTip(with.isEmpty() ? QString()
+                                                    : QStringLiteral("Its length is locked with %1 - hold Shift and drag "
+                                                                     "it to give it a length of its own")
+                                                          .arg(with.join(QStringLiteral(", "))));
+            }
             if (over != hoverPart_) {
                 hoverPart_ = over;
                 showGrabRings();
@@ -3174,10 +3215,12 @@ bool BrickWizardDialog::eventFilter(QObject* o, QEvent* e) {
         }
         if (e->type() == QEvent::MouseButtonPress) {
             auto* me = static_cast<QMouseEvent*>(e);
-            if (me->button() == Qt::LeftButton && me->modifiers() == Qt::NoModifier) {
+            // SHIFT: the part dragged gets a length of its own - not locked to the others at that end of its cable.
+            if (me->button() == Qt::LeftButton && (me->modifiers() & ~Qt::ShiftModifier) == Qt::NoModifier) {
                 const QString hit = previewPartAt(me->position());
                 if (!hit.isEmpty()) {
                     partDrag_ = hit;
+                    partDragOwn_ = me->modifiers() & Qt::ShiftModifier;
                     partDragFrom_ = preview_->worldAt(me->position());
                     partDragDesign_ = design_;
                     partDragBuilt_.faces = lastFaces_;
@@ -3194,7 +3237,7 @@ bool BrickWizardDialog::eventFilter(QObject* o, QEvent* e) {
             design_.catalog = &catalog_;
             const Vec2 d = now - partDragFrom_;
             const double dx = std::round(d.x), dy = std::round(d.y);
-            const QString sid = dragPartOnDrawing(design_, partDragBuilt_, keep, dx, dy);
+            const QString sid = dragPartOnDrawing(design_, partDragBuilt_, keep, dx, dy, partDragOwn_);
             canvas_->update();
             refreshPreview();
             if (const Brick* s = design_.brick(sid))
@@ -3525,6 +3568,75 @@ QHash<QString, int> BrickWizardDialog::partCounts() const {
     return n;
 }
 
+QHash<QString, double> BrickWizardDialog::partLengths() const {
+    QHash<QString, double> mm;
+    for (const Brick& b : design_.bricks) {
+        if (!brickIsSpecial(b.type)) continue;
+        // AT ITS LONGEST: a cable going to several parts, some of its wires longer than others, is bought that long.
+        const double longest = runLongestMm(design_, b);
+        const int wires = b.type == BrickType::TwistedPair ? 2 * std::max(1, b.run.pairs) : std::max(1, b.run.wires);
+        for (const QString& layer : b.run.stack) {
+            const QString id = b.run.stackParts.value(layer);
+            if (id.isEmpty()) continue;
+            mm[id] += longest * (layer == QLatin1String("wires") ? wires : 1);
+        }
+    }
+    return mm;
+}
+
+void BrickWizardDialog::syncLiveLengths() {
+    Document* doc = document();
+    if (!doc) return;
+    const QHash<QString, double> now = partLengths();
+    if (!liveLenInit_) {
+        liveLengths_ = now;
+        liveLenInit_ = true;
+        return;
+    }
+    if (now == liveLengths_) return;
+    QSet<QString> ids;
+    for (auto it = now.cbegin(); it != now.cend(); ++it) ids.insert(it.key());
+    for (auto it = liveLengths_.cbegin(); it != liveLengths_.cend(); ++it) ids.insert(it.key());
+    BomTable table;
+    table.fromJson(doc->bom());
+    bool changed = false;
+    for (const QString& id : ids) {
+        const double delta = now.value(id) - liveLengths_.value(id);
+        if (std::abs(delta) < 1e-6) continue;
+        const LibraryPart* p = catalog_.byId(id);
+        if (!p) continue;
+        // In the part's own unit: metres for a cable or a wire, millimetres for a heatshrink - a piece is one a run.
+        const QString unit = p->unit.isEmpty() ? defaultUnitForKind(p->kind) : p->unit;
+        const double by = unit == QLatin1String("m")    ? delta / 1000.0
+                          : unit == QLatin1String("mm") ? delta
+                          : unit == QLatin1String("cm") ? delta / 10.0
+                                                        : 0.0;
+        if (std::abs(by) < 1e-9) continue;
+        bool had = false;
+        for (size_t k = 0; k < table.rows.size(); ++k)
+            if (table.rows[k].partId == id) {
+                table.rows[k].qty += by;
+                if (table.rows[k].qty <= 1e-9) table.rows.erase(table.rows.begin() + static_cast<long>(k));
+                had = true;
+                changed = true;
+                break;
+            }
+        if (!had && by > 0.0) {
+            BomRow row = bomRowFromPart(*p, by);
+            row.rowId = bomNextRowId(table.rows);
+            table.rows.push_back(row);
+            changed = true;
+        }
+    }
+    liveLengths_ = now;
+    if (changed) {
+        doc->bom() = table.toJson();
+        doc->setDirty(true);
+        emit bomChanged();
+        refreshBom();
+    }
+}
+
 void BrickWizardDialog::syncLiveBom() {
     Document* doc = document();
     if (!doc) return;
@@ -3638,7 +3750,10 @@ void BrickWizardDialog::refreshPreview() {
     if (editor_) design_.faceFanPct = editor_->faceFanScale();
     syncBridgeWires(design_);   // wires taken from a joined special follow it
     recordHistory();
-    if (partDrag_.isEmpty()) syncLiveBom();
+    if (partDrag_.isEmpty() && runDrag_.isEmpty()) {
+        syncLiveBom();
+        syncLiveLengths();
+    }
     const BrickBuild built = buildBrickHarness(design_, &catalog_,
                                                [this](const QString& id) { return bomItemOf(id); });
     actual_ = built.actual;
@@ -4241,6 +4356,7 @@ bool BrickWizardDialog::loadFromDrawing(const QString& name) {
     canvas_->setSelection({});
     canvas_->centreView();
     liveInit_ = false;   // an opened harness brings its own bill: counted from here, not added again
+    liveLenInit_ = false;
     designChanged();
     refreshSaved();
     status_->setText(QStringLiteral("Opened \"%1\"").arg(name));

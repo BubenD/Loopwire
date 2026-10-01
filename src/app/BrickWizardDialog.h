@@ -461,6 +461,14 @@ private:
     QToolButton* bridgeMany_ = nullptr;   // a bridge wire taking several of the cable's wires
     // THE LIVE BILL: how many bricks use each part, last time the bill was brought into step with them.
     QHash<QString, int> liveCounts_;
+    // AND BY LENGTH: how many millimetres of each run's layers' parts (a cable, a braid, a heatshrink - its wires,
+    // so many times over) the runs take, each at its LONGEST branch.
+    QHash<QString, double> liveLengths_;
+    bool liveLenInit_ = false;
+    QHash<QString, double> partLengths() const;
+    void syncLiveLengths();
+    QComboBox* bridgeAt_ = nullptr;   // which branch of its cable a bridge wire comes out of
+    bool partDragOwn_ = false;        // Shift held: the part dragged gets a length of its own
     bool liveInit_ = false;
     QHash<QString, int> partCounts() const;
     void syncLiveBom();

@@ -498,10 +498,12 @@ void testRoundThreeModel() {
             runs.push_back(&en);
     const Entity* trunk = nullptr;
     int outWires = 0;
-    for (const Entity* en : runs) {
-        if (en->meta.contains(QStringLiteral("twistBody"))) trunk = en;
-        else outWires += en->meta.value(QStringLiteral("twistWires")).toInt();
-    }
+    // The trunk is the one carrying every wire (each branch has the cable's body too, on to its part).
+    for (const Entity* en : runs)
+        if (!trunk || en->meta.value(QStringLiteral("twistWires")).toInt() > trunk->meta.value(QStringLiteral("twistWires")).toInt())
+            trunk = en;
+    for (const Entity* en : runs)
+        if (en != trunk) outWires += en->meta.value(QStringLiteral("twistWires")).toInt();
     std::printf("  split: %d run(s), trunk %s, %d wire(s) out of it\n", int(runs.size()), trunk ? "yes" : "no",
                 outWires);
     check(runs.size() == 3 && trunk && trunk->meta.value(QStringLiteral("twistWires")).toInt() == 6,
@@ -3384,8 +3386,8 @@ void testRoundNineteen() {
             std::printf("  dots: six wires into four ways - %d (%s)\n", dlg.canvas()->markOf(x).compat,
                         qPrintable(dlg.canvas()->markOf(x).why));
             check(dlg.canvas()->markOf(x).compat == 2, "dots: red - more wires than the connector has ways");
-            // A run's own dot: its layers' parts on the bill or not.
-            check(dlg.canvas()->markOf(c).bom == 0, "dots: a run whose wire is not on the BOM - red");
+            // A run's own dot: its layers' parts on the bill - put there by length, at its longest, by the live bill.
+            check(dlg.canvas()->markOf(c).bom == 1, "dots: a run's wire put on the BOM by its length - green");
         }
         cat.disconnectLibrary(libFile);
         cat.remember();
@@ -3676,6 +3678,77 @@ void testRoundTwenty() {
     }
 }
 
+// ROUND TWENTY-ONE: a cable to two parts at one end - their lengths locked together until Shift gives one its own,
+// the longest what is bought; the cable on to each part; the transition at the end it was set at; a bridge wire out
+// of the branch it is told.
+void testRoundTwentyOne() {
+    BrickDesign d;
+    const QString sa = d.addBrick(BrickType::End, PartKind::Connector, 0, 1);
+    const QString a2 = d.addBrick(BrickType::End, PartKind::Connector, 0, 3);
+    const QString sb = d.addBrick(BrickType::End, PartKind::Connector, 4, 2);
+    const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 2, 2);
+    d.connect(sa, c, nullptr, -1, 0);
+    d.connect(a2, c, nullptr, -1, 0);
+    d.connect(c, sb, nullptr, 1, -1);
+    d.brick(c)->run.wires = 4;
+    d.brick(c)->run.lengthMm = 200;
+    d.brick(c)->run.transitions = RunEnds::Finish;
+    check(lengthLockedWith(d, sa) == QStringList{a2}, "lengths: two parts at one end of a cable are locked together");
+    BrickBuild b = buildBrickHarness(d, nullptr);
+    QString trunkSides;
+    int bodies = 0;
+    for (const Entity& e : b.entities)
+        if (e.type == EntityType::TwistedPair && e.meta.value(QStringLiteral("brickId")).toString() == c) {
+            if (e.meta.value(QStringLiteral("twistBody")).toString() == QLatin1String("cable")) ++bodies;
+            if (!e.meta.value(QStringLiteral("twistBodyTransitionSides")).toString().isEmpty() &&
+                e.meta.value(QStringLiteral("twistBodyTransitionSides")).toString() != QLatin1String("none"))
+                trunkSides = e.meta.value(QStringLiteral("twistBodyTransitionSides")).toString();
+        }
+    std::printf("  split: %d runs with the cable's body, the transition at the %s\n", bodies, qPrintable(trunkSides));
+    check(bodies == 3, "split: the cable goes on to each part - its body on the trunk and on both branches");
+    check(trunkSides == QLatin1String("start"),
+          "split: a transition set at the finish is at that end of the cable (the far part), not where it divides");
+    // SHIFT AND DRAG: that part gets a length of its own; the other keeps the run's.
+    const QString moved = dragPartOnDrawing(d, b, a2, -60.0, 0.0, true);
+    check(moved == c && d.brick(c)->run.lengthMm == 200.0 && d.link(c, a2)->lengthMm > 200.0,
+          "lengths: Shift and drag - this part's branch its own length, the cable's length as it was");
+    check(lengthLockedWith(d, sa).isEmpty() && lengthLockedWith(d, a2).isEmpty(), "lengths: no longer locked together");
+    std::printf("  lengths: run %.0f, the branch to the second part %.0f, the longest %.0f\n", d.brick(c)->run.lengthMm,
+                d.link(c, a2)->lengthMm, runLongestMm(d, *d.brick(c)));
+    check(std::abs(runLongestMm(d, *d.brick(c)) - d.link(c, a2)->lengthMm) < 1e-9, "lengths: the longest branch is the cable's length to buy");
+    b = buildBrickHarness(d, nullptr);
+    const double xSa = b.faces.value(sa + QStringLiteral(":0")).centre.x;
+    const double xA2 = b.faces.value(a2 + QStringLiteral(":0")).centre.x;
+    check(xA2 < xSa - 30.0, "lengths: the part with the longer branch is drawn further off");
+    check(BrickDesign::fromJson(d.toJson()).link(c, a2)->lengthMm == d.link(c, a2)->lengthMm, "lengths: kept with the harness");
+    // A BRIDGE WIRE OUT OF THE BRANCH IT IS TOLD.
+    {
+        const QString fe = d.addBrick(BrickType::End, PartKind::Ferrule, 0, 0);
+        const QString br = d.addBrick(BrickType::Run, PartKind::Wire, 1, 0);
+        makeBridgeWire(*d.brick(br));
+        d.connect(c, br, nullptr, 0, 1);
+        d.connect(br, fe);
+        syncBridgeWires(d);
+        auto startOfBridge = [&] {
+            for (const Entity& e : buildBrickHarness(d, nullptr).entities)
+                if (e.meta.value(QStringLiteral("brickId")).toString() == br && !e.points.empty() &&
+                    e.type != EntityType::Wipeout)
+                    return e.points.back().y > e.points.front().y ? e.points.front() : e.points.back();
+            return Vec2{};
+        };
+        d.brick(br)->run.bridgeAt = sa;
+        const BrickBuild bb = buildBrickHarness(d, nullptr);
+        const Vec2 faceSa = bb.faces.value(sa + QStringLiteral(":0")).centre;
+        const Vec2 faceA2 = bb.faces.value(a2 + QStringLiteral(":0")).centre;
+        const Vec2 atSa = startOfBridge();
+        d.brick(br)->run.bridgeAt = a2;
+        const Vec2 atA2 = startOfBridge();
+        std::printf("  bridge: out of the first branch at %.1f,%.1f, of the second at %.1f,%.1f\n", atSa.x, atSa.y, atA2.x, atA2.y);
+        check(distance(atSa, faceSa) < distance(atSa, faceA2) && distance(atA2, faceA2) < distance(atA2, faceSa),
+              "bridge: it comes out of the branch it is told");
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -3710,6 +3783,7 @@ int run_brickharness_tests() {
     testRoundEighteen();
     testRoundNineteen();
     testRoundTwenty();
+    testRoundTwentyOne();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }
