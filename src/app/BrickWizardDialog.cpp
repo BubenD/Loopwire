@@ -910,6 +910,9 @@ void BrickCanvas::fillContextMenu(QMenu& menu) {
         if (b->type == BrickType::End) {
             QAction* a = menu.addAction(QStringLiteral("Open in library"), this, [this, id = b->libPart] { emit openInLibrary(id); });
             a->setEnabled(!b->libPart.isEmpty());
+            QAction* u = menu.addAction(QStringLiteral("Update from library"), this,
+                                        [this, id = b->id] { emit updateFromLibrary(id); });
+            u->setEnabled(!b->libPart.isEmpty());
         } else if (brickIsSpecial(b->type)) {
             QMenu* lib = menu.addMenu(QStringLiteral("Open in library"));
             for (const QString& layer : b->run.stack) {
@@ -918,6 +921,9 @@ void BrickCanvas::fillContextMenu(QMenu& menu) {
                 lib->addAction(QStringLiteral("%1 - %2").arg(layer, id), this, [this, id] { emit openInLibrary(id); });
             }
             lib->setEnabled(!lib->actions().isEmpty());
+            QAction* u = menu.addAction(QStringLiteral("Update from library"), this,
+                                        [this, id = b->id] { emit updateFromLibrary(id); });
+            u->setEnabled(!b->run.stackParts.isEmpty());
         }
         menu.addSeparator();
     }
@@ -1552,6 +1558,7 @@ void BrickWizardDialog::buildUi() {
                                                               brickTitle(*o)));
     });
     connect(canvas_, &BrickCanvas::openInLibrary, this, &BrickWizardDialog::openInLibraryRequested);
+    connect(canvas_, &BrickCanvas::updateFromLibrary, this, [this](const QString& id) { updateBrickFromLibrary(id); });
     connect(canvas_, &BrickCanvas::dimensionPicked, this, [this](const QString& a, const QString& b) {
         // Which side is the part's own (its Dimensions setting): above unless it says below.
         design_.dims.push_back({a, b, design_.brick(a) && design_.brick(a)->dimBelow});
@@ -2389,6 +2396,55 @@ std::vector<Entity> BrickWizardDialog::drawing() const {
     return buildBrickHarness(design_, &catalog_,
                              [this](const QString& id) { return bomItemOf(id); })
         .entities;
+}
+
+bool BrickWizardDialog::updateBrickFromLibrary(const QString& brickId) {
+    Brick* b = design_.brick(brickId);
+    if (!b) return false;
+    // The library as it is in its files NOW - what was changed in the parts library since the wizard opened.
+    catalog_ = PartsCatalog();
+    catalog_.openRemembered();
+    design_.catalog = &catalog_;
+    design_.shapeCache.clear();   // its drawing and faces worked out again from the part
+    QStringList ids;
+    if (b->type == BrickType::End) ids << b->libPart;
+    for (auto it = b->run.stackParts.cbegin(); it != b->run.stackParts.cend(); ++it) ids << it.value();
+    ids.removeAll(QString());
+    bool found = false;
+    for (const QString& id : ids) {
+        const LibraryPart* p = catalog_.byId(id);
+        if (!p) continue;
+        found = true;
+        if (b->type == BrickType::End && id == b->libPart) b->kind = p->kind;   // a part changed to another kind
+        // ITS LINES ON THE BILL say what the part says now - its description, part numbers, maker, unit - with their
+        // quantities and their places kept.
+        if (Document* doc = document()) {
+            BomTable table;
+            table.fromJson(doc->bom());
+            bool changed = false;
+            for (BomRow& r : table.rows) {
+                if (r.partId != id) continue;
+                const BomRow fresh = bomRowFromPart(*p, r.qty);
+                r.description = fresh.description;
+                r.internalPn = fresh.internalPn;
+                r.mfrPn = fresh.mfrPn;
+                r.mfrName = fresh.mfrName;
+                r.unit = fresh.unit;
+                changed = true;
+            }
+            if (changed) {
+                doc->bom() = table.toJson();
+                doc->setDirty(true);
+                emit bomChanged();
+            }
+        }
+    }
+    syncBridgeWires(design_);
+    designChanged();
+    refreshBom();
+    status_->setText(found ? QStringLiteral("%1 updated from the library").arg(brickTitle(*b))
+                           : QStringLiteral("%1: its part is no longer in the library").arg(brickTitle(*b)));
+    return found;
 }
 
 void BrickWizardDialog::setAllDimsSide(bool below) {

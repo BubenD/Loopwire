@@ -118,6 +118,8 @@ signals:
     void brickDoubleClicked(const QString& id);
     // "Open in library" on a brick: its part (or one of its layers' parts) to be shown in the parts library.
     void openInLibrary(const QString& partId);
+    // "Update from library" on a brick: its part read again from the library as it is now.
+    void updateFromLibrary(const QString& brickId);
     // Two bricks clicked while putting a dimension on: the dimension goes between them.
     void dimensionPicked(const QString& a, const QString& b);
     // A brick clicked while setting another's drawing order: `source` goes above (or under) `other`.
@@ -229,6 +231,10 @@ public:
     // put on by hand, the points they are measured from, and the side they all go.
     void openDimensionWizard();
     QDialog* dimensionWizard() const { return dimWizard_; }
+    // UPDATE FROM LIBRARY: the library read again from its files, and the brick - its part's kind, its drawing and
+    // faces, its contacts, its lines on the bill - brought up to what the part is there now. Returns whether the part
+    // was found.
+    bool updateBrickFromLibrary(const QString& brickId);
 
     // THE BILL. Puts one of a part on the drawing's bill of materials. A part the bill already lists
     // is not added without asking; `ask` answers the question (the window asks the user when none is

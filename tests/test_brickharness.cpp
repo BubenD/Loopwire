@@ -3609,6 +3609,49 @@ void testRoundTwenty() {
             if (e.meta.value(QStringLiteral("brickDim")).toString() == QLatin1String("manual")) y = e.points[2].y;
         check(y > 0.0, "dims: a dimension set Above is above, though its part says Below");
     }
+    // UPDATE FROM LIBRARY: the part changed in the library, the brick and its line on the bill follow.
+    {
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_update.plb"));
+        QFile::remove(libFile);
+        auto write = [&libFile](const QString& description) {
+            PartsLibrary lib;
+            LibraryPart p;
+            p.id = QStringLiteral("UPD-CONN");
+            p.kind = PartKind::Connector;
+            p.mfrPn = QStringLiteral("UPD-CONN");
+            p.description = description;
+            p.params[QStringLiteral("includePins")] = QStringLiteral("1");
+            lib.parts = {p};
+            lib.save(libFile);
+        };
+        write(QStringLiteral("Old description"));
+        PartsCatalog cat;
+        cat.openRemembered();
+        cat.connectLibrary(libFile);
+        cat.remember();
+        {
+            Document doc;
+            Editor ed;
+            ed.setDocument(&doc);
+            BrickWizardDialog dlg(&ed);
+            BrickDesign& w = dlg.design();
+            const QString x = w.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+            w.brick(x)->libPart = QStringLiteral("UPD-CONN");
+            dlg.selectBrick(x);   // on the bill
+            write(QStringLiteral("New description"));
+            check(dlg.updateBrickFromLibrary(x), "update: the brick's part read again from the library");
+            QString said;
+            BomTable t;
+            t.fromJson(doc.bom());
+            for (const BomRow& r : t.rows)
+                if (r.partId == QLatin1String("UPD-CONN")) said = r.description;
+            std::printf("  update: the bill now says \"%s\"\n", qPrintable(said));
+            check(said.contains(QStringLiteral("New description")), "update: its line on the bill says what the library says now");
+        }
+        cat.disconnectLibrary(libFile);
+        cat.remember();
+        QFile::remove(libFile);
+    }
     // A BRIDGE WIRE'S MASK: one piece.
     {
         BrickDesign d;

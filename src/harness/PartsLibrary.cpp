@@ -880,7 +880,9 @@ std::vector<PartField> partFields(PartKind kind) {
         case PartKind::Ferrule:
             // THE WIRE IT TAKES, picked from the ferrule sizes there are (or typed): its entry size.
             return {choice("size", "Entry size",
-                           {QStringLiteral("0.25 mm2 (24 AWG)"), QStringLiteral("0.34 mm2 (22 AWG)"),
+                           {QStringLiteral("0.03 mm2 (32 AWG)"), QStringLiteral("0.05 mm2 (30 AWG)"),
+                            QStringLiteral("0.08 mm2 (28 AWG)"), QStringLiteral("0.14 mm2 (26 AWG)"),
+                            QStringLiteral("0.25 mm2 (24 AWG)"), QStringLiteral("0.34 mm2 (22 AWG)"),
                             QStringLiteral("0.5 mm2 (20 AWG)"), QStringLiteral("0.75 mm2 (18 AWG)"),
                             QStringLiteral("1.0 mm2 (18 AWG)"), QStringLiteral("1.5 mm2 (16 AWG)"),
                             QStringLiteral("2.5 mm2 (14 AWG)"), QStringLiteral("4 mm2 (12 AWG)"),
