@@ -456,6 +456,12 @@ QJsonObject BrickDesign::toJson() const {
                                                    {"stack", QJsonArray::fromStringList(r.stack)},
                                                    {"transitions", endsKey(r.transitions)},
                                                    {"transitionWidthMm", r.transitionWidthMm},
+                                                   {"transitionPart", r.transitionPart},
+                                                   {"branchCover", r.branchCover},
+                                                   {"branchShrinkPart", r.branchShrinkPart},
+                                                   {"fanEndShrink", r.fanEndShrink},
+                                                   {"fanEndShrinkMm", r.fanEndShrinkMm},
+                                                   {"fanEndShrinkPart", r.fanEndShrinkPart},
                                                    {"dimTotal", r.dimTotal},
                                                    {"dimFans", r.dimFans},
                                                    {"dimBetween", r.dimBetween},
@@ -489,6 +495,8 @@ QJsonObject BrickDesign::toJson() const {
     {
         QJsonObject lo{{"a", l.a}, {"b", l.b}, {"portA", l.portA}, {"portB", l.portB}, {"wires", l.wires}};
         if (l.lengthMm > 1e-9) lo.insert(QStringLiteral("lengthMm"), l.lengthMm);
+        if (!l.wireList.isEmpty()) lo.insert(QStringLiteral("wireList"), l.wireList);
+        if (l.endBoot) lo.insert(QStringLiteral("endBoot"), true);
         ls.append(lo);
     }
     QJsonArray ds;
@@ -559,6 +567,12 @@ BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
                 for (auto it = sp.begin(); it != sp.end(); ++it) s.stackParts.insert(it.key(), it.value().toString());
             }
             s.transitionWidthMm = std::max(0.0, r.value(QStringLiteral("transitionWidthMm")).toDouble(0.0));
+            s.transitionPart = r.value(QStringLiteral("transitionPart")).toString();
+            s.branchCover = r.value(QStringLiteral("branchCover")).toInt(0);
+            s.branchShrinkPart = r.value(QStringLiteral("branchShrinkPart")).toString();
+            s.fanEndShrink = r.value(QStringLiteral("fanEndShrink")).toBool(false);
+            s.fanEndShrinkMm = std::max(0.5, r.value(QStringLiteral("fanEndShrinkMm")).toDouble(10.0));
+            s.fanEndShrinkPart = r.value(QStringLiteral("fanEndShrinkPart")).toString();
             s.dimTotal = r.value(QStringLiteral("dimTotal")).toBool();
             s.dimFans = r.value(QStringLiteral("dimFans")).toBool();
             s.dimBetween = r.value(QStringLiteral("dimBetween")).toBool();
@@ -599,6 +613,8 @@ BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
         l.portB = lo.value(QStringLiteral("portB")).toInt(-1);
         l.wires = lo.value(QStringLiteral("wires")).toInt(0);
         l.lengthMm = std::max(0.0, lo.value(QStringLiteral("lengthMm")).toDouble(0.0));
+        l.wireList = lo.value(QStringLiteral("wireList")).toString();
+        l.endBoot = lo.value(QStringLiteral("endBoot")).toBool(false);
         d.links.push_back(l);
     }
     return d;
@@ -1808,7 +1824,9 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                     other = jn.a == s.id ? jn.b : jn.a;
                 }
                 const BrickLink* l = design.link(s.id, other);
-                const int w = l && l->wires > 0 ? l->wires : 0;
+                // The wires picked for this part - as many as are picked - or the count said, or an even share.
+                const int picked = l && !l->wireList.trimmed().isEmpty() ? parseWireList(l->wireList, s.run.wires).size() : 0;
+                const int w = picked > 0 ? picked : l && l->wires > 0 ? l->wires : 0;
                 said << w;
                 if (w > 0) given += w;
                 else ++open;
@@ -2442,15 +2460,11 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         std::stable_sort(subs.begin(), subs.end(), [&](size_t x, size_t y) {
             return dot(atB[x].centre, toward.perp()) < dot(atB[y].centre, toward.perp());
         });
-        const double packed = ww * 1.5;
-        double total = 0.0;
-        for (size_t k : subs) total += std::max(1, branches[k].wires) * packed;
-        double acc = -total / 2.0;
+        // EVERY BRANCH STARTS AT THE MIDDLE of the cable body's end face and fans out from there - not each from its
+        // own stretch of the face, out at its edges.
         for (size_t k : subs) {
-            const double width = std::max(1, branches[k].wires) * packed;
-            splitAt[k] = at + toward.perp() * (acc + width / 2.0);
+            splitAt[k] = at;
             splitDir[k] = toward;
-            acc += width;
         }
     }
 
@@ -2809,7 +2823,13 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         std::vector<Entity> made;
 
         const bool laidUp = s.type == BrickType::TwistedPair || s.type == BrickType::TwistedBundle;
-        const QString outer = noCover ? QStringLiteral("wires") : r.outermost();
+        // A BRANCH AFTER THE CABLE DIVIDES is bare wires fanning out to its part, or wires under heatshrink - never
+        // the cable's own body, which ends where it divides. A cable with no cable or heatshrink of its own is a
+        // fanout's gathered wires all the way.
+        const QString outer = noCover ? QStringLiteral("wires")
+                              : isSub ? (r.branchCover == 1 && r.outermost() != QLatin1String("wires") ? QStringLiteral("heatshrink")
+                                                                                                    : QStringLiteral("wires"))
+                                      : r.outermost();
         double bodyWidth = 0.0;
         if (wires == 1) {
             // ONE WIRE is a wire, not a bundle.
@@ -2899,9 +2919,18 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                                                                             : r.transitions;
                     // Never where the cable divides: a branch has no transition at its start there, nor the trunk at
                     // its end - the transition is at the cable's end, where it fans out into its part.
-                    const bool wantA = (ends == RunEnds::Start || ends == RunEnds::Both) && !isSub;
-                    const bool wantB = (ends == RunEnds::Finish || ends == RunEnds::Both) && !isTrunk;
-                    if ((wantA && !spreadA) || (wantB && !spreadB && !loose)) {
+                    // ON THE CABLE'S BODY ONLY: at its start or its finish - which, for a cable that divides, may be
+                    // where it divides. Where it divides into branches under heatshrink, a transition is there always.
+                    // A branch has one at its end only where it is asked for (its link's endBoot).
+                    bool wantA = (ends == RunEnds::Start || ends == RunEnds::Both) && !isSub;
+                    bool wantB = (ends == RunEnds::Finish || ends == RunEnds::Both) && !isSub;
+                    if (isTrunk && r.branchCover == 1) wantB = true;
+                    if (isSub) {
+                        const BrickLink* bl = design.link(s.id, br.b.node);
+                        wantB = bl && bl->endBoot;
+                    }
+                    out.transitionCount[s.id] += (wantA ? 1 : 0) + (wantB ? 1 : 0);
+                    if ((wantA && !spreadA) || (wantB && !spreadB && (!loose || isTrunk))) {
                         run.meta.insert(QStringLiteral("twistEndBoot"), true);
                         run.meta.insert(QStringLiteral("twistEndBootRecovered"), true);
                     }
@@ -2933,7 +2962,55 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             if (!laidUp && r.trunkWires > 0)
                 run.meta.insert(QStringLiteral("twistTrunkWires"), std::clamp(r.trunkWires, 1, wires));
             made.push_back(run);
+            // HEATSHRINK OVER EACH WIRE'S END where they fan out into a part: a sleeve on the last so many millimetres
+            // of every wire, its own outline round the wire.
+            if (r.fanEndShrink && !laidUp && (spreadA || spreadB)) {
+                const std::vector<std::vector<Vec2>> strands = twistedPairStrands(run);
+                const double len = std::max(0.5, r.fanEndShrinkMm);
+                const double half = ww / 2.0 + 0.5;
+                auto sleeve = [&](const std::vector<Vec2>& c, bool atEnd) {
+                    if (c.size() < 2) return;
+                    std::vector<Vec2> path = c;
+                    if (atEnd) std::reverse(path.begin(), path.end());
+                    // The last `len` of it, from its end.
+                    std::vector<Vec2> piece{path.front()};
+                    double acc = 0.0;
+                    for (size_t k = 1; k < path.size() && acc < len; ++k) {
+                        const double seg = distance(path[k - 1], path[k]);
+                        if (acc + seg >= len) {
+                            piece.push_back(path[k - 1] + (path[k] - path[k - 1]).normalized() * (len - acc));
+                            acc = len;
+                        } else {
+                            piece.push_back(path[k]);
+                            acc += seg;
+                        }
+                    }
+                    if (piece.size() < 2) return;
+                    std::vector<Vec2> ring = offsetPolyline(piece, half);
+                    const std::vector<Vec2> other = offsetPolyline(piece, -half);
+                    ring.insert(ring.end(), other.rbegin(), other.rend());
+                    ring.push_back(ring.front());
+                    Entity sl;
+                    sl.type = EntityType::Polyline;
+                    sl.points = ring;
+                    sl.meta.insert(QStringLiteral("mechRole"), QStringLiteral("fanShrink"));
+                    made.push_back(sl);
+                    out.fanEndCount[s.id] += 1;
+                };
+                // Each wire is its two edges, the first so many of the lines: anything after them is not a wire.
+                for (size_t j = 0; j + 1 < strands.size() && j / 2 < static_cast<size_t>(wires); j += 2) {
+                    const auto& ea = strands[j];
+                    const auto& eb = strands[j + 1];
+                    if (ea.size() != eb.size() || ea.size() < 2) continue;
+                    std::vector<Vec2> c(ea.size());
+                    for (size_t q = 0; q < ea.size(); ++q) c[q] = (ea[q] + eb[q]) * 0.5;
+                    if (spreadA) sleeve(c, false);
+                    if (spreadB) sleeve(c, true);
+                }
+            }
         }
+        // How long a branch after the cable divides is drawn - what its heatshrink comes to on the bill.
+        if (isSub && !br.b.node.isEmpty()) out.branchLengths.insert(s.id + QLatin1Char('|') + br.b.node, routeLength(route));
 
         // Where each bridge wire on this run leaves it: its end face, where its fan starts at that end, going on out
         // that way - and how wide the face is there, so the bridge comes out of the face and not its middle.

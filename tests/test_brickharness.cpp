@@ -1098,7 +1098,8 @@ void testRoundFive() {
     check(labels && labels->isVisible(), "sections: and back");
     // FOLDED, A SECTION IS ITS HEADER, and the next follows straight after it.
     auto* foldStack = dlg.findChild<QToolButton*>(QStringLiteral("brickFoldStack"));
-    auto* foldDims = dlg.findChild<QToolButton*>(QStringLiteral("brickFoldDims"));
+    // The section right after the stack is the branches and wire ends now.
+    auto* foldDims = dlg.findChild<QToolButton*>(QStringLiteral("brickFoldBranches"));
     auto* foldNets = dlg.findChild<QToolButton*>(QStringLiteral("brickFoldNets"));
     auto yOf = [&dlg](QWidget* w) { return w->mapTo(&dlg, QPoint(0, 0)).y(); };
     if (foldStack && foldDims) {
@@ -3705,7 +3706,7 @@ void testRoundTwentyOne() {
                 trunkSides = e.meta.value(QStringLiteral("twistBodyTransitionSides")).toString();
         }
     std::printf("  split: %d runs with the cable's body, the transition at the %s\n", bodies, qPrintable(trunkSides));
-    check(bodies == 3, "split: the cable goes on to each part - its body on the trunk and on both branches");
+    check(bodies == 1, "split: the cable's body ends where it divides - its branches are wires (or heatshrink, when asked)");
     check(trunkSides == QLatin1String("start"),
           "split: a transition set at the finish is at that end of the cable (the far part), not where it divides");
     // SHIFT AND DRAG: that part gets a length of its own; the other keeps the run's.
@@ -3749,6 +3750,84 @@ void testRoundTwentyOne() {
     }
 }
 
+// ROUND TWENTY-TWO: after a cable divides, bare wires or wires under heatshrink - with a transition where the body ends
+// and at a branch's end when asked - the branches from the middle of its end, the wires each picked for a branch;
+// heatshrink over each wire end where the wires fan out.
+void testRoundTwentyTwo() {
+    auto harness = [](BrickDesign& d, QString& c, QString& sa, QString& a2) {
+        sa = d.addBrick(BrickType::End, PartKind::Connector, 0, 1);
+        a2 = d.addBrick(BrickType::End, PartKind::Connector, 0, 3);
+        const QString sb = d.addBrick(BrickType::End, PartKind::Connector, 4, 2);
+        c = d.addBrick(BrickType::Run, PartKind::Cable, 2, 2);
+        d.connect(sa, c, nullptr, -1, 0);
+        d.connect(a2, c, nullptr, -1, 0);
+        d.connect(c, sb, nullptr, 1, -1);
+        d.brick(c)->run.wires = 6;
+    };
+    {
+        BrickDesign d;
+        QString c, sa, a2;
+        harness(d, c, sa, a2);
+        BrickBuild b = buildBrickHarness(d, nullptr);
+        std::vector<const Entity*> runs;
+        for (const Entity& e : b.entities)
+            if (e.type == EntityType::TwistedPair && e.meta.value(QStringLiteral("brickId")).toString() == c) runs.push_back(&e);
+        int bodied = 0;
+        Vec2 trunkEnd;
+        std::vector<Vec2> starts;
+        for (const Entity* e : runs) {
+            if (e->meta.value(QStringLiteral("twistWires")).toInt() == 6) trunkEnd = e->points.back();
+            else starts.push_back(e->points.front());
+            if (!e->meta.value(QStringLiteral("twistBody")).toString().isEmpty()) ++bodied;
+        }
+        check(runs.size() == 3 && bodied == 1, "branches: after the cable's body the wires fan out bare - the body is on the trunk only");
+        check(starts.size() == 2 && distance(starts[0], starts[1]) < 1e-6 && distance(starts[0], trunkEnd) < 1e-6,
+              "branches: every branch starts at the middle of the cable body's end");
+        // UNDER HEATSHRINK: a transition where the body ends, heatshrink on each branch, one at a branch's end.
+        d.brick(c)->run.branchCover = 1;
+        d.link(c, a2)->endBoot = true;
+        b = buildBrickHarness(d, nullptr);
+        int shrunk = 0;
+        for (const Entity& e : b.entities)
+            if (e.type == EntityType::TwistedPair && e.meta.value(QStringLiteral("brickId")).toString() == c &&
+                e.meta.value(QStringLiteral("twistBody")).toString() == QLatin1String("heatshrink"))
+                ++shrunk;
+        std::printf("  branches: %d under heatshrink, %d transitions\n", shrunk, b.transitionCount.value(c));
+        check(shrunk == 2, "branches: under heatshrink, each branch is heatshrink over its wires");
+        check(b.transitionCount.value(c) == 2, "branches: a transition where the body ends, and one at the end of the branch asked");
+        // THE WIRES PICKED FOR A BRANCH.
+        d.link(c, sa)->wireList = QStringLiteral("1,2,3,4");
+        b = buildBrickHarness(d, nullptr);
+        int toSa = 0;
+        for (const Entity& e : b.entities)
+            if (e.type == EntityType::TwistedPair && e.meta.value(QStringLiteral("brickId")).toString() == c &&
+                e.meta.value(QStringLiteral("twistWires")).toInt() != 6 && distance(e.points.back(), b.faces.value(sa + QStringLiteral(":0")).centre) < 1.0)
+                toSa = e.meta.value(QStringLiteral("twistWires")).toInt();
+        check(toSa == 4, "branches: the wires picked for a branch are its wires");
+        check(BrickDesign::fromJson(d.toJson()).link(c, sa)->wireList == QStringLiteral("1,2,3,4") &&
+                  BrickDesign::fromJson(d.toJson()).brick(c)->run.branchCover == 1,
+              "branches: kept with the harness");
+    }
+    // HEATSHRINK OVER EACH WIRE END where they fan out.
+    {
+        BrickDesign d;
+        const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString r = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString y = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        d.connect(x, r);
+        d.connect(r, y);
+        d.brick(r)->run.wires = 4;
+        d.brick(r)->run.fanEndShrink = true;
+        d.brick(r)->run.fanEndShrinkMm = 6.0;
+        const BrickBuild b = buildBrickHarness(d, nullptr);
+        int sleeves = 0;
+        for (const Entity& e : b.entities)
+            if (e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("fanShrink")) ++sleeves;
+        std::printf("  wire ends: %d sleeved\n", sleeves);
+        check(sleeves == 8 && b.fanEndCount.value(r) == 8, "wire ends: a heatshrink over each wire's end, at both fans");
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -3784,6 +3863,7 @@ int run_brickharness_tests() {
     testRoundNineteen();
     testRoundTwenty();
     testRoundTwentyOne();
+    testRoundTwentyTwo();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

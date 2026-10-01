@@ -2143,6 +2143,80 @@ QWidget* BrickWizardDialog::buildRunPage() {
     }
     stackBox->setTitle(QString());
     foldSection(QStringLiteral("Stack — from the inside out"), stackBox, cols, "brickFoldStack", 150);
+    // BRANCHES AND WIRE ENDS: the transition heatshrink's part; for a cable to several parts at one end, what its
+    // wires are after its body (bare, or under heatshrink) and which go to each part, with a transition at a branch's
+    // end; and heatshrink over each wire's end where they fan out.
+    {
+        auto* box = new QWidget(page);
+        auto* bl = new QFormLayout(box);
+        auto partBox = [this, box](const char* name, std::initializer_list<PartKind> kinds) {
+            auto* c = new QComboBox(box);
+            c->setObjectName(QLatin1String(name));
+            c->addItem(QStringLiteral("(no part number)"), QString());
+            for (PartKind k : kinds)
+                for (const LibraryPart* p : catalog_.ofKind(k))
+                    c->addItem((p->mfrPn.isEmpty() ? p->title() : p->mfrPn) +
+                                   (p->description.isEmpty() ? QString() : QStringLiteral(" — ") + p->description),
+                               p->id);
+            return c;
+        };
+        transitionPart_ = partBox("brickTransitionPart", {PartKind::Heatshrink, PartKind::HeatshrinkBoot});
+        bl->addRow(QStringLiteral("Transition P/N"), transitionPart_);
+        branchCover_ = new QComboBox(box);
+        branchCover_->setObjectName(QStringLiteral("brickBranchCover"));
+        branchCover_->addItems({QStringLiteral("Wires fan out"), QStringLiteral("Wires under heatshrink, then fan out")});
+        bl->addRow(QStringLiteral("After the cable"), branchCover_);
+        branchShrink_ = partBox("brickBranchShrink", {PartKind::Heatshrink});
+        bl->addRow(QStringLiteral("Branch heatshrink P/N"), branchShrink_);
+        branches_ = new QTableWidget(0, 3, box);
+        branches_->setObjectName(QStringLiteral("brickBranches"));
+        branches_->setHorizontalHeaderLabels(
+            {QStringLiteral("Branch to"), QStringLiteral("Wires (1,3)"), QStringLiteral("End transition")});
+        branches_->verticalHeader()->setVisible(false);
+        branches_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+        branches_->setMinimumHeight(90);
+        bl->addRow(branches_);
+        fanShrink_ = new QCheckBox(QStringLiteral("Heatshrink over each wire end"), box);
+        fanShrink_->setObjectName(QStringLiteral("brickFanShrink"));
+        bl->addRow(fanShrink_);
+        fanShrinkLen_ = new QDoubleSpinBox(box);
+        fanShrinkLen_->setObjectName(QStringLiteral("brickFanShrinkLen"));
+        fanShrinkLen_->setRange(0.5, 200.0);
+        fanShrinkLen_->setSuffix(QStringLiteral(" mm from the end"));
+        bl->addRow(QStringLiteral("Its length"), fanShrinkLen_);
+        fanShrinkPart_ = partBox("brickFanShrinkPart", {PartKind::Heatshrink, PartKind::Marker, PartKind::Sleeve});
+        bl->addRow(QStringLiteral("Its P/N"), fanShrinkPart_);
+        branchesBox_ = box;
+        auto edit = [this](const std::function<void(Brick&)>& fn) {
+            Brick* b = design_.brick(canvas_->selected());
+            if (!b || !brickIsSpecial(b->type)) return;
+            fn(*b);
+            designChanged();
+        };
+        connect(transitionPart_, &QComboBox::activated, this, [this, edit](int i) {
+            const QString id = transitionPart_->itemData(i).toString();
+            edit([id](Brick& b) { b.run.transitionPart = id; });
+        });
+        connect(branchCover_, &QComboBox::activated, this, [this, edit](int i) {
+            edit([i](Brick& b) { b.run.branchCover = i; });
+            loadBranches();
+        });
+        connect(branchShrink_, &QComboBox::activated, this, [this, edit](int i) {
+            const QString id = branchShrink_->itemData(i).toString();
+            edit([id](Brick& b) { b.run.branchShrinkPart = id; });
+        });
+        connect(fanShrink_, &QCheckBox::toggled, this, [this, edit](bool on) {
+            edit([on](Brick& b) { b.run.fanEndShrink = on; });
+            loadBranches();
+        });
+        connect(fanShrinkLen_, &QDoubleSpinBox::valueChanged, this,
+                [edit](double v) { edit([v](Brick& b) { b.run.fanEndShrinkMm = v; }); });
+        connect(fanShrinkPart_, &QComboBox::activated, this, [this, edit](int i) {
+            const QString id = fanShrinkPart_->itemData(i).toString();
+            edit([id](Brick& b) { b.run.fanEndShrinkPart = id; });
+        });
+        foldSection(QStringLiteral("Branches and wire ends"), box, cols, "brickFoldBranches", 260);
+    }
     auto editStack = [this](auto fn) {
         Brick* b = design_.brick(canvas_->selected());
         if (!b || !brickIsSpecial(b->type)) return;
@@ -2908,7 +2982,74 @@ void BrickWizardDialog::loadPanel() {
     loadLayerPart();
     loadLabels();
     loadNets();
+    loadBranches();
     showActuals();
+}
+
+void BrickWizardDialog::loadBranches() {
+    if (!branchesBox_) return;
+    const Brick* b = design_.brick(canvas_->selected());
+    if (!b || !brickIsSpecial(b->type)) return;
+    const BrickRunSpec& r = b->run;
+    auto pick = [](QComboBox* c, const QString& id) {
+        const QSignalBlocker hush(c);
+        const int at = c->findData(id);
+        c->setCurrentIndex(at >= 0 ? at : 0);
+    };
+    pick(transitionPart_, r.transitionPart);
+    pick(branchShrink_, r.branchShrinkPart);
+    pick(fanShrinkPart_, r.fanEndShrinkPart);
+    {
+        const QSignalBlocker a(branchCover_), c(fanShrink_), d(fanShrinkLen_);
+        branchCover_->setCurrentIndex(std::clamp(r.branchCover, 0, 1));
+        fanShrink_->setChecked(r.fanEndShrink);
+        fanShrinkLen_->setValue(r.fanEndShrinkMm);
+    }
+    fanShrinkLen_->setEnabled(r.fanEndShrink);
+    fanShrinkPart_->setEnabled(r.fanEndShrink);
+    // THE BRANCHES: only for a cable going to several parts at one end - the end with more than one.
+    QStringList parts;
+    for (int port : {0, 1}) {
+        QStringList here;
+        for (const QString& o : design_.sideOf(b->id, port))
+            if (const Brick* ob = design_.brick(o); ob && ob->type == BrickType::End) here << o;
+        if (here.size() > 1) parts = here;
+    }
+    const bool split = parts.size() > 1;
+    const bool covered = split && r.branchCover == 1;
+    branchCover_->setEnabled(split);
+    branchShrink_->setEnabled(covered);
+    branches_->setEnabled(split);
+    const QSignalBlocker hush(branches_);
+    branches_->setRowCount(static_cast<int>(parts.size()));
+    for (int row = 0; row < static_cast<int>(parts.size()); ++row) {
+        const QString pid = parts[row];
+        const Brick* ob = design_.brick(pid);
+        auto* name = new QTableWidgetItem(ob->name.isEmpty() ? brickTitle(*ob) : ob->name);
+        name->setFlags(Qt::ItemIsEnabled);
+        branches_->setItem(row, 0, name);
+        const BrickLink* l = design_.link(b->id, pid);
+        auto* wires = new QLineEdit(l ? l->wireList : QString(), branches_);
+        wires->setPlaceholderText(QStringLiteral("an even share"));
+        connect(wires, &QLineEdit::editingFinished, this, [this, wires, sid = b->id, pid] {
+            if (BrickLink* lk = design_.link(sid, pid); lk && lk->wireList != wires->text().trimmed()) {
+                lk->wireList = wires->text().trimmed();
+                designChanged();
+            }
+        });
+        branches_->setCellWidget(row, 1, wires);
+        auto* boot = new QCheckBox(branches_);
+        boot->setChecked(l && l->endBoot);
+        boot->setEnabled(covered);
+        boot->setToolTip(QStringLiteral("A transition heatshrink at the end of this branch, before it fans out"));
+        connect(boot, &QCheckBox::toggled, this, [this, sid = b->id, pid](bool on) {
+            if (BrickLink* lk = design_.link(sid, pid)) {
+                lk->endBoot = on;
+                designChanged();
+            }
+        });
+        branches_->setCellWidget(row, 2, boot);
+    }
 }
 
 void BrickWizardDialog::showActuals() {
@@ -3565,6 +3706,21 @@ QHash<QString, int> BrickWizardDialog::partCounts() const {
     QHash<QString, int> n;
     for (const Brick& b : design_.bricks)
         if (b.type == BrickType::End && !b.libPart.isEmpty()) ++n[b.libPart];
+    // AND WHAT IS COUNTED IN PIECES ON THE RUNS: each transition heatshrink drawn, each wire end sleeved - where
+    // their parts are bought by the piece.
+    auto pieces = [this](const QString& id) {
+        const LibraryPart* p = id.isEmpty() ? nullptr : catalog_.byId(id);
+        if (!p) return false;
+        const QString unit = p->unit.isEmpty() ? defaultUnitForKind(p->kind) : p->unit;
+        return unit != QLatin1String("m") && unit != QLatin1String("mm") && unit != QLatin1String("cm");
+    };
+    for (const Brick& b : design_.bricks) {
+        if (!brickIsSpecial(b.type)) continue;
+        if (pieces(b.run.transitionPart) && extraTransitions_.value(b.id) > 0)
+            n[b.run.transitionPart] += extraTransitions_.value(b.id);
+        if (b.run.fanEndShrink && pieces(b.run.fanEndShrinkPart) && extraFanEnds_.value(b.id) > 0)
+            n[b.run.fanEndShrinkPart] += extraFanEnds_.value(b.id);
+    }
     return n;
 }
 
@@ -3580,6 +3736,19 @@ QHash<QString, double> BrickWizardDialog::partLengths() const {
             if (id.isEmpty()) continue;
             mm[id] += longest * (layer == QLatin1String("wires") ? wires : 1);
         }
+        // THE HEATSHRINK OVER EACH BRANCH after the cable divides: as long as the branches are drawn.
+        if (b.run.branchCover == 1 && !b.run.branchShrinkPart.isEmpty()) {
+            const QString key = b.id + QLatin1Char('|');
+            for (auto it = extraBranchLengths_.cbegin(); it != extraBranchLengths_.cend(); ++it)
+                if (it.key().startsWith(key)) mm[b.run.branchShrinkPart] += it.value();
+        }
+        // A sleeve over each wire end, where its part is bought by length: its length, so many times.
+        if (b.run.fanEndShrink && !b.run.fanEndShrinkPart.isEmpty())
+            if (const LibraryPart* p = catalog_.byId(b.run.fanEndShrinkPart)) {
+                const QString unit = p->unit.isEmpty() ? defaultUnitForKind(p->kind) : p->unit;
+                if (unit == QLatin1String("m") || unit == QLatin1String("mm") || unit == QLatin1String("cm"))
+                    mm[b.run.fanEndShrinkPart] += extraFanEnds_.value(b.id) * b.run.fanEndShrinkMm;
+            }
     }
     return mm;
 }
@@ -3751,6 +3920,22 @@ void BrickWizardDialog::refreshPreview() {
     syncBridgeWires(design_);   // wires taken from a joined special follow it
     recordHistory();
     if (partDrag_.isEmpty() && runDrag_.isEmpty()) {
+        // What the drawing makes of the runs - how many transitions, wire ends sleeved, how long each branch - for the
+        // bill, worked out from the design as it is now (only when a run has a part number for any of them).
+        bool extras = false;
+        for (const Brick& b : design_.bricks)
+            extras = extras || (brickIsSpecial(b.type) && (!b.run.transitionPart.isEmpty() || !b.run.branchShrinkPart.isEmpty() ||
+                                                           (b.run.fanEndShrink && !b.run.fanEndShrinkPart.isEmpty())));
+        if (extras) {
+            const BrickBuild pre = buildBrickHarness(design_, &catalog_);
+            extraBranchLengths_ = pre.branchLengths;
+            extraTransitions_ = pre.transitionCount;
+            extraFanEnds_ = pre.fanEndCount;
+        } else {
+            extraBranchLengths_.clear();
+            extraTransitions_.clear();
+            extraFanEnds_.clear();
+        }
         syncLiveBom();
         syncLiveLengths();
     }

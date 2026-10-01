@@ -469,6 +469,20 @@ private:
     void syncLiveLengths();
     QComboBox* bridgeAt_ = nullptr;   // which branch of its cable a bridge wire comes out of
     bool partDragOwn_ = false;        // Shift held: the part dragged gets a length of its own
+    // What the drawing made of the runs, for the bill (see refreshPreview).
+    QHash<QString, double> extraBranchLengths_;
+    QHash<QString, int> extraTransitions_;
+    QHash<QString, int> extraFanEnds_;
+    // THE BRANCHES AND WIRE ENDS section of a run's panel.
+    QWidget* branchesBox_ = nullptr;
+    QComboBox* transitionPart_ = nullptr;
+    QComboBox* branchCover_ = nullptr;
+    QComboBox* branchShrink_ = nullptr;
+    QTableWidget* branches_ = nullptr;
+    QCheckBox* fanShrink_ = nullptr;
+    QDoubleSpinBox* fanShrinkLen_ = nullptr;
+    QComboBox* fanShrinkPart_ = nullptr;
+    void loadBranches();
     bool liveInit_ = false;
     QHash<QString, int> partCounts() const;
     void syncLiveBom();

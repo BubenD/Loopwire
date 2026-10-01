@@ -89,6 +89,17 @@ struct BrickRunSpec {
     // HOW WIDE THE TRANSITION HEATSHRINK IS; nought = as the drawing sizes it. Never narrower than the
     // cable it goes over - a figure below that is drawn at the cable's width.
     double transitionWidthMm = 0.0;
+    // THE PART NUMBER OF ITS TRANSITION HEATSHRINKS - at the ends of the cable's body, where it divides, at a
+    // branch's end.
+    QString transitionPart;
+    // A CABLE TO SEVERAL PARTS AT ONE END: what its wires are after its body ends - 0 bare wires fanning out to each
+    // part, 1 each branch of wires under heatshrink (with a transition where the body ends) and then its fan.
+    int branchCover = 0;
+    QString branchShrinkPart;   // the heatshrink over a branch's wires
+    // HEATSHRINK OVER EACH WIRE'S END where the wires fan out: on or off, how long from the end, and its part number.
+    bool fanEndShrink = false;
+    double fanEndShrinkMm = 10.0;
+    QString fanEndShrinkPart;
     // Dimensions: the whole run, each fan, and what is between the fans.
     bool dimTotal = false;
     bool dimFans = false;
@@ -173,6 +184,10 @@ struct BrickLink {
     // ITS OWN LENGTH, where a cable goes to several parts at one end: 0 = locked to the run's length with the others;
     // set (Shift and the part dragged on the drawing), this branch is that long whatever the others are.
     double lengthMm = 0.0;
+    // WHICH OF THE CABLE'S WIRES go to this part, "1,3" (its count with them); empty, an even share.
+    QString wireList;
+    // A TRANSITION HEATSHRINK AT THE END OF THIS BRANCH, before it fans out into the part.
+    bool endBoot = false;
 };
 
 // WHAT A BRICK LOOKS LIKE UNTURNED: its connection faces - where, which way they look, how long -
@@ -395,6 +410,11 @@ struct BrickBuild {
     QHash<QString, double> scales;          // what each end was drawn at, by id - Auto's figure included
     QStringList problems;                   // what could not be drawn, and why
     double rowPitch = 0.0;                  // how far apart the pane's rows were drawn
+    // How long each branch after a cable divides is drawn, by "<special>|<part>" - for its heatshrink on the bill.
+    QHash<QString, double> branchLengths;
+    // How many transition heatshrinks each special has on it, and how many wire ends are covered at its fans.
+    QHash<QString, int> transitionCount;
+    QHash<QString, int> fanEndCount;
 };
 
 // THE DRAWING: every end as its library part (or a placeholder of its kind) set down by its entry
