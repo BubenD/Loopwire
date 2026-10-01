@@ -3808,6 +3808,17 @@ void testRoundTwentyTwo() {
                   BrickDesign::fromJson(d.toJson()).brick(c)->run.branchCover == 1,
               "branches: kept with the harness");
     }
+    // A TRANSITION AT A LOOSE END: a cable on a part at one end only, its transition asked at both ends, has it at
+    // the loose end too.
+    {
+        BrickDesign d;
+        const QString x = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        d.connect(c, x, nullptr, 1, -1);
+        d.brick(c)->run.transitions = RunEnds::Both;
+        const BrickBuild b = buildBrickHarness(d, nullptr);
+        check(b.transitionCount.value(c) == 2, "transition: at the loose end of a cable too, not only at its part");
+    }
     // HEATSHRINK OVER EACH WIRE END where they fan out.
     {
         BrickDesign d;

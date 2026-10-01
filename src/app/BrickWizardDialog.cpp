@@ -1849,6 +1849,8 @@ QWidget* BrickWizardDialog::buildRunPage() {
     auto* page = new QWidget;
     auto* form = new QFormLayout(page);
     runForm_ = form;
+    // SHORT FIELDS: a figure is a few characters - stretched across the whole panel it was a long empty bar.
+    form->setFieldGrowthPolicy(QFormLayout::FieldsStayAtSizeHint);
     runKind_ = new QLabel(page);
     form->addRow(QStringLiteral("Special"), runKind_);
     auto spin = [page](const char* name, double lo, double hi, double step, const QString& suffix,
@@ -1859,6 +1861,7 @@ QWidget* BrickWizardDialog::buildRunPage() {
         s->setSingleStep(step);
         s->setDecimals(1);
         s->setSuffix(suffix);
+        s->setMaximumWidth(160);
         if (!special.isEmpty()) s->setSpecialValueText(special);
         return s;
     };

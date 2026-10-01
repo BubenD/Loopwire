@@ -2930,7 +2930,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                         wantB = bl && bl->endBoot;
                     }
                     out.transitionCount[s.id] += (wantA ? 1 : 0) + (wantB ? 1 : 0);
-                    if ((wantA && !spreadA) || (wantB && !spreadB && (!loose || isTrunk))) {
+                    if ((wantA && !spreadA) || (wantB && !spreadB)) {
                         run.meta.insert(QStringLiteral("twistEndBoot"), true);
                         run.meta.insert(QStringLiteral("twistEndBootRecovered"), true);
                     }
