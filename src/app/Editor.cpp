@@ -17614,6 +17614,10 @@ void Editor::writeBundleMeta(Entity& e, bool straight) const {
         e.meta.insert(QStringLiteral("twistStrip"), true);
         if (twistStripLen_ > 1e-9) e.meta.insert(QStringLiteral("twistStripLen"), twistStripLen_);
     }
+    if (straight && twistEndShrink_) {
+        e.meta.insert(QStringLiteral("twistEndShrink"), true);
+        e.meta.insert(QStringLiteral("twistEndShrinkLen"), twistEndShrinkLen_);
+    }
     if (straight && twistTrunk_ > 0)
         e.meta.insert(QStringLiteral("twistTrunkWires"),
                       std::clamp(twistTrunk_, 1, std::clamp(twistWires_, 2, kTwistedMaxWires)));
@@ -17773,6 +17777,19 @@ void Editor::setTwistBodyShrinkFinish(double mm) {
     const double next = std::max(-1.0, mm);
     if (std::abs(twistBodyShrinkFinish_ - next) < 1e-9) return;
     twistBodyShrinkFinish_ = next;
+    emit overlayChanged();
+}
+
+void Editor::setTwistEndShrink(bool on) {
+    if (twistEndShrink_ == on) return;
+    twistEndShrink_ = on;
+    emit overlayChanged();
+}
+
+void Editor::setTwistEndShrinkLen(double mm) {
+    const double next = std::max(0.5, mm);
+    if (std::abs(twistEndShrinkLen_ - next) < 1e-9) return;
+    twistEndShrinkLen_ = next;
     emit overlayChanged();
 }
 

@@ -186,6 +186,9 @@ std::vector<std::vector<Vec2>> twistedPairStrands(const Entity& pair);
 // Kept apart from the strands above because the strands come strictly TWO PER WIRE, and everything
 // that walks them in pairs - the joints on every wire, for one - would take a cut end for an edge.
 std::vector<std::vector<Vec2>> twistedPairEndCaps(const Entity& pair);
+// HEATSHRINK OVER THE WIRE ENDS (meta twistEndShrink, its length twistEndShrinkLen - 10 mm when not said): a closed
+// outline round the last so much of each wire, at each end where the wires fan out.
+std::vector<std::vector<Vec2>> twistedPairEndSleeves(const Entity& pair);
 // THE STRAIGHT STRETCHES OF THE DRAWN LINES: one segment per stretch of wire that is actually
 // straight, with the little facets an arc is drawn as left out and anything too short to be worth
 // marking dropped. A harness is mostly straight line - the bundle, the slants of the fan, the flush

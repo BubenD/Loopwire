@@ -262,6 +262,11 @@ public:
     TwistFigures twistPreviewFigures() const;
     bool twistStrip() const { return twistStrip_; }
     void setTwistStrip(bool on);
+    // HEATSHRINK OVER EACH WIRE'S END where the wires fan out, and how long it is from the end.
+    bool twistEndShrink() const { return twistEndShrink_; }
+    void setTwistEndShrink(bool on);
+    double twistEndShrinkLen() const { return twistEndShrinkLen_; }
+    void setTwistEndShrinkLen(double mm);
     // THE CONVERGED STRETCH AS A CABLE UNDER HEATSHRINK, rather than as the lines its wires make.
     // The fans are untouched: the wires come out of it at both ends exactly as they do now, and what
     // changes is the part between them, where a loom is a covered thing.
@@ -1912,6 +1917,8 @@ private:
     bool twistFlush_ = true;                       // the ends are cut square across the fan
     double twistFlushLen_ = 0.0;                   // how long that is; 0 = the drawing's own share
     bool twistStrip_ = false;                      // the insulation is off the last of each wire
+    bool twistEndShrink_ = false;                  // heatshrink over the end of each wire
+    double twistEndShrinkLen_ = 10.0;              // how much of the wire it covers from its end
     RunBody twistBodyKind_ = RunBody::Wires;       // what the converged stretch is made of
     double twistBoot_ = 0.0;                       // a cable's boot; 0 = the drawing's own
     double twistBootFinish_ = 0.0;

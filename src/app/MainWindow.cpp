@@ -5098,6 +5098,8 @@ void MainWindow::syncBreakOptions() {
         fieldRoom(twistFanKneeBSpin_, twistFanKneeBLabel_, straightRun);
         room(twistFlushCheck_, straightRun);
         room(twistStripCheck_, straightRun);
+        room(twistShrinkCheck_, straightRun);
+        fieldRoom(twistShrinkSpin_, twistShrinkLabel_, straightRun);
         // A FANOUT HAS ONE END. "Both sides same" is an answer about the other one, and there is
         // no other one - the tick would be a setting that cannot do anything.
         room(twistSidesCheck_, straightRun && !fanout);
@@ -5184,6 +5186,23 @@ void MainWindow::syncBreakOptions() {
         showAutoField(twistStripSpin_, twistStripLabel_, straightRun && editor_->twistStrip(),
                       editor_->twistStripLen() <= 1e-9,
                       editor_->twistStripLen() > 1e-9 ? editor_->twistStripLen() : fig.stripLen);
+        // Heatshrink over the wire ends, like the stripped ends: the straight run's, its length shown while it is on.
+        if (twistShrinkCheck_) {
+            twistShrinkCheck_->setVisible(straightRun);
+            if (straightRun) {
+                QSignalBlocker b(twistShrinkCheck_);
+                twistShrinkCheck_->setChecked(editor_->twistEndShrink());
+            }
+        }
+        if (twistShrinkSpin_ && twistShrinkLabel_) {
+            const bool on = straightRun && editor_->twistEndShrink();
+            twistShrinkSpin_->setVisible(on);
+            twistShrinkLabel_->setVisible(on);
+            if (on) {
+                QSignalBlocker b(twistShrinkSpin_);
+                twistShrinkSpin_->setValue(editor_->twistEndShrinkLen());
+            }
+        }
         if (twistBodyCombo_) {
             twistBodyCombo_->setVisible(straightRun);
             if (straightRun) {
@@ -10230,6 +10249,20 @@ void MainWindow::refreshProperties() {
                        mv(QStringLiteral("twistStripLen")).toDouble(0.0), [this](double v) {
                            editor_->setSelectionMetaNumber(QStringLiteral("twistStripLen"),
                                                            std::max(0.0, v));
+                       });
+            // AND HEATSHRINK OVER EACH WIRE'S END, and how long.
+            const bool shrinking = e->meta.value(QStringLiteral("twistEndShrink")).toBool();
+            addCombo(QStringLiteral("Shrink over ends"), {QStringLiteral("Yes"), QStringLiteral("No")},
+                     mv(QStringLiteral("twistEndShrink")).isVaries()
+                         ? QStringLiteral("#Value")
+                         : (shrinking ? QStringLiteral("Yes") : QStringLiteral("No")),
+                     false, [this](const QString& t) {
+                         editor_->setSelectionMetaBool(QStringLiteral("twistEndShrink"), t == QLatin1String("Yes"));
+                     });
+            if (shrinking)
+                addNum(QStringLiteral("Shrink length"), mv(QStringLiteral("twistEndShrinkLen")).toDouble(10.0),
+                       [this](double v) {
+                           editor_->setSelectionMetaNumber(QStringLiteral("twistEndShrinkLen"), std::max(0.5, v));
                        });
         }
         if (e->points.size() > 2)

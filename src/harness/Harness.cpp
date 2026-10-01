@@ -1578,6 +1578,51 @@ std::vector<std::vector<Vec2>> twistedPairEndCaps(const Entity& pair) {
     return c ? c->caps : std::vector<std::vector<Vec2>>{};
 }
 
+std::vector<std::vector<Vec2>> twistedPairEndSleeves(const Entity& pair) {
+    if (pair.type != EntityType::TwistedPair || !pair.meta.value(QStringLiteral("twistEndShrink")).toBool()) return {};
+    const TwistCached* c = twistCached(pair);
+    if (!c) return {};
+    const TwistFrames& f = c->frames;
+    const double len = std::max(0.5, pair.meta.value(QStringLiteral("twistEndShrinkLen")).toDouble(10.0));
+    const double half = f.thick + 0.5;
+    std::vector<std::vector<Vec2>> out;
+    auto sleeve = [&](std::vector<Vec2> path, bool atEnd) {
+        if (path.size() < 2) return;
+        if (atEnd) std::reverse(path.begin(), path.end());
+        // The last `len` of the wire, from its end.
+        std::vector<Vec2> piece{path.front()};
+        double acc = 0.0;
+        for (size_t k = 1; k < path.size() && acc < len; ++k) {
+            const double seg = distance(path[k - 1], path[k]);
+            if (seg < 1e-9) continue;
+            if (acc + seg >= len) {
+                piece.push_back(path[k - 1] + (path[k] - path[k - 1]).normalized() * (len - acc));
+                acc = len;
+            } else {
+                piece.push_back(path[k]);
+                acc += seg;
+            }
+        }
+        if (piece.size() < 2) return;
+        std::vector<Vec2> ring = offsetPolyline(piece, half);
+        const std::vector<Vec2> other = offsetPolyline(piece, -half);
+        ring.insert(ring.end(), other.rbegin(), other.rend());
+        ring.push_back(ring.front());
+        out.push_back(std::move(ring));
+    };
+    // Each wire is two of the strands, its two edges: its middle is between them.
+    for (size_t j = 0; j + 1 < c->strands.size() && j / 2 < static_cast<size_t>(f.wires); j += 2) {
+        const auto& ea = c->strands[j];
+        const auto& eb = c->strands[j + 1];
+        if (ea.size() != eb.size() || ea.size() < 2) continue;
+        std::vector<Vec2> mid(ea.size());
+        for (size_t q = 0; q < ea.size(); ++q) mid[q] = (ea[q] + eb[q]) * 0.5;
+        if (f.spreadStart) sleeve(mid, false);
+        if (f.spreadEnd) sleeve(mid, true);
+    }
+    return out;
+}
+
 std::vector<std::vector<Vec2>> twistedPairBody(const Entity& pair) {
     if (pair.type != EntityType::TwistedPair) return {};
     const TwistCached* c = twistCached(pair);

@@ -827,6 +827,36 @@ void MainWindow::buildHarnessMechanicalTab() {
                 });
                 connect(twistStripSpin_, &QDoubleSpinBox::valueChanged, this,
                         [this](double v) { editor_->setTwistStripLen(v); canvas_->update(); });
+                // HEATSHRINK OVER THE WIRE ENDS: a sleeve on the last of each wire where it fans out - and how
+                // long it is from the end.
+                twistShrinkCheck_ = new QCheckBox(QStringLiteral("Shrink over ends"), optW);
+                twistShrinkCheck_->setChecked(editor_->twistEndShrink());
+                twistShrinkCheck_->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
+                twistShrinkCheck_->setToolTip(QStringLiteral(
+                    "A heatshrink sleeve over the end of each wire where the wires fan out - its length below."));
+                fg->addWidget(twistShrinkCheck_, 0, 9, 1, 2);
+                twistShrinkLabel_ = new QLabel(QStringLiteral("Shrink length"), optW);
+                twistShrinkLabel_->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
+                twistShrinkSpin_ = new QDoubleSpinBox(optW);
+                twistShrinkSpin_->setRange(0.5, 500.0);
+                twistShrinkSpin_->setDecimals(1);
+                twistShrinkSpin_->setSingleStep(0.5);
+                twistShrinkSpin_->setKeyboardTracking(false);
+                twistShrinkSpin_->setValue(editor_->twistEndShrinkLen());
+                twistShrinkSpin_->setMinimumWidth(64);
+                twistShrinkSpin_->setToolTip(QStringLiteral("How much of each wire the heatshrink covers, from its end."));
+                fg->addWidget(twistShrinkLabel_, 1, 12);
+                fg->addWidget(twistShrinkSpin_, 1, 13);
+                connect(twistShrinkCheck_, &QCheckBox::toggled, this, [this](bool on) {
+                    editor_->setTwistEndShrink(on);
+                    syncBreakOptions();
+                    canvas_->update();
+                    statusBar()->showMessage(on ? QStringLiteral("Harness run: heatshrink over each wire end")
+                                                : QStringLiteral("Harness run: no heatshrink over the wire ends"),
+                                             2000);
+                });
+                connect(twistShrinkSpin_, &QDoubleSpinBox::valueChanged, this,
+                        [this](double v) { editor_->setTwistEndShrinkLen(v); canvas_->update(); });
                 // THE CONVERGED STRETCH AS A CABLE UNDER HEATSHRINK. A loom between its two fans is
                 // a covered thing - a cable, or a sleeve over the bundle - and drawing the two or
                 // three lines its wires make there says the wires are on show when they are not.

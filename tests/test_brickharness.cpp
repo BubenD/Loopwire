@@ -3819,6 +3819,28 @@ void testRoundTwentyTwo() {
         const BrickBuild b = buildBrickHarness(d, nullptr);
         check(b.transitionCount.value(c) == 2, "transition: at the loose end of a cable too, not only at its part");
     }
+    // A FAN-OUT DRAWN ON THE SHEET (the ribbon's): heatshrink over the end of each wire where it fans out.
+    {
+        Entity fan;
+        fan.type = EntityType::TwistedPair;
+        fan.id = QStringLiteral("fan-shrink");
+        fan.points = {{0.0, 0.0}, {100.0, 0.0}};
+        fan.a = fan.points.front();
+        fan.b = fan.points.back();
+        fan.meta.insert(QStringLiteral("twistWires"), 4);
+        fan.meta.insert(QStringLiteral("twistStraight"), true);
+        fan.meta.insert(QStringLiteral("twistSpread"), QStringLiteral("finish"));
+        check(twistedPairEndSleeves(fan).empty(), "fanout: no heatshrink over the wire ends unless asked");
+        fan.meta.insert(QStringLiteral("twistEndShrink"), true);
+        fan.meta.insert(QStringLiteral("twistEndShrinkLen"), 8.0);
+        const auto sleeves = twistedPairEndSleeves(fan);
+        double reach = 0.0;
+        for (const auto& ring : sleeves)
+            for (const Vec2& v : ring) reach = std::max(reach, 100.0 - v.x);
+        std::printf("  fanout: %zu sleeves, reaching %.1f back from the end\n", sleeves.size(), reach);
+        check(sleeves.size() == 4 && reach > 7.0 && reach < 9.5,
+              "fanout: a heatshrink over each wire's end where it fans out, as long as said");
+    }
     // HEATSHRINK OVER EACH WIRE END where they fan out.
     {
         BrickDesign d;
