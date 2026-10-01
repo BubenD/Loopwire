@@ -11385,6 +11385,42 @@ int MainWindow::bomHoverAt(const Vec2& world, bool alt) {
                 }
             }
         }
+    // ANYWHERE OVER A PART, not only on one of its lines: a connector's body is mostly empty paper inside its outline,
+    // and a pointer over the middle of it touched nothing. So with nothing hit, the part on the sheet whose whole
+    // outline box the pointer is inside is the one meant - the smallest, where one sits inside another.
+    if (ids.isEmpty() && editor_->document()) {
+        QHash<QString, Bounds> boxOf;           // each copy of a part placed: all of it
+        QHash<QString, QString> partOfCopy;
+        QHash<QString, std::vector<QString>> membersOf;
+        for (const Entity& o : editor_->document()->entities()) {
+            const QString part = o.meta.value(QStringLiteral("libPart")).toString();
+            if (part.isEmpty() || o.type == EntityType::Dimension) continue;
+            QString copy = o.meta.value(QStringLiteral("partCopy")).toString();
+            if (copy.isEmpty()) copy = o.meta.value(QStringLiteral("blockInst")).toString();
+            if (copy.isEmpty()) copy = o.id;
+            const Bounds b = o.bounds();
+            if (!b.valid) continue;
+            boxOf[copy].expand(b.min);
+            boxOf[copy].expand(b.max);
+            partOfCopy.insert(copy, part);
+            membersOf[copy].push_back(o.id);
+        }
+        QString best;
+        double bestArea = 1e300;
+        for (auto it = boxOf.cbegin(); it != boxOf.cend(); ++it) {
+            const Bounds& b = it.value();
+            if (world.x < b.min.x || world.x > b.max.x || world.y < b.min.y || world.y > b.max.y) continue;
+            const double area = (b.max.x - b.min.x) * (b.max.y - b.min.y);
+            if (area < bestArea) {
+                bestArea = area;
+                best = it.key();
+            }
+        }
+        if (!best.isEmpty()) {
+            ids << partOfCopy.value(best);
+            lit = membersOf.value(best);
+        }
+    }
     editor_->setLookupHighlight(lit);
     if (bomDlg_ && bomDlg_->isVisible()) bomDlg_->highlightParts(ids);
     bomPanel_->clearSelection();

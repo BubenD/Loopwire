@@ -456,6 +456,28 @@ int run_partspanel_tests() {
                 check(bom->selectionModel()->selectedRows().isEmpty() && win.editorForTest()->lookupHighlight().empty(),
                       "bom hover: and without Alt, nothing stays picked or lit");
                 doc->entities().pop_back();
+                // AN END PART PLACED BY THE WIZARD, the pointer in the middle of its body - on none of its lines.
+                Entity body;
+                body.type = EntityType::Polyline;
+                body.id = QStringLiteral("hover-body");
+                body.points = {{6000.0, 6000.0}, {6060.0, 6000.0}, {6060.0, 6040.0}, {6000.0, 6040.0}, {6000.0, 6000.0}};
+                body.layer = QStringLiteral("0");
+                body.meta.insert(QStringLiteral("libPart"), drawnId);
+                body.meta.insert(QStringLiteral("partCopy"), QStringLiteral("copy-1"));
+                Entity face = body;
+                face.id = QStringLiteral("hover-face");
+                face.type = EntityType::Line;
+                face.points.clear();
+                face.a = {6060.0, 6010.0};
+                face.b = {6060.0, 6030.0};
+                doc->entities().push_back(body);
+                doc->entities().push_back(face);
+                const int inside = win.bomHoverAt(Vec2{6030.0, 6020.0}, true);
+                check(inside == 1 && win.editorForTest()->lookupHighlight().size() == 2,
+                      "bom hover: Alt anywhere over a placed part's body picks its line - and lights all of the part");
+                win.bomHoverAt(Vec2{6030.0, 6020.0}, false);
+                doc->entities().pop_back();
+                doc->entities().pop_back();
             }
             int row = -1;
             for (int i = 0; i < bom->rowCount(); ++i)
