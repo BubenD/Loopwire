@@ -1182,6 +1182,8 @@ void BrickCanvas::dropEvent(QDropEvent* e) {
                                     std::round(col), snapHalf(row));
     if (parts.value(2) == QLatin1String("bridge"))
         if (Brick* b = d_->brick(id)) makeBridgeWire(*b);
+    if (parts.value(2) == QLatin1String("branch"))
+        if (Brick* b = d_->brick(id)) makeBranch(*b);
     e->acceptProposedAction();
     setSelected(id);
     emit selectionChanged(id);
@@ -1221,6 +1223,9 @@ BrickPalette::BrickPalette(QWidget* parent) : QListWidget(parent) {
     // A BRIDGE WIRE: takes the wires it is told from the cable it is joined to, the rest going on to its parts.
     brick(QStringLiteral("Bridge wire"),
           brickTypeKey(BrickType::Run) + QLatin1Char('|') + partKindKey(PartKind::Wire) + QStringLiteral("|bridge"));
+    // A BRANCH: joined to a cable's body, it takes wires from it on to its part - a run of its own after the divide.
+    brick(QStringLiteral("Branch"),
+          brickTypeKey(BrickType::Run) + QLatin1Char('|') + partKindKey(PartKind::Wire) + QStringLiteral("|branch"));
 }
 
 QStringList BrickPalette::mimeTypes() const { return {QString::fromLatin1(kBrickMime)}; }
@@ -1485,6 +1490,11 @@ void BrickWizardDialog::buildUi() {
     // harness uses in bold - so what adding a part did is seen as it is done. Where it sits is chosen.
     bom_ = new QTableWidget(0, 5, this);
     bom_->horizontalHeader()->setHighlightSections(false);   // rows picked do not bold the headings
+    // ONE LINE A ROW: a long description is cut short with "...", never wrapped onto a second line.
+    bom_->setWordWrap(false);
+    bom_->setTextElideMode(Qt::ElideRight);
+    bom_->verticalHeader()->setSectionResizeMode(QHeaderView::Fixed);
+    bom_->verticalHeader()->setDefaultSectionSize(bom_->fontMetrics().height() + 8);
     bom_->setObjectName(QStringLiteral("brickBom"));
     bom_->setHorizontalHeaderLabels({QStringLiteral("Item"), QStringLiteral("Qty"), QStringLiteral("Unit"),
                                      QStringLiteral("P/N"), QStringLiteral("Description")});
@@ -1632,6 +1642,26 @@ void BrickWizardDialog::buildUi() {
     panel_->addWidget(buildRunPage());
     panel_->addWidget(buildLinkPage());
     tidyFields(panel_, 180);   // every field in the panels one short width
+    // THE LIBRARY PART wide enough to read its P/N and a good part of its description; the designator's height a
+    // few characters.
+    if (part_) {
+        part_->setMinimumWidth(360);
+        part_->setMaximumWidth(360);
+    }
+    if (designatorHeight_) {
+        designatorHeight_->setMinimumWidth(80);
+        designatorHeight_->setMaximumWidth(80);
+    }
+    // "A" AND "MATCH" LOOK LIKE BUTTONS: framed, and blue while on.
+    for (QToolButton* t : panel_->findChildren<QToolButton*>()) {
+        const QString n = t->objectName();
+        if (!n.endsWith(QLatin1String("Auto")) && n != QLatin1String("brickPartScaleMatch")) continue;
+        t->setStyleSheet(QStringLiteral(
+            "QToolButton{padding:1px 6px;border:1px solid #5a6b7d;border-radius:3px;background:#2c3947;color:#e6e9ef;"
+            "font-weight:bold;}"
+            "QToolButton:hover{background:#34475a;}"
+            "QToolButton:checked{background:#2b6cb0;color:white;border-color:#2b6cb0;}"));
+    }
 
     split->addWidget(leftSplit_);
     split->addWidget(middle_);
@@ -1787,9 +1817,16 @@ QWidget* BrickWizardDialog::buildEndPage() {
                 const QSignalBlocker hush(partScaleAuto_);
                 partScaleAuto_->setChecked(false);
             }
+            // Sized by hand now, not by the match.
+            if (Brick* b = design_.brick(canvas_->selected()); b && !matchSetting_) b->matchedTo.clear();
             writeEnd();
+            showMatched();
         });
-        connect(partScaleAuto_, &QToolButton::toggled, this, [this](bool) { writeEnd(); });
+        connect(partScaleAuto_, &QToolButton::toggled, this, [this](bool) {
+            if (Brick* b = design_.brick(canvas_->selected())) b->matchedTo.clear();
+            writeEnd();
+            showMatched();
+        });
     }
     bomState_ = new QLabel(page);
     bomState_->setObjectName(QStringLiteral("brickBomState"));
@@ -1830,6 +1867,7 @@ QWidget* BrickWizardDialog::buildEndPage() {
     partDimSide_->addItems({QStringLiteral("Above the part"), QStringLiteral("Below the part")});
     partDimSide_->setToolTip(QStringLiteral("Where the dimensions put on from this part go"));
     f->addRow(QStringLiteral("Dimensions"), partDimSide_);
+    f->setRowVisible(partDimSide_, false);   // a part's dimensions are set in the dimension wizard
     connect(partDimSide_, &QComboBox::currentIndexChanged, this, [this](int i) {
         Brick* b = design_.brick(canvas_->selected());
         if (!b || b->type != BrickType::End) return;
@@ -2230,8 +2268,10 @@ QWidget* BrickWizardDialog::buildRunPage() {
         branchCover_->setObjectName(QStringLiteral("brickBranchCover"));
         branchCover_->addItems({QStringLiteral("Wires fan out"), QStringLiteral("Wires under heatshrink, then fan out")});
         bl->addRow(QStringLiteral("After the cable"), branchCover_);
+        bl->setRowVisible(branchCover_, false);   // a branch's own cover is the Branch brick's now
         branchShrink_ = partBox("brickBranchShrink", {PartKind::Heatshrink});
         bl->addRow(QStringLiteral("Branch heatshrink P/N"), branchShrink_);
+        bl->setRowVisible(branchShrink_, false);
         branches_ = new QTableWidget(0, 4, box);
         branches_->setObjectName(QStringLiteral("brickBranches"));
         branches_->setHorizontalHeaderLabels({QStringLiteral("Branch to"), QStringLiteral("Wires (1,3)"),
@@ -2240,6 +2280,7 @@ QWidget* BrickWizardDialog::buildRunPage() {
         branches_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
         branches_->setMinimumHeight(90);
         bl->addRow(branches_);
+        bl->setRowVisible(branches_, false);   // the branches' options are on their Branch bricks
         fanShrink_ = new QCheckBox(QStringLiteral("Heatshrink over each wire end"), box);
         fanShrink_->setObjectName(QStringLiteral("brickFanShrink"));
         bl->addRow(fanShrink_);
@@ -2255,6 +2296,31 @@ QWidget* BrickWizardDialog::buildRunPage() {
         fanShrinkParts_->setObjectName(QStringLiteral("brickFanShrinkParts"));
         fanShrinkParts_->setMaximumHeight(90);
         bl->addRow(QStringLiteral("At"), fanShrinkParts_);
+        bl->setRowVisible(fanShrinkParts_, false);
+        // INSIDE THE CONNECTOR'S BACKSHELL: on the bill, not drawn.
+        fanShrinkInside_ = new QCheckBox(QStringLiteral("Inside connector backshell"), box);
+        fanShrinkInside_->setObjectName(QStringLiteral("brickFanShrinkInside"));
+        fanShrinkInside_->setToolTip(QStringLiteral("Inside the connector's backshell: the heatshrink over the wire "
+                                                    "ends is added to the BOM but not drawn"));
+        bl->addRow(fanShrinkInside_);
+        connect(fanShrinkInside_, &QCheckBox::toggled, this, [this](bool on) {
+            if (Brick* b = design_.brick(canvas_->selected()); b && brickIsSpecial(b->type)) {
+                b->run.fanEndShrinkInside = on;
+                designChanged();
+            }
+        });
+        // AND THE TRANSITION HEATSHRINK, inside the backshell likewise.
+        transitionInside_ = new QCheckBox(QStringLiteral("Inside backshell"), box);
+        transitionInside_->setObjectName(QStringLiteral("brickTransitionInside"));
+        transitionInside_->setToolTip(QStringLiteral("Inside the backshell: the transition heatshrink is added to the "
+                                                     "BOM but not drawn"));
+        (transitionForm_ ? transitionForm_ : bl)->addRow(transitionInside_);
+        connect(transitionInside_, &QCheckBox::toggled, this, [this](bool on) {
+            if (Brick* b = design_.brick(canvas_->selected()); b && brickIsSpecial(b->type)) {
+                b->run.transitionInside = on;
+                designChanged();
+            }
+        });
         connect(fanShrinkParts_, &QListWidget::itemChanged, this, [this](QListWidgetItem* it) {
             Brick* b = design_.brick(canvas_->selected());
             if (!b || !it) return;
@@ -2533,6 +2599,8 @@ QString BrickWizardDialog::addFromPalette(const QString& what) {
     const QString id = design_.addBrick(brickTypeFromKey(parts[0]), partKindFromKey(parts[1]), col, row);
     if (parts.value(2) == QLatin1String("bridge"))
         if (Brick* b = design_.brick(id)) makeBridgeWire(*b);
+    if (parts.value(2) == QLatin1String("branch"))
+        if (Brick* b = design_.brick(id)) makeBranch(*b);
     selectBrick(id);
     designChanged();
     return id;
@@ -2626,6 +2694,24 @@ bool BrickWizardDialog::updateBrickFromLibrary(const QString& brickId) {
     status_->setText(found ? QStringLiteral("%1 updated from the library").arg(brickTitle(*b))
                            : QStringLiteral("%1: its part is no longer in the library").arg(brickTitle(*b)));
     return found;
+}
+
+void BrickWizardDialog::showMatched() {
+    if (!partScaleMatch_) return;
+    const Brick* b = design_.brick(canvas_->selected());
+    const Brick* to = b && !b->matchedTo.isEmpty() ? design_.brick(b->matchedTo) : nullptr;
+    // MATCHED: blue, saying to what - for as long as the size is the one Match gave it.
+    const QString frame = QStringLiteral("padding:1px 6px;border:1px solid %1;border-radius:3px;background:%2;color:%3;"
+                                         "font-weight:bold;");
+    partScaleMatch_->setStyleSheet(
+        QStringLiteral("QToolButton{") +
+        (to ? frame.arg(QStringLiteral("#2b6cb0"), QStringLiteral("#2b6cb0"), QStringLiteral("white"))
+            : frame.arg(QStringLiteral("#5a6b7d"), QStringLiteral("#2c3947"), QStringLiteral("#e6e9ef"))) +
+        QStringLiteral("} QToolButton:hover{background:#34475a;} "
+                       "QToolButton:checked{background:#2b6cb0;color:white;border-color:#2b6cb0;}"));
+    partScaleMatch_->setToolTip(to ? QStringLiteral("Matched to %1 - press to match it to another brick")
+                                         .arg(to->name.isEmpty() ? brickTitle(*to) : to->name)
+                                   : QStringLiteral("Scale this part to another: press, then click the other brick"));
 }
 
 void BrickWizardDialog::setAllDimsSide(bool below) {
@@ -2904,6 +2990,7 @@ void BrickWizardDialog::loadPanel() {
             const double k = b->autoScale ? drawnScales_.value(b->id, b->scale) : b->scale;
             partScale_->setValue(k * 100.0);
         }
+        showMatched();
         // THE PART'S OWN FIGURES, straight out of the library.
         params_->setRowCount(0);
         const LibraryPart* p = b->libPart.isEmpty() ? nullptr : catalog_.byId(b->libPart);
@@ -2951,12 +3038,15 @@ void BrickWizardDialog::loadPanel() {
     {
         // Bridge wires: only for a special joined to another one, and then they decide the wire count.
         // Only on a BRIDGE WIRE: a cable's own panel has no such thing.
-        const bool bridge = brickIsBridge(*b);
+        // A BRANCH picks its wires from the cable it is joined to the same way - "an even share" when none are picked.
+        const bool branch = brickIsBranch(*b);
+        const bool bridge = brickIsBridge(*b) || branch;
         if (runForm_) runForm_->setRowVisible(bridge_->parentWidget(), bridge);
-        if (bridge) runKind_->setText(QStringLiteral("Bridge wire"));
+        if (bridge) runKind_->setText(branch ? QStringLiteral("Branch") : QStringLiteral("Bridge wire"));
         const Brick* from = design_.brick(joinedSpecial(design_, b->id));
         const QSignalBlocker hush(bridge_);
         bridge_->clear();
+        if (branch) bridge_->addItem(QStringLiteral("An even share of the rest"), QString());
         if (from) {
             // The cable's wires, by net where they have one - and its shield, when it has a braid.
             for (int w = 1; w <= from->run.wires; ++w) {
@@ -3099,6 +3189,12 @@ void BrickWizardDialog::loadBranches() {
     }
     fanShrinkLen_->setEnabled(r.fanEndShrink);
     fanShrinkPart_->setEnabled(r.fanEndShrink);
+    {
+        const QSignalBlocker i1(fanShrinkInside_), i2(transitionInside_);
+        fanShrinkInside_->setChecked(r.fanEndShrinkInside);
+        transitionInside_->setChecked(r.transitionInside);
+    }
+    fanShrinkInside_->setEnabled(r.fanEndShrink);
     {
         const QSignalBlocker s1(transLenStart_), s2(transLenFinish_);
         transLenStart_->setValue(r.transitionLenStartMm);
@@ -3351,6 +3447,7 @@ bool BrickWizardDialog::scalePartToMatch(const QString& id, const QString& other
         const double mineAcross = across(id, mine->out), theirsAcross = across(other, theirs->out);
         if (mineAcross > 1e-6 && theirsAcross > 1e-6) {
             b->scale = std::clamp(now * theirsAcross * 0.5 / mineAcross, 0.05, 10.0);
+            b->matchedTo = other;   // Match lit blue on it, till it is sized some other way
             status_->setText(QStringLiteral("Scaled to %1 % - half the size of %2 (%3 mm across)")
                                  .arg(qRound(b->scale * 100.0))
                                  .arg(brickTitle(*ob))
@@ -3359,6 +3456,7 @@ bool BrickWizardDialog::scalePartToMatch(const QString& id, const QString& other
         }
     }
     b->scale = std::clamp(now * theirs->lengthMm / mine->lengthMm, 0.1, 10.0);
+    b->matchedTo = other;
     status_->setText(QStringLiteral("Scaled to %1 % - its entry as long as the other's (%2 mm)")
                          .arg(qRound(b->scale * 100.0))
                          .arg(theirs->lengthMm, 0, 'f', 1));
@@ -3644,9 +3742,10 @@ void BrickWizardDialog::writeRun() {
     r.lengthMm = length_->value();
     // THE LENGTH CHANGED: the part at its finish, and all beyond it, pulled in or pushed out to suit.
     (void)oldLength;   // the drawing follows the length; the pane is left as it is
-    if (bridge_ && brickIsBridge(*b)) {
+    if (bridge_ && (brickIsBridge(*b) || brickIsBranch(*b))) {
         const QString said = bridgeValue();
-        if (!said.isEmpty()) r.bridgeWires = said;   // a bridge wire is always one: never emptied into a cable
+        // A bridge wire is always one: never emptied into a cable. A branch with none picked takes an even share.
+        if (!said.isEmpty() || brickIsBranch(*b)) r.bridgeWires = said;
         if (syncBridgeWires(design_) > 0) {
             const QSignalBlocker hush(wires_);
             wires_->setValue(r.wires);

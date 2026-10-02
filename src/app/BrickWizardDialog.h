@@ -486,7 +486,12 @@ private:
     QDoubleSpinBox* transLenFinish_ = nullptr;
     QListWidget* fanShrinkParts_ = nullptr;     // the parts whose wire ends get heatshrink
     QFormLayout* transitionForm_ = nullptr;     // the run's transition heatshrink box
+    QCheckBox* fanShrinkInside_ = nullptr;      // the wire-end heatshrink inside the backshell: on the bill, not drawn
+    QCheckBox* transitionInside_ = nullptr;     // the transition heatshrink likewise
     bool rightSized_ = false;                   // the right's panel and bill set to 3:1 once shown
+    bool matchSetting_ = false;                 // the scale is being set by Match, not typed
+    // Match lit blue while the part's size is the one Match gave it.
+    void showMatched();
     // A DIMENSION PICKED ON THE PREVIEW, and one being dragged in or out: its key, where the drag began, the way it
     // moves (square to what it measures) and how far off its place it was then.
     QString dimSel_;

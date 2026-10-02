@@ -1232,7 +1232,7 @@ void testDialog() {
         else if (!what.isEmpty()) ++specials;
     }
     std::printf("  wizard: palette of %d end part(s) and %d special(s)\n", ends, specials);
-    check(ends >= 5 && specials == 5, "wizard: the palette holds the end parts, the four specials and the bridge wire");
+    check(ends >= 5 && specials == 6, "wizard: the palette holds the end parts, the four specials, the bridge wire and the branch");
 
     // A BRICK DROPPED ON THE PANE lands on the grid where it was dropped.
     BrickCanvas* canvas = dlg.canvas();
@@ -4012,6 +4012,120 @@ void testRoundTwentyFour() {
     }
 }
 
+// ROUND TWENTY-FIVE: the BRANCH brick - a cable dividing into branches each with its own stack and transitions; the
+// cable's body over the wires it divides into; a bridge wire on a cable's end with nothing else there; heatshrinks
+// inside the backshell counted, not drawn; Match lit when matched.
+void testRoundTwentyFive() {
+    BrickDesign d;
+    const QString sa = d.addBrick(BrickType::End, PartKind::Connector, 0, 1);
+    const QString a2 = d.addBrick(BrickType::End, PartKind::Connector, 0, 3);
+    const QString sb = d.addBrick(BrickType::End, PartKind::Connector, 4, 2);
+    const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 3, 2);
+    const QString b1 = d.addBrick(BrickType::Run, PartKind::Wire, 1, 1);
+    const QString b2 = d.addBrick(BrickType::Run, PartKind::Wire, 1, 3);
+    makeBranch(*d.brick(b1));
+    makeBranch(*d.brick(b2));
+    d.connect(c, sb, nullptr, 1, -1);
+    d.brick(c)->run.wires = 6;
+    QString why;
+    check(d.connect(b1, c, &why, 1, 0) && d.connect(b2, c, &why, 1, 0), "branch: two branches joined to one end of a cable");
+    d.connect(sa, b1, nullptr, -1, 0);
+    d.connect(a2, b2, nullptr, -1, 0);
+    d.brick(b1)->run.bridgeWires = QStringLiteral("1-4");
+    d.brick(b1)->run.stack = {QStringLiteral("wires"), QStringLiteral("heatshrink")};
+    d.brick(b1)->run.transitions = RunEnds::Finish;
+    syncBridgeWires(d);
+    BrickBuild b = buildBrickHarness(d, nullptr);
+    int w1 = 0, w2 = 0, trunkWires = 0;
+    size_t trunkAt = 0, lastBranchAt = 0;
+    QString b1Body, b1Sides;
+    for (size_t k = 0; k < b.entities.size(); ++k) {
+        const Entity& e = b.entities[k];
+        if (e.type != EntityType::TwistedPair) continue;
+        const QString id = e.meta.value(QStringLiteral("brickId")).toString();
+        if (id == b1) {
+            w1 = e.meta.value(QStringLiteral("twistWires")).toInt();
+            b1Body = e.meta.value(QStringLiteral("twistBody")).toString();
+            b1Sides = e.meta.value(QStringLiteral("twistBodyTransitionSides")).toString();
+            lastBranchAt = std::max(lastBranchAt, k);
+        }
+        if (id == b2) {
+            w2 = e.meta.value(QStringLiteral("twistWires")).toInt();
+            lastBranchAt = std::max(lastBranchAt, k);
+        }
+        if (id == c) {
+            trunkWires = e.meta.value(QStringLiteral("twistWires")).toInt();
+            trunkAt = k;
+        }
+    }
+    std::printf("  branch: %d and %d wires out of the cable's %d; the first under %s, transition at its %s\n", w1, w2,
+                trunkWires, qPrintable(b1Body), qPrintable(b1Sides));
+    check(w1 == 4 && w2 == 2 && trunkWires == 6, "branch: each takes its wires from the cable - the ones picked, the rest an even share");
+    check(!b1Body.isEmpty() && b1Sides == QLatin1String("finish"), "branch: its own stack and its own transition at its part");
+    check(trunkAt > lastBranchAt, "branch: the cable's body drawn over the wires it divides into");
+    // INSIDE THE BACKSHELL: the transition counted, not drawn.
+    d.brick(b1)->run.transitionInside = true;
+    b = buildBrickHarness(d, nullptr);
+    QString sides;
+    for (const Entity& e : b.entities)
+        if (e.type == EntityType::TwistedPair && e.meta.value(QStringLiteral("brickId")).toString() == b1)
+            sides = e.meta.value(QStringLiteral("twistBodyTransitionSides")).toString();
+    check(b.transitionCount.value(b1) == 1 && (sides.isEmpty() || sides == QLatin1String("none")),
+          "inside: a transition inside the backshell is on the bill, not drawn");
+    // A BRIDGE WIRE ON A CABLE'S END WITH NOTHING ELSE THERE: out of the cable's body at its end.
+    {
+        BrickDesign e;
+        const QString x = e.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString cab = e.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString br = e.addBrick(BrickType::Run, PartKind::Wire, 2, 1);
+        const QString fe = e.addBrick(BrickType::End, PartKind::Ferrule, 3, 1);
+        e.connect(x, cab);
+        e.brick(cab)->run.wires = 4;
+        makeBridgeWire(*e.brick(br));
+        e.connect(cab, br, nullptr, 1, 0);
+        e.connect(br, fe);
+        syncBridgeWires(e);
+        const BrickBuild bb = buildBrickHarness(e, nullptr);
+        Vec2 cableEnd, bridgeStart;
+        bool haveCable = false, haveBridge = false;
+        for (const Entity& en : bb.entities) {
+            const QString id = en.meta.value(QStringLiteral("brickId")).toString();
+            if (id == cab && en.type == EntityType::TwistedPair) {
+                cableEnd = en.points.back();
+                haveCable = true;
+            }
+            if (id == br && en.type == EntityType::Polyline && en.meta.value(QStringLiteral("double")).toBool()) {
+                bridgeStart = en.points.front();
+                haveBridge = true;
+            }
+        }
+        std::printf("  bridge on a bare end: cable ends %.1f,%.1f, bridge starts %.1f,%.1f\n", cableEnd.x, cableEnd.y,
+                    bridgeStart.x, bridgeStart.y);
+        check(haveCable && haveBridge && distance(cableEnd, bridgeStart) < 15.0,
+              "bridge: alone on a cable's end, it comes out of the cable's body there");
+    }
+    // MATCH LIT WHEN MATCHED; the part's dimensions row gone; the bill one line a row.
+    {
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        BrickWizardDialog dlg(&ed);
+        BrickDesign& w = dlg.design();
+        const QString x = w.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString f = w.addBrick(BrickType::Fanout, PartKind::Wire, 1, 0);
+        const QString fe = w.addBrick(BrickType::End, PartKind::Ferrule, 2, 0);
+        w.connect(x, f);
+        w.connect(f, fe);
+        dlg.selectBrick(f);
+        check(dlg.scalePartToMatch(fe, x) && w.brick(fe)->matchedTo == x, "match: the part remembers it was matched");
+        dlg.selectBrick(fe);
+        auto* match = dlg.findChild<QToolButton*>(QStringLiteral("brickPartScaleMatch"));
+        check(match && match->styleSheet().contains(QStringLiteral("#2b6cb0")), "match: lit blue while matched");
+        auto* bom = dlg.findChild<QTableWidget*>(QStringLiteral("brickBom"));
+        check(bom && !bom->wordWrap(), "bom: one line a row");
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -4050,6 +4164,7 @@ int run_brickharness_tests() {
     testRoundTwentyTwo();
     testRoundTwentyThree();
     testRoundTwentyFour();
+    testRoundTwentyFive();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

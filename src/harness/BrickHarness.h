@@ -129,6 +129,13 @@ struct BrickRunSpec {
     // A BRIDGE WIRE'S BRANCH: which of its cable's parts at that end it comes out beside (of a cable going to several
     // there) - empty, the first.
     QString bridgeAt;
+    // A BRANCH: a run joined to a cable's body that takes some of its wires (bridgeWires says which) on to its own
+    // part - with its own stack, fans, transitions - out of where the cable divides.
+    bool isBranch = false;
+    // ON THE BILL, NOT DRAWN: the heatshrink over the wire ends, the transition heatshrink - inside a connector's
+    // backshell, where nobody sees them.
+    bool fanEndShrinkInside = false;
+    bool transitionInside = false;
     // WHICH END A FANOUT SPREADS AT: -1 the end on a part (the start when both are), 0 the start,
     // 1 the finish.
     int fanSide = -1;
@@ -177,6 +184,8 @@ struct Brick {
     // big as the bundle coming into it wants, so the wires run in with as few bends as there can be.
     double scale = 1.0;
     bool autoScale = false;
+    // SIZED BY MATCHING it to another part (the brick it was matched to) - until its size is set some other way.
+    QString matchedTo;
 };
 
 struct BrickLink {
@@ -357,6 +366,9 @@ bool brickIsBridge(const Brick& b);
 bool brickIsTied(const Brick& b);
 // Made into a bridge wire: one wire, no cover, taking wire 1 until told otherwise.
 void makeBridgeWire(Brick& b);
+// A BRANCH brick: joined to a cable's body, it takes wires from it and carries them on to its part - a run of its own.
+void makeBranch(Brick& b);
+bool brickIsBranch(const Brick& b);
 
 // ---- WHAT MOVES WITH WHAT ------------------------------------------------------------------------------
 // A part and the special in line with it (on its row) are one line: moved up or down, the other goes too. A
