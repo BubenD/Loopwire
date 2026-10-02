@@ -241,6 +241,9 @@ struct BrickDesign {
     // THE BRICKS TURN WITH THE DRAWING: a part turned there (R 45, Space 90) has its brick's connections turned round
     // it on the pane as well. Off, the turn is the drawing's alone. (Mirroring is on the brick either way.)
     bool tieBrickTurn = true;
+    // A DIMENSION MOVED IN OR OUT on the drawing (its line dragged in the preview): by its key - "manual:<n>" for one
+    // put on between two bricks, "<special>:<kind>:<part>" for a run's - how far off its own place, in mm.
+    QHash<QString, double> dimShift;
     // The part as its brick shows it: turned on the pane with the drawing only while they are tied.
     Brick asOnPane(const Brick& b) const {
         Brick t = b;

@@ -508,7 +508,13 @@ QJsonObject BrickDesign::toJson() const {
     return QJsonObject{{"format", "edraw-brick-harness"}, {"bricks", bs}, {"links", ls},
                        {"dimFromFar", dimFromFar},        {"dimToFar", dimToFar}, {"dims", ds},
                        {"dimFromMid", dimFromMid},        {"dimToMid", dimToMid},
-                       {"tieBrickTurn", tieBrickTurn}};
+                       {"tieBrickTurn", tieBrickTurn},
+                       {"dimShift", [this] {
+                            QJsonObject o;
+                            for (auto it = dimShift.cbegin(); it != dimShift.cend(); ++it)
+                                if (std::abs(it.value()) > 1e-9) o.insert(it.key(), it.value());
+                            return o;
+                        }()}};
 }
 
 BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
@@ -518,6 +524,10 @@ BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
     d.dimFromMid = o.value(QStringLiteral("dimFromMid")).toBool();
     d.dimToMid = o.value(QStringLiteral("dimToMid")).toBool();
     d.tieBrickTurn = o.value(QStringLiteral("tieBrickTurn")).toBool(true);
+    {
+        const QJsonObject shifts = o.value(QStringLiteral("dimShift")).toObject();
+        for (auto it = shifts.begin(); it != shifts.end(); ++it) d.dimShift.insert(it.key(), it.value().toDouble());
+    }
     for (const QJsonValue v : o.value(QStringLiteral("dims")).toArray()) {
         const QJsonObject dm = v.toObject();
         d.dims.push_back({dm.value(QStringLiteral("a")).toString(), dm.value(QStringLiteral("b")).toString(),
@@ -2717,7 +2727,26 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         else if (isTrunk) route = {la.centre, splitAt[i]};
         // A BRANCH TURNS OFF TOWARD ITS PART just after the cable divides - not straight on beside the others for half
         // the way: the cable goes on as one to where it divides, and from there each branch goes its own way.
-        else if (isSub) route = routeBetweenFaces(la.centre, splitDir[i], lb.centre, fb.out, fanB + 5.0, 45.0, 0.0, 0);
+        else if (isSub) {
+            // OFF AT ONCE, on the slant toward its part, from where the cable's body ends - so the body goes all the way
+            // to where the branches spread, and no stretch of bare wires runs on straight past it first. Then straight
+            // into the part, its fan's length and a little before it.
+            const Vec2 u = splitDir[i].normalized();
+            const Vec2 side = u.perp();
+            const Vec2 d = lb.centre - la.centre;
+            const double forward = dot(d, u), across = dot(d, side);
+            const double into = fanB + 5.0;
+            if (forward > into + 1.0 && dot(fb.out, u) < -0.7) {
+                const double run = std::min(std::abs(across), forward - into);
+                const Vec2 knee = la.centre + u * run + side * across;
+                route = {la.centre};
+                if (distance(knee, la.centre) > 1e-6) route.push_back(knee);
+                if (distance(knee, lb.centre) > 1e-6) route.push_back(lb.centre);
+                if (route.size() < 2) route.push_back(lb.centre);
+            } else {
+                route = routeBetweenFaces(la.centre, splitDir[i], lb.centre, fb.out, into, 45.0, 0.0, 0);
+            }
+        }
         else if (loose && bridgeOut && looseSide.length() > 1e-9) {
             // OFF THE CABLE'S FACE ON THE SLANT, then on alongside it for the rest of its length.
             const double slant = std::min(15.0, r.lengthMm * 0.35);
@@ -3144,6 +3173,13 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             Entity d = makeDim(p0, p1, offset, !written.isEmpty() ? written : fmt(measured));
             d.meta.insert(QStringLiteral("brickDim"), QLatin1String(kind));
             d.meta.insert(QStringLiteral("brickMeasured"), measured);
+            // MOVED IN OR OUT by hand: along the square to what it measures, and that is the way it is dragged.
+            const QString key = s.id + QLatin1Char(':') + QLatin1String(kind) + QLatin1Char(':') + br.b.node;
+            const Vec2 n = (p1 - p0).normalized().perp();
+            if (d.points.size() >= 3) d.points[2] = d.points[2] + n * design.dimShift.value(key);
+            d.meta.insert(QStringLiteral("brickDimKey"), key);
+            d.meta.insert(QStringLiteral("brickDimNormalX"), n.x);
+            d.meta.insert(QStringLiteral("brickDimNormalY"), n.y);
             made.push_back(d);
         };
         if (r.dimTotal && !loose && !isSub && !br.a.id.isEmpty()) {
@@ -3266,6 +3302,13 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                         at = Vec2{x, (from.y + to.y) / 2.0};
                     }
                     Entity d = makeDim(from, to, 0.0, !r.dimTextTotal.isEmpty() ? r.dimTextTotal : fmt(along));
+                    // Moved up or down (or across) by hand.
+                    const QString key = s.id + QStringLiteral(":total:") + br.b.node;
+                    const Vec2 n = acrossX ? Vec2{0.0, 1.0} : Vec2{1.0, 0.0};
+                    at = at + n * design.dimShift.value(key);
+                    d.meta.insert(QStringLiteral("brickDimKey"), key);
+                    d.meta.insert(QStringLiteral("brickDimNormalX"), n.x);
+                    d.meta.insert(QStringLiteral("brickDimNormalY"), n.y);
                     d.points = {from, to, at};
                     d.meta.insert(QStringLiteral("dimType"), QStringLiteral("linear"));
                     d.meta.insert(QStringLiteral("dimAcross"), acrossX);
@@ -3493,6 +3536,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             double said = 0.0;
             double top = 0.0, bottom = 0.0;
             int level = 0;
+            int index = 0;   // which of the design's dimensions it is
         };
         std::vector<Planned> plan;
         for (const BrickDim& dm : design.dims) {
@@ -3524,7 +3568,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                     top = std::max(top, bx.max.y);
                     bottom = std::min(bottom, bx.min.y);
                 }
-            plan.push_back(Planned{p0, p1, dm.below, said, top, bottom, 0});
+            plan.push_back(Planned{p0, p1, dm.below, said, top, bottom, 0, static_cast<int>(&dm - design.dims.data())});
         }
         double baseAbove = -1e300, baseBelow = 1e300;
         for (const Planned& pl : plan) {
@@ -3556,7 +3600,10 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         for (const Planned& pl : plan) {
             const Vec2 p0 = pl.p0, p1 = pl.p1;
             const double said = pl.said;
-            const double lineY = pl.below ? baseBelow - 12.0 - pl.level * 10.0 : baseAbove + 12.0 + pl.level * 10.0;
+            const QString key = QStringLiteral("manual:%1").arg(pl.index);
+            // Where the levelling puts it - and as far up or down from there as it was dragged.
+            const double lineY = (pl.below ? baseBelow - 12.0 - pl.level * 10.0 : baseAbove + 12.0 + pl.level * 10.0) +
+                                 design.dimShift.value(key);
             Entity d;
             d.type = EntityType::Dimension;
             d.a = p0;
@@ -3571,6 +3618,9 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             d.meta.insert(QStringLiteral("mechRole"), QStringLiteral("dim"));
             d.meta.insert(QStringLiteral("brickDim"), QStringLiteral("manual"));
             d.meta.insert(QStringLiteral("brickDimIndex"), n++);
+            d.meta.insert(QStringLiteral("brickDimKey"), key);
+            d.meta.insert(QStringLiteral("brickDimNormalX"), 0.0);
+            d.meta.insert(QStringLiteral("brickDimNormalY"), 1.0);
             d.meta.insert(QStringLiteral("brickMeasured"), said);
             d.meta.insert(QStringLiteral("textOverride"), QString::number(said, 'f', 1));
             out.entities.push_back(d);

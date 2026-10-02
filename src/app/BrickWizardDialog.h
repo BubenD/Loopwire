@@ -486,6 +486,18 @@ private:
     QDoubleSpinBox* transLenFinish_ = nullptr;
     QListWidget* fanShrinkParts_ = nullptr;     // the parts whose wire ends get heatshrink
     QFormLayout* transitionForm_ = nullptr;     // the run's transition heatshrink box
+    bool rightSized_ = false;                   // the right's panel and bill set to 3:1 once shown
+    // A DIMENSION PICKED ON THE PREVIEW, and one being dragged in or out: its key, where the drag began, the way it
+    // moves (square to what it measures) and how far off its place it was then.
+    QString dimSel_;
+    QString dimDrag_;
+    Vec2 dimDragFrom_;
+    Vec2 dimDragN_{0.0, 1.0};
+    double dimDragShift0_ = 0.0;
+    QString previewDimAt(const Vec2& world) const;
+public:
+    QString selectedDimension() const { return dimSel_; }
+private:
     void loadBranches();
     bool liveInit_ = false;
     QHash<QString, int> partCounts() const;

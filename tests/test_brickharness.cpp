@@ -3941,6 +3941,77 @@ void testRoundTwentyThree() {
     QFile::remove(libFile);
 }
 
+// ROUND TWENTY-FOUR: a dimension picked on the preview and dragged in or out; branches off at once where the cable's
+// body ends.
+void testRoundTwentyFour() {
+    {
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        BrickWizardDialog dlg(&ed);
+        dlg.resize(1500, 900);
+        dlg.show();
+        BrickDesign& w = dlg.design();
+        const QString x = w.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString c = w.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString y = w.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        w.connect(x, c);
+        w.connect(c, y);
+        w.brick(c)->run.dimTotal = true;
+        w.brick(c)->run.dimTotalBelow = false;
+        dlg.selectBrick(c);
+        QApplication::processEvents();
+        dlg.preview()->grab();
+        const Entity* dim = nullptr;
+        for (const Entity& e : dlg.preview()->entities())
+            if (e.type == EntityType::Dimension && !e.meta.value(QStringLiteral("brickDimKey")).toString().isEmpty()) dim = &e;
+        check(dim != nullptr, "dimension: a run's dimension carries its key");
+        if (dim) {
+            Vec2 d1, d2;
+            dimensionLineEnds(*dim, d1, d2);
+            const double y0 = dim->points[2].y;
+            const QString key = dim->meta.value(QStringLiteral("brickDimKey")).toString();
+            const QPointF at = dlg.preview()->screenAt(d1 + (d2 - d1) * 0.25);
+            const QPointF to = at + QPointF(0, -40);   // up the screen
+            QMouseEvent press(QEvent::MouseButtonPress, at, dlg.preview()->mapToGlobal(at), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(dlg.preview(), &press);
+            check(dlg.selectedDimension() == key, "dimension: pressed on its line, it is picked");
+            QMouseEvent move(QEvent::MouseMove, to, dlg.preview()->mapToGlobal(to), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(dlg.preview(), &move);
+            QMouseEvent release(QEvent::MouseButtonRelease, to, dlg.preview()->mapToGlobal(to), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(dlg.preview(), &release);
+            double y1 = y0;
+            for (const Entity& e : dlg.preview()->entities())
+                if (e.meta.value(QStringLiteral("brickDimKey")).toString() == key) y1 = e.points[2].y;
+            std::printf("  dimension: dragged from %.1f to %.1f (shift %.1f)\n", y0, y1, w.dimShift.value(key));
+            check(y1 > y0 + 1.0 && w.dimShift.value(key) > 1.0, "dimension: dragged up, its line goes up - and stays there");
+            check(BrickDesign::fromJson(w.toJson()).dimShift.value(key) == w.dimShift.value(key), "dimension: kept with the harness");
+        }
+    }
+    // BRANCHES OFF AT ONCE where the cable's body ends: each branch's first leg already on the slant.
+    {
+        BrickDesign d;
+        const QString sa = d.addBrick(BrickType::End, PartKind::Connector, 0, 1);
+        const QString a2 = d.addBrick(BrickType::End, PartKind::Connector, 0, 3);
+        const QString sb = d.addBrick(BrickType::End, PartKind::Connector, 4, 2);
+        const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 2, 2);
+        d.connect(sa, c, nullptr, -1, 0);
+        d.connect(a2, c, nullptr, -1, 0);
+        d.connect(c, sb, nullptr, 1, -1);
+        d.brick(c)->run.wires = 6;
+        bool slanted = true;
+        int branches = 0;
+        for (const Entity& e : buildBrickHarness(d, nullptr).entities)
+            if (e.type == EntityType::TwistedPair && e.meta.value(QStringLiteral("brickId")).toString() == c &&
+                e.meta.value(QStringLiteral("twistWires")).toInt() != 6 && e.points.size() >= 2) {
+                ++branches;
+                const Vec2 first = (e.points[1] - e.points[0]).normalized();
+                if (std::abs(first.y) < 0.3) slanted = false;
+            }
+        check(branches == 2 && slanted, "branches: each turns off toward its part right where the cable's body ends");
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -3978,6 +4049,7 @@ int run_brickharness_tests() {
     testRoundTwentyOne();
     testRoundTwentyTwo();
     testRoundTwentyThree();
+    testRoundTwentyFour();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

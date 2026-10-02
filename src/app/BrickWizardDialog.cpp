@@ -3420,7 +3420,9 @@ bool BrickWizardDialog::eventFilter(QObject* o, QEvent* e) {
         if (e->type() == QEvent::MouseMove && partDrag_.isEmpty() &&
             !(static_cast<QMouseEvent*>(e)->buttons() & Qt::LeftButton)) {
             const QString over = previewPartAt(static_cast<QMouseEvent*>(e)->position());
-            preview_->setCursor(over.isEmpty() ? Qt::ArrowCursor : Qt::OpenHandCursor);
+            const bool overDim = over.isEmpty() &&
+                                 !previewDimAt(preview_->worldAt(static_cast<QMouseEvent*>(e)->position())).isEmpty();
+            preview_->setCursor(!over.isEmpty() ? Qt::OpenHandCursor : overDim ? Qt::SizeVerCursor : Qt::ArrowCursor);
             // LOCKED TO THE OTHERS: said over a part whose branch is as long as the others' at that end of its cable.
             {
                 QStringList with;
@@ -3435,6 +3437,42 @@ bool BrickWizardDialog::eventFilter(QObject* o, QEvent* e) {
                 hoverPart_ = over;
                 showGrabRings();
             }
+        }
+        // A DIMENSION, PICKED AND DRAGGED: pressed on its line or a joint at the end of it, it is picked - its joints
+        // shown - and pulled, it moves in or out from what it measures, square to it.
+        if (e->type() == QEvent::MouseButtonPress) {
+            auto* me = static_cast<QMouseEvent*>(e);
+            if (me->button() == Qt::LeftButton && me->modifiers() == Qt::NoModifier) {
+                const Vec2 at = preview_->worldAt(me->position());
+                const QString key = previewDimAt(at);
+                if (!key.isEmpty()) {
+                    dimSel_ = key;
+                    dimDrag_ = key;
+                    dimDragFrom_ = at;
+                    dimDragShift0_ = design_.dimShift.value(key);
+                    for (const Entity& en : lastEnts_)
+                        if (en.meta.value(QStringLiteral("brickDimKey")).toString() == key)
+                            dimDragN_ = Vec2{en.meta.value(QStringLiteral("brickDimNormalX")).toDouble(0.0),
+                                             en.meta.value(QStringLiteral("brickDimNormalY")).toDouble(1.0)};
+                    showGrabRings();
+                    status_->setText(QStringLiteral("Dimension picked - drag it up or down"));
+                    return true;
+                }
+                if (!dimSel_.isEmpty()) {
+                    dimSel_.clear();   // picked away from it: not picked any more
+                    showGrabRings();
+                }
+            }
+        } else if (e->type() == QEvent::MouseMove && !dimDrag_.isEmpty()) {
+            const Vec2 now = preview_->worldAt(static_cast<QMouseEvent*>(e)->position());
+            const double shift = dimDragShift0_ + dot(now - dimDragFrom_, dimDragN_);
+            design_.dimShift[dimDrag_] = std::round(shift * 10.0) / 10.0;
+            refreshPreview();
+            return true;
+        } else if (e->type() == QEvent::MouseButtonRelease && !dimDrag_.isEmpty()) {
+            dimDrag_.clear();
+            recordHistory();
+            return true;
         }
         // CTRL ON AN END OF A RUN - a cable's, a heatshrink's, a fanout's, loose or on a part: dragged, the run is
         // shortened or lengthened, its length following the drag along the way that end points.
@@ -3724,6 +3762,26 @@ void BrickWizardDialog::checkCompatibility(const Brick* b) {
     compatAdd_->setVisible(canAdd);
 }
 
+QString BrickWizardDialog::previewDimAt(const Vec2& world) const {
+    // A dimension's line, or the joint at either end of it - near enough to take hold of.
+    const double reach = std::max(1.2, handleMm_ * 1.2);
+    QString best;
+    double bestD = reach;
+    for (const Entity& e : lastEnts_) {
+        if (e.type != EntityType::Dimension) continue;
+        const QString key = e.meta.value(QStringLiteral("brickDimKey")).toString();
+        if (key.isEmpty()) continue;
+        Vec2 d1, d2;
+        if (!dimensionLineEnds(e, d1, d2)) continue;
+        const double d = closestPointOnSegment(world, d1, d2).distance;
+        if (d < bestD) {
+            bestD = d;
+            best = key;
+        }
+    }
+    return best;
+}
+
 void BrickWizardDialog::showGrabRings() {
     // THE GRAB POINT, on the preview only and only where it is wanted: the part picked, and the part the pointer is
     // over - a ring on every part all the time read as connection points drawn on the parts.
@@ -3744,6 +3802,26 @@ void BrickWizardDialog::showGrabRings() {
         ring.meta.insert(QLatin1String(kPreviewMarkKey), true);
         ring.meta.insert(QStringLiteral("brickHandle"), b->id);
         ents.push_back(ring);
+    }
+    // THE DIMENSION PICKED: lit, with a joint at each end of its line to drag it in or out by.
+    if (!dimSel_.isEmpty()) {
+        std::vector<Entity> joints;
+        for (Entity& e : ents) {
+            if (e.type != EntityType::Dimension || e.meta.value(QStringLiteral("brickDimKey")).toString() != dimSel_) continue;
+            e.meta.insert(QLatin1String(kPreviewSelectedKey), true);
+            Vec2 d1, d2;
+            if (!dimensionLineEnds(e, d1, d2)) continue;
+            for (const Vec2& c : {d1, d2}) {
+                const double h = std::max(0.6, handleMm_ * 0.7);
+                Entity sq;
+                sq.type = EntityType::Polyline;
+                sq.points = {c + Vec2{-h, -h}, c + Vec2{h, -h}, c + Vec2{h, h}, c + Vec2{-h, h}, c + Vec2{-h, -h}};
+                sq.color = QStringLiteral("#5aa0ff");
+                sq.meta.insert(QLatin1String(kPreviewMarkKey), true);
+                joints.push_back(sq);
+            }
+        }
+        for (Entity& j : joints) ents.push_back(std::move(j));
     }
     preview_->setEntities(ents);
 }
@@ -4000,7 +4078,8 @@ void BrickWizardDialog::syncLiveBom() {
 }
 
 void BrickWizardDialog::recordHistory() {
-    if (restoring_ || (canvas_ && canvas_->dragging()) || !partDrag_.isEmpty() || !runDrag_.isEmpty()) return;   // a drag is one step
+    if (restoring_ || (canvas_ && canvas_->dragging()) || !partDrag_.isEmpty() || !runDrag_.isEmpty() || !dimDrag_.isEmpty())
+        return;   // a drag is one step
     const QByteArray now = QJsonDocument(design_.toJson()).toJson(QJsonDocument::Compact);
     if (historyAt_ >= 0 && historyAt_ < static_cast<int>(history_.size()) && history_[historyAt_] == now) return;
     history_.resize(static_cast<size_t>(historyAt_ + 1));
@@ -4111,7 +4190,15 @@ void BrickWizardDialog::placeBom(int where) {
     }
     case 2: middle_->addWidget(bomBox_); break;
     case 3: middle_->insertWidget(0, bomBox_); break;
-    default: rightSplit_->addWidget(bomBox_); break;
+    default: {
+        // UNDER THE PART'S PANEL on the right: the panel three quarters of it, the bill the last quarter.
+        rightSplit_->addWidget(bomBox_);
+        rightSplit_->setStretchFactor(0, 3);
+        rightSplit_->setStretchFactor(1, 1);
+        const int h = std::max(400, rightSplit_->height());
+        rightSplit_->setSizes({h * 3 / 4, h / 4});
+        break;
+    }
     }
     bomBox_->show();
     bomAt_ = where;
@@ -4184,6 +4271,12 @@ void BrickWizardDialog::keyPressEvent(QKeyEvent* e) {
 
 void BrickWizardDialog::showEvent(QShowEvent* e) {
     QDialog::showEvent(e);
+    // The bill under the part's panel: a quarter of the right, once the window is the height it is.
+    if (bomAt_ == 4 && rightSplit_ && rightSplit_->count() >= 2 && !rightSized_) {
+        const int h = std::max(400, rightSplit_->height());
+        rightSplit_->setSizes({h * 3 / 4, h / 4});
+        rightSized_ = true;
+    }
     refreshSaved();   // the drawing may have changed while it was away
     refreshBom();
 }

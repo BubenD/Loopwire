@@ -46,6 +46,8 @@ public:
     double zoom() const { return zoom_; }
     // The drawing's point under a point of the pane, as it was last painted.
     Vec2 worldAt(const QPointF& at) const { return lastVt_.toWorld(at); }
+    // And where a point of the drawing is on the pane, as it was last painted.
+    QPointF screenAt(const Vec2& world) const { return lastVt_.toScreen(world); }
 
     // Picking one object out of what is shown. Used to say which line of a part's drawing the harness
     // attaches to: with this on, a click takes the nearest object under it and nothing else - one line,
