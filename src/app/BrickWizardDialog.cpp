@@ -1409,6 +1409,8 @@ void BrickWizardDialog::buildUi() {
     }
     button("brickDelete", QStringLiteral("Delete"), QStringLiteral("Delete what is picked"),
            [this] { canvas_->deleteSelected(); });
+    button("brickClear", QStringLiteral("Clear"), QStringLiteral("Clear every brick off the pane (Ctrl+Z brings it back)"),
+           [this] { clearAll(); });
     // SYMMETRIC, in x and y, the bricks and the drawing alike: the parts laid out either side of the axis,
     // each column the same step apart, and both panes brought round to show the whole of it.
     button("brickArrange", QStringLiteral("Symmetric"),
@@ -2325,10 +2327,29 @@ QWidget* BrickWizardDialog::buildRunPage() {
             s->setSpecialValueText(QStringLiteral("Auto"));
             return s;
         };
+        // Each with its "A": lit, as long as the drawing makes it - the field showing what that came to.
+        auto withA = [box](QDoubleSpinBox* s, const char* name, QToolButton*& a) {
+            auto* host = new QWidget(box);
+            auto* hl = new QHBoxLayout(host);
+            hl->setContentsMargins(0, 0, 0, 0);
+            hl->setSpacing(3);
+            s->setParent(host);
+            hl->addWidget(s);
+            a = new QToolButton(host);
+            a->setObjectName(QLatin1String(name));
+            a->setText(QStringLiteral("A"));
+            a->setCheckable(true);
+            a->setToolTip(QStringLiteral("Auto: as long as the drawing makes it"));
+            hl->addWidget(a);
+            hl->addStretch(1);
+            return host;
+        };
         transLenStart_ = lenBox("brickTransLenStart");
-        tf->addRow(QStringLiteral("Length, start"), transLenStart_);
+        transLenStart_->setSpecialValueText(QString());
+        tf->addRow(QStringLiteral("Length, start"), withA(transLenStart_, "brickTransLenStartAuto", transLenStartAuto_));
         transLenFinish_ = lenBox("brickTransLenFinish");
-        tf->addRow(QStringLiteral("Length, finish"), transLenFinish_);
+        transLenFinish_->setSpecialValueText(QString());
+        tf->addRow(QStringLiteral("Length, finish"), withA(transLenFinish_, "brickTransLenFinishAuto", transLenFinishAuto_));
         branchCover_ = new QComboBox(box);
         branchCover_->setObjectName(QStringLiteral("brickBranchCover"));
         branchCover_->addItems({QStringLiteral("Wires fan out"), QStringLiteral("Wires under heatshrink, then fan out")});
@@ -2380,9 +2401,23 @@ QWidget* BrickWizardDialog::buildRunPage() {
         transitionInside_->setToolTip(QStringLiteral("Inside the backshell: the transition heatshrink is added to the "
                                                      "BOM but not drawn"));
         (transitionForm_ ? transitionForm_ : bl)->addRow(transitionInside_);
+        // WHICH ONE IS INSIDE: the start's, the finish's or both - not drawn, on the bill as it is cut.
+        transInsideEnds_ = new QComboBox(box);
+        transInsideEnds_->setObjectName(QStringLiteral("brickTransInsideEnds"));
+        transInsideEnds_->addItems({QStringLiteral("Start"), QStringLiteral("Finish"), QStringLiteral("Both")});
+        transInsideEnds_->setToolTip(QStringLiteral("The transition heatshrink inside the backshell - not drawn, but on "
+                                                    "the BOM with its part and length"));
+        (transitionForm_ ? transitionForm_ : bl)->addRow(QStringLiteral("Inside, which"), transInsideEnds_);
         connect(transitionInside_, &QCheckBox::toggled, this, [this](bool on) {
             if (Brick* b = design_.brick(canvas_->selected()); b && brickIsSpecial(b->type)) {
                 b->run.transitionInside = on;
+                designChanged();
+                loadBranches();
+            }
+        });
+        connect(transInsideEnds_, &QComboBox::activated, this, [this](int i) {
+            if (Brick* b = design_.brick(canvas_->selected()); b && brickIsSpecial(b->type)) {
+                b->run.transitionInsideEnds = i == 0 ? RunEnds::Start : i == 1 ? RunEnds::Finish : RunEnds::Both;
                 designChanged();
             }
         });
@@ -2446,18 +2481,26 @@ QWidget* BrickWizardDialog::buildRunPage() {
                 designChanged();
             }
         });
-        connect(transLenStart_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
-            if (Brick* b = design_.brick(canvas_->selected()); b && brickIsSpecial(b->type)) {
-                b->run.transitionLenStartMm = v;
-                designChanged();
-            }
-        });
-        connect(transLenFinish_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
-            if (Brick* b = design_.brick(canvas_->selected()); b && brickIsSpecial(b->type)) {
-                b->run.transitionLenFinishMm = v;
-                designChanged();
-            }
-        });
+        // A figure typed in takes it over from Auto; "A" pressed gives it back to the drawing.
+        for (auto [spin, a, start] : {std::tuple<QDoubleSpinBox*, QToolButton*, bool>{transLenStart_, transLenStartAuto_, true},
+                                      {transLenFinish_, transLenFinishAuto_, false}}) {
+            connect(spin, &QDoubleSpinBox::valueChanged, this, [this, a, start](double v) {
+                if (Brick* b = design_.brick(canvas_->selected()); b && brickIsSpecial(b->type)) {
+                    (start ? b->run.transitionLenStartMm : b->run.transitionLenFinishMm) = std::max(0.0, v);
+                    const QSignalBlocker hush(a);
+                    a->setChecked(v <= 1e-9);
+                    designChanged();
+                }
+            });
+            connect(a, &QToolButton::toggled, this, [this, spin, start](bool on) {
+                if (Brick* b = design_.brick(canvas_->selected()); b && brickIsSpecial(b->type)) {
+                    (start ? b->run.transitionLenStartMm : b->run.transitionLenFinishMm) =
+                        on ? 0.0 : std::max(0.5, spin->value());
+                    designChanged();
+                    loadBranches();
+                }
+            });
+        }
         branchesBox_ = box;
         auto edit = [this](const std::function<void(Brick&)>& fn) {
             Brick* b = design_.brick(canvas_->selected());
@@ -3508,10 +3551,14 @@ void BrickWizardDialog::loadBranches() {
     fanShrinkLen_->setEnabled(r.fanEndShrink);
     fanShrinkPart_->setEnabled(r.fanEndShrink);
     {
-        const QSignalBlocker i1(fanShrinkInside_), i2(transitionInside_);
+        const QSignalBlocker i1(fanShrinkInside_), i2(transitionInside_), i3(transInsideEnds_);
         fanShrinkInside_->setChecked(r.fanEndShrinkInside);
         transitionInside_->setChecked(r.transitionInside);
+        transInsideEnds_->setCurrentIndex(r.transitionInsideEnds == RunEnds::Start    ? 0
+                                          : r.transitionInsideEnds == RunEnds::Finish ? 1
+                                                                                       : 2);
     }
+    if (transitionForm_) transitionForm_->setRowVisible(transInsideEnds_, r.transitionInside);
     {
         const QSignalBlocker t1(transStretch_), t2(transStretchLen_), t3(transStretchAuto_);
         transStretch_->setChecked(r.transitionStretch);
@@ -3525,12 +3572,20 @@ void BrickWizardDialog::loadBranches() {
     transStretchAuto_->setEnabled(r.transitionStretch);
     fanShrinkInside_->setEnabled(r.fanEndShrink);
     {
-        const QSignalBlocker s1(transLenStart_), s2(transLenFinish_);
-        transLenStart_->setValue(r.transitionLenStartMm);
-        transLenFinish_->setValue(r.transitionLenFinishMm);
+        const QSignalBlocker s1(transLenStart_), s2(transLenFinish_), s3(transLenStartAuto_), s4(transLenFinishAuto_);
+        const BrickActual act = actual_.value(b->id);
+        // On Auto, what it came to on the drawing.
+        transLenStartAuto_->setChecked(r.transitionLenStartMm <= 1e-9);
+        transLenStart_->setValue(r.transitionLenStartMm > 1e-9 ? r.transitionLenStartMm : act.transitionLenStart);
+        transLenFinishAuto_->setChecked(r.transitionLenFinishMm <= 1e-9);
+        transLenFinish_->setValue(r.transitionLenFinishMm > 1e-9 ? r.transitionLenFinishMm : act.transitionLenFinish);
     }
-    transLenStart_->setEnabled(r.transitions == RunEnds::Start || r.transitions == RunEnds::Both || r.branchCover == 1);
-    transLenFinish_->setEnabled(r.transitions == RunEnds::Finish || r.transitions == RunEnds::Both || r.branchCover == 1);
+    const bool lenStartOn = r.transitions == RunEnds::Start || r.transitions == RunEnds::Both || r.branchCover == 1;
+    const bool lenFinishOn = r.transitions == RunEnds::Finish || r.transitions == RunEnds::Both || r.branchCover == 1;
+    transLenStart_->setEnabled(lenStartOn);
+    transLenStartAuto_->setEnabled(lenStartOn);
+    transLenFinish_->setEnabled(lenFinishOn);
+    transLenFinishAuto_->setEnabled(lenFinishOn);
     // The parts it goes into, each ticked where its wire ends get heatshrink.
     {
         const QSignalBlocker hushParts(fanShrinkParts_);
@@ -4398,6 +4453,14 @@ QHash<QString, double> BrickWizardDialog::partLengths() const {
             for (auto it = extraBranchLengths_.cbegin(); it != extraBranchLengths_.cend(); ++it)
                 if (it.key().startsWith(key)) mm[b.run.branchShrinkPart] += it.value();
         }
+        // ITS TRANSITION HEATSHRINKS, where their part is bought by length: as long as each is cut - drawn or inside a
+        // backshell - all told.
+        if (!b.run.transitionPart.isEmpty() && extraTransitionMm_.value(b.id) > 1e-9)
+            if (const LibraryPart* p = catalog_.byId(b.run.transitionPart)) {
+                const QString unit = p->unit.isEmpty() ? defaultUnitForKind(p->kind) : p->unit;
+                if (unit == QLatin1String("m") || unit == QLatin1String("mm") || unit == QLatin1String("cm"))
+                    mm[b.run.transitionPart] += extraTransitionMm_.value(b.id);
+            }
         // A sleeve over each wire end, where its part is bought by length: its length, so many times.
         if (b.run.fanEndShrink && !b.run.fanEndShrinkPart.isEmpty())
             if (const LibraryPart* p = catalog_.byId(b.run.fanEndShrinkPart)) {
@@ -4554,6 +4617,14 @@ void BrickWizardDialog::restoreHistory(int at) {
     restoring_ = false;
 }
 
+void BrickWizardDialog::clearAll() {
+    design_.bricks.clear();
+    design_.links.clear();
+    canvas_->setSelection({});
+    designChanged();
+    status_->setText(QStringLiteral("Cleared - Ctrl+Z brings it back"));
+}
+
 void BrickWizardDialog::undo() {
     if (!canUndo()) {
         status_->setText(QStringLiteral("Nothing to undo"));
@@ -4587,10 +4658,12 @@ void BrickWizardDialog::refreshPreview() {
             const BrickBuild pre = buildBrickHarness(design_, &catalog_);
             extraBranchLengths_ = pre.branchLengths;
             extraTransitions_ = pre.transitionCount;
+            extraTransitionMm_ = pre.transitionMm;
             extraFanEnds_ = pre.fanEndCount;
         } else {
             extraBranchLengths_.clear();
             extraTransitions_.clear();
+            extraTransitionMm_.clear();
             extraFanEnds_.clear();
         }
         syncLiveBom();

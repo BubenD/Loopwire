@@ -4326,21 +4326,142 @@ void testRoundTwentySeven() {
         BrickRunSpec& r = d.brick(c)->run;
         r.fanStartMm = 0.0;   // no fan at the start: the cable goes into its part
         r.transitions = RunEnds::Start;
-        auto startX = [&d, &c] {
-            for (const Entity& e : buildBrickHarness(d, nullptr).entities)
-                if (e.type == EntityType::TwistedPair && e.meta.value(QStringLiteral("brickId")).toString() == c)
-                    return e.points.front().x;
-            return 0.0;
+        // The piece over the part: how far into it, and how far across it goes - and the part's own height.
+        auto overPart = [&d, &x](double& along, double& across, double& partAcross, bool& masked) {
+            along = across = partAcross = 0.0;
+            masked = false;
+            Bounds pb;
+            for (const Entity& e : buildBrickHarness(d, nullptr).entities) {
+                const QString role = e.meta.value(QStringLiteral("mechRole")).toString();
+                if (e.meta.value(QStringLiteral("brickId")).toString() == x && role != QLatin1String("designator") &&
+                    e.type != EntityType::Text)
+                    pb.expand(e.bounds());
+                if (role != QLatin1String("transitionOverPart")) continue;
+                if (e.type == EntityType::Wipeout) masked = true;
+                if (e.type != EntityType::Polyline) continue;
+                const Bounds bb = e.bounds();
+                along = bb.max.x - bb.min.x;
+                across = bb.max.y - bb.min.y;
+            }
+            if (pb.valid) partAcross = pb.max.y - pb.min.y;
         };
-        const double plain = startX();
+        double along, across, partAcross;
+        bool masked;
+        overPart(along, across, partAcross, masked);
+        check(along == 0.0 && !masked, "stretch: nothing over the part until asked");
         r.transitionStretch = true;
         const BrickBuild b = buildBrickHarness(d, nullptr);
-        const double stretched = startX();
-        std::printf("  stretch: the run starts %.1f, stretched %.1f (auto %.1f)\n", plain, stretched, b.actual.value(c).transitionStretch);
-        check(stretched < plain - 0.5 && std::abs((plain - stretched) - b.actual.value(c).transitionStretch) < 1e-6,
+        overPart(along, across, partAcross, masked);
+        std::printf("  stretch: over the part %.1f along, %.1f across (the part %.1f), auto %.1f\n", along, across, partAcross,
+                    b.actual.value(c).transitionStretch);
+        check(along > 0.5 && std::abs(along - b.actual.value(c).transitionStretch) < 1e-6,
               "stretch: the transition carried on over the end part - a tenth of its length on Auto");
+        check(masked && across >= partAcross - 1e-6, "stretch: a wipeout over the whole of the part across");
         r.transitionStretchMm = 6.0;
-        check(std::abs((plain - startX()) - 6.0) < 1e-6, "stretch: as far as said");
+        overPart(along, across, partAcross, masked);
+        check(std::abs(along - 6.0) < 1e-6, "stretch: as far as said");
+    }
+}
+
+// ROUND TWENTY-EIGHT: a bridge wire on a cable's end where it divides into branches; each transition's length shown on
+// Auto; which transition is inside the backshell - and its length on the bill; Clear.
+void testRoundTwentyEight() {
+    {
+        BrickDesign d;
+        const QString sa = d.addBrick(BrickType::End, PartKind::Connector, 0, 1);
+        const QString a2 = d.addBrick(BrickType::End, PartKind::Connector, 0, 3);
+        const QString sb = d.addBrick(BrickType::End, PartKind::Connector, 4, 2);
+        const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 3, 2);
+        const QString b1 = d.addBrick(BrickType::Run, PartKind::Wire, 1, 1);
+        const QString b2 = d.addBrick(BrickType::Run, PartKind::Wire, 1, 3);
+        const QString bw = d.addBrick(BrickType::Run, PartKind::Wire, 2, 0);
+        const QString f = d.addBrick(BrickType::End, PartKind::Ferrule, 1, 0);
+        makeBranch(*d.brick(b1));
+        makeBranch(*d.brick(b2));
+        makeBridgeWire(*d.brick(bw));
+        d.brick(bw)->run.bridgeWires = QStringLiteral("1,2");
+        d.connect(c, sb, nullptr, 1, -1);
+        d.brick(c)->run.wires = 6;
+        d.connect(b1, c, nullptr, 1, 0);
+        d.connect(b2, c, nullptr, 1, 0);
+        d.connect(sa, b1, nullptr, -1, 0);
+        d.connect(a2, b2, nullptr, -1, 0);
+        QString why;
+        check(d.connect(bw, c, &why, 1, 0), "bridge: joined to the cable's end where it divides");
+        d.connect(f, bw, nullptr, -1, 0);
+        syncBridgeWires(d);
+        std::vector<Vec2> bridgeRoute;
+        std::vector<std::vector<Vec2>> cable;
+        for (const Entity& e : buildBrickHarness(d, nullptr).entities) {
+            if (e.type != EntityType::TwistedPair) continue;
+            const QString id = e.meta.value(QStringLiteral("brickId")).toString();
+            if (id == bw) bridgeRoute = e.points;
+            else if (id == c) cable.push_back(e.points);
+        }
+        double off = 1e300;
+        if (!bridgeRoute.empty())
+            for (const auto& rt : cable)
+                for (size_t k = 0; k + 1 < rt.size(); ++k)
+                    off = std::min({off, closestPointOnSegment(bridgeRoute.front(), rt[k], rt[k + 1]).distance,
+                                    closestPointOnSegment(bridgeRoute.back(), rt[k], rt[k + 1]).distance});
+        std::printf("  bridge: off the cable where it divides by %.2f\n", off);
+        check(!bridgeRoute.empty() && off < 6.0, "bridge: comes out of the cable where it divides, not left off by itself");
+    }
+    {
+        BrickDesign d;
+        const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString y = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        d.connect(x, c);
+        d.connect(c, y);
+        BrickRunSpec& r = d.brick(c)->run;
+        r.transitions = RunEnds::Both;
+        r.lengthMm = 300.0;
+        BrickBuild b = buildBrickHarness(d, nullptr);
+        const BrickActual a = b.actual.value(c);
+        std::printf("  transition lengths on Auto: %.1f, %.1f; all told %.1f\n", a.transitionLenStart, a.transitionLenFinish,
+                    b.transitionMm.value(c));
+        check(a.transitionLenStart > 1.0 && a.transitionLenFinish > 1.0, "transition: each length on Auto, as drawn");
+        check(std::abs(b.transitionMm.value(c) - (a.transitionLenStart + a.transitionLenFinish)) < 1e-6,
+              "transition: on the bill as long as both");
+        r.transitionLenStartMm = 15.0;
+        b = buildBrickHarness(d, nullptr);
+        check(std::abs(b.actual.value(c).transitionLenStart - 15.0) < 1e-6, "transition: a length said is the length");
+        // INSIDE THE BACKSHELL, the start's only: the finish still drawn, both on the bill as long as they are.
+        auto sides = [&d, &c] {
+            for (const Entity& e : buildBrickHarness(d, nullptr).entities)
+                if (e.type == EntityType::TwistedPair && e.meta.value(QStringLiteral("brickId")).toString() == c)
+                    return e.meta.value(QStringLiteral("twistBodyTransitionSides")).toString();
+            return QString();
+        };
+        check(sides() == QStringLiteral("both"), "inside: both drawn before");
+        r.transitionInside = true;
+        r.transitionInsideEnds = RunEnds::Start;
+        b = buildBrickHarness(d, nullptr);
+        check(sides() == QStringLiteral("finish") && b.transitionCount.value(c) == 2 &&
+                  std::abs(b.transitionMm.value(c) - (15.0 + b.actual.value(c).transitionLenFinish)) < 1e-6,
+              "inside: the start's not drawn, both counted and their lengths on the bill");
+        r.transitionInsideEnds = RunEnds::Both;
+        check(sides() == QStringLiteral("none"), "inside: both, neither drawn");
+        const BrickDesign back = BrickDesign::fromJson(d.toJson());
+        check(back.brick(c)->run.transitionInsideEnds == RunEnds::Both, "inside: which, kept");
+    }
+    {
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        BrickWizardDialog dlg(&ed);
+        BrickDesign& w = dlg.design();
+        w.addBrick(BrickType::Run, PartKind::Cable, 2, 2);
+        w.addBrick(BrickType::End, PartKind::Connector, 1, 2);
+        auto* clr = dlg.findChild<QPushButton*>(QStringLiteral("brickClear"));
+        check(clr != nullptr, "clear: a Clear button");
+        if (clr) clr->click();
+        check(dlg.design().bricks.empty(), "clear: every brick gone");
+        check(dlg.findChild<QToolButton*>(QStringLiteral("brickTransLenStartAuto")) &&
+                  dlg.findChild<QToolButton*>(QStringLiteral("brickTransLenFinishAuto")) &&
+                  dlg.findChild<QComboBox*>(QStringLiteral("brickTransInsideEnds")),
+              "transition: A on each length, and which one is inside");
     }
 }
 
@@ -4385,6 +4506,7 @@ int run_brickharness_tests() {
     testRoundTwentyFive();
     testRoundTwentySix();
     testRoundTwentySeven();
+    testRoundTwentyEight();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

@@ -548,6 +548,7 @@ QJsonObject BrickDesign::toJson() const {
                                                    {"transitionInside", r.transitionInside},
                                                    {"transitionStretch", r.transitionStretch},
                                                    {"transitionStretchMm", r.transitionStretchMm},
+                                                   {"transitionInsideEnds", endsKey(r.transitionInsideEnds)},
                                                    {"stackParts", [&r] {
                                                         QJsonObject sp;
                                                         for (auto it = r.stackParts.cbegin(); it != r.stackParts.cend(); ++it)
@@ -661,6 +662,8 @@ BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
             s.transitionInside = r.value(QStringLiteral("transitionInside")).toBool(false);
             s.transitionStretch = r.value(QStringLiteral("transitionStretch")).toBool(false);
             s.transitionStretchMm = std::max(0.0, r.value(QStringLiteral("transitionStretchMm")).toDouble(0.0));
+            if (r.contains(QStringLiteral("transitionInsideEnds")))
+                s.transitionInsideEnds = endsFromKey(r.value(QStringLiteral("transitionInsideEnds")).toString());
             {
                 const QJsonObject sp = r.value(QStringLiteral("stackParts")).toObject();
                 for (auto it = sp.begin(); it != sp.end(); ++it) s.stackParts.insert(it.key(), it.value().toString());
@@ -1889,6 +1892,13 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                     if (f.node == f.id) {
                         partThere = f.node;
                         partsThere << f.node;
+                    } else if (junctions.contains(f.node)) {
+                        // THE PARTS BEYOND A BRANCH BRICK at this end too: a bridge may be told to come out beside one.
+                        const Junction& jn = junctions.value(f.node);
+                        const Brick* ob = design.brick(jn.a == s.id ? jn.b : jn.a);
+                        if (ob && brickIsBranch(*ob))
+                            for (const QString& part : design.sideOf(ob->id, 1 - design.portOn(ob->id, s.id)))
+                                if (const Brick* pb = design.brick(part); pb && pb->type == BrickType::End) partsThere << part;
                     }
                 for (int k = side->size() - 1; k >= 0; --k) {
                     const FaceRef& f = side->at(k);
@@ -2192,13 +2202,17 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             pf.node = it.value().partThere;
             pf.id = pf.node;
             pf.port = design.portOn(pf.node, it.value().source);
+            // A part beyond a branch brick faces the branch, not the cable.
+            const Brick* via = branchVia.value(it.value().source + QLatin1Char('|') + pf.node);
+            if (pf.port < 0 && via) pf.port = design.portOn(pf.node, via->id);
+            if (pf.port < 0) continue;
             const Vec2 at = faceAt(pf);
             // AT THE CABLE'S END FACE, not at the part: the bridge comes out where the fan starts, a fan's length
             // off the part - so its own part may stand nearer than the part the fan goes into.
             double fan = kWiresRunEnd;
-            if (const Brick* src = design.brick(it.value().source)) {
+            if (const Brick* src = via ? via : design.brick(it.value().source)) {
                 const int srcPort = design.portOn(src->id, pf.node);
-                const double said = srcPort == kPortRight ? src->run.fanFinishMm : src->run.fanStartMm;
+                const double said = via ? src->run.fanFinishMm : srcPort == kPortRight ? src->run.fanFinishMm : src->run.fanStartMm;
                 const auto sh = shapes.constFind(pf.node);
                 const double faceLen = sh != shapes.cend() && pf.port >= 0 && pf.port < sh->ports()
                                            ? sh->faceLen[static_cast<size_t>(pf.port)]
@@ -3001,26 +3015,78 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         }
         // A TRANSITION STRETCHED OVER ITS END PART: at an end with no fan and a part there, asked for, the run (and the
         // transition on it) carried on over the part - so far, or a tenth of the part's length.
+        // In the run's own terms (turned round where it was built from its finish).
+        auto ownEnds = [&](RunEnds e) {
+            return !br.flipped ? e
+                   : e == RunEnds::Start  ? RunEnds::Finish
+                   : e == RunEnds::Finish ? RunEnds::Start
+                                          : e;
+        };
+        // WHICH TRANSITION IS INSIDE THE BACKSHELL: not drawn there - nor stretched over the part.
+        const RunEnds inEnds = r.transitionInside ? ownEnds(r.transitionInsideEnds) : RunEnds::None;
+        const bool insideA = inEnds == RunEnds::Start || inEnds == RunEnds::Both;
+        const bool insideB = inEnds == RunEnds::Finish || inEnds == RunEnds::Both;
         double stretchA = 0.0, stretchB = 0.0;
-        if (r.transitionStretch && !r.transitionInside && r.outermost() != QLatin1String("wires") && route.size() >= 2) {
-            const RunEnds sEnds = !br.flipped ? r.transitions
-                                  : r.transitions == RunEnds::Start  ? RunEnds::Finish
-                                  : r.transitions == RunEnds::Finish ? RunEnds::Start
-                                                                     : r.transitions;
+        double stretchCould = 0.0;   // what Auto would come to, asked or not - for the window to show
+        if (r.outermost() != QLatin1String("wires") && route.size() >= 2 && r.transitions != RunEnds::None) {
+            const RunEnds sEnds = ownEnds(r.transitions);
             const bool atA = (sEnds == RunEnds::Start || sEnds == RunEnds::Both) && !isSub && !br.freeStart &&
-                             !br.a.id.isEmpty() && br.a.node == br.a.id;
-            const bool atB = (sEnds == RunEnds::Finish || sEnds == RunEnds::Both) && !isTrunk && !loose && br.b.node == br.b.id;
+                             !br.a.id.isEmpty() && br.a.node == br.a.id && !insideA;
+            const bool atB = (sEnds == RunEnds::Finish || sEnds == RunEnds::Both) && !isTrunk && !loose &&
+                             br.b.node == br.b.id && !insideB;
             auto partLength = [](const BrickFace& f) { return std::max(1.0, distance(f.nearAt, f.farAt)); };
             if (atA && !spreadA) {
-                stretchA = r.transitionStretchMm > 1e-9 ? r.transitionStretchMm : 0.1 * partLength(fa);
-                route.insert(route.begin(), route.front() - fa.out.normalized() * stretchA);
+                const double v = r.transitionStretchMm > 1e-9 ? r.transitionStretchMm : 0.1 * partLength(fa);
+                stretchCould = std::max(stretchCould, v);
+                if (r.transitionStretch) stretchA = v;
             }
             if (atB && !spreadB) {
-                stretchB = r.transitionStretchMm > 1e-9 ? r.transitionStretchMm : 0.1 * partLength(fb);
-                route.push_back(route.back() - fb.out.normalized() * stretchB);
+                const double v = r.transitionStretchMm > 1e-9 ? r.transitionStretchMm : 0.1 * partLength(fb);
+                stretchCould = std::max(stretchCould, v);
+                if (r.transitionStretch) stretchB = v;
             }
         }
+        double transLenA = 0.0, transLenB = 0.0;   // each transition's length as drawn, at this branch's ends
         std::vector<Entity> made;
+        // THE TRANSITION STRETCHED OVER ITS PART: from the entry face on into the part, as wide as the whole part is
+        // across - shrunk down over it - a wipeout under it so the part's own lines are covered.
+        auto overPart = [&](const BrickFace& f, const QString& part, const Vec2& faceAt, double len) {
+            if (len <= 1e-9) return;
+            const Vec2 u = f.out.normalized() * -1.0, v = u.perp();
+            double lo = 1e300, hi = -1e300;
+            for (const Entity& e : out.entities) {
+                if (e.meta.value(QStringLiteral("brickId")).toString() != part) continue;
+                const QString role = e.meta.value(QStringLiteral("mechRole")).toString();
+                if (role == QLatin1String("designator") || role == QLatin1String("balloon") || e.type == EntityType::Text) continue;
+                const Bounds bb = e.bounds();
+                if (!bb.valid) continue;
+                for (const Vec2& p : {bb.min, bb.max, Vec2{bb.min.x, bb.max.y}, Vec2{bb.max.x, bb.min.y}}) {
+                    const double t = dot(p - faceAt, v);
+                    lo = std::min(lo, t);
+                    hi = std::max(hi, t);
+                }
+            }
+            if (lo > hi) return;
+            const double wall = 0.3;
+            lo -= wall;
+            hi += wall;
+            const std::vector<Vec2> box{faceAt + v * lo, faceAt + u * len + v * lo, faceAt + u * len + v * hi, faceAt + v * hi};
+            Entity w;
+            w.type = EntityType::Wipeout;
+            w.points = box;
+            w.meta.insert(QStringLiteral("noFrame"), true);
+            w.meta.insert(QStringLiteral("mechRole"), QStringLiteral("transitionOverPart"));
+            made.push_back(w);
+            Entity o;
+            o.type = EntityType::Polyline;
+            o.points = box;
+            o.points.push_back(box.front());
+            o.meta.insert(QStringLiteral("closed"), true);
+            o.meta.insert(QStringLiteral("mechRole"), QStringLiteral("transitionOverPart"));
+            made.push_back(o);
+        };
+        if (stretchA > 1e-9) overPart(fa, br.a.id, route.front(), stretchA);
+        if (stretchB > 1e-9) overPart(fb, br.b.id, route.back(), stretchB);
 
         const bool laidUp = s.type == BrickType::TwistedPair || s.type == BrickType::TwistedBundle;
         // A BRANCH AFTER THE CABLE DIVIDES is bare wires fanning out to its part, or wires under heatshrink - never
@@ -3110,7 +3176,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                                                std::max(ww * 1.5, loose ? la.share : std::min(la.share, lb.share)));
                     // A BRANCH under heatshrink with a transition asked at an end is drawn as a body that takes one: a
                     // sleeve has no transition of its own to draw.
-                    const bool transitionAsked = br.viaBranch && r.transitions != RunEnds::None && !r.transitionInside;
+                    const bool transitionAsked = br.viaBranch && r.transitions != RunEnds::None && !(insideA && insideB);
                     run.meta.insert(QStringLiteral("twistBody"),
                                     outer == QLatin1String("heatshrink") && !transitionAsked ? QStringLiteral("heatshrink")
                                                                                              : QStringLiteral("cable"));
@@ -3140,14 +3206,16 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                         wantB = bl && bl->endBoot;
                     }
                     out.transitionCount[s.id] += (wantA ? 1 : 0) + (wantB ? 1 : 0);
-                    // INSIDE THE BACKSHELL: on the bill, as counted - not drawn.
-                    if (r.transitionInside) wantA = wantB = false;
+                    const bool countA = wantA, countB = wantB;
+                    // INSIDE THE BACKSHELL: on the bill, as counted and as long - not drawn.
+                    if (insideA) wantA = false;
+                    if (insideB) wantB = false;
                     if ((wantA && !spreadA) || (wantB && !spreadB)) {
                         run.meta.insert(QStringLiteral("twistEndBoot"), true);
                         run.meta.insert(QStringLiteral("twistEndBootRecovered"), true);
                     }
                     // THE TRANSITION'S ENTRY the size of the bundle going into it.
-                    if (wantA || wantB) {
+                    if (countA || countB) {
                         const double entry = std::min(bodyWidth, packed * (wires - 1) + ww);
                         run.meta.insert(QStringLiteral("twistBodyFace"), entry);
                         // KEPT ON THE STRAIGHT IT SITS ON: a transition is a straight sleeve, and one longer than the
@@ -3172,11 +3240,12 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                                 const BrickLink* bl = design.link(s.id, br.b.node);
                                 askedB = bl ? bl->endBootLenMm : 0.0;
                             }
-                            // ...and the length it is stretched over the end part, on top.
-                            run.meta.insert(QStringLiteral("twistBoot"),
-                                            (askedA > 1e-9 ? askedA : std::max(2.0, std::min(want, room(false)))) + stretchA);
-                            run.meta.insert(QStringLiteral("twistBootFinish"),
-                                            (askedB > 1e-9 ? askedB : std::max(2.0, std::min(want, room(true)))) + stretchB);
+                            transLenA = askedA > 1e-9 ? askedA : std::max(2.0, std::min(want, room(false)));
+                            transLenB = askedB > 1e-9 ? askedB : std::max(2.0, std::min(want, room(true)));
+                            run.meta.insert(QStringLiteral("twistBoot"), transLenA);
+                            run.meta.insert(QStringLiteral("twistBootFinish"), transLenB);
+                            // ON THE BILL as long as it is cut - the piece over the part included.
+                            out.transitionMm[s.id] += (countA ? transLenA + stretchA : 0.0) + (countB ? transLenB + stretchB : 0.0);
                         }
                         // Its width as said - held at the cable's width if it is asked to be narrower.
                         if (r.transitionWidthMm > 1e-9)
@@ -3269,9 +3338,10 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         // that way - and how wide the face is there, so the bridge comes out of the face and not its middle.
         for (auto it = bridgeOff.cbegin(); it != bridgeOff.cend(); ++it) {
             if (it.value().source != s.id) continue;
-            // ONLY THE BRIDGE ON THAT END of the cable - no part there: it comes out of the cable's body, at its end.
+            // ONLY THE BRIDGE ON THAT END of the cable - no part there: it comes out of the cable's body, at its end -
+            // or, where the cable divides into branches there, out of the body where it divides.
             if (it.value().partThere.isEmpty()) {
-                if (!loose || isTrunk || isSub || route.size() < 2) continue;
+                if (!loose || isSub || route.size() < 2) continue;
                 const Vec2 out1 = (route.back() - route[route.size() - 2]).normalized();
                 const double half = std::max(bodyWidth / 2.0, packed * (wires - 1) / 2.0 + ww / 2.0);
                 bridgeStart.insert(it.key(), BridgeStart{route.back(), out1, half});
@@ -3305,7 +3375,9 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             act.bodyWidth = bodyWidth;
             act.transitionWidth = r.transitionWidthMm > 1e-9 ? std::max(r.transitionWidthMm, bodyWidth)
                                                              : bodyWidth * 1.25;
-            act.transitionStretch = std::max(stretchA, stretchB);
+            act.transitionStretch = r.transitionStretch ? std::max(stretchA, stretchB) : stretchCould;
+            act.transitionLenStart = br.flipped ? transLenB : transLenA;
+            act.transitionLenFinish = br.flipped ? transLenA : transLenB;
             for (const Entity& e : made)
                 if (e.type == EntityType::TwistedPair) {
                     const TwistFigures fig = twistedPairFigures(e);

@@ -141,6 +141,9 @@ struct BrickRunSpec {
     // (0 - a tenth of the part's length).
     bool transitionStretch = false;
     double transitionStretchMm = 0.0;
+    // WHICH TRANSITION IS INSIDE THE BACKSHELL (transitionInside): the start's, the finish's or both - not drawn, on the
+    // bill with its length all the same.
+    RunEnds transitionInsideEnds = RunEnds::Both;
     // WHICH END A FANOUT SPREADS AT: -1 the end on a part (the start when both are), 0 the start,
     // 1 the finish.
     int fanSide = -1;
@@ -452,7 +455,9 @@ struct BrickActual {
     double bodyWidth = 0.0;
     double trunk = 0.0;
     double transitionWidth = 0.0;   // the transition heatshrink, as drawn
-    double transitionStretch = 0.0; // how far it is stretched over the end part, as drawn
+    double transitionStretch = 0.0; // how far it is stretched over the end part, as drawn (or would be, asked)
+    double transitionLenStart = 0.0;   // each transition's length, as the drawing makes it
+    double transitionLenFinish = 0.0;
 };
 
 struct BrickBuild {
@@ -467,6 +472,8 @@ struct BrickBuild {
     // How many transition heatshrinks each special has on it, and how many wire ends are covered at its fans.
     QHash<QString, int> transitionCount;
     QHash<QString, int> fanEndCount;
+    // How long the transition heatshrinks on each special come to, all told - inside a backshell too.
+    QHash<QString, double> transitionMm;
 };
 
 // THE DRAWING: every end as its library part (or a placeholder of its kind) set down by its entry

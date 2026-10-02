@@ -458,6 +458,8 @@ private:
     void recordHistory();
     void restoreHistory(int at);
 public:
+    // CLEAR: every brick and link off the pane - the name and what is saved stay, Ctrl+Z brings it back.
+    void clearAll();
     void undo();
     void redo();
     bool canUndo() const { return historyAt_ > 0; }
@@ -495,6 +497,7 @@ private:
     // What the drawing made of the runs, for the bill (see refreshPreview).
     QHash<QString, double> extraBranchLengths_;
     QHash<QString, int> extraTransitions_;
+    QHash<QString, double> extraTransitionMm_;   // and how long they come to
     QHash<QString, int> extraFanEnds_;
     // THE BRANCHES AND WIRE ENDS section of a run's panel.
     QWidget* branchesBox_ = nullptr;
@@ -507,6 +510,9 @@ private:
     QComboBox* fanShrinkPart_ = nullptr;
     QDoubleSpinBox* transLenStart_ = nullptr;   // each transition's own length, 0 Auto
     QDoubleSpinBox* transLenFinish_ = nullptr;
+    QToolButton* transLenStartAuto_ = nullptr;  // "A": as long as the drawing makes it, the field showing that
+    QToolButton* transLenFinishAuto_ = nullptr;
+    QComboBox* transInsideEnds_ = nullptr;      // which transition is inside the backshell
     QListWidget* fanShrinkParts_ = nullptr;     // the parts whose wire ends get heatshrink
     QFormLayout* transitionForm_ = nullptr;     // the run's transition heatshrink box
     QCheckBox* fanShrinkInside_ = nullptr;      // the wire-end heatshrink inside the backshell: on the bill, not drawn
