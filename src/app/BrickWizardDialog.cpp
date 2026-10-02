@@ -1277,7 +1277,8 @@ BrickPalette::BrickPalette(QWidget* parent) : QListWidget(parent) {
         brick(partKindName(k), brickTypeKey(BrickType::End) + QLatin1Char('|') + partKindKey(k));
     header(QStringLiteral("Joints"));
     for (PartKind k : brickJointKinds())
-        brick(partKindName(k), brickTypeKey(BrickType::End) + QLatin1Char('|') + partKindKey(k));
+        if (k != PartKind::Heatshrink)   // a heatshrink goes on a run (its stack, its transitions), not between parts
+            brick(partKindName(k), brickTypeKey(BrickType::End) + QLatin1Char('|') + partKindKey(k));
     header(QStringLiteral("Specials"));
     for (BrickType t : {BrickType::Fanout, BrickType::Run, BrickType::TwistedPair,
                         BrickType::TwistedBundle})
@@ -2315,6 +2316,48 @@ QWidget* BrickWizardDialog::buildRunPage() {
         transitionPart_ = partBox("brickTransitionPart", {PartKind::Heatshrink, PartKind::HeatshrinkBoot});
         QFormLayout* tf = transitionForm_ ? transitionForm_ : bl;   // with the rest of the transition's figures
         tf->addRow(QStringLiteral("P/N"), transitionPart_);
+        // MORE OF THEM, ONE OVER ANOTHER: picked and added over the first, taken off again.
+        {
+            auto* host = new QWidget(box);
+            auto* hl = new QHBoxLayout(host);
+            hl->setContentsMargins(0, 0, 0, 0);
+            hl->setSpacing(3);
+            transLayerPick_ = partBox("brickTransLayerPick", {PartKind::Heatshrink, PartKind::HeatshrinkBoot});
+            transLayerPick_->setParent(host);
+            hl->addWidget(transLayerPick_, 1);
+            auto* add = new QToolButton(host);
+            add->setObjectName(QStringLiteral("brickTransLayerAdd"));
+            add->setText(QStringLiteral("+"));
+            add->setToolTip(QStringLiteral("Put this heatshrink on over the transition"));
+            hl->addWidget(add);
+            auto* del = new QToolButton(host);
+            del->setObjectName(QStringLiteral("brickTransLayerRemove"));
+            del->setText(QStringLiteral("−"));
+            del->setToolTip(QStringLiteral("Take the picked layer off"));
+            hl->addWidget(del);
+            tf->addRow(QStringLiteral("Over it"), host);
+            transLayers_ = new QListWidget(box);
+            transLayers_->setObjectName(QStringLiteral("brickTransLayers"));
+            transLayers_->setMaximumHeight(58);
+            transLayers_->setToolTip(QStringLiteral("Heatshrinks over the transition, one over another - inside out"));
+            tf->addRow(QString(), transLayers_);
+            connect(add, &QToolButton::clicked, this, [this] {
+                Brick* b = design_.brick(canvas_->selected());
+                const QString id = transLayerPick_->currentData().toString();
+                if (!b || !brickIsSpecial(b->type) || id.isEmpty()) return;
+                b->run.transitionLayers << id;
+                designChanged();
+                loadBranches();
+            });
+            connect(del, &QToolButton::clicked, this, [this] {
+                Brick* b = design_.brick(canvas_->selected());
+                const int row = transLayers_->currentRow() >= 0 ? transLayers_->currentRow() : transLayers_->count() - 1;
+                if (!b || !brickIsSpecial(b->type) || row < 0 || row >= b->run.transitionLayers.size()) return;
+                b->run.transitionLayers.removeAt(row);
+                designChanged();
+                loadBranches();
+            });
+        }
         // EACH TRANSITION ITS OWN LENGTH: at the start, at the finish (and a branch's at its end, in the table) -
         // "Auto" as the drawing makes it.
         auto lenBox = [box](const char* name) {
@@ -3540,6 +3583,15 @@ void BrickWizardDialog::loadBranches() {
         c->setCurrentIndex(at >= 0 ? at : 0);
     };
     pick(transitionPart_, r.transitionPart);
+    {
+        const QSignalBlocker hush(transLayers_);
+        transLayers_->clear();
+        for (const QString& id : r.transitionLayers) {
+            const LibraryPart* p = catalog_.byId(id);
+            transLayers_->addItem(!p ? id : p->mfrPn.isEmpty() ? p->title() : p->mfrPn);
+        }
+        transLayers_->setEnabled(r.transitions != RunEnds::None);
+    }
     pick(branchShrink_, r.branchShrinkPart);
     pick(fanShrinkPart_, r.fanEndShrinkPart);
     {
@@ -4011,6 +4063,22 @@ bool BrickWizardDialog::eventFilter(QObject* o, QEvent* e) {
                     partDrag_ = hit;
                     partDragOwn_ = me->modifiers() & Qt::ShiftModifier;
                     partDragFrom_ = preview_->worldAt(me->position());
+                    // THE REST HELD WHERE IT IS: the part most linked other than this one stays put on the drawing, so
+                    // only what this drag changes - this part, and what hangs on it alone - moves.
+                    {
+                        QString ref;
+                        int most = -1;
+                        for (const Brick& ob : design_.bricks) {
+                            if (ob.type != BrickType::End || ob.id == hit || !lastPartX_.contains(ob.id)) continue;
+                            const int n = static_cast<int>(design_.linksOf(ob.id).size());
+                            if (n > most) {
+                                most = n;
+                                ref = ob.id;
+                            }
+                        }
+                        design_.holdPart = ref;
+                        design_.holdX = lastPartX_.value(ref);
+                    }
                     partDragDesign_ = design_;
                     partDragBuilt_.faces = lastFaces_;
                     selectBrick(hit);
@@ -4426,6 +4494,11 @@ QHash<QString, int> BrickWizardDialog::partCounts() const {
         if (b.run.fanEndShrink && pieces(b.run.fanEndShrinkPart) && extraFanEnds_.value(b.id) > 0)
             n[b.run.fanEndShrinkPart] += extraFanEnds_.value(b.id);
     }
+    // THE LAYERS OVER THE TRANSITIONS, by the piece.
+    for (auto it = extraLayerCount_.cbegin(); it != extraLayerCount_.cend(); ++it) {
+        const QString id = it.key().section(QLatin1Char('|'), 1);
+        if (pieces(id) && it.value() > 0) n[id] += it.value();
+    }
     return n;
 }
 
@@ -4461,6 +4534,16 @@ QHash<QString, double> BrickWizardDialog::partLengths() const {
                 if (unit == QLatin1String("m") || unit == QLatin1String("mm") || unit == QLatin1String("cm"))
                     mm[b.run.transitionPart] += extraTransitionMm_.value(b.id);
             }
+        // THE LAYERS OVER ITS TRANSITIONS, by length.
+        for (auto it = extraLayerMm_.cbegin(); it != extraLayerMm_.cend(); ++it) {
+            if (!it.key().startsWith(b.id + QLatin1Char('|'))) continue;
+            const QString id = it.key().section(QLatin1Char('|'), 1);
+            if (const LibraryPart* p = catalog_.byId(id)) {
+                const QString unit = p->unit.isEmpty() ? defaultUnitForKind(p->kind) : p->unit;
+                if (unit == QLatin1String("m") || unit == QLatin1String("mm") || unit == QLatin1String("cm"))
+                    mm[id] += it.value();
+            }
+        }
         // A sleeve over each wire end, where its part is bought by length: its length, so many times.
         if (b.run.fanEndShrink && !b.run.fanEndShrinkPart.isEmpty())
             if (const LibraryPart* p = catalog_.byId(b.run.fanEndShrinkPart)) {
@@ -4653,17 +4736,22 @@ void BrickWizardDialog::refreshPreview() {
         bool extras = false;
         for (const Brick& b : design_.bricks)
             extras = extras || (brickIsSpecial(b.type) && (!b.run.transitionPart.isEmpty() || !b.run.branchShrinkPart.isEmpty() ||
+                                                           !b.run.transitionLayers.isEmpty() ||
                                                            (b.run.fanEndShrink && !b.run.fanEndShrinkPart.isEmpty())));
         if (extras) {
             const BrickBuild pre = buildBrickHarness(design_, &catalog_);
             extraBranchLengths_ = pre.branchLengths;
             extraTransitions_ = pre.transitionCount;
             extraTransitionMm_ = pre.transitionMm;
+            extraLayerCount_ = pre.layerCount;
+            extraLayerMm_ = pre.layerMm;
             extraFanEnds_ = pre.fanEndCount;
         } else {
             extraBranchLengths_.clear();
             extraTransitions_.clear();
             extraTransitionMm_.clear();
+            extraLayerCount_.clear();
+            extraLayerMm_.clear();
             extraFanEnds_.clear();
         }
         syncLiveBom();
@@ -4674,6 +4762,7 @@ void BrickWizardDialog::refreshPreview() {
     actual_ = built.actual;
     drawnScales_ = built.scales;
     lastFaces_ = built.faces;
+    lastPartX_ = built.partX;
     std::vector<Entity> ents = built.entities;
     const QStringList sel = canvas_->selection();
     for (Entity& e : ents)

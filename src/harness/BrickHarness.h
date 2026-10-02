@@ -93,6 +93,8 @@ struct BrickRunSpec {
     // THE PART NUMBER OF ITS TRANSITION HEATSHRINKS - at the ends of the cable's body, where it divides, at a
     // branch's end.
     QString transitionPart;
+    // MORE TRANSITION HEATSHRINKS, one over another over the first (transitionPart): their part numbers, inside out.
+    QStringList transitionLayers;
     // A CABLE TO SEVERAL PARTS AT ONE END: what its wires are after its body ends - 0 bare wires fanning out to each
     // part, 1 each branch of wires under heatshrink (with a transition where the body ends) and then its fan.
     int branchCover = 0;
@@ -277,6 +279,10 @@ struct BrickDesign {
     // A DIMENSION MOVED IN OR OUT on the drawing (its line dragged in the preview): by its key - "manual:<n>" for one
     // put on between two bricks, "<special>:<kind>:<part>" for a run's - how far off its own place, in mm.
     QHash<QString, double> dimShift;
+    // HELD WHERE IT IS on the drawing while a part is dragged there: this part stays at this x, so only what the drag
+    // changes moves. Not saved.
+    QString holdPart;
+    double holdX = 0.0;
     // The part as its brick shows it: turned on the pane with the drawing only while they are tied.
     Brick asOnPane(const Brick& b) const {
         Brick t = b;
@@ -474,6 +480,11 @@ struct BrickBuild {
     QHash<QString, int> fanEndCount;
     // How long the transition heatshrinks on each special come to, all told - inside a backshell too.
     QHash<QString, double> transitionMm;
+    // The layers over them, by "<special>|<part>": how many, and how long all told.
+    QHash<QString, int> layerCount;
+    QHash<QString, double> layerMm;
+    // Where each end part was laid out along the harness, by id.
+    QHash<QString, double> partX;
 };
 
 // THE DRAWING: every end as its library part (or a placeholder of its kind) set down by its entry

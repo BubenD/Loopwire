@@ -1297,6 +1297,8 @@ QString twistKey(const Entity& e) {
                                                               : QLatin1String("|e-");
     k += e.meta.value(QLatin1String("twistEndBootRecovered")).toBool(true) ? QLatin1String("r")
                                                                           : QLatin1String("s");
+    k += e.meta.value(QLatin1String("twistEndBootSquareStart")).toBool() ? QLatin1String("|qs") : QLatin1String("|q-");
+    k += e.meta.value(QLatin1String("twistEndBootSquareFinish")).toBool() ? QLatin1String("f") : QLatin1String("-");
     for (const char* m : {"twistFlush", "twistFlushFinish", "twistStrip", "twistStripFinish"})
         k += e.meta.contains(QLatin1String(m))
                  ? (e.meta.value(QLatin1String(m)).toBool() ? QLatin1String("|f1")
@@ -1542,14 +1544,18 @@ const TwistCached* twistCached(const Entity& pair) {
                 // the part: RECOVERED, where it has shrunk down onto the cable coming out of it, or
                 // CUT SQUARE across at its own width. The other end is the cable's width, as the
                 // fan boots' are, so cable and boot meet on one line.
+                // CUT SQUARE AT ONE END ONLY where it is said: carried on over the part there by another piece.
+                const bool squareA = pair.meta.value(QStringLiteral("twistEndBootSquareStart")).toBool();
+                const bool squareB = pair.meta.value(QStringLiteral("twistEndBootSquareFinish")).toBool();
                 auto endBootAt = [&](double atEnd, double reach, double face, double shrink,
                                      double intoTheBody) {
                     if (reach < 1e-6) return;
                     const double wide = f.bootHalf > 0.0 ? f.bootHalf : f.bodyHalf * 1.25;
-                    const double free = f.endBootRecovered ? std::min(face, wide) : wide;
+                    const bool recovered = f.endBootRecovered && !(intoTheBody > 0.0 ? squareA : squareB);
+                    const double free = recovered ? std::min(face, wide) : wide;
                     std::vector<Vec2> run{posOn(atEnd), posOn(atEnd + intoTheBody * reach)};
                     std::vector<Vec2> boot = shrunkSleeveOutline(
-                        run, wide, free, f.bodyHalf, f.endBootRecovered ? shrink : 0.0, 0.0);
+                        run, wide, free, f.bodyHalf, recovered ? shrink : 0.0, 0.0);
                     if (boot.size() < 3) return;
                     boot.push_back(boot.front());
                     c.body.push_back(std::move(boot));

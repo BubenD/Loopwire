@@ -4340,7 +4340,7 @@ void testRoundTwentySeven() {
                 if (e.type == EntityType::Wipeout) masked = true;
                 if (e.type != EntityType::Polyline) continue;
                 const Bounds bb = e.bounds();
-                along = bb.max.x - bb.min.x;
+                along = bb.max.x - bb.min.x - 0.4;   // it starts a little back over the transition
                 across = bb.max.y - bb.min.y;
             }
             if (pb.valid) partAcross = pb.max.y - pb.min.y;
@@ -4465,6 +4465,168 @@ void testRoundTwentyEight() {
     }
 }
 
+// ROUND TWENTY-NINE: a bridge on a branch brick takes its wires from that branch; the cable its own length to where it
+// divides, each branch its own from there (none at all at nought); the wires out of a transition where it divides side
+// by side across it; a part dragged moves alone; layers over the transition; the palette's joints.
+void testRoundTwentyNine() {
+    auto harness = [](BrickDesign& d, QString& sa, QString& a2, QString& sb, QString& c, QString& b1, QString& b2) {
+        sa = d.addBrick(BrickType::End, PartKind::Connector, 0, 1);
+        a2 = d.addBrick(BrickType::End, PartKind::Connector, 0, 3);
+        sb = d.addBrick(BrickType::End, PartKind::Connector, 4, 2);
+        c = d.addBrick(BrickType::Run, PartKind::Cable, 3, 2);
+        b1 = d.addBrick(BrickType::Run, PartKind::Wire, 1, 1);
+        b2 = d.addBrick(BrickType::Run, PartKind::Wire, 1, 3);
+        makeBranch(*d.brick(b1));
+        makeBranch(*d.brick(b2));
+        d.connect(c, sb, nullptr, 1, -1);
+        d.brick(c)->run.wires = 6;
+        d.brick(c)->run.lengthMm = 150.0;
+        d.connect(b1, c, nullptr, 1, 0);
+        d.connect(b2, c, nullptr, 1, 0);
+        d.connect(sa, b1, nullptr, -1, 0);
+        d.connect(a2, b2, nullptr, -1, 0);
+        d.brick(b1)->run.bridgeWires = QStringLiteral("1-4");
+        d.brick(b1)->run.wires = 4;
+        d.brick(b1)->run.lengthMm = 100.0;
+        d.brick(b2)->run.lengthMm = 100.0;
+    };
+    auto runsOf = [](const BrickBuild& b, const QString& id) {
+        std::vector<std::vector<Vec2>> out;
+        for (const Entity& e : b.entities)
+            if (e.type == EntityType::TwistedPair && e.meta.value(QStringLiteral("brickId")).toString() == id)
+                out.push_back(e.points);
+        return out;
+    };
+    // A BRIDGE ON A BRANCH BRICK: out of that branch's fan, its two wires off the branch's four.
+    {
+        BrickDesign d;
+        QString sa, a2, sb, c, b1, b2;
+        harness(d, sa, a2, sb, c, b1, b2);
+        const QString bw = d.addBrick(BrickType::Run, PartKind::Wire, 2, 0);
+        const QString f = d.addBrick(BrickType::End, PartKind::Ferrule, 1, 0);
+        makeBridgeWire(*d.brick(bw));
+        d.brick(bw)->run.bridgeWires = QStringLiteral("1,2");
+        QString why;
+        check(d.connect(bw, b1, &why, 1, 0), "bridge on a branch: joined to the branch at its part");
+        d.connect(f, bw, nullptr, -1, 0);
+        syncBridgeWires(d);
+        const BrickBuild b = buildBrickHarness(d, nullptr);
+        const auto bridge = runsOf(b, bw);
+        const auto branch = runsOf(b, bw).empty() ? std::vector<std::vector<Vec2>>{} : runsOf(b, b1);
+        double off = 1e300;
+        int branchWires = 0;
+        for (const Entity& e : b.entities)
+            if (e.type == EntityType::TwistedPair && e.meta.value(QStringLiteral("brickId")).toString() == b1)
+                branchWires = e.meta.value(QStringLiteral("twistWires")).toInt();
+        if (!bridge.empty())
+            for (const auto& rt : branch)
+                for (size_t k = 0; k + 1 < rt.size(); ++k)
+                    off = std::min({off, closestPointOnSegment(bridge.front().front(), rt[k], rt[k + 1]).distance,
+                                    closestPointOnSegment(bridge.front().back(), rt[k], rt[k + 1]).distance});
+        std::printf("  bridge on a branch: %.2f off it, the branch left %d wire(s)\n", off, branchWires);
+        check(!bridge.empty() && off < 6.0, "bridge on a branch: comes out of the branch, not left off by itself");
+        check(branchWires == 2, "bridge on a branch: its wires come off the branch's");
+    }
+    // THE CABLE ITS OWN LENGTH to where it divides; a branch of nought not drawn; the wires side by side out of the
+    // transition there; layers over the transitions.
+    {
+        BrickDesign d;
+        QString sa, a2, sb, c, b1, b2;
+        harness(d, sa, a2, sb, c, b1, b2);
+        d.brick(c)->run.transitions = RunEnds::Both;
+        BrickBuild b = buildBrickHarness(d, nullptr);
+        const auto trunk = runsOf(b, c);
+        double trunkLen = 0.0;
+        for (const auto& rt : trunk) {
+            double len = 0.0;
+            for (size_t k = 1; k < rt.size(); ++k) len += distance(rt[k - 1], rt[k]);
+            trunkLen = std::max(trunkLen, len);
+        }
+        std::printf("  divides: the cable drawn %.1f to where it divides (said 150)\n", trunkLen);
+        check(std::abs(trunkLen - 150.0) < 1.0, "divides: the cable its own length to where it divides");
+        const auto r1 = runsOf(b, b1), r2 = runsOf(b, b2);
+        check(!r1.empty() && !r2.empty() && distance(r1.front().front(), r2.front().front()) > 0.5,
+              "divides: out of the transition side by side, not from one point");
+        d.brick(c)->run.transitionLayers = {QStringLiteral("LAYER-A"), QStringLiteral("LAYER-B")};
+        b = buildBrickHarness(d, nullptr);
+        int layers = 0;
+        for (const Entity& e : b.entities)
+            if (e.type == EntityType::Polyline && e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("transitionLayer"))
+                ++layers;
+        std::printf("  layers: %d drawn, %d of the first on the bill (%.1f mm)\n", layers,
+                    b.layerCount.value(c + QStringLiteral("|LAYER-A")), b.layerMm.value(c + QStringLiteral("|LAYER-A")));
+        check(layers >= 2 && b.layerCount.value(c + QStringLiteral("|LAYER-A")) >= 1 &&
+                  b.layerCount.value(c + QStringLiteral("|LAYER-B")) == b.layerCount.value(c + QStringLiteral("|LAYER-A")),
+              "layers: one over another over each transition, each on the bill");
+        const BrickDesign back = BrickDesign::fromJson(d.toJson());
+        check(back.brick(c)->run.transitionLayers.size() == 2, "layers: kept");
+        d.brick(b2)->run.lengthMm = 0.0;
+        b = buildBrickHarness(d, nullptr);
+        check(runsOf(b, b2).empty(), "divides: a branch of no length is not drawn - its part on the cable");
+    }
+    // A PART DRAGGED MOVES ALONE: the branch's own length, or the cable's, and nothing else's; the rest held.
+    {
+        BrickDesign d;
+        QString sa, a2, sb, c, b1, b2;
+        harness(d, sa, a2, sb, c, b1, b2);
+        BrickBuild b = buildBrickHarness(d, nullptr);
+        BrickDesign moved = d;
+        dragPartOnDrawing(moved, b, sa, -20.0, 0.0, false);
+        std::printf("  drag: branch %.0f -> %.0f, cable %.0f -> %.0f\n", d.brick(b1)->run.lengthMm, moved.brick(b1)->run.lengthMm,
+                    d.brick(c)->run.lengthMm, moved.brick(c)->run.lengthMm);
+        check(std::abs(moved.brick(b1)->run.lengthMm - 120.0) < 1e-6 && moved.brick(c)->run.lengthMm == 150.0 &&
+                  moved.brick(b2)->run.lengthMm == 100.0,
+              "drag: a branch's part changes the branch's length alone");
+        moved = d;
+        dragPartOnDrawing(moved, b, sb, 30.0, 0.0, false);
+        check(std::abs(moved.brick(c)->run.lengthMm - 180.0) < 1e-6 && moved.brick(b1)->run.lengthMm == 100.0,
+              "drag: the cable's part changes the cable's length alone");
+        moved.holdPart = a2;
+        moved.holdX = b.partX.value(a2);
+        const BrickBuild after = buildBrickHarness(moved, nullptr);
+        check(std::abs(after.partX.value(a2) - b.partX.value(a2)) < 1e-6 && std::abs(after.partX.value(sa) - b.partX.value(sa)) < 1e-6 &&
+                  std::abs(std::abs(after.partX.value(sb) - b.partX.value(sb)) - 30.0) < 1.0,
+              "drag: held, only the part dragged moves");
+    }
+    // A BRIDGE OUT OF WHERE THE CABLE DIVIDES: its part moves with the bridge's length.
+    {
+        BrickDesign d;
+        QString sa, a2, sb, c, b1, b2;
+        harness(d, sa, a2, sb, c, b1, b2);
+        const QString bw = d.addBrick(BrickType::Run, PartKind::Wire, 2, 0);
+        const QString f = d.addBrick(BrickType::End, PartKind::Ferrule, 1, 0);
+        makeBridgeWire(*d.brick(bw));
+        d.brick(bw)->run.bridgeWires = QStringLiteral("5,6");
+        d.connect(bw, c, nullptr, 1, 0);
+        d.connect(f, bw, nullptr, -1, 0);
+        syncBridgeWires(d);
+        d.holdPart = sb;
+        const double x0 = buildBrickHarness(d, nullptr).partX.value(f);
+        d.brick(bw)->run.lengthMm += 40.0;
+        const double x1 = buildBrickHarness(d, nullptr).partX.value(f);
+        std::printf("  bridge at the divide: its part %.1f -> %.1f\n", x0, x1);
+        check(std::abs(x1 - x0) > 10.0, "bridge at the divide: its part moves with the bridge's length");
+    }
+    // THE JOINTS ON THE PALETTE: a backshell, no heatshrink.
+    {
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        BrickWizardDialog dlg(&ed);
+        auto* palette = dlg.findChild<BrickPalette*>(QStringLiteral("brickPalette"));
+        bool backshell = false, heatshrink = false;
+        for (int i = 0; palette && i < palette->count(); ++i) {
+            const QString what = palette->item(i)->data(Qt::UserRole).toString();
+            if (what.endsWith(QLatin1Char('|') + partKindKey(PartKind::Backshell))) backshell = true;
+            if (what.endsWith(QLatin1Char('|') + partKindKey(PartKind::Heatshrink))) heatshrink = true;
+        }
+        check(backshell && !heatshrink, "palette: a backshell among the joints, no heatshrink");
+        check(dlg.findChild<QListWidget*>(QStringLiteral("brickTransLayers")) &&
+                  dlg.findChild<QToolButton*>(QStringLiteral("brickTransLayerAdd")),
+              "layers: a list of them on the transition, and + to add one");
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -4507,6 +4669,7 @@ int run_brickharness_tests() {
     testRoundTwentySix();
     testRoundTwentySeven();
     testRoundTwentyEight();
+    testRoundTwentyNine();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

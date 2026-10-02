@@ -375,6 +375,7 @@ private:
     QToolButton* partScaleAuto_ = nullptr;
     QHash<QString, double> drawnScales_;   // what each end came to on the last drawing
     QHash<QString, BrickFace> lastFaces_;  // every entry face on the last drawing
+    QHash<QString, double> lastPartX_;     // and where each part was along the harness
     // SCALE TO ANOTHER PART: pressed, the next brick clicked is the one this part is sized to - its entry
     // face made as long as that brick's nearest one.
     QToolButton* partScaleMatch_ = nullptr;
@@ -498,6 +499,8 @@ private:
     QHash<QString, double> extraBranchLengths_;
     QHash<QString, int> extraTransitions_;
     QHash<QString, double> extraTransitionMm_;   // and how long they come to
+    QHash<QString, int> extraLayerCount_;        // the layers over them, by "<special>|<part>"
+    QHash<QString, double> extraLayerMm_;
     QHash<QString, int> extraFanEnds_;
     // THE BRANCHES AND WIRE ENDS section of a run's panel.
     QWidget* branchesBox_ = nullptr;
@@ -513,6 +516,8 @@ private:
     QToolButton* transLenStartAuto_ = nullptr;  // "A": as long as the drawing makes it, the field showing that
     QToolButton* transLenFinishAuto_ = nullptr;
     QComboBox* transInsideEnds_ = nullptr;      // which transition is inside the backshell
+    QComboBox* transLayerPick_ = nullptr;       // a heatshrink to put on over the transition
+    QListWidget* transLayers_ = nullptr;        // the layers over it, inside out
     QListWidget* fanShrinkParts_ = nullptr;     // the parts whose wire ends get heatshrink
     QFormLayout* transitionForm_ = nullptr;     // the run's transition heatshrink box
     QCheckBox* fanShrinkInside_ = nullptr;      // the wire-end heatshrink inside the backshell: on the bill, not drawn
