@@ -137,6 +137,10 @@ struct BrickRunSpec {
     // backshell, where nobody sees them.
     bool fanEndShrinkInside = false;
     bool transitionInside = false;
+    // STRETCHED OVER THE END PART: a transition at an end with no fan carried on over the part it goes into, so far
+    // (0 - a tenth of the part's length).
+    bool transitionStretch = false;
+    double transitionStretchMm = 0.0;
     // WHICH END A FANOUT SPREADS AT: -1 the end on a part (the start when both are), 0 the start,
     // 1 the finish.
     int fanSide = -1;
@@ -448,6 +452,7 @@ struct BrickActual {
     double bodyWidth = 0.0;
     double trunk = 0.0;
     double transitionWidth = 0.0;   // the transition heatshrink, as drawn
+    double transitionStretch = 0.0; // how far it is stretched over the end part, as drawn
 };
 
 struct BrickBuild {

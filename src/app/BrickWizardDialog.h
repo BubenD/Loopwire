@@ -511,6 +511,9 @@ private:
     QFormLayout* transitionForm_ = nullptr;     // the run's transition heatshrink box
     QCheckBox* fanShrinkInside_ = nullptr;      // the wire-end heatshrink inside the backshell: on the bill, not drawn
     QCheckBox* transitionInside_ = nullptr;     // the transition heatshrink likewise
+    QCheckBox* transStretch_ = nullptr;         // stretched over the end part
+    QDoubleSpinBox* transStretchLen_ = nullptr; // and how far
+    QToolButton* transStretchAuto_ = nullptr;   // "A": a tenth of the part's length
     bool rightSized_ = false;                   // the right's panel and bill set to 3:1 once shown
     bool matchSetting_ = false;                 // the scale is being set by Match, not typed
     // Match lit blue while the part's size is the one Match gave it.

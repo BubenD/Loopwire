@@ -79,6 +79,7 @@ QString brickTitle(const Brick& b) {
 
 // A brick's size as it sits unturned: along its two ports, and across them.
 QSizeF brickSize(const Brick& b) {
+    if (b.type == BrickType::Joint) return {34.0, 34.0};   // a small thing, tied to its run
     if (b.type != BrickType::End) return {82.0, 30.0};
     return brickKindIsJoint(b.kind) ? QSizeF(90.0, 34.0) : QSizeF(96.0, 38.0);
 }
@@ -463,7 +464,11 @@ void BrickCanvas::moveSelection(double dCol, double dRow) {
             if (it.value().x) b->col += dCol;
             if (it.value().y) b->row += dRow;
         }
-    for (const QString& id : sel_)
+    QStringList moving = sel_;
+    for (const QString& id : sel_)   // a run's joints with it
+        for (const QString& jid : jointsOf(*d_, id))
+            if (!moving.contains(jid)) moving << jid;
+    for (const QString& id : moving)
         if (Brick* b = d_->brick(id)) {
             from.insert(id, QPointF(b->col, b->row));
             b->col += dCol;
@@ -574,6 +579,16 @@ void BrickCanvas::paintEvent(QPaintEvent*) {
         if (!a || !b) continue;
         const bool picked = (selLink_.first == l.a && selLink_.second == l.b) ||
                             (selLink_.first == l.b && selLink_.second == l.a);
+        // A JOINT'S TIE: from the joint to the middle of its run, dashed - it is in the run, not at an end of it.
+        if (a->type == BrickType::Joint || b->type == BrickType::Joint) {
+            const Brick* jb = a->type == BrickType::Joint ? a : b;
+            const Brick* run = jb == a ? b : a;
+            QPen tie(picked ? QColor(0x2b, 0xd0, 0xff) : QColor(0xd9, 0xa0, 0x50), picked ? 2.4 : 1.6);
+            tie.setStyle(Qt::DashLine);
+            p.setPen(tie);
+            p.drawLine(brickRect(*jb).center(), brickRect(*run).center());
+            continue;
+        }
         const QPointF pa = portPoint(*a, d_->portOn(l.a, l.b));
         const QPointF pb = portPoint(*b, d_->portOn(l.b, l.a));
         p.setPen(QPen(picked ? QColor(0x2b, 0xd0, 0xff) : QColor(0xc9, 0xcc, 0xd1), picked ? 3.0 : 2.0));
@@ -607,6 +622,28 @@ void BrickCanvas::paintEvent(QPaintEvent*) {
         if (end && b.libPart.isEmpty()) fill = fill.darker(135);
         p.setPen(QPen(picked ? QColor(0x2b, 0xd0, 0xff) : QColor(0x9a, 0xa7, 0xb8), picked ? 2.4 : 1.2));
         p.setBrush(fill);
+        // A JOINT: a small octagon with its name - eight corners, so it reads as a splice and not as a part.
+        if (b.type == BrickType::Joint) {
+            const double c = std::min(r.width(), r.height()) * 0.29;
+            const QPolygonF oct({QPointF(r.left() + c, r.top()), QPointF(r.right() - c, r.top()),
+                                 QPointF(r.right(), r.top() + c), QPointF(r.right(), r.bottom() - c),
+                                 QPointF(r.right() - c, r.bottom()), QPointF(r.left() + c, r.bottom()),
+                                 QPointF(r.left(), r.bottom() - c), QPointF(r.left(), r.top() + c)});
+            p.drawPolygon(oct);
+            QFont jf = font();
+            jf.setPointSizeF(7.5);
+            jf.setBold(true);
+            p.setFont(jf);
+            p.setPen(QColor(0xf2, 0xe6, 0xd0));
+            p.drawText(r, Qt::AlignCenter, p.fontMetrics().elidedText(brickTitle(b), Qt::ElideRight, int(r.width() - 4)));
+            const BrickMark mk = marks_.value(b.id);
+            if (mk.compat >= 0) {
+                p.setPen(QPen(QColor(0x14, 0x18, 0x1e), 1.0));
+                p.setBrush(mk.compat == 0 ? QColor(0x4c, 0xd0, 0x7a) : mk.compat == 1 ? QColor(0xf0, 0xa0, 0x30) : QColor(0xe0, 0x4a, 0x4a));
+                p.drawEllipse(QPointF(r.right() - 3.0, r.top() + 3.0), 3.0, 3.0);
+            }
+            continue;
+        }
         if (end) p.drawRect(r);
         else {
             const double rr = std::min(r.width(), r.height()) / 2.0;
@@ -812,6 +849,10 @@ void BrickCanvas::mousePressEvent(QMouseEvent* e) {
         startAt_.clear();
         for (const QString& id : sel_)
             if (const Brick* b = d_->brick(id)) startAt_.insert(id, QPointF(b->col, b->row));
+        // A RUN'S JOINTS GO WITH IT: tied to it, they keep their place by it.
+        for (const QString& id : sel_)
+            for (const QString& jid : jointsOf(*d_, id))
+                if (const Brick* jb = d_->brick(jid); jb && !startAt_.contains(jid)) startAt_.insert(jid, QPointF(jb->col, jb->row));
         // Only the bricks picked move: none is tied to another on the pane.
         follow_.clear();
         for (auto it = follow_.cbegin(); it != follow_.cend(); ++it)
@@ -885,6 +926,16 @@ void BrickCanvas::mouseReleaseEvent(QMouseEvent* e) {
             const int toPort = tport.first == to ? tport.second : -1;
             QString why;
             if (d_->connect(dragId_, to, &why, dragPort_, toPort)) {
+                // A JOINT TIED TO ITS RUN sits just above it, coupled to it from now on.
+                Brick* da = d_->brick(dragId_);
+                Brick* db = d_->brick(to);
+                if (da && db && (da->type == BrickType::Joint || db->type == BrickType::Joint)) {
+                    Brick* jb = da->type == BrickType::Joint ? da : db;
+                    const Brick* run = jb == da ? db : da;
+                    const int already = static_cast<int>(jointsOf(*d_, run->id).size()) - 1;
+                    jb->col = run->col - 0.3 + 0.45 * already;
+                    jb->row = run->row - 0.75;
+                }
                 emit message(QStringLiteral("Linked"));
                 emit linked(dragId_, to);
                 emit designChanged();
@@ -2335,6 +2386,56 @@ QWidget* BrickWizardDialog::buildRunPage() {
                 designChanged();
             }
         });
+        // STRETCHED OVER THE END PART, at an end with no fan: the transition carried on over the part so far - "A" a
+        // tenth of the part's length, the field showing what that comes to.
+        transStretch_ = new QCheckBox(QStringLiteral("Stretch over end part"), box);
+        transStretch_->setObjectName(QStringLiteral("brickTransStretch"));
+        transStretch_->setToolTip(QStringLiteral("At an end with no fan, the transition heatshrink is carried on over the "
+                                                 "part it goes into - as far as the field says"));
+        (transitionForm_ ? transitionForm_ : bl)->addRow(transStretch_);
+        {
+            auto* host = new QWidget(box);
+            auto* hl = new QHBoxLayout(host);
+            hl->setContentsMargins(0, 0, 0, 0);
+            hl->setSpacing(3);
+            transStretchLen_ = new QDoubleSpinBox(host);
+            transStretchLen_->setObjectName(QStringLiteral("brickTransStretchLen"));
+            transStretchLen_->setRange(0.0, 1000.0);
+            transStretchLen_->setDecimals(1);
+            transStretchLen_->setSuffix(QStringLiteral(" mm"));
+            hl->addWidget(transStretchLen_);
+            transStretchAuto_ = new QToolButton(host);
+            transStretchAuto_->setObjectName(QStringLiteral("brickTransStretchAuto"));
+            transStretchAuto_->setText(QStringLiteral("A"));
+            transStretchAuto_->setCheckable(true);
+            transStretchAuto_->setToolTip(QStringLiteral("Auto: a tenth of the end part's length"));
+            hl->addWidget(transStretchAuto_);
+            hl->addStretch(1);
+            (transitionForm_ ? transitionForm_ : bl)->addRow(QStringLiteral("Over the part"), host);
+        }
+        connect(transStretch_, &QCheckBox::toggled, this, [this](bool on) {
+            if (Brick* b = design_.brick(canvas_->selected()); b && brickIsSpecial(b->type)) {
+                b->run.transitionStretch = on;
+                designChanged();
+                loadBranches();
+            }
+        });
+        connect(transStretchLen_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
+            if (Brick* b = design_.brick(canvas_->selected()); b && brickIsSpecial(b->type)) {
+                b->run.transitionStretchMm = v;   // a figure typed in takes it over from Auto
+                const QSignalBlocker hush(transStretchAuto_);
+                transStretchAuto_->setChecked(false);
+                designChanged();
+            }
+        });
+        connect(transStretchAuto_, &QToolButton::toggled, this, [this](bool on) {
+            if (Brick* b = design_.brick(canvas_->selected()); b && brickIsSpecial(b->type)) {
+                if (on) b->run.transitionStretchMm = 0.0;
+                else b->run.transitionStretchMm = std::max(0.5, transStretchLen_->value());
+                designChanged();
+                loadBranches();
+            }
+        });
         connect(fanShrinkParts_, &QListWidget::itemChanged, this, [this](QListWidgetItem* it) {
             Brick* b = design_.brick(canvas_->selected());
             if (!b || !it) return;
@@ -3411,6 +3512,17 @@ void BrickWizardDialog::loadBranches() {
         fanShrinkInside_->setChecked(r.fanEndShrinkInside);
         transitionInside_->setChecked(r.transitionInside);
     }
+    {
+        const QSignalBlocker t1(transStretch_), t2(transStretchLen_), t3(transStretchAuto_);
+        transStretch_->setChecked(r.transitionStretch);
+        const bool autoLen = r.transitionStretchMm <= 1e-9;
+        transStretchAuto_->setChecked(autoLen);
+        // On Auto, what it came to on the drawing.
+        transStretchLen_->setValue(autoLen ? actual_.value(b->id).transitionStretch : r.transitionStretchMm);
+    }
+    transStretch_->setEnabled(r.transitions != RunEnds::None);
+    transStretchLen_->setEnabled(r.transitionStretch);
+    transStretchAuto_->setEnabled(r.transitionStretch);
     fanShrinkInside_->setEnabled(r.fanEndShrink);
     {
         const QSignalBlocker s1(transLenStart_), s2(transLenFinish_);

@@ -4161,6 +4161,7 @@ void testRoundTwentySix() {
         d.connect(c, y);
         d.brick(c)->run.wires = 4;
         d.brick(c)->run.lengthMm = 200;
+        d.brick(c)->run.stack = {QStringLiteral("wires")};   // bare wires: a joint in them is seen
         const BrickBuild before = buildBrickHarness(d, &cat);
         QString why;
         check(d.connect(j, c, &why), "joint: tied to a run");
@@ -4269,6 +4270,80 @@ void testRoundTwentySix() {
     QFile::remove(libFile);
 }
 
+// ROUND TWENTY-SEVEN: a joint is a small thing tied to its run, moving with it, and not seen inside a cable's body; a
+// transition stretched over its end part; the run brick called a harness run.
+void testRoundTwentySeven() {
+    check(brickTypeName(BrickType::Run) == QLatin1String("Harness run"), "name: the run brick is a harness run");
+    // NOT SEEN INSIDE THE CABLE.
+    {
+        BrickDesign d;
+        const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString y = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        const QString j = d.addBrick(BrickType::Joint, PartKind::Splice, 1, 1);
+        d.connect(x, c);
+        d.connect(c, y);
+        d.connect(j, c);
+        d.brick(c)->run.wires = 4;
+        d.brick(c)->run.lengthMm = 200;
+        d.brick(c)->run.stack = {QStringLiteral("wires"), QStringLiteral("cable")};
+        d.brick(j)->joint.atMm = 80.0;
+        auto drawnSplices = [&d, &j] {
+            int n = 0;
+            for (const Entity& e : buildBrickHarness(d, nullptr).entities)
+                if (e.meta.value(QStringLiteral("brickId")).toString() == j &&
+                    e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("splice") && e.type == EntityType::Polyline)
+                    ++n;
+            return n;
+        };
+        check(drawnSplices() == 0, "joint: inside the cable's body it is not drawn");
+        d.brick(j)->joint.atMm = 2.0;   // out in the fan, where the wires are seen
+        check(drawnSplices() == 1, "joint: in the fan, where the wires are on show, it is drawn");
+    }
+    // A JOINT MOVES WITH ITS RUN on the pane.
+    {
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        BrickWizardDialog dlg(&ed);
+        BrickDesign& w = dlg.design();
+        const QString c = w.addBrick(BrickType::Run, PartKind::Cable, 2, 2);
+        const QString j = w.addBrick(BrickType::Joint, PartKind::Splice, 2, 1);
+        w.connect(j, c);
+        const double jc = w.brick(j)->col;
+        dlg.canvas()->setSelection({c});
+        dlg.canvas()->moveSelection(1.0, 0.0);
+        check(std::abs(w.brick(j)->col - (jc + 1.0)) < 1e-9, "joint: tied to its run, it moves with it");
+    }
+    // A TRANSITION STRETCHED OVER ITS END PART: an end with no fan.
+    {
+        BrickDesign d;
+        const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString y = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        d.connect(x, c);
+        d.connect(c, y);
+        BrickRunSpec& r = d.brick(c)->run;
+        r.fanStartMm = 0.0;   // no fan at the start: the cable goes into its part
+        r.transitions = RunEnds::Start;
+        auto startX = [&d, &c] {
+            for (const Entity& e : buildBrickHarness(d, nullptr).entities)
+                if (e.type == EntityType::TwistedPair && e.meta.value(QStringLiteral("brickId")).toString() == c)
+                    return e.points.front().x;
+            return 0.0;
+        };
+        const double plain = startX();
+        r.transitionStretch = true;
+        const BrickBuild b = buildBrickHarness(d, nullptr);
+        const double stretched = startX();
+        std::printf("  stretch: the run starts %.1f, stretched %.1f (auto %.1f)\n", plain, stretched, b.actual.value(c).transitionStretch);
+        check(stretched < plain - 0.5 && std::abs((plain - stretched) - b.actual.value(c).transitionStretch) < 1e-6,
+              "stretch: the transition carried on over the end part - a tenth of its length on Auto");
+        r.transitionStretchMm = 6.0;
+        check(std::abs((plain - startX()) - 6.0) < 1e-6, "stretch: as far as said");
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -4309,6 +4384,7 @@ int run_brickharness_tests() {
     testRoundTwentyFour();
     testRoundTwentyFive();
     testRoundTwentySix();
+    testRoundTwentySeven();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }
