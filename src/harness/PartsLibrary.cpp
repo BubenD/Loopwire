@@ -859,6 +859,8 @@ std::vector<PartField> partFields(PartKind kind) {
                             QStringLiteral("Panel receptacle"), QStringLiteral("Panel plug")}),
                     // THE CABLE IT TAKES, across: what a drawing of it drawn to proportion is sized by.
                     range("cableEntry", "Cable entry", "mm"),
+                    // HOW ITS CONTACTS TAKE A WIRE: crimped, or soldered - a solid wire is never crimped.
+                    choice("termination", "Contact termination", {QStringLiteral("Crimp"), QStringLiteral("Solder")}),
                     choice("material", "Shell material", kMetals + kPolymers),
                     choice("plating", "Contact material", kMetals),
                     text("temp", "Temperature range", "C"),
@@ -936,6 +938,7 @@ std::vector<PartField> partFields(PartKind kind) {
                             QStringLiteral("90 degree"), QStringLiteral("Transition")}),
                     choice("material", "Material", kPolymers),
                     yesNo("adhesive", "Adhesive lined"),
+                    num("wall", "Recovered wall thickness", "mm"),
                     text("spec", "Specification")};
         case PartKind::Backshell:
             return {text("shellSize", "Shell size"),
@@ -957,6 +960,7 @@ std::vector<PartField> partFields(PartKind kind) {
                     range("leg3", "Leg 3 entry", "mm"),
                     choice("material", "Material", kPolymers),
                     yesNo("adhesive", "Adhesive lined"),
+                    num("wall", "Recovered wall thickness", "mm"),
                     text("spec", "Specification")};
         case PartKind::ShieldBraid:
             // Braid is bought by a size that is written differently by every maker, so it is a

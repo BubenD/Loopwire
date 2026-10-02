@@ -38,6 +38,7 @@
 #include <QFile>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QGroupBox>
 
 #include <algorithm>
 #include <cmath>
@@ -3861,6 +3862,85 @@ void testRoundTwentyTwo() {
     }
 }
 
+// ROUND TWENTY-THREE: a heatshrink's recovered wall in the stack's size (0.30 mm assumed, and said, when the library
+// has none); solid wire into crimp contacts is a fault; a connector says how its contacts take a wire; the run's
+// figures framed by what they are about.
+void testRoundTwentyThree() {
+    auto hasField = [](PartKind k, const char* key) {
+        for (const PartField& f : partFields(k))
+            if (f.key == QLatin1String(key)) return true;
+        return false;
+    };
+    check(hasField(PartKind::Connector, "termination"), "library: a connector says whether its contacts crimp or solder");
+    check(hasField(PartKind::HeatshrinkBoot, "wall") && hasField(PartKind::YSplit, "wall") && hasField(PartKind::Heatshrink, "wall"),
+          "library: a heatshrink, a boot and a Y-split each have a recovered wall thickness");
+    const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_walls.plb"));
+    QFile::remove(libFile);
+    {
+        PartsLibrary lib;
+        auto part = [](const char* id, PartKind k, std::initializer_list<std::pair<const char*, const char*>> ps) {
+            LibraryPart p;
+            p.id = p.mfrPn = QString::fromLatin1(id);
+            p.kind = k;
+            for (const auto& [key, v] : ps) p.params[QString::fromLatin1(key)] = QString::fromLatin1(v);
+            return p;
+        };
+        lib.parts = {part("W-SOLID", PartKind::Wire, {{"od", "1.5"}, {"conductor", "Solid"}, {"gaugeMode", "AWG"}, {"gauge", "22"}}),
+                     part("W-STRAND", PartKind::Wire, {{"od", "1.5"}, {"conductor", "Stranded"}, {"gaugeMode", "AWG"}, {"gauge", "22"}}),
+                     part("HS-NOWALL", PartKind::Heatshrink, {{"entryMin", "3"}, {"entryMax", "9"}}),
+                     part("HS-WALL", PartKind::Heatshrink, {{"entryMin", "3"}, {"entryMax", "9"}, {"wall", "0.6"}}),
+                     part("C-CRIMP", PartKind::Connector, {{"pins", "4"}, {"termination", "Crimp"}, {"includePins", "1"}}),
+                     part("C-SOLDER", PartKind::Connector, {{"pins", "4"}, {"termination", "Solder"}, {"includePins", "1"}})};
+        lib.save(libFile);
+    }
+    PartsCatalog cat;
+    cat.openRemembered();
+    cat.connectLibrary(libFile);
+    cat.remember();
+    {
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        BrickWizardDialog dlg(&ed);
+        BrickDesign& w = dlg.design();
+        const QString x = w.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString c = w.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString y = w.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        w.connect(x, c);
+        w.connect(c, y);
+        BrickRunSpec& r = w.brick(c)->run;
+        r.wires = 4;
+        r.stack = {QStringLiteral("wires"), QStringLiteral("heatshrink")};
+        r.stackParts.insert(QStringLiteral("wires"), QStringLiteral("W-STRAND"));
+        r.stackParts.insert(QStringLiteral("heatshrink"), QStringLiteral("HS-NOWALL"));
+        dlg.selectBrick(c);
+        const BrickMark noWall = dlg.canvas()->markOf(c);
+        std::printf("  wall: %d (%s)\n", noWall.compat, qPrintable(noWall.why));
+        check(noWall.compat == 1 && noWall.why.contains(QStringLiteral("0.30 mm")),
+              "wall: not in the library - 0.30 mm assumed, and said");
+        r.stackParts.insert(QStringLiteral("heatshrink"), QStringLiteral("HS-WALL"));
+        dlg.selectBrick(c);
+        check(dlg.canvas()->markOf(c).compat == 0, "wall: given in the library, it is used - nothing to say");
+        // SOLID WIRE INTO CRIMP CONTACTS.
+        w.brick(x)->libPart = QStringLiteral("C-CRIMP");
+        r.stackParts.insert(QStringLiteral("wires"), QStringLiteral("W-SOLID"));
+        dlg.selectBrick(c);
+        std::printf("  solid into crimp: %d (%s)\n", dlg.canvas()->markOf(x).compat, qPrintable(dlg.canvas()->markOf(x).why));
+        check(dlg.canvas()->markOf(x).compat == 2 && dlg.canvas()->markOf(x).why.contains(QStringLiteral("solid")),
+              "crimp: solid wire into crimp contacts - red, and why");
+        w.brick(x)->libPart = QStringLiteral("C-SOLDER");
+        dlg.selectBrick(c);
+        check(!dlg.canvas()->markOf(x).why.contains(QStringLiteral("solid")), "crimp: into solder contacts, solid wire is fine");
+        // THE RUN'S FIGURES IN FRAMES.
+        check(dlg.findChild<QGroupBox*>(QStringLiteral("brickGroupFans")) && dlg.findChild<QGroupBox*>(QStringLiteral("brickGroupBody")) &&
+                  dlg.findChild<QGroupBox*>(QStringLiteral("brickGroupTransition")),
+              "run: its fans, body and transition heatshrink each framed together");
+    }
+    cat.disconnectLibrary(libFile);
+    cat.remember();
+    QFile::remove(libFile);
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -3897,6 +3977,7 @@ int run_brickharness_tests() {
     testRoundTwenty();
     testRoundTwentyOne();
     testRoundTwentyTwo();
+    testRoundTwentyThree();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

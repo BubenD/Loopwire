@@ -2044,39 +2044,53 @@ QWidget* BrickWizardDialog::buildRunPage() {
         });
         return f;
     };
+    // FRAMED BY WHAT THEY ARE ABOUT: the fans, the body, the transition heatshrink - each a box of its own, so the
+    // figures that go together are seen together.
+    auto group = [page, form](const char* name, const QString& title) {
+        auto* g = new QGroupBox(title, page);
+        g->setObjectName(QLatin1String(name));
+        auto* gl = new QFormLayout(g);
+        gl->setFieldGrowthPolicy(QFormLayout::FieldsStayAtSizeHint);
+        form->addRow(g);
+        return gl;
+    };
+    QFormLayout* fansForm = group("brickGroupFans", QStringLiteral("Fans"));
+    QFormLayout* bodyForm = group("brickGroupBody", QStringLiteral("Body"));
+    QFormLayout* transForm = group("brickGroupTransition", QStringLiteral("Transition heatshrink"));
     fanStart_ = spin("brickFanStart", 0.5, 1000.0, 1.0, QStringLiteral(" mm"));
     {
         QWidget* row = withAuto(fanStart_, "brickFanStartAuto");
         fanStartOn_ = withFan(row, fanStart_, "brickFanStartOn");
-        form->addRow(QStringLiteral("Fan length, start"), row);
+        fansForm->addRow(QStringLiteral("Fan length, start"), row);
     }
     fanFinish_ = spin("brickFanFinish", 0.5, 1000.0, 1.0, QStringLiteral(" mm"));
     {
         QWidget* row = withAuto(fanFinish_, "brickFanFinishAuto");
         fanFinishOn_ = withFan(row, fanFinish_, "brickFanFinishOn");
-        form->addRow(QStringLiteral("Fan length, finish"), row);
+        fansForm->addRow(QStringLiteral("Fan length, finish"), row);
     }
-    knee_ = spin("brickKnee", 0.0, 1000.0, 1.0, QStringLiteral(" mm"));
-    form->addRow(QStringLiteral("Bend radius, body"), withAuto(knee_, "brickKneeAuto"));
     fanKnee_ = spin("brickFanKnee", 0.0, 1000.0, 0.5, QStringLiteral(" mm"));
-    form->addRow(QStringLiteral("Bend radius, fans"), withAuto(fanKnee_, "brickFanKneeAuto"));
-    form->addRow(QStringLiteral("Converge to"), withAuto(trunk_, "brickTrunkAuto"));
+    fansForm->addRow(QStringLiteral("Bend radius, fans"), withAuto(fanKnee_, "brickFanKneeAuto"));
+    fansForm->addRow(QStringLiteral("Converge to"), withAuto(trunk_, "brickTrunkAuto"));
     fanScale_ = spin("brickFanScale", 5.0, 100.0, 5.0, QStringLiteral(" %"));
-    form->addRow(QStringLiteral("Fans across the face"), fanScale_);
+    fansForm->addRow(QStringLiteral("Fans across the face"), fanScale_);
+    knee_ = spin("brickKnee", 0.0, 1000.0, 1.0, QStringLiteral(" mm"));
+    bodyForm->addRow(QStringLiteral("Bend radius, body"), withAuto(knee_, "brickKneeAuto"));
     bodyScale_ = spin("brickBodyScale", 5.0, 100.0, 5.0, QStringLiteral(" %"));
-    form->addRow(QStringLiteral("Body across the face"), bodyScale_);
+    bodyForm->addRow(QStringLiteral("Body across the face"), bodyScale_);
     bodyWidth_ = spin("brickBodyWidth", 0.0, 1000.0, 0.5, QStringLiteral(" mm"));
-    form->addRow(QStringLiteral("Body width"), withAuto(bodyWidth_, "brickBodyWidthAuto"));
+    bodyForm->addRow(QStringLiteral("Body width"), withAuto(bodyWidth_, "brickBodyWidthAuto"));
     transitions_ = new QComboBox(page);
     transitions_->setObjectName(QStringLiteral("brickTransitions"));
     transitions_->addItems({QStringLiteral("None"), QStringLiteral("Start"), QStringLiteral("Finish"),
                             QStringLiteral("Both")});
-    form->addRow(QStringLiteral("Transition heatshrink"), transitions_);
+    transForm->addRow(QStringLiteral("Where"), transitions_);
     // ITS WIDTH, which cannot be less than the cable it goes over: turned down past that, the field stops at
     // the cable's width.
     transitionWidth_ = spin("brickTransitionWidth", 0.0, 1000.0, 0.5, QStringLiteral(" mm"));
     transitionWidth_->setToolTip(QStringLiteral("How wide the transition heatshrink is - never less than the cable"));
-    form->addRow(QStringLiteral("Transition width"), withAuto(transitionWidth_, "brickTransitionWidthAuto"));
+    transForm->addRow(QStringLiteral("Width"), withAuto(transitionWidth_, "brickTransitionWidthAuto"));
+    transitionForm_ = transForm;   // its part number and its lengths join it (the branches section makes them)
     for (QDoubleSpinBox* s : {length_, wireWidth_, fanStart_, fanFinish_, knee_, fanKnee_, fanScale_,
                               bodyScale_, bodyWidth_, trunk_, transitionWidth_})
         connect(s, &QDoubleSpinBox::valueChanged, this, [this, s](double) {
@@ -2194,7 +2208,8 @@ QWidget* BrickWizardDialog::buildRunPage() {
             return c;
         };
         transitionPart_ = partBox("brickTransitionPart", {PartKind::Heatshrink, PartKind::HeatshrinkBoot});
-        bl->addRow(QStringLiteral("Transition P/N"), transitionPart_);
+        QFormLayout* tf = transitionForm_ ? transitionForm_ : bl;   // with the rest of the transition's figures
+        tf->addRow(QStringLiteral("P/N"), transitionPart_);
         // EACH TRANSITION ITS OWN LENGTH: at the start, at the finish (and a branch's at its end, in the table) -
         // "Auto" as the drawing makes it.
         auto lenBox = [box](const char* name) {
@@ -2208,9 +2223,9 @@ QWidget* BrickWizardDialog::buildRunPage() {
             return s;
         };
         transLenStart_ = lenBox("brickTransLenStart");
-        bl->addRow(QStringLiteral("Transition length, start"), transLenStart_);
+        tf->addRow(QStringLiteral("Length, start"), transLenStart_);
         transLenFinish_ = lenBox("brickTransLenFinish");
-        bl->addRow(QStringLiteral("Transition length, finish"), transLenFinish_);
+        tf->addRow(QStringLiteral("Length, finish"), transLenFinish_);
         branchCover_ = new QComboBox(box);
         branchCover_->setObjectName(QStringLiteral("brickBranchCover"));
         branchCover_->addItems({QStringLiteral("Wires fan out"), QStringLiteral("Wires under heatshrink, then fan out")});
@@ -4174,6 +4189,9 @@ void BrickWizardDialog::showEvent(QShowEvent* e) {
 }
 
 namespace {
+// A heatshrink's recovered wall where the library does not give it: 0.30 mm (0.012 in).
+constexpr double kDefaultShrinkWallMm = 0.30;
+
 // A conductor in square millimetres, from a gauge in AWG or in mm2.
 double gaugeAreaMm2(double v, bool awg) {
     if (v <= 0.0) return 0.0;
@@ -4294,7 +4312,11 @@ BrickMark BrickWizardDialog::compatibilityOf(const Brick& b) const {
                     say(2, QStringLiteral("%1: heatshrink %2 shrinks only to %3 mm - loose on %4 mm").arg(name, lname)
                                .arg(lo, 0, 'f', 1).arg(d, 0, 'f', 1));
                 }
-                if (d > 0.0) d += 2.0 * (wall > 0.0 ? wall : 0.5);
+                // ITS RECOVERED WALL, from the library - or, not given there, 0.30 mm (0.012 in), and said so.
+                if (wall <= 0.0)
+                    say(1, QStringLiteral("%1: the recovered wall of heatshrink %2 is not in the library - 0.30 mm "
+                                          "(0.012 in) assumed for the size").arg(name, lname));
+                if (d > 0.0) d += 2.0 * (wall > 0.0 ? wall : kDefaultShrinkWallMm);
             }
         }
         out.d = d;
@@ -4343,6 +4365,7 @@ BrickMark BrickWizardDialog::compatibilityOf(const Brick& b) const {
         int wires = 0;
         double area = 0.0;
         QString from;
+        bool solid = false;   // its conductors solid, not stranded
     };
     QList<In> ins;
     int used = 0;
@@ -4368,7 +4391,11 @@ BrickMark BrickWizardDialog::compatibilityOf(const Brick& b) const {
         if (const LibraryPart* wp = partOf(s->run.stackParts.value(QStringLiteral("wires")))) {
             const QList<double> a = gaugeAreas(wp->value(QStringLiteral("gauge")), gaugeIsAwg(wp->value(QStringLiteral("gaugeMode"))));
             if (!a.isEmpty()) in.area = a.front();
+            in.solid = wp->value(QStringLiteral("conductor")).compare(QLatin1String("Solid"), Qt::CaseInsensitive) == 0;
         }
+        // A cable made of solid conductors says so too.
+        if (const LibraryPart* cp = partOf(s->run.stackParts.value(QStringLiteral("cable"))))
+            in.solid = in.solid || cp->value(QStringLiteral("conductor")).compare(QLatin1String("Solid"), Qt::CaseInsensitive) == 0;
         ins << in;
     }
     if (used == 0) {
@@ -4469,6 +4496,22 @@ BrickMark BrickWizardDialog::compatibilityOf(const Brick& b) const {
         else say(1, QStringLiteral("Its wire size is not in the library"));
     } else {
         takesKnown = false;   // a Y-split, a heatshrink, a boot: sized to the bundle, not to a wire
+    }
+    // SOLID WIRE IS NEVER CRIMPED: a crimp is made on strands, and a solid conductor in a crimp contact works loose
+    // and cracks. A connector whose contacts are crimped (said so, or bought without its pins - its contacts crimp
+    // terminals), a ferrule, a crimp terminal, a contact - with a solid wire into it is a fault.
+    {
+        const QString term = p->value(QStringLiteral("termination"));
+        bool crimped = term.compare(QLatin1String("Crimp"), Qt::CaseInsensitive) == 0;
+        if (p->kind == PartKind::Connector && term.isEmpty() && !partIncludesPins(*p) && !partIsWired(*p) &&
+            !tiedContactsOf(merged, p->id).isEmpty())
+            crimped = true;
+        if (p->kind == PartKind::Ferrule || p->kind == PartKind::Crimp || p->kind == PartKind::ContactPin) crimped = true;
+        if (crimped)
+            for (const In& in : ins)
+                if (in.solid)
+                    say(2, QStringLiteral("%1 has solid wires, and these are crimp contacts - a crimp is made on "
+                                          "stranded wire: use stranded wire, or solder contacts").arg(in.from));
     }
     // THE WIRES AGAINST WHAT IT TAKES.
     if (takesKnown && !takes.isEmpty()) {
