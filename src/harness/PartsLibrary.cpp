@@ -918,6 +918,9 @@ std::vector<PartField> partFields(PartKind kind) {
                     choice("gaugeMode", "Gauge in", {QStringLiteral("AWG"), QStringLiteral("mm2")}),
                     range("gauge", "Wire gauge range"),
                     text("ways", "Ways"),
+                    // ITS SIZE when made: how long a joint it is, and how big across - what it adds to the bundle there.
+                    num("length", "Length", "mm"),
+                    num("od", "Outer diameter", "mm"),
                     text("spec", "Specification")};
         case PartKind::Heatshrink:
             return {choice("material", "Material", kPolymers),

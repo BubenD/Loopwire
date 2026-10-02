@@ -1232,7 +1232,7 @@ void testDialog() {
         else if (!what.isEmpty()) ++specials;
     }
     std::printf("  wizard: palette of %d end part(s) and %d special(s)\n", ends, specials);
-    check(ends >= 5 && specials == 6, "wizard: the palette holds the end parts, the four specials, the bridge wire and the branch");
+    check(ends >= 5 && specials == 7, "wizard: the palette holds the end parts, the four specials, the bridge wire, the branch and the joint");
 
     // A BRICK DROPPED ON THE PANE lands on the grid where it was dropped.
     BrickCanvas* canvas = dlg.canvas();
@@ -4126,6 +4126,149 @@ void testRoundTwentyFive() {
     }
 }
 
+// ROUND TWENTY-SIX: a JOINT tied to a run - its splices drawn where it is made, as long as the part, staggered for a
+// step joint; the stretch of cable it takes for the preview only; its splice parts and wires out on the bill; the
+// bundle at the joint against the cover over it; kept with the harness; and the run itself not changed by it.
+void testRoundTwentySix() {
+    const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_joint.plb"));
+    QFile::remove(libFile);
+    {
+        PartsLibrary lib;
+        auto part = [](const char* id, PartKind k, std::initializer_list<std::pair<const char*, const char*>> ps) {
+            LibraryPart p;
+            p.id = p.mfrPn = QString::fromLatin1(id);
+            p.kind = k;
+            for (const auto& [key, v] : ps) p.params[QString::fromLatin1(key)] = QString::fromLatin1(v);
+            return p;
+        };
+        lib.parts = {part("SP-BUTT", PartKind::Splice, {{"length", "12"}, {"od", "4"}, {"type", "Crimp"}}),
+                     part("JW-WIRE", PartKind::Wire, {{"od", "1.5"}}),
+                     part("JW-SHRINK", PartKind::Heatshrink, {{"entryMin", "2"}, {"entryMax", "5"}, {"wall", "0.5"}})};
+        lib.save(libFile);
+    }
+    PartsCatalog cat;
+    cat.openRemembered();
+    cat.connectLibrary(libFile);
+    cat.remember();
+    {
+        BrickDesign d;
+        d.catalog = &cat;
+        const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString y = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        const QString j = d.addBrick(BrickType::Joint, PartKind::Splice, 1, 1);
+        d.connect(x, c);
+        d.connect(c, y);
+        d.brick(c)->run.wires = 4;
+        d.brick(c)->run.lengthMm = 200;
+        const BrickBuild before = buildBrickHarness(d, &cat);
+        QString why;
+        check(d.connect(j, c, &why), "joint: tied to a run");
+        check(!d.connect(j, x, &why), "joint: not to a part");
+        check(d.sideOf(c, 0).size() == 1 && d.sideOf(c, 1).size() == 1, "joint: not at either end of the run - in it");
+        BrickJoint& jt = d.brick(j)->joint;
+        jt.parts = {QStringLiteral("SP-BUTT")};
+        jt.inWires = QStringLiteral("1,2");
+        jt.outCount = 1;
+        jt.atMm = 60.0;
+        BrickBuild b = buildBrickHarness(d, &cat);
+        // The run is the same run, joint or no joint.
+        double runLenBefore = 0.0, runLenAfter = 0.0;
+        for (const Entity& e : before.entities)
+            if (e.type == EntityType::TwistedPair) runLenBefore = e.points.back().x - e.points.front().x;
+        for (const Entity& e : b.entities)
+            if (e.type == EntityType::TwistedPair) runLenAfter = e.points.back().x - e.points.front().x;
+        check(std::abs(runLenBefore - runLenAfter) < 1e-6, "joint: the run is laid out as it was");
+        auto splices = [&b, &j](double* firstX, double* boxLen) {
+            int n = 0;
+            for (const Entity& e : b.entities)
+                if (e.meta.value(QStringLiteral("brickId")).toString() == j && e.type == EntityType::Polyline &&
+                    e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("splice")) {
+                    if (n == 0 && firstX) {
+                        double lo = 1e300, hi = -1e300;
+                        for (const Vec2& v : e.points) {
+                            lo = std::min(lo, v.x);
+                            hi = std::max(hi, v.x);
+                        }
+                        *firstX = lo;
+                        if (boxLen) *boxLen = hi - lo;
+                    }
+                    ++n;
+                }
+            return n;
+        };
+        double x0 = 0.0, len = 0.0;
+        const int one = splices(&x0, &len);
+        double runStart = 0.0;
+        for (const Entity& e : b.entities)
+            if (e.type == EntityType::TwistedPair) runStart = e.points.front().x;
+        std::printf("  joint: %d splice, %.1f long, starting %.1f along the run\n", one, len, x0 - runStart);
+        check(one == 1 && std::abs(len - 12.0) < 0.5, "joint: one splice, as long as its part says");
+        check(std::abs((x0 - runStart) - 60.0) < 1.0, "joint: made where it is said, measured from the run's start");
+        bool spanHidden = false;
+        for (const Entity& e : b.entities)
+            if (e.meta.value(QStringLiteral("jointSpan")).toString() == j) spanHidden = e.meta.value(QStringLiteral("previewOnly")).toBool();
+        check(spanHidden, "joint: the stretch of cable it takes is for the preview only");
+        // A STEP JOINT of two wires in and two out: two splices, staggered.
+        jt.outCount = 2;
+        jt.stepped = true;
+        jt.stepMm = 20.0;
+        b = buildBrickHarness(d, &cat);
+        check(splices(nullptr, nullptr) == 2 && jointSpliceCount(d, *d.brick(j)) == 2, "joint: a step joint staggers its splices");
+        check(BrickDesign::fromJson(d.toJson()).brick(j)->joint.stepped &&
+                  BrickDesign::fromJson(d.toJson()).brick(j)->joint.parts == QStringList{QStringLiteral("SP-BUTT")},
+              "joint: kept with the harness");
+    }
+    // THE WIZARD: its mark - the bundle at the joint against the heatshrink over the run - and its parts on the bill.
+    {
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        BrickWizardDialog dlg(&ed);
+        BrickDesign& w = dlg.design();
+        const QString x = w.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString c = w.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString y = w.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        const QString j = w.addBrick(BrickType::Joint, PartKind::Splice, 1, 1);
+        w.connect(x, c);
+        w.connect(c, y);
+        w.connect(j, c);
+        BrickRunSpec& r = w.brick(c)->run;
+        r.wires = 4;
+        r.stack = {QStringLiteral("wires"), QStringLiteral("heatshrink")};
+        r.stackParts.insert(QStringLiteral("wires"), QStringLiteral("JW-WIRE"));
+        r.stackParts.insert(QStringLiteral("heatshrink"), QStringLiteral("JW-SHRINK"));
+        BrickJoint& jt = w.brick(j)->joint;
+        jt.parts = {QStringLiteral("SP-BUTT")};
+        jt.inWires = QStringLiteral("1,2");
+        jt.outWirePart = QStringLiteral("JW-WIRE");
+        dlg.selectBrick(j);
+        std::printf("  joint mark: %d (%s)\n", dlg.canvas()->markOf(j).compat, qPrintable(dlg.canvas()->markOf(j).why));
+        check(dlg.canvas()->markOf(j).compat == 2, "joint: the bundle at the joint too big for the heatshrink over it - red");
+        BomTable t;
+        t.fromJson(doc.bom());
+        bool splice = false, outWire = false;
+        for (const BomRow& row : t.rows) {
+            splice = splice || row.partId == QLatin1String("SP-BUTT");
+            outWire = outWire || row.partId == QLatin1String("JW-WIRE");
+        }
+        check(splice && outWire, "joint: its splice and the wire out of it on the bill");
+        auto* page = dlg.findChild<QWidget*>(QStringLiteral("brickJointSections"));
+        auto* span = dlg.findChild<QPushButton*>(QStringLiteral("brickJointShowSpan"));
+        check(page && span, "joint: a page of its own, with the button that shows the length it takes");
+        if (span) span->setChecked(true);
+        bool lit = false;
+        for (const Entity& e : dlg.preview()->entities()) lit = lit || e.meta.value(QStringLiteral("jointSpan")).toString() == j;
+        check(lit && dlg.jointShown() == j, "joint: its stretch of cable lit on the preview when asked");
+        bool placed = false;
+        for (const Entity& e : dlg.drawing()) placed = placed || e.meta.value(QStringLiteral("previewOnly")).toBool();
+        check(!placed, "joint: and never on the drawing placed");
+    }
+    cat.disconnectLibrary(libFile);
+    cat.remember();
+    QFile::remove(libFile);
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -4165,6 +4308,7 @@ int run_brickharness_tests() {
     testRoundTwentyThree();
     testRoundTwentyFour();
     testRoundTwentyFive();
+    testRoundTwentySix();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

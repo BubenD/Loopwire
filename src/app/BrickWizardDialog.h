@@ -290,6 +290,29 @@ private:
     QWidget* buildEndPage();
     QWidget* buildRunPage();
     QWidget* buildLinkPage();
+    // THE JOINT'S PAGE: the splice made in the run it is tied to - how, with what, which wires in and out, where.
+    QWidget* buildJointPage();
+    void loadJoint();
+    void editJoint(const std::function<void(BrickJoint&)>& fn);
+    QLabel* jointRun_ = nullptr;
+    QComboBox* jointMethod_ = nullptr;
+    QListWidget* jointParts_ = nullptr;
+    QLabel* jointPartsNote_ = nullptr;
+    QLabel* jointLen_ = nullptr;
+    QLineEdit* jointIn_ = nullptr;
+    QLabel* jointInNames_ = nullptr;
+    QSpinBox* jointOutCount_ = nullptr;
+    QComboBox* jointOutPart_ = nullptr;
+    QLineEdit* jointOutNames_ = nullptr;
+    QDoubleSpinBox* jointAt_ = nullptr;
+    QComboBox* jointFrom_ = nullptr;
+    QCheckBox* jointStepped_ = nullptr;
+    QDoubleSpinBox* jointStep_ = nullptr;
+    QPushButton* jointShowSpan_ = nullptr;
+    QString jointShow_;   // the joint whose stretch of cable the preview lights
+public:
+    QString jointShown() const { return jointShow_; }
+private:
     void loadPanel();
     void loadLabels();
     void refreshPreview();

@@ -38,14 +38,15 @@ namespace Edraw_Desktop {
 // are long.
 // ==================================================================================================
 
-enum class BrickType { End, Fanout, Run, TwistedPair, TwistedBundle };
+// A JOINT is tied to a special - a splice made in that run - and is not on the harness's way itself.
+enum class BrickType { End, Fanout, Run, TwistedPair, TwistedBundle, Joint };
 // A special's two ports.
 enum BrickPort { kPortLeft = 0, kPortRight = 1 };
 
 QString brickTypeName(BrickType type);
 QString brickTypeKey(BrickType type);
 BrickType brickTypeFromKey(const QString& key);
-inline bool brickIsSpecial(BrickType t) { return t != BrickType::End; }
+inline bool brickIsSpecial(BrickType t) { return t != BrickType::End && t != BrickType::Joint; }
 
 // The kinds an end brick can be: the parts a harness finishes on, then the joints it passes through.
 std::vector<PartKind> brickEndKinds();
@@ -154,6 +155,21 @@ struct BrickRunSpec {
     QString outermost() const;
 };
 
+// A JOINT IN A RUN: wires of the harness soldered or crimped together - one to one, several to one, so many to so
+// many - with a splice part (or several), the wires that go out of it, and where along the run it is made.
+struct BrickJoint {
+    QString method = QStringLiteral("Crimp");   // or "Solder"
+    QStringList parts;                          // the splice parts, from the library's Splice group
+    QString inWires;                            // the harness's wires that go in, "1,2"
+    int outCount = 1;                           // how many wires go on out of it
+    QString outWirePart;                        // the wire they are, from the library
+    QStringList outNames;                       // their names - an input's net carries on when not said
+    double atMm = 50.0;                         // where, from the end said
+    bool fromFinish = false;                    // measured from the run's finish (its start otherwise)
+    bool stepped = false;                       // a STEP JOINT: the splices staggered along the run
+    double stepMm = 15.0;                       // and how far apart
+};
+
 struct Brick {
     QString id;
     BrickType type = BrickType::End;
@@ -186,6 +202,7 @@ struct Brick {
     bool autoScale = false;
     // SIZED BY MATCHING it to another part (the brick it was matched to) - until its size is set some other way.
     QString matchedTo;
+    BrickJoint joint;                      // for a joint
 };
 
 struct BrickLink {
@@ -368,6 +385,13 @@ bool brickIsTied(const Brick& b);
 void makeBridgeWire(Brick& b);
 // A BRANCH brick: joined to a cable's body, it takes wires from it and carries them on to its part - a run of its own.
 void makeBranch(Brick& b);
+// THE JOINTS TIED TO A RUN, and the run a joint is tied to.
+QStringList jointsOf(const BrickDesign& d, const QString& specialId);
+QString jointRun(const BrickDesign& d, const QString& jointId);
+// How many splices a joint is (each of its parts; a step joint of one part, one per pair of wires), and how long
+// each is - the part's length, 8 mm when it does not say.
+int jointSpliceCount(const BrickDesign& d, const Brick& joint);
+double jointSpliceLengthMm(const LibraryPart* part);
 bool brickIsBranch(const Brick& b);
 
 // ---- WHAT MOVES WITH WHAT ------------------------------------------------------------------------------

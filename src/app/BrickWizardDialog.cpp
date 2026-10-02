@@ -603,6 +603,7 @@ void BrickCanvas::paintEvent(QPaintEvent*) {
         const bool picked = sel_.contains(b.id);
         QColor fill = end ? (joint ? QColor(0x2f, 0x62, 0x5a) : QColor(0x2f, 0x4f, 0x74))
                           : QColor(0x5a, 0x43, 0x78);
+        if (b.type == BrickType::Joint) fill = QColor(0x7a, 0x55, 0x22);   // a joint: brown, tied to its run
         if (end && b.libPart.isEmpty()) fill = fill.darker(135);
         p.setPen(QPen(picked ? QColor(0x2b, 0xd0, 0xff) : QColor(0x9a, 0xa7, 0xb8), picked ? 2.4 : 1.2));
         p.setBrush(fill);
@@ -631,11 +632,16 @@ void BrickCanvas::paintEvent(QPaintEvent*) {
                   : !lp->mfrPn.isEmpty() ? lp->mfrPn
                                          : lp->title();
         }
+        else if (b.type == BrickType::Joint)
+            sub = QStringLiteral("%1 · %2 in, %3 out")
+                      .arg(b.joint.method)
+                      .arg(parseWireList(b.joint.inWires, 0).size())
+                      .arg(b.joint.outCount);
         else sub = b.type == BrickType::TwistedPair
                        ? QStringLiteral("%1 pr · L-%2").arg(std::max(1, b.run.pairs)).arg(b.run.lengthMm, 0, 'f', 0)
                        : QStringLiteral("%1 w · L-%2").arg(b.run.wires).arg(b.run.lengthMm, 0, 'f', 0);
         // A branch with a length of its own: the longest said too.
-        if (!end && runLongestMm(*d_, b) > b.run.lengthMm + 0.5)
+        if (brickIsSpecial(b.type) && runLongestMm(*d_, b) > b.run.lengthMm + 0.5)
             sub += QStringLiteral("/%1").arg(runLongestMm(*d_, b), 0, 'f', 0);
         const QRectF bottom(r.left() + 3, r.center().y(), r.width() - 6, r.height() / 2.0 - 2);
         p.setPen(QColor(0xb8, 0xc0, 0xcc));
@@ -1184,6 +1190,11 @@ void BrickCanvas::dropEvent(QDropEvent* e) {
         if (Brick* b = d_->brick(id)) makeBridgeWire(*b);
     if (parts.value(2) == QLatin1String("branch"))
         if (Brick* b = d_->brick(id)) makeBranch(*b);
+    if (Brick* b = d_->brick(id); b && b->type == BrickType::Joint) {
+        int n = 0;   // J1, J2, ...
+        for (const Brick& o : d_->bricks) n += o.type == BrickType::Joint ? 1 : 0;
+        b->name = QStringLiteral("J%1").arg(n);
+    }
     e->acceptProposedAction();
     setSelected(id);
     emit selectionChanged(id);
@@ -1226,6 +1237,8 @@ BrickPalette::BrickPalette(QWidget* parent) : QListWidget(parent) {
     // A BRANCH: joined to a cable's body, it takes wires from it on to its part - a run of its own after the divide.
     brick(QStringLiteral("Branch"),
           brickTypeKey(BrickType::Run) + QLatin1Char('|') + partKindKey(PartKind::Wire) + QStringLiteral("|branch"));
+    // A JOINT: tied to a run, a splice made in it.
+    brick(QStringLiteral("Joint (splice)"), brickTypeKey(BrickType::Joint) + QLatin1Char('|') + partKindKey(PartKind::Splice));
 }
 
 QStringList BrickPalette::mimeTypes() const { return {QString::fromLatin1(kBrickMime)}; }
@@ -1641,6 +1654,7 @@ void BrickWizardDialog::buildUi() {
     panel_->addWidget(buildEndPage());
     panel_->addWidget(buildRunPage());
     panel_->addWidget(buildLinkPage());
+    panel_->addWidget(buildJointPage());
     tidyFields(panel_, 180);   // every field in the panels one short width
     // THE LIBRARY PART wide enough to read its P/N and a good part of its description; the designator's height a
     // few characters.
@@ -2535,6 +2549,195 @@ QWidget* BrickWizardDialog::buildRunPage() {
     return scrolled(column);
 }
 
+QWidget* BrickWizardDialog::buildJointPage() {
+    auto* column = new QWidget;
+    column->setObjectName(QStringLiteral("brickJointSections"));
+    QVBoxLayout* cols = sectionColumn(column);
+    auto* page = new QWidget;
+    auto* f = new QFormLayout(page);
+    jointRun_ = new QLabel(page);
+    jointRun_->setWordWrap(true);
+    f->addRow(QStringLiteral("In"), jointRun_);
+    jointMethod_ = new QComboBox(page);
+    jointMethod_->setObjectName(QStringLiteral("brickJointMethod"));
+    jointMethod_->addItems({QStringLiteral("Crimp"), QStringLiteral("Solder")});
+    f->addRow(QStringLiteral("Made by"), jointMethod_);
+    connect(jointMethod_, &QComboBox::activated, this,
+            [this](int) { editJoint([this](BrickJoint& j) { j.method = jointMethod_->currentText(); }); });
+    // ITS SPLICE PARTS, ticked from the library's Splice group - one, or several.
+    jointParts_ = new QListWidget(page);
+    jointParts_->setObjectName(QStringLiteral("brickJointParts"));
+    jointParts_->setMaximumHeight(110);
+    f->addRow(QStringLiteral("Splice parts"), jointParts_);
+    jointPartsNote_ = new QLabel(page);
+    jointPartsNote_->setWordWrap(true);
+    jointPartsNote_->setStyleSheet(QStringLiteral("color:#f0b35a;"));
+    f->addRow(QString(), jointPartsNote_);
+    jointLen_ = new QLabel(page);
+    jointLen_->setObjectName(QStringLiteral("brickJointLength"));
+    f->addRow(QStringLiteral("Joint length"), jointLen_);
+    connect(jointParts_, &QListWidget::itemChanged, this, [this](QListWidgetItem*) {
+        QStringList ids;
+        for (int i = 0; i < jointParts_->count(); ++i)
+            if (jointParts_->item(i)->checkState() == Qt::Checked) ids << jointParts_->item(i)->data(Qt::UserRole).toString();
+        editJoint([ids](BrickJoint& j) { j.parts = ids; });
+        loadJoint();
+    });
+    // THE WIRES IN - of the harness - and OUT, with their wire and their names.
+    jointIn_ = new QLineEdit(page);
+    jointIn_->setObjectName(QStringLiteral("brickJointIn"));
+    jointIn_->setPlaceholderText(QStringLiteral("1,2"));
+    f->addRow(QStringLiteral("Wires in"), jointIn_);
+    jointInNames_ = new QLabel(page);
+    jointInNames_->setWordWrap(true);
+    jointInNames_->setStyleSheet(QStringLiteral("color:#8fa3b8;"));
+    f->addRow(QString(), jointInNames_);
+    connect(jointIn_, &QLineEdit::editingFinished, this, [this] {
+        const QString t = jointIn_->text().trimmed();
+        editJoint([t](BrickJoint& j) { j.inWires = t; });
+        loadJoint();
+    });
+    jointOutCount_ = new QSpinBox(page);
+    jointOutCount_->setObjectName(QStringLiteral("brickJointOutCount"));
+    jointOutCount_->setRange(1, 64);
+    f->addRow(QStringLiteral("Wires out"), jointOutCount_);
+    connect(jointOutCount_, &QSpinBox::valueChanged, this, [this](int v) { editJoint([v](BrickJoint& j) { j.outCount = v; }); });
+    jointOutPart_ = new QComboBox(page);
+    jointOutPart_->setObjectName(QStringLiteral("brickJointOutPart"));
+    jointOutPart_->addItem(QStringLiteral("(no part number)"), QString());
+    for (const LibraryPart* p : catalog_.ofKind(PartKind::Wire))
+        jointOutPart_->addItem((p->mfrPn.isEmpty() ? p->title() : p->mfrPn) +
+                                   (p->description.isEmpty() ? QString() : QStringLiteral(" — ") + p->description),
+                               p->id);
+    f->addRow(QStringLiteral("Out wire P/N"), jointOutPart_);
+    connect(jointOutPart_, &QComboBox::activated, this, [this](int i) {
+        const QString id = jointOutPart_->itemData(i).toString();
+        editJoint([id](BrickJoint& j) { j.outWirePart = id; });
+    });
+    jointOutNames_ = new QLineEdit(page);
+    jointOutNames_->setObjectName(QStringLiteral("brickJointOutNames"));
+    jointOutNames_->setToolTip(QStringLiteral("The names of the wires out, comma between - a name goes along the whole "
+                                              "harness. Left empty, each takes the name of the wire it comes from."));
+    f->addRow(QStringLiteral("Out names"), jointOutNames_);
+    connect(jointOutNames_, &QLineEdit::editingFinished, this, [this] {
+        QStringList names;
+        for (const QString& n : jointOutNames_->text().split(QLatin1Char(','), Qt::SkipEmptyParts)) names << n.trimmed();
+        editJoint([names](BrickJoint& j) { j.outNames = names; });
+    });
+    // WHERE: so far from one end of the run.
+    jointAt_ = new QDoubleSpinBox(page);
+    jointAt_->setObjectName(QStringLiteral("brickJointAt"));
+    jointAt_->setRange(0.0, 100000.0);
+    jointAt_->setDecimals(1);
+    jointAt_->setSuffix(QStringLiteral(" mm"));
+    f->addRow(QStringLiteral("At"), jointAt_);
+    connect(jointAt_, &QDoubleSpinBox::valueChanged, this, [this](double v) { editJoint([v](BrickJoint& j) { j.atMm = v; }); });
+    jointFrom_ = new QComboBox(page);
+    jointFrom_->setObjectName(QStringLiteral("brickJointFrom"));
+    jointFrom_->addItems({QStringLiteral("from the run's start"), QStringLiteral("from the run's finish")});
+    f->addRow(QString(), jointFrom_);
+    connect(jointFrom_, &QComboBox::activated, this, [this](int i) { editJoint([i](BrickJoint& j) { j.fromFinish = i == 1; }); });
+    // A STEP JOINT: the splices staggered along the run - and the stretch of cable it takes, lit on the preview.
+    jointStepped_ = new QCheckBox(QStringLiteral("Step joint - splices staggered"), page);
+    jointStepped_->setObjectName(QStringLiteral("brickJointStepped"));
+    f->addRow(jointStepped_);
+    connect(jointStepped_, &QCheckBox::toggled, this, [this](bool on) {
+        editJoint([on](BrickJoint& j) { j.stepped = on; });
+        loadJoint();
+    });
+    jointStep_ = new QDoubleSpinBox(page);
+    jointStep_->setObjectName(QStringLiteral("brickJointStep"));
+    jointStep_->setRange(0.5, 1000.0);
+    jointStep_->setDecimals(1);
+    jointStep_->setSuffix(QStringLiteral(" mm apart"));
+    f->addRow(QStringLiteral("Step"), jointStep_);
+    connect(jointStep_, &QDoubleSpinBox::valueChanged, this, [this](double v) { editJoint([v](BrickJoint& j) { j.stepMm = v; }); });
+    jointShowSpan_ = new QPushButton(QStringLiteral("Show the length it takes"), page);
+    jointShowSpan_->setObjectName(QStringLiteral("brickJointShowSpan"));
+    jointShowSpan_->setCheckable(true);
+    jointShowSpan_->setToolTip(QStringLiteral("Light the stretch of cable the joint takes on the preview - it is not drawn"));
+    f->addRow(QString(), jointShowSpan_);
+    connect(jointShowSpan_, &QPushButton::toggled, this, [this](bool on) {
+        jointShow_ = on ? canvas_->selected() : QString();
+        showGrabRings();
+    });
+    foldSection(QStringLiteral("Joint"), page, cols, "brickFoldJoint");
+    return scrolled(column);
+}
+
+void BrickWizardDialog::editJoint(const std::function<void(BrickJoint&)>& fn) {
+    Brick* b = design_.brick(canvas_->selected());
+    if (!b || b->type != BrickType::Joint) return;
+    fn(b->joint);
+    canvas_->update();
+    designChanged();
+}
+
+void BrickWizardDialog::loadJoint() {
+    const Brick* b = design_.brick(canvas_->selected());
+    if (!b || b->type != BrickType::Joint) return;
+    const BrickJoint& j = b->joint;
+    const Brick* run = design_.brick(jointRun(design_, b->id));
+    jointRun_->setText(run ? (run->name.isEmpty() ? brickTitle(*run) : run->name)
+                           : QStringLiteral("tie it to a run - link it to the cable, fanout or branch it is made in"));
+    const QSignalBlocker s1(jointMethod_), s2(jointParts_), s3(jointIn_), s4(jointOutCount_), s5(jointOutPart_),
+        s6(jointOutNames_), s7(jointAt_), s8(jointFrom_), s9(jointStepped_), s10(jointStep_), s11(jointShowSpan_);
+    jointMethod_->setCurrentIndex(j.method == QLatin1String("Solder") ? 1 : 0);
+    // THE SPLICE GROUP of the library, each ticked if the joint is made with it.
+    jointParts_->clear();
+    const std::vector<const LibraryPart*> splices = catalog_.ofKind(PartKind::Splice);
+    for (const LibraryPart* p : splices) {
+        auto* it = new QListWidgetItem((p->mfrPn.isEmpty() ? p->title() : p->mfrPn) +
+                                           (p->description.isEmpty() ? QString() : QStringLiteral(" — ") + p->description),
+                                       jointParts_);
+        it->setData(Qt::UserRole, p->id);
+        it->setFlags(Qt::ItemIsEnabled | Qt::ItemIsUserCheckable);
+        it->setCheckState(j.parts.contains(p->id) ? Qt::Checked : Qt::Unchecked);
+    }
+    jointPartsNote_->setText(splices.empty() ? QStringLiteral("No splice in the parts library - add one to its Splice group")
+                                             : QString());
+    jointPartsNote_->setVisible(splices.empty());
+    // ITS LENGTH, from the part: each splice, and what a step joint comes to.
+    {
+        const LibraryPart* sp = j.parts.isEmpty() ? nullptr : catalog_.byId(j.parts.front());
+        const double len = jointSpliceLengthMm(sp);
+        const int n = jointSpliceCount(design_, *b);
+        const bool said = sp && sp->value(QStringLiteral("length")).toDouble() > 0.0;
+        QString text = QStringLiteral("%1 mm each%2").arg(len, 0, 'f', 1).arg(said ? QString() : QStringLiteral(" (not in the library - assumed)"));
+        if (j.stepped && n > 1)
+            text += QStringLiteral(", %1 splices over %2 mm").arg(n).arg((n - 1) * std::max(len + 1.0, j.stepMm) + len, 0, 'f', 1);
+        else if (n > 1)
+            text += QStringLiteral(", %1 splices side by side").arg(n);
+        jointLen_->setText(text);
+    }
+    jointIn_->setText(j.inWires);
+    {
+        QStringList named;
+        const QList<int> in = parseWireList(j.inWires, run ? run->run.wires : 0);
+        for (int w : in) {
+            const QString net = run ? run->run.nets.value(w - 1) : QString();
+            named << (net.isEmpty() ? QStringLiteral("wire %1").arg(w) : QStringLiteral("wire %1 (%2)").arg(w).arg(net));
+        }
+        jointInNames_->setText(in.isEmpty() ? QStringLiteral("of the run's %1 wires").arg(run ? run->run.wires : 0)
+                                            : named.join(QStringLiteral(", ")));
+        // An input's name goes on: shown where the names out are not said.
+        QStringList nets;
+        for (int w : in)
+            if (run && !run->run.nets.value(w - 1).isEmpty()) nets << run->run.nets.value(w - 1);
+        jointOutNames_->setPlaceholderText(nets.isEmpty() ? QStringLiteral("names, comma between") : nets.join(QStringLiteral(", ")));
+    }
+    jointOutCount_->setValue(std::max(1, j.outCount));
+    const int op = jointOutPart_->findData(j.outWirePart);
+    jointOutPart_->setCurrentIndex(op >= 0 ? op : 0);
+    jointOutNames_->setText(j.outNames.join(QStringLiteral(", ")));
+    jointAt_->setValue(j.atMm);
+    jointFrom_->setCurrentIndex(j.fromFinish ? 1 : 0);
+    jointStepped_->setChecked(j.stepped);
+    jointStep_->setValue(j.stepMm);
+    jointStep_->setEnabled(j.stepped);
+    jointShowSpan_->setChecked(jointShow_ == b->id);
+}
+
 QWidget* BrickWizardDialog::buildLinkPage() {
     auto* page = new QWidget(panel_);
     auto* f = new QFormLayout(page);
@@ -2601,6 +2804,11 @@ QString BrickWizardDialog::addFromPalette(const QString& what) {
         if (Brick* b = design_.brick(id)) makeBridgeWire(*b);
     if (parts.value(2) == QLatin1String("branch"))
         if (Brick* b = design_.brick(id)) makeBranch(*b);
+    if (Brick* b = design_.brick(id); b && b->type == BrickType::Joint) {
+        int n = 0;   // J1, J2, ...
+        for (const Brick& o : design_.bricks) n += o.type == BrickType::Joint ? 1 : 0;
+        b->name = QStringLiteral("J%1").arg(n);
+    }
     selectBrick(id);
     designChanged();
     return id;
@@ -2642,9 +2850,13 @@ double BrickWizardDialog::lastRowPitch() const {
 }
 
 std::vector<Entity> BrickWizardDialog::drawing() const {
-    return buildBrickHarness(design_, &catalog_,
-                             [this](const QString& id) { return bomItemOf(id); })
-        .entities;
+    std::vector<Entity> ents = buildBrickHarness(design_, &catalog_, [this](const QString& id) { return bomItemOf(id); })
+                                   .entities;
+    // What the preview alone shows - a joint's stretch of cable - is not part of the drawing.
+    ents.erase(std::remove_if(ents.begin(), ents.end(),
+                              [](const Entity& e) { return e.meta.value(QStringLiteral("previewOnly")).toBool(); }),
+               ents.end());
+    return ents;
 }
 
 bool BrickWizardDialog::updateBrickFromLibrary(const QString& brickId) {
@@ -2962,6 +3174,11 @@ void BrickWizardDialog::loadPanel() {
     if (!b) {
         noneText_->setText(QStringLiteral("Pick a brick to set what it is."));
         panel_->setCurrentIndex(0);
+        return;
+    }
+    if (b->type == BrickType::Joint) {
+        panel_->setCurrentIndex(4);
+        loadJoint();
         return;
     }
     if (b->type == BrickType::End) {
@@ -3885,6 +4102,15 @@ void BrickWizardDialog::showGrabRings() {
     // THE GRAB POINT, on the preview only and only where it is wanted: the part picked, and the part the pointer is
     // over - a ring on every part all the time read as connection points drawn on the parts.
     std::vector<Entity> ents = lastEnts_;
+    // A JOINT'S STRETCH OF CABLE only while it is asked to be shown.
+    ents.erase(std::remove_if(ents.begin(), ents.end(),
+                              [this](const Entity& e) {
+                                  return e.meta.value(QStringLiteral("previewOnly")).toBool() &&
+                                         e.meta.value(QStringLiteral("jointSpan")).toString() != jointShow_;
+                              }),
+               ents.end());
+    for (Entity& e : ents)   // and lit in its own orange, not the preview's grey
+        if (e.meta.value(QStringLiteral("previewOnly")).toBool()) e.meta.insert(QLatin1String(kPreviewMarkKey), true);
     QStringList want = canvas_->selection();
     if (!hoverPart_.isEmpty() && !want.contains(hoverPart_)) want << hoverPart_;
     for (const QString& id : want) {
@@ -4019,6 +4245,13 @@ QHash<QString, int> BrickWizardDialog::partCounts() const {
         const QString unit = p->unit.isEmpty() ? defaultUnitForKind(p->kind) : p->unit;
         return unit != QLatin1String("m") && unit != QLatin1String("mm") && unit != QLatin1String("cm");
     };
+    // A JOINT'S SPLICES: each part it is made with, once for each splice of it.
+    for (const Brick& b : design_.bricks) {
+        if (b.type != BrickType::Joint || jointRun(design_, b.id).isEmpty()) continue;
+        const int times = b.joint.parts.size() > 1 ? 1 : jointSpliceCount(design_, b);
+        for (const QString& id : b.joint.parts)
+            if (!id.isEmpty()) n[id] += times;
+    }
     for (const Brick& b : design_.bricks) {
         if (!brickIsSpecial(b.type)) continue;
         if (pieces(b.run.transitionPart) && extraTransitions_.value(b.id) > 0)
@@ -4040,6 +4273,12 @@ QHash<QString, double> BrickWizardDialog::partLengths() const {
             const QString id = b.run.stackParts.value(layer);
             if (id.isEmpty()) continue;
             mm[id] += longest * (layer == QLatin1String("wires") ? wires : 1);
+        }
+        // THE WIRES OUT OF ITS JOINTS: so many of them, from the joint to the run's other end.
+        for (const QString& jid : jointsOf(design_, b.id)) {
+            const Brick* jb = design_.brick(jid);
+            if (!jb || jb->joint.outWirePart.isEmpty()) continue;
+            mm[jb->joint.outWirePart] += std::max(1, jb->joint.outCount) * std::max(0.0, b.run.lengthMm - jb->joint.atMm);
         }
         // THE HEATSHRINK OVER EACH BRANCH after the cable divides: as long as the branches are drawn.
         if (b.run.branchCover == 1 && !b.run.branchShrinkPart.isEmpty()) {
@@ -4531,6 +4770,71 @@ BrickMark BrickWizardDialog::compatibilityOf(const Brick& b) const {
             m.why = bu.level > 0 ? bu.why
                                  : bu.d > 0.0 ? QStringLiteral("Its layers fit one over another - %1 mm across").arg(bu.d, 0, 'f', 1)
                                               : QStringLiteral("Its layers fit one over another");
+        }
+        return m;
+    }
+    if (b.type == BrickType::Joint) {
+        // A JOINT: tied to a run, with its splice parts on the bill, the wires that go in said - and the bundle at the
+        // joint, splices and all, going into what covers the run there.
+        auto say = [&m](int level, const QString& why) {
+            if (level > m.compat) {
+                m.compat = level;
+                m.why = why;
+            }
+        };
+        const BrickJoint& j = b.joint;
+        bool onBill = !j.parts.isEmpty();
+        for (const QString& id : j.parts) onBill = onBill && bomItemOf(id) > 0;
+        if (!j.parts.isEmpty()) m.bom = onBill ? 1 : 0;
+        const Brick* run = design_.brick(jointRun(design_, b.id));
+        if (!run) {
+            say(1, QStringLiteral("Tie it to a run - the cable, fanout or branch the joint is made in"));
+            return m;
+        }
+        if (j.parts.isEmpty())
+            say(1, merged.ofKind(PartKind::Splice).empty()
+                       ? QStringLiteral("No splice in the parts library - add one to its Splice group")
+                       : QStringLiteral("Pick the splice part it is made with"));
+        const int in = parseWireList(j.inWires, run->run.wires).size();
+        if (in == 0) say(1, QStringLiteral("Say which of the run's wires go into it"));
+        const LibraryPart* sp = j.parts.isEmpty() ? nullptr : partOf(j.parts.front());
+        const double spOd = sp ? sp->value(QStringLiteral("od")).toDouble() : 0.0;
+        if (sp && spOd <= 0.0) say(1, QStringLiteral("The splice's outer diameter is not in the library - the joint's size cannot be checked"));
+        // THE BUNDLE AT THE JOINT: the wires not joined, packed round, and the splices made there beside them.
+        const LibraryPart* wp = partOf(run->run.stackParts.value(QStringLiteral("wires")));
+        const double wireOd = wp ? wp->value(QStringLiteral("od")).toDouble() : 0.0;
+        if (spOd > 0.0 && wireOd > 0.0) {
+            const int rest = std::max(0, run->run.wires - in);
+            const int together = j.stepped ? 1 : jointSpliceCount(design_, b);
+            const double dRest = wireOd * std::sqrt(rest / 0.7);
+            const double dJoint = std::sqrt(dRest * dRest + together * spOd * spOd / 0.7);
+            double lo = 0.0, hi = 0.0;
+            QString cover;
+            for (const QString& layer : run->run.stack) {
+                const LibraryPart* lp = partOf(run->run.stackParts.value(layer));
+                if (!lp) continue;
+                if (layer == QLatin1String("heatshrink")) {
+                    lo = lp->value(QStringLiteral("entryMin")).toDouble();
+                    hi = lp->value(QStringLiteral("entryMax")).toDouble();
+                    cover = lp->mfrPn.isEmpty() ? lp->title() : lp->mfrPn;
+                }
+                if (layer == QLatin1String("cable") && hi <= 0.0) {
+                    hi = lp->value(QStringLiteral("od")).toDouble();
+                    cover = lp->mfrPn.isEmpty() ? lp->title() : lp->mfrPn;
+                }
+            }
+            if (hi > 0.0 && dJoint > hi * 1.02)
+                say(2, QStringLiteral("At the joint the bundle is %1 mm across, splices and all - more than %2 takes (%3 mm)")
+                           .arg(dJoint, 0, 'f', 1).arg(cover).arg(hi, 0, 'f', 1));
+            else if (m.compat < 0) {
+                m.compat = 0;
+                m.why = QStringLiteral("At the joint the bundle is %1 mm across, splices and all").arg(dJoint, 0, 'f', 1);
+            }
+            (void)lo;
+        }
+        if (m.compat < 0) {
+            m.compat = 0;
+            m.why = QStringLiteral("Joint set");
         }
         return m;
     }

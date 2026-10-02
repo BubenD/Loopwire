@@ -27,6 +27,7 @@ QString brickTypeName(BrickType type) {
     case BrickType::Run: return QStringLiteral("Cable / heatshrink run");
     case BrickType::TwistedPair: return QStringLiteral("Twisted pair");
     case BrickType::TwistedBundle: return QStringLiteral("Twisted bundle");
+    case BrickType::Joint: return QStringLiteral("Joint");
     }
     return QString();
 }
@@ -38,13 +39,14 @@ QString brickTypeKey(BrickType type) {
     case BrickType::Run: return QStringLiteral("run");
     case BrickType::TwistedPair: return QStringLiteral("twisted-pair");
     case BrickType::TwistedBundle: return QStringLiteral("twisted-bundle");
+    case BrickType::Joint: return QStringLiteral("joint");
     }
     return QStringLiteral("end");
 }
 
 BrickType brickTypeFromKey(const QString& key) {
     for (BrickType t : {BrickType::End, BrickType::Fanout, BrickType::Run, BrickType::TwistedPair,
-                        BrickType::TwistedBundle})
+                        BrickType::TwistedBundle, BrickType::Joint})
         if (brickTypeKey(t) == key) return t;
     return BrickType::End;
 }
@@ -217,9 +219,40 @@ QStringList BrickDesign::finishesOf(const QString& specialId) const {
 
 QStringList BrickDesign::sideOf(const QString& specialId, int port) const {
     QStringList out;
-    for (const QString& o : linksOf(specialId))
+    for (const QString& o : linksOf(specialId)) {
+        // A joint tied to the run is in it, not at either end of it.
+        if (const Brick* ob = brick(o); ob && ob->type == BrickType::Joint) continue;
         if (portOn(specialId, o) == port) out << o;
+    }
     return out;
+}
+
+QStringList jointsOf(const BrickDesign& d, const QString& specialId) {
+    QStringList out;
+    for (const QString& o : d.linksOf(specialId))
+        if (const Brick* ob = d.brick(o); ob && ob->type == BrickType::Joint) out << o;
+    return out;
+}
+
+int jointSpliceCount(const BrickDesign& d, const Brick& joint) {
+    const BrickJoint& j = joint.joint;
+    if (j.parts.size() > 1) return static_cast<int>(j.parts.size());
+    if (!j.stepped) return 1;
+    // A STEP JOINT of one part: one splice for each wire that goes in and on out, staggered.
+    const Brick* run = d.brick(jointRun(d, joint.id));
+    const int in = parseWireList(j.inWires, run ? run->run.wires : 0).size();
+    return std::max(1, std::min(std::max(1, in), std::max(1, j.outCount)));
+}
+
+double jointSpliceLengthMm(const LibraryPart* part) {
+    const double l = part ? part->value(QStringLiteral("length")).toDouble() : 0.0;
+    return l > 0.0 ? l : 8.0;
+}
+
+QString jointRun(const BrickDesign& d, const QString& jointId) {
+    for (const QString& o : d.linksOf(jointId))
+        if (const Brick* ob = d.brick(o); ob && brickIsSpecial(ob->type)) return o;
+    return QString();
 }
 
 int BrickDesign::fanoutSpreadSide(const Brick& s) const {
@@ -261,6 +294,16 @@ bool BrickDesign::connect(const QString& a, const QString& b, QString* why, int 
     const Brick* x = brick(a);
     const Brick* y = brick(b);
     if (!x || !y || a == b) return refuse(QStringLiteral("Pick two different bricks"));
+    // A JOINT IS TIED TO A RUN - any special, whatever is at its ends - and to nothing else, and to one run.
+    if (x->type == BrickType::Joint || y->type == BrickType::Joint) {
+        const Brick* j = x->type == BrickType::Joint ? x : y;
+        const Brick* s = j == x ? y : x;
+        if (!brickIsSpecial(s->type)) return refuse(QStringLiteral("A joint is tied to a run - a cable, a fanout, a branch"));
+        if (!jointRun(*this, j->id).isEmpty()) return refuse(QStringLiteral("That joint is tied to a run already"));
+        links.push_back({a, b, 0, 0, 0});
+        if (why) why->clear();
+        return true;
+    }
     // A FANOUT OR A TWISTED RUN CARRIED ON INTO A CABLE OR HEATSHRINK: two specials joined end to end.
     // Each gives that side to the other; the wires pass straight through, packed.
     if (brickIsSpecial(x->type) && brickIsSpecial(y->type) &&
@@ -439,6 +482,14 @@ QJsonObject BrickDesign::toJson() const {
         if (std::abs(b.scale - 1.0) > 1e-9) o.insert(QStringLiteral("scale"), b.scale);
         if (b.autoScale) o.insert(QStringLiteral("autoScale"), true);
         if (!b.matchedTo.isEmpty()) o.insert(QStringLiteral("matchedTo"), b.matchedTo);
+        if (b.type == BrickType::Joint) {
+            const BrickJoint& j = b.joint;
+            o.insert(QStringLiteral("joint"),
+                     QJsonObject{{"method", j.method}, {"parts", QJsonArray::fromStringList(j.parts)},
+                                 {"inWires", j.inWires}, {"outCount", j.outCount}, {"outWirePart", j.outWirePart},
+                                 {"outNames", QJsonArray::fromStringList(j.outNames)}, {"atMm", j.atMm},
+                                 {"fromFinish", j.fromFinish}, {"stepped", j.stepped}, {"stepMm", j.stepMm}});
+        }
         if (std::abs(b.drawTurnDeg) > 1e-9) o.insert(QStringLiteral("drawTurn"), b.drawTurnDeg);
         if (b.drawMirror) o.insert(QStringLiteral("drawMirror"), true);
         if (brickIsSpecial(b.type)) {
@@ -560,6 +611,20 @@ BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
         b.drawDyMm = bo.value(QStringLiteral("drawDy")).toDouble(0.0);
         b.drawTurnDeg = bo.value(QStringLiteral("drawTurn")).toDouble(0.0);
         b.matchedTo = bo.value(QStringLiteral("matchedTo")).toString();
+        if (bo.contains(QStringLiteral("joint"))) {
+            const QJsonObject jo = bo.value(QStringLiteral("joint")).toObject();
+            BrickJoint& j = b.joint;
+            j.method = jo.value(QStringLiteral("method")).toString(QStringLiteral("Crimp"));
+            for (const QJsonValue v : jo.value(QStringLiteral("parts")).toArray()) j.parts << v.toString();
+            j.inWires = jo.value(QStringLiteral("inWires")).toString();
+            j.outCount = std::max(1, jo.value(QStringLiteral("outCount")).toInt(1));
+            j.outWirePart = jo.value(QStringLiteral("outWirePart")).toString();
+            for (const QJsonValue v : jo.value(QStringLiteral("outNames")).toArray()) j.outNames << v.toString();
+            j.atMm = std::max(0.0, jo.value(QStringLiteral("atMm")).toDouble(50.0));
+            j.fromFinish = jo.value(QStringLiteral("fromFinish")).toBool(false);
+            j.stepped = jo.value(QStringLiteral("stepped")).toBool(false);
+            j.stepMm = std::max(0.5, jo.value(QStringLiteral("stepMm")).toDouble(15.0));
+        }
         b.drawMirror = bo.value(QStringLiteral("drawMirror")).toBool(false);
         b.z = bo.value(QStringLiteral("z")).toInt(0);
         b.dimBelow = bo.value(QStringLiteral("dimBelow")).toBool(false);
@@ -1636,6 +1701,15 @@ BrickShape endShapeAsDrawn(const Brick& b, const PartsCatalog* catalog) {
 } // namespace
 
 BrickShape BrickDesign::shapeOf(const Brick& b) const {
+    if (b.type == BrickType::Joint) {
+        // ONE TIE, to its run.
+        BrickShape s;
+        s.faceMid = {Vec2{0.0, -15.0}};
+        s.faceOut = {Vec2{0.0, -1.0}};
+        s.faceLen = {10.0};
+        s.half = Vec2{30.0, 15.0};
+        return s;
+    }
     if (b.type != BrickType::End) return specialShape();
     QString key = partKindKey(b.kind) + QLatin1Char('|') + b.libPart + QLatin1Char('|') + b.name +
                         QLatin1Char('|') + QString::number(reinterpret_cast<quintptr>(catalog)) +
@@ -3475,7 +3549,90 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             }
         }
 
+        // ITS JOINTS: each splice drawn on the run where it is made - as long as its part, as big across - side by side,
+        // or staggered along the run for a step joint; its name beside it; and the stretch of cable the joint takes,
+        // which only the preview shows, and only when asked.
+        std::vector<Entity> jointEnts;
+        if (labelBranch.value(&s) == i && route.size() >= 2) {
+            const double total = routeLength(route);
+            auto along = [&](double from, double to) {
+                std::vector<Vec2> pts{pointAlong(route, from)};
+                double acc = 0.0;
+                for (size_t k = 1; k < route.size(); ++k) {
+                    acc += distance(route[k - 1], route[k]);
+                    if (acc > from + 1e-6 && acc < to - 1e-6) pts.push_back(route[k]);
+                }
+                pts.push_back(pointAlong(route, to));
+                return pts;
+            };
+            for (const QString& jid : jointsOf(design, s.id)) {
+                const Brick* jb = design.brick(jid);
+                if (!jb) continue;
+                const BrickJoint& j = jb->joint;
+                const LibraryPart* sp = catalog && !j.parts.isEmpty() ? catalog->byId(j.parts.front()) : nullptr;
+                const double len = jointSpliceLengthMm(sp);
+                const double spOd = sp ? sp->value(QStringLiteral("od")).toDouble() : 0.0;
+                const double od = spOd > 0.0 ? spOd : std::max(ww * 2.5, 3.0);
+                const int n = jointSpliceCount(design, *jb);
+                const double step = j.stepped ? std::max(len + 1.0, j.stepMm) : 0.0;
+                const double span = (j.stepped ? (n - 1) * step : 0.0) + len;
+                // From the end it is measured from, in the special's own terms.
+                const bool fromRouteEnd = j.fromFinish != br.flipped;
+                auto onRoute = [&](double s0) { return fromRouteEnd ? std::max(0.0, total - s0) : std::min(total, s0); };
+                std::vector<Entity> one;
+                for (int k = 0; k < n; ++k) {
+                    const double near = std::clamp(j.atMm + k * step, 0.0, std::max(0.0, total - len));
+                    const double mid = fromRouteEnd ? total - near - len / 2.0 : near + len / 2.0;
+                    Vec2 dir;
+                    const Vec2 c0 = pointAlong(route, std::clamp(mid, 0.0, total), &dir);
+                    const double across = n > 1 && !j.stepped ? (k - (n - 1) / 2.0) * (od + 0.5) : 0.0;
+                    const Vec2 c = c0 + dir.perp() * across;
+                    const Vec2 u = dir * (len / 2.0), v = dir.perp() * (od / 2.0);
+                    Entity mask;
+                    mask.type = EntityType::Wipeout;
+                    mask.points = {c - u - v, c + u - v, c + u + v, c - u + v};
+                    mask.meta.insert(QStringLiteral("noFrame"), true);
+                    one.push_back(mask);
+                    Entity box;
+                    box.type = EntityType::Polyline;
+                    box.points = {c - u - v, c + u - v, c + u + v, c - u + v, c - u - v};
+                    box.meta.insert(QStringLiteral("closed"), true);
+                    box.meta.insert(QStringLiteral("mechRole"), QStringLiteral("splice"));
+                    one.push_back(box);
+                    if (k == 0) {
+                        Entity t = makeTextAt(c0 + dir.perp() * (od / 2.0 + 2.5 + std::abs(across)),
+                                              jb->name.isEmpty() ? QStringLiteral("J") : jb->name, 2.5);
+                        t.meta.insert(QStringLiteral("justify"), QStringLiteral("BC"));
+                        t.meta.insert(QStringLiteral("mechRole"), QStringLiteral("splice"));
+                        one.push_back(t);
+                    }
+                }
+                // THE STRETCH THE JOINT TAKES, for the preview only.
+                {
+                    double a0 = onRoute(j.atMm), a1 = onRoute(j.atMm + span);
+                    if (a1 < a0) std::swap(a0, a1);
+                    a1 = std::max(a1, a0 + 0.5);
+                    const std::vector<Vec2> path = along(a0, a1);
+                    const double half = std::max(bodyWidth, od) / 2.0 + 1.5;
+                    std::vector<Vec2> band = offsetPolyline(path, half);
+                    const std::vector<Vec2> other = offsetPolyline(path, -half);
+                    band.insert(band.end(), other.rbegin(), other.rend());
+                    if (!band.empty()) band.push_back(band.front());
+                    Entity hl;
+                    hl.type = EntityType::Polyline;
+                    hl.points = band;
+                    hl.color = QStringLiteral("#ff9f40");
+                    hl.meta.insert(QStringLiteral("jointSpan"), jid);
+                    hl.meta.insert(QStringLiteral("previewOnly"), true);
+                    hl.meta.insert(QStringLiteral("brickMeasured"), span);
+                    one.push_back(hl);
+                }
+                stampBrick(one, jid);
+                for (Entity& e : one) jointEnts.push_back(std::move(e));
+            }
+        }
         stampBrick(made, s.id);
+        for (Entity& e : jointEnts) made.push_back(std::move(e));
         for (Entity& e : made) {
             e.meta.insert(QStringLiteral("brickBranch"), static_cast<int>(i));
             if (isTrunk) e.meta.insert(QStringLiteral("brickTrunk"), true);
