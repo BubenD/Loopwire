@@ -5853,6 +5853,13 @@ void BrickWizardDialog::place() {
                 if (!ids.isEmpty()) e.meta.insert(QStringLiteral("stackParts"), ids);
             }
         }
+        // WHICH HARNESS AND WHICH BRICK it came from - for the DRC to find a part on the sheet.
+        if (!bid.isEmpty()) {
+            e.meta.insert(QStringLiteral("harness"), currentName_.isEmpty() ? harnessName() : currentName_);
+            e.meta.insert(QStringLiteral("harnessBrick"), bid);
+            if (const Brick* nb = design_.brick(bid); nb && nb->type == BrickType::End)
+                e.meta.insert(QStringLiteral("partName"), brickTitle(*nb));
+        }
         e.meta.remove(QStringLiteral("brickId"));
         e.meta.remove(QStringLiteral("brickBranch"));
     }

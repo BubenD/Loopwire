@@ -440,11 +440,18 @@ const std::vector<BrickDrcRule>& brickDrcRules() {
     // THE RULES BY THEIR TRADE NAMES, each with what it checks - the label in the list, the description when it is
     // hovered and in its explainer.
     auto rule = [](const char* id, const char* label, const char* group, const char* text) {
-        return BrickDrcRule{QString::fromLatin1(id), QString::fromUtf8(label), QString::fromLatin1(group),
-                            QString::fromUtf8(text)};
+        // A warning where it is something missing or unfinished; a fail where the harness is wrong.
+        static const QSet<QString> warn = {QStringLiteral("nopart"), QStringLiteral("nodesig"), QStringLiteral("shortrun"),
+                                           QStringLiteral("nolayerpn"), QStringLiteral("transpn"), QStringLiteral("fanshrinkpn"),
+                                           QStringLiteral("notonbom"), QStringLiteral("compat-contacts"), QStringLiteral("compat-data")};
+        const QString key = QString::fromLatin1(id);
+        return BrickDrcRule{key, QString::fromUtf8(label), QString::fromLatin1(group), QString::fromUtf8(text),
+                            warn.contains(key) ? 1 : 2};
     };
     static const std::vector<BrickDrcRule> rules = {
         // LOGICAL DRC: connectivity, identification, definition, procurement.
+        rule("drawn-open", "Part disconnected on the drawing", "Logical",
+             "A part on the drawing touches none of its runs - it has been moved off its wires on the sheet. Put it back on the run's end, or place the harness again."),
         rule("unlinked", "Unconnected element", "Logical",
              "A part or run on the harness with no connection to anything else. Connect it, or delete it."),
         rule("openside", "Open port", "Logical",
@@ -809,6 +816,98 @@ std::vector<BrickIssue> brickDrc(const BrickDesign& d, const QString& harness, c
             if (f.rule == QLatin1String("logic")) continue;
             add(QStringLiteral("compat-") + f.rule, f.level, &b, f.why, !f.why.startsWith(drcTitle(b)));
         }
+    }
+    return out;
+}
+
+} // namespace Edraw_Desktop
+
+namespace Edraw_Desktop {
+
+std::vector<BrickIssue> drawingConnectivity(const std::vector<Entity>& ents) {
+    std::vector<BrickIssue> out;
+    // THE PLACED HARNESS'S PARTS AND RUNS: each part the objects of one copy mark; a run a twisted-pair object.
+    struct Part {
+        Bounds box;
+        QString lib, harness, brick, name;
+        bool run = false;
+    };
+    QHash<QString, Part> parts;
+    std::vector<Vec2> ends;
+    for (const Entity& e : ents) {
+        const QString copy = e.meta.value(QStringLiteral("partCopy")).toString();
+        if (copy.isEmpty()) continue;
+        if (e.type == EntityType::TwistedPair) {
+            if (e.points.size() >= 2) {
+                ends.push_back(e.points.front());
+                ends.push_back(e.points.back());
+            }
+            parts[copy].run = true;
+            continue;
+        }
+        Part& p = parts[copy];
+        const QString role = e.meta.value(QStringLiteral("mechRole")).toString();
+        if (role == QLatin1String("designator")) {
+            p.name = e.meta.value(QStringLiteral("text")).toString();
+        }
+        // The part's own body - not its designator, its balloon, a dimension.
+        if (e.type == EntityType::Text || e.type == EntityType::Dimension || role == QLatin1String("designator") ||
+            role == QLatin1String("balloon") || role == QLatin1String("dim"))
+            continue;
+        p.box.expand(e.bounds());
+        if (p.lib.isEmpty()) p.lib = e.meta.value(QStringLiteral("libPart")).toString();
+        if (p.harness.isEmpty()) p.harness = e.meta.value(QStringLiteral("harness")).toString();
+        if (p.brick.isEmpty()) p.brick = e.meta.value(QStringLiteral("harnessBrick")).toString();
+        if (p.name.isEmpty()) p.name = e.meta.value(QStringLiteral("partName")).toString();
+    }
+    auto touches = [](const Bounds& b, const Vec2& v, double tol) {
+        return b.valid && v.x >= b.min.x - tol && v.x <= b.max.x + tol && v.y >= b.min.y - tol && v.y <= b.max.y + tol;
+    };
+    auto overlap = [](const Bounds& a, const Bounds& b, double tol) {
+        return a.valid && b.valid && a.min.x <= b.max.x + tol && b.min.x <= a.max.x + tol && a.min.y <= b.max.y + tol &&
+               b.min.y <= a.max.y + tol;
+    };
+    constexpr double kTol = 1.0;
+    // ON A RUN: a part a run's end touches - and, through it, a part fitted face to face on that one (a boot on a
+    // connector), and so on.
+    QSet<QString> onRun;
+    QStringList ids;
+    for (auto it = parts.cbegin(); it != parts.cend(); ++it)
+        if (!it.value().run && it.value().box.valid) ids << it.key();
+    if (ends.empty()) return out;   // no run placed: nothing to be disconnected from
+    for (const QString& id : ids)
+        for (const Vec2& v : ends)
+            if (touches(parts.value(id).box, v, kTol)) {
+                onRun.insert(id);
+                break;
+            }
+    for (bool grew = true; grew;) {
+        grew = false;
+        for (const QString& id : ids) {
+            if (onRun.contains(id)) continue;
+            for (const QString& other : onRun)
+                if (overlap(parts.value(id).box, parts.value(other).box, kTol)) {
+                    onRun.insert(id);
+                    grew = true;
+                    break;
+                }
+        }
+    }
+    for (const QString& id : ids) {
+        if (onRun.contains(id)) continue;
+        const Part& p = parts.value(id);
+        const QString what = !p.name.isEmpty() ? p.name : !p.lib.isEmpty() ? p.lib : QStringLiteral("A part");
+        BrickIssue i;
+        i.rule = QStringLiteral("drawn-open");
+        i.harness = p.harness.isEmpty() ? QStringLiteral("(drawing)") : p.harness;
+        i.brickId = p.brick;
+        i.message = QStringLiteral("%1 touches none of its runs on the drawing - it has been moved off its wires").arg(what);
+        i.key = i.harness + QStringLiteral("|drawn-open|") + id;
+        i.level = 2;
+        i.located = true;
+        i.atX = (p.box.min.x + p.box.max.x) / 2.0;
+        i.atY = (p.box.min.y + p.box.max.y) / 2.0;
+        out.push_back(i);
     }
     return out;
 }

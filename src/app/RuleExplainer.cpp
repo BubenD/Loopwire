@@ -109,6 +109,15 @@ const QHash<QString, Scene>& scenes() {
     static const QHash<QString, Scene> all = [] {
         QHash<QString, Scene> s;
         // ---- the harness DRC: logical --------------------------------------------------------------------
+        s.insert(QStringLiteral("drawn-open"), [](QPainter& p, bool fixed, double pulse) {
+            part(p, {15, 45, 50, 40}, QStringLiteral("X1"));
+            cable(p, 65, 225, 65, 12);
+            for (double y : {57.0, 65.0, 73.0}) wire(p, {225, 65}, {250, y});
+            const double drop = fixed ? 0.0 : 55.0;
+            part(p, {250, 45 + drop, 50, 40}, QStringLiteral("X2"), fixed ? kInk : kBad);
+            if (fixed) good(p, {275, 35});
+            else bad(p, {275, 120}, pulse, 26);
+        });
         s.insert(QStringLiteral("unlinked"), [](QPainter& p, bool fixed, double pulse) {
             part(p, {20, 40, 50, 40}, QStringLiteral("X1"));
             cable(p, 70, 230, 60, 12);

@@ -14033,7 +14033,38 @@ QToolButton* MainWindow::makeDrcBypassButton(QWidget* parent) {
 void MainWindow::prepareMechanicalValidation() {
     // Modeless and kept alive: a gauge is changed on the drawing, Check again is pressed, and the
     // answers follow - which is the whole point of checking against the bundle rather than a figure.
-    if (!mechCheckDlg_) mechCheckDlg_ = new MechanicalValidationDialog(editor_, this);
+    if (!mechCheckDlg_) {
+        mechCheckDlg_ = new MechanicalValidationDialog(editor_, this);
+        // A FINDING DOUBLE-CLICKED: to its part on the sheet - where it was found there, or by the harness and brick it
+        // was placed from.
+        connect(mechCheckDlg_, &MechanicalValidationDialog::locateRequested, this,
+                [this](const QString& harness, const QString& brickId, double x, double y, bool located) {
+                    Vec2 at{x, y};
+                    bool found = located;
+                    if (!found && doc_ && !brickId.isEmpty()) {
+                        Bounds box;
+                        QString first;
+                        for (const Entity& e : doc_->entities())
+                            if (e.meta.value(QStringLiteral("harnessBrick")).toString() == brickId &&
+                                (harness.isEmpty() || e.meta.value(QStringLiteral("harness")).toString() == harness)) {
+                                box.expand(e.bounds());
+                                if (first.isEmpty()) first = e.id;
+                            }
+                        if (box.valid) {
+                            at = Vec2{(box.min.x + box.max.x) / 2.0, (box.min.y + box.max.y) / 2.0};
+                            found = true;
+                            editor_->selectById(first);
+                        }
+                    }
+                    if (!found) {
+                        statusBar()->showMessage(QStringLiteral("That part is not placed on the drawing - place the harness from the wizard"));
+                        return;
+                    }
+                    canvas_->centerOn(at, 2.5);
+                    editor_->flashHighlight(at);
+                    canvas_->setFocus(Qt::OtherFocusReason);
+                });
+    }
     // THE HARNESS OPEN IN THE WIZARD is checked as it is now, saved or not.
     if (brickWizard_) mechCheckDlg_->setOpenHarness(&brickWizard_->design(), brickWizard_->harnessName());
     mechCheckDlg_->readFromDrawing();

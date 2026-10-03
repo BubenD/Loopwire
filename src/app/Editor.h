@@ -641,10 +641,13 @@ public:
     const QSet<QString>& drcBypassed() const { return drcBypassed_; }
     void drcBypass(const QString& key) { drcBypassed_.insert(key); }
     void drcRestore(const QString& key) { drcBypassed_.remove(key); }
-    bool drcRuleEnabled(const QString& id) const { return !drcRulesOff_.contains(id); }
+    // EACH RULE'S SEVERITY as the user has set it - 2 fail, 1 warning, 0 pass (not checked) - or, not set, as it comes.
+    int drcSeverity(const QString& id, int asItComes) const { return drcSeverity_.value(id, asItComes); }
+    void setDrcSeverity(const QString& id, int level) { drcSeverity_.insert(id, std::clamp(level, 0, 2)); }
+    bool drcRuleEnabled(const QString& id) const { return drcSeverity_.value(id, 1) != 0; }
     void setDrcRuleEnabled(const QString& id, bool on) {
-        if (on) drcRulesOff_.remove(id);
-        else drcRulesOff_.insert(id);
+        if (on) drcSeverity_.remove(id);
+        else drcSeverity_.insert(id, 0);
     }
 
     // Per-rule enable flags for validateSchematic (all on by default; session-scoped).
@@ -1799,7 +1802,7 @@ private:
 
     QSet<QString> bypassed_;        // validation discrepancy keys the user accepted
     QSet<QString> drcBypassed_;     // the harness DRC's, likewise
-    QSet<QString> drcRulesOff_;     // the harness DRC rules turned off
+    QHash<QString, int> drcSeverity_;   // the harness DRC rules' severities, where set
     QSet<QString> disabledRules_;   // validation rule ids the user turned off
     bool flashOn_ = false;          // a locate-highlight ring is currently shown
     Vec2 flashPt_{0.0, 0.0};        // where to draw it (world)

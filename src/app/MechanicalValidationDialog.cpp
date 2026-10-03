@@ -19,6 +19,7 @@
 #include <QPushButton>
 #include <QTableWidget>
 #include <QTextBrowser>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 namespace Edraw_Desktop {
@@ -78,6 +79,13 @@ void MechanicalValidationDialog::buildUi() {
     harnessTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
     harnessTable_->verticalHeader()->setVisible(false);
     harnessTable_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
+    harnessTable_->setToolTip(QStringLiteral("Double-click a finding to go to its part on the drawing"));
+    // DOUBLE-CLICKED: to the part on the drawing.
+    connect(harnessTable_, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
+        if (row < 0 || row >= static_cast<int>(harnessRows_.size())) return;
+        const BrickIssue& i = harnessRows_[static_cast<size_t>(row)];
+        emit locateRequested(i.harness, i.brickId, i.atX, i.atY, i.located);
+    });
     root->addWidget(harnessTable_, 3);
 
     auto* fitLabel = new QLabel(QStringLiteral("On the drawing: what is fitted against the bundle it goes on"), this);
@@ -159,13 +167,25 @@ void MechanicalValidationDialog::checkHarnesses() {
     const QJsonObject saved = doc->wizards().value(QStringLiteral("harnesses")).toObject();
     for (auto it = saved.begin(); it != saved.end(); ++it)
         if (!done.contains(it.key())) check(BrickDesign::fromJson(it.value().toObject()), it.key());
+    // AND AS PLACED ON THE SHEET: a part moved off its wires there.
+    for (BrickIssue& i : drawingConnectivity(doc->entities())) harnessIssues_.push_back(std::move(i));
+}
+
+int MechanicalValidationDialog::severityOf(const QString& rule) const {
+    int asItComes = 2;
+    for (const BrickDrcRule& r : brickDrcRules())
+        if (r.id == rule) asItComes = r.severity;
+    return editor_ ? editor_->drcSeverity(rule, asItComes) : asItComes;
 }
 
 std::vector<BrickIssue> MechanicalValidationDialog::shownHarnessIssues() const {
     std::vector<BrickIssue> out;
     for (const BrickIssue& i : harnessIssues_) {
-        if (editor_ && (!editor_->drcRuleEnabled(i.rule) || editor_->drcBypassed().contains(i.key))) continue;
+        // AT ITS RULE'S SEVERITY: a fail, a warning - or, set to pass, not shown at all.
+        const int severity = severityOf(i.rule);
+        if (severity == 0 || (editor_ && editor_->drcBypassed().contains(i.key))) continue;
         out.push_back(i);
+        out.back().level = severity;
     }
     // Worst first.
     std::stable_sort(out.begin(), out.end(), [](const BrickIssue& a, const BrickIssue& b) { return a.level > b.level; });
@@ -191,7 +211,7 @@ void MechanicalValidationDialog::refreshHarnessTable() {
             : shown.empty()
                 ? QStringLiteral("Harness wizard: every rule passes%1.")
                       .arg(bypassed ? QStringLiteral(" (%1 bypassed)").arg(bypassed) : QString())
-                : QStringLiteral("Harness wizard: %1 wrong, %2 to check%3 - Bypass to accept one.")
+                : QStringLiteral("Harness wizard: %1 fail, %2 warning%3 - double-click to go to it, Bypass to accept one.")
                       .arg(wrong)
                       .arg(check)
                       .arg(bypassed ? QStringLiteral(", %1 bypassed").arg(bypassed) : QString()));
@@ -201,13 +221,14 @@ void MechanicalValidationDialog::refreshHarnessTable() {
     }
     QHash<QString, QString> labelOf;
     for (const BrickDrcRule& r : brickDrcRules()) labelOf.insert(r.id, r.label);
+    harnessRows_ = shown;
     harnessTable_->setRowCount(0);
     harnessTable_->setRowCount(static_cast<int>(shown.size()));
     for (int row = 0; row < static_cast<int>(shown.size()); ++row) {
         const BrickIssue& i = shown[static_cast<size_t>(row)];
         const QColor colour = i.level >= 2 ? QColor("#e06c6c") : i.level == 1 ? QColor("#e6b45a") : QColor("#9fb4c8");
-        const QString cells[4] = {i.level >= 2 ? QStringLiteral("wrong") : i.level == 1 ? QStringLiteral("check")
-                                                                                         : QStringLiteral("note"),
+        const QString cells[4] = {i.level >= 2 ? QStringLiteral("fail") : i.level == 1 ? QStringLiteral("warning")
+                                                                                        : QStringLiteral("note"),
                                   labelOf.value(i.rule, i.rule), i.harness, i.message};
         for (int c = 0; c < 4; ++c) {
             auto* item = new QTableWidgetItem(cells[c]);
@@ -238,27 +259,70 @@ void MechanicalValidationDialog::showRules() {
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     connect(dlg, &QObject::destroyed, this, [this] { rulesDlg_ = nullptr; });
     dlg->setWindowTitle(QStringLiteral("Harness DRC rules"));
-    dlg->resize(560, 620);
+    dlg->resize(560, 700);
     auto* lay = new QVBoxLayout(dlg);
-    lay->addWidget(new QLabel(QStringLiteral("Tick the rules the harness DRC checks - its own, apart from the schematic's:"), dlg));
+    lay->addWidget(new QLabel(QStringLiteral("Each rule's severity - click its square to change it. The harness DRC's own "
+                                             "rules, apart from the schematic's:"),
+                              dlg));
+    // THE SQUARE OF A SEVERITY: red a fail, yellow a warning, green a pass (not checked).
+    auto paint = [](QToolButton* sq, int level) {
+        const char* colour = level >= 2 ? "#e05a5a" : level == 1 ? "#e6b84a" : "#4cd07a";
+        sq->setStyleSheet(QStringLiteral("QToolButton{background:%1;border:1px solid #1a2028;border-radius:2px;}"
+                                         "QToolButton:hover{border:1px solid #ffffff;}")
+                              .arg(QLatin1String(colour)));
+        sq->setProperty("severity", level);
+        sq->setToolTip(level >= 2 ? QStringLiteral("Fail - click for warning")
+                       : level == 1 ? QStringLiteral("Warning - click for pass (not checked)")
+                                    : QStringLiteral("Pass (not checked) - click for fail"));
+    };
+    // THE LEGEND.
+    {
+        auto* legend = new QHBoxLayout;
+        for (int level : {2, 1, 0}) {
+            auto* sq = new QToolButton(dlg);
+            sq->setFixedSize(14, 14);
+            sq->setEnabled(false);
+            paint(sq, level);
+            legend->addWidget(sq);
+            legend->addWidget(new QLabel(level >= 2 ? QStringLiteral("Fail (error)")
+                                         : level == 1 ? QStringLiteral("Warning")
+                                                      : QStringLiteral("Pass (not checked)"),
+                                         dlg));
+            legend->addSpacing(14);
+        }
+        legend->addStretch(1);
+        lay->addLayout(legend);
+    }
     for (const QString group : {QStringLiteral("Logical"), QStringLiteral("Compatibility")}) {
         auto* box = new QGroupBox(group == QLatin1String("Logical") ? QStringLiteral("Logical DRC")
                                                                     : QStringLiteral("Compatibility validation"),
                                   dlg);
         auto* bl = new QVBoxLayout(box);
+        bl->setSpacing(3);
         for (const BrickDrcRule& r : brickDrcRules()) {
             if (r.group != group) continue;
-            auto* cb = new QCheckBox(r.label, box);
-            cb->setObjectName(QStringLiteral("harnessDrcRule_") + r.id);
-            // HOVERED: the fault and the fix, animated, with what the rule means.
-            RuleExplainer::attach(cb, r.id, r.label, r.description);
-            cb->setChecked(!editor_ || editor_->drcRuleEnabled(r.id));
+            auto* row = new QHBoxLayout;
+            auto* sq = new QToolButton(box);
+            sq->setObjectName(QStringLiteral("harnessDrcRule_") + r.id);
+            sq->setFixedSize(14, 14);
+            sq->setCursor(Qt::PointingHandCursor);
+            paint(sq, severityOf(r.id));
+            // PRESSED: fail, then warning, then pass, then fail again.
             const QString id = r.id;
-            connect(cb, &QCheckBox::toggled, this, [this, id](bool on) {
-                if (editor_) editor_->setDrcRuleEnabled(id, on);
+            connect(sq, &QToolButton::clicked, this, [this, sq, id, paint] {
+                const int now = sq->property("severity").toInt();
+                const int next = now >= 2 ? 1 : now == 1 ? 0 : 2;
+                if (editor_) editor_->setDrcSeverity(id, next);
+                paint(sq, next);
                 refreshHarnessTable();
             });
-            bl->addWidget(cb);
+            row->addWidget(sq);
+            auto* name = new QLabel(r.label, box);
+            name->setObjectName(QStringLiteral("harnessDrcRuleName_") + r.id);
+            // HOVERED: the fault and the fix, animated, with what the rule means.
+            RuleExplainer::attach(name, r.id, r.label, r.description);
+            row->addWidget(name, 1);
+            bl->addLayout(row);
         }
         lay->addWidget(box);
     }

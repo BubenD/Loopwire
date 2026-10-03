@@ -2,6 +2,7 @@
 
 #include "harness/BrickHarness.h"
 #include "harness/PartsLibrary.h"
+#include "model/Entity.h"
 
 #include <QString>
 
@@ -41,6 +42,7 @@ struct BrickDrcRule {
     QString label;
     QString group;   // "Logical" or "Compatibility"
     QString description;   // what it checks, and what to do about it
+    int severity = 2;      // as it comes: 2 fail, 1 warning (the user may change it, or set it to pass)
 };
 const std::vector<BrickDrcRule>& brickDrcRules();
 
@@ -51,8 +53,15 @@ struct BrickIssue {
     QString brickId;
     QString message;
     int level = 1;     // 0 a note, 1 unfinished or unknown, 2 wrong
+    // Where it is on the drawing, when that is known (a part found off its wires there).
+    bool located = false;
+    double atX = 0.0, atY = 0.0;
 };
 std::vector<BrickIssue> brickDrc(const BrickDesign& d, const QString& harness, const PartsLibrary& merged,
                                  const std::function<int(const QString&)>& bomItemOf);
+
+// THE HARNESS AS PLACED ON THE DRAWING: every part the wizard put down touches a run's end, or a part that does - one
+// moved off its wires on the sheet is found here, whatever its design says.
+std::vector<BrickIssue> drawingConnectivity(const std::vector<Entity>& ents);
 
 } // namespace Edraw_Desktop

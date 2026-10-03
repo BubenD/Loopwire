@@ -5089,9 +5089,9 @@ void testRoundThirtyThree() {
         for (const BrickIssue& i : drc.shownHarnessIssues()) dup = dup || i.rule == QLatin1String("dupdesig");
         check(!dup && ed.ruleEnabled(QStringLiteral("dup")), "drc window: a rule turned off finds nothing - the schematic's untouched");
         drc.showRules();
-        check(drc.findChild<QCheckBox*>(QStringLiteral("harnessDrcRule_dupdesig")) &&
-                  !drc.findChild<QCheckBox*>(QStringLiteral("harnessDrcRule_dupdesig"))->isChecked() &&
-                  drc.findChild<QCheckBox*>(QStringLiteral("harnessDrcRule_compat-gauge")),
+        check(drc.findChild<QToolButton*>(QStringLiteral("harnessDrcRule_dupdesig")) &&
+                  drc.findChild<QToolButton*>(QStringLiteral("harnessDrcRule_dupdesig"))->property("severity").toInt() == 0 &&
+                  drc.findChild<QToolButton*>(QStringLiteral("harnessDrcRule_compat-gauge")),
               "drc window: its rules, logical and compatibility, each a tick");
     }
     // THE WHEEL a twentieth bigger.
@@ -5181,7 +5181,7 @@ void testRoundThirtyFour() {
         drc.showBypass();
         auto* bypass = drc.findChild<QDialog*>(QStringLiteral("harnessDrcBypassDialog"));
         check(bypass && bypass->isVisible() && !drc.isVisible(), "bypass table: opens on its own too");
-        auto* cb = drc.findChild<QCheckBox*>(QStringLiteral("harnessDrcRule_compat-entrysize"));
+        auto* cb = drc.findChild<QLabel*>(QStringLiteral("harnessDrcRuleName_compat-entrysize"));
         if (cb) {
             QEvent enter(QEvent::Enter);
             QApplication::sendEvent(cb, &enter);
@@ -5196,6 +5196,85 @@ void testRoundThirtyFour() {
         if (rules) rules->close();
         if (bypass) bypass->close();
     }
+}
+
+// ROUND THIRTY-FIVE: each rule's severity a square - red fail, yellow warning, green pass - pressed round, with a
+// legend; a part moved off its wires on the drawing fails; a finding double-clicked goes to its part.
+void testRoundThirtyFive() {
+    // THE HARNESS AS PLACED: its objects marked by part, as placing marks them.
+    BrickDesign d;
+    const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+    const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+    const QString y = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+    d.connect(x, c);
+    d.connect(c, y);
+    d.brick(x)->name = QStringLiteral("X1");
+    d.brick(y)->name = QStringLiteral("X2");
+    std::vector<Entity> placed = buildBrickHarness(d, nullptr).entities;
+    for (Entity& e : placed) {
+        const QString bid = e.meta.value(QStringLiteral("brickId")).toString();
+        e.meta.insert(QStringLiteral("partCopy"), QStringLiteral("copy-") + bid);
+        e.meta.insert(QStringLiteral("harness"), QStringLiteral("W1"));
+        e.meta.insert(QStringLiteral("harnessBrick"), bid);
+        e.meta.remove(QStringLiteral("brickId"));
+    }
+    check(drawingConnectivity(placed).empty(), "drawn: every part on its run - nothing found");
+    // X2 moved off its wires on the sheet.
+    for (Entity& e : placed)
+        if (e.meta.value(QStringLiteral("harnessBrick")).toString() == y) {
+            e.a = e.a + Vec2{0.0, 300.0};
+            e.b = e.b + Vec2{0.0, 300.0};
+            e.center = e.center + Vec2{0.0, 300.0};
+            for (Vec2& v : e.points) v = v + Vec2{0.0, 300.0};
+        }
+    const std::vector<BrickIssue> off = drawingConnectivity(placed);
+    for (const BrickIssue& i : off) std::printf("  drawn: %s\n", qPrintable(i.message));
+    check(off.size() == 1 && off.front().rule == QStringLiteral("drawn-open") && off.front().brickId == y &&
+              off.front().located && off.front().atY > 200.0,
+          "drawn: a part moved off its wires found, and where it is");
+
+    // THE DRC WINDOW: the drawing checked too; double-clicked, a finding asks to be found; the squares.
+    Document doc;
+    Editor ed;
+    ed.setDocument(&doc);
+    for (const Entity& e : placed) doc.entities().push_back(e);
+    MechanicalValidationDialog drc(&ed);
+    drc.readFromDrawing();
+    bool drawnShown = false;
+    for (const BrickIssue& i : drc.shownHarnessIssues()) drawnShown = drawnShown || i.rule == QLatin1String("drawn-open");
+    check(drawnShown, "drc window: the part off its wires on the drawing fails");
+    auto* table = drc.findChild<QTableWidget*>(QStringLiteral("harnessDrcTable"));
+    QString askedFor;
+    bool where = false;
+    QObject::connect(&drc, &MechanicalValidationDialog::locateRequested,
+                     [&](const QString&, const QString& brickId, double, double, bool located) {
+                         askedFor = brickId;
+                         where = located;
+                     });
+    if (table && table->rowCount() > 0) emit table->cellDoubleClicked(0, 0);
+    check(askedFor == y && where, "drc window: double-clicked, the finding asks for its part on the drawing");
+    drc.showRules();
+    auto* sq = drc.findChild<QToolButton*>(QStringLiteral("harnessDrcRule_drawn-open"));
+    check(sq && sq->property("severity").toInt() == 2, "rules: a fail is red as it comes");
+    if (sq) sq->click();
+    check(ed.drcSeverity(QStringLiteral("drawn-open"), 2) == 1 && sq && sq->property("severity").toInt() == 1,
+          "rules: pressed, red turns yellow - a warning");
+    int level = -1;
+    for (const BrickIssue& i : drc.shownHarnessIssues())
+        if (i.rule == QLatin1String("drawn-open")) level = i.level;
+    check(level == 1, "rules: and its findings are warnings now");
+    if (sq) sq->click();
+    bool gone = true;
+    for (const BrickIssue& i : drc.shownHarnessIssues()) gone = gone && i.rule != QLatin1String("drawn-open");
+    check(sq && sq->property("severity").toInt() == 0 && gone, "rules: pressed again, green - a pass, not shown");
+    if (sq) sq->click();
+    check(sq && sq->property("severity").toInt() == 2, "rules: and round to red again");
+    auto* legend = drc.findChild<QDialog*>(QStringLiteral("harnessDrcRulesDialog"));
+    bool hasLegend = false;
+    if (legend)
+        for (QLabel* l : legend->findChildren<QLabel*>()) hasLegend = hasLegend || l->text() == QStringLiteral("Fail (error)");
+    check(hasLegend, "rules: with its colours' legend");
+    if (legend) legend->close();
 }
 
 int run_brickharness_tests() {
@@ -5246,6 +5325,7 @@ int run_brickharness_tests() {
     testRoundThirtyTwo();
     testRoundThirtyThree();
     testRoundThirtyFour();
+    testRoundThirtyFive();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

@@ -16,6 +16,8 @@ set(CMAKE_AUTOUIC ON)
 
 if(MSVC)
     add_compile_options(/W4 /permissive- /utf-8 /EHsc)
+    # MainWindow.cpp and the wizard are past the default section limit of one object file.
+    add_compile_options(/bigobj)
 else()
     add_compile_options(-Wall -Wextra)
 endif()

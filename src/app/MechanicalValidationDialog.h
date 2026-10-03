@@ -43,6 +43,12 @@ public:
     // Its rules (which are checked) and its bypass table - the DRC's own, not the schematic's.
     void showRules();
     void showBypass();
+    // A rule's severity now: as the user set it (2 fail, 1 warning, 0 pass), or as it comes.
+    int severityOf(const QString& rule) const;
+
+signals:
+    // A finding double-clicked: its part found on the drawing - where it was found, or by its harness and brick.
+    void locateRequested(const QString& harness, const QString& brickId, double x, double y, bool located);
 
 private:
     void buildUi();
@@ -66,6 +72,7 @@ private:
     QString openName_;
     PartsLibrary merged_;
     std::vector<BrickIssue> harnessIssues_;
+    std::vector<BrickIssue> harnessRows_;   // as shown, row by row
     QLabel* harnessSummary_ = nullptr;
     QTableWidget* harnessTable_ = nullptr;
     QDialog* rulesDlg_ = nullptr;
