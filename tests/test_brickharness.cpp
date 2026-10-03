@@ -4916,11 +4916,25 @@ void testRoundThirtyTwo() {
             mouse(wheel, QEvent::MouseButtonRelease, at);
             check(std::abs(w.brick(x)->col - (col0 + 1.0)) < 1e-9, "nav: the right segment moves the brick a step right");
             const bool tied = w.tieBrickTurn;
-            mouse(wheel, QEvent::MouseButtonPress, wheel->segmentCentre(3));
-            mouse(wheel, QEvent::MouseButtonRelease, wheel->segmentCentre(3));
-            check(w.tieBrickTurn == !tied, "nav: the tie segment turns the tie over");
-            mouse(wheel, QEvent::MouseButtonPress, wheel->segmentCentre(3));
-            mouse(wheel, QEvent::MouseButtonRelease, wheel->segmentCentre(3));
+            mouse(wheel, QEvent::MouseButtonPress, wheel->segmentCentre(5));
+            mouse(wheel, QEvent::MouseButtonRelease, wheel->segmentCentre(5));
+            check(w.tieBrickTurn == !tied, "nav: the tie segment (bottom left) turns the tie over");
+            mouse(wheel, QEvent::MouseButtonPress, wheel->segmentCentre(5));
+            mouse(wheel, QEvent::MouseButtonRelease, wheel->segmentCentre(5));
+        }
+        // THE SYMMETRIC LIST names each part by its designator and P/N - or, with neither, its kind.
+        if (auto* about = dlg.findChild<QComboBox*>(QStringLiteral("brickSymRef"))) {
+            w.brick(x)->name = QStringLiteral("P7");
+            const QString bare = dlg.addFromPalette(brickTypeKey(BrickType::End) + QLatin1Char('|') + partKindKey(PartKind::Ferrule));
+            bool named = false, kind = false;
+            for (int i = 0; i < about->count(); ++i) {
+                if (about->itemData(i).toString() == x && about->itemText(i) == QStringLiteral("about: P7")) named = true;
+                if (about->itemData(i).toString() == bare &&
+                    about->itemText(i) == QStringLiteral("about: ") + partKindName(PartKind::Ferrule))
+                    kind = true;
+            }
+            check(named && kind, "symmetric list: a part by its designator (and P/N), one with neither by its kind");
+            canvas->setSelection({x});   // the one dropped from the palette was picked: back to the first
         }
         dlg.rotateSelected(true);
         check(w.brick(x)->rot == 3, "turn: with Shift, a quarter counter-clockwise");

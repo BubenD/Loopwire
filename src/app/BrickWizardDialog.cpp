@@ -1739,8 +1739,8 @@ void BrickWizardDialog::buildUi() {
     middle_ = new QSplitter(Qt::Vertical, split);
     canvas_ = new BrickCanvas(&design_, middle_);
     canvas_->setObjectName(QStringLiteral("brickCanvas"));
-    // THE NAVIGATION ON THE PANE: a round wheel in its top right corner - move up, Symmetric, right, the tie, down, turn
-    // back, left, turn, clockwise from the top - the part Symmetric is about in the list under it. The buttons it works
+    // THE NAVIGATION ON THE PANE: a round wheel in its top right corner - move up, turn, right, Symmetric, down, the tie,
+    // left, turn back, clockwise from the top - the part Symmetric is about in the list under it. The buttons it works
     // are kept, out of sight, as what it presses.
     {
         navBox_ = new QWidget(canvas_);
@@ -1761,15 +1761,15 @@ void BrickWizardDialog::buildUi() {
         };
         navWheel_->setItems({
             {QStringLiteral("up"), QStringLiteral("Up"), tipOf("brickUp"), press("brickUp"), {}},
-            {QStringLiteral("sym"), QStringLiteral("Symmetric"), tipOf("brickArrange"), press("brickArrange"), {}},
+            {QStringLiteral("cw"), QStringLiteral("Turn"), tipOf("brickRotate"), press("brickRotate"), {}},
             {QStringLiteral("right"), QStringLiteral("Right"), tipOf("brickRight"), press("brickRight"), {}},
+            {QStringLiteral("sym"), QStringLiteral("Symmetric"), tipOf("brickArrange"), press("brickArrange"), {}},
+            {QStringLiteral("down"), QStringLiteral("Down"), tipOf("brickDown"), press("brickDown"), {}},
             {QStringLiteral("tie"), QStringLiteral("Tie turn"), tieTurn_->toolTip(),
              [this] { tieTurn_->setChecked(!tieTurn_->isChecked()); }, [this] { return tieTurn_->isChecked(); }},
-            {QStringLiteral("down"), QStringLiteral("Down"), tipOf("brickDown"), press("brickDown"), {}},
+            {QStringLiteral("left"), QStringLiteral("Left"), tipOf("brickLeft"), press("brickLeft"), {}},
             {QStringLiteral("ccw"), QStringLiteral("Turn back"), QStringLiteral("Turn the brick a quarter counter-clockwise"),
              [this] { rotateSelected(true); }, {}},
-            {QStringLiteral("left"), QStringLiteral("Left"), tipOf("brickLeft"), press("brickLeft"), {}},
-            {QStringLiteral("cw"), QStringLiteral("Turn"), tipOf("brickRotate"), press("brickRotate"), {}},
         });
         vl->addWidget(navWheel_, 0, Qt::AlignHCenter);
         symRef_->setParent(navBox_);
@@ -5283,9 +5283,17 @@ void BrickWizardDialog::loadLayers(int side) {
 
 void BrickWizardDialog::refreshSymRef() {
     if (!symRef_) return;
+    // EACH PART BY ITS DESIGNATOR AND ITS P/N - or, with neither, what kind of part it is.
+    auto said = [this](const Brick& b) {
+        QStringList bits;
+        if (!b.name.trimmed().isEmpty()) bits << b.name.trimmed();
+        if (const LibraryPart* p = b.libPart.isEmpty() ? nullptr : catalog_.byId(b.libPart))
+            bits << (p->mfrPn.isEmpty() ? p->title() : p->mfrPn);
+        return bits.isEmpty() ? partKindName(b.kind) : bits.join(QLatin1Char(' '));
+    };
     QStringList parts;
     for (const Brick& b : design_.bricks)
-        if (b.type == BrickType::End) parts << b.id + QLatin1Char('\t') + brickTitle(b);
+        if (b.type == BrickType::End) parts << b.id + QLatin1Char('\t') + said(b);
     const QString key = parts.join(QLatin1Char('\n'));
     if (key == symRefKey_) return;
     symRefKey_ = key;
@@ -5294,7 +5302,10 @@ void BrickWizardDialog::refreshSymRef() {
     symRef_->clear();
     symRef_->addItem(QStringLiteral("about: Auto"), QString());
     for (const Brick& b : design_.bricks)
-        if (b.type == BrickType::End) symRef_->addItem(QStringLiteral("about: ") + brickTitle(b), b.id);
+        if (b.type == BrickType::End) {
+            symRef_->addItem(QStringLiteral("about: ") + said(b), b.id);
+            symRef_->setItemData(symRef_->count() - 1, said(b), Qt::ToolTipRole);
+        }
     symRef_->setCurrentIndex(std::max(0, symRef_->findData(keep)));
 }
 
