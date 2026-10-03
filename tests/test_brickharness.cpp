@@ -1734,7 +1734,7 @@ void testRoundSeven() {
                   "wizard: turned below the cable, the width stops at the cable's");
         }
         auto* sym = dlg.findChild<QPushButton*>(QStringLiteral("brickArrange"));
-        check(sym && sym->text() == QStringLiteral("Symmetric"), "wizard: a Symmetric button");
+        check(sym && sym->toolTip().startsWith(QStringLiteral("Symmetric")), "wizard: a Symmetric button");
     }
     // SYMMETRIC WITH NOTHING LINKED YET: one connector on the left, two on the right, dropped anywhere - the two
     // are put the same distance either side of the one.
@@ -4880,6 +4880,90 @@ void testRoundThirtyOne() {
     }
 }
 
+// ROUND THIRTY-TWO: the navigation round on the pane's corner; Shift turns the other way; the branches converge onto the
+// transition's entry face where the cable divides.
+void testRoundThirtyTwo() {
+    {
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        BrickWizardDialog dlg(&ed);
+        dlg.resize(1400, 900);
+        dlg.show();
+        auto* nav = dlg.findChild<QWidget*>(QStringLiteral("brickNav"));
+        auto* canvas = dlg.canvas();
+        bool inNav = nav != nullptr;
+        for (const char* name : {"brickRotate", "brickLeft", "brickRight", "brickUp", "brickDown", "brickArrange"})
+            inNav = inNav && nav->findChild<QPushButton*>(QLatin1String(name)) != nullptr;
+        inNav = inNav && nav->findChild<QCheckBox*>(QStringLiteral("brickTieTurn")) &&
+                nav->findChild<QComboBox*>(QStringLiteral("brickSymRef"));
+        check(inNav && nav->parentWidget() == canvas, "nav: arrows, turn, Symmetric and the tie on the pane itself");
+        if (nav && canvas) {
+            const QRect r = nav->geometry();
+            std::printf("  nav: at %d,%d %dx%d on a pane %dx%d\n", r.x(), r.y(), r.width(), r.height(), canvas->width(),
+                        canvas->height());
+            check(r.right() <= canvas->width() && r.right() >= canvas->width() - 20 && r.top() < 60,
+                  "nav: in the pane's top right corner");
+        }
+        BrickDesign& w = dlg.design();
+        const QString x = w.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        canvas->setSelection({x});
+        dlg.rotateSelected(true);
+        check(w.brick(x)->rot == 3, "turn: with Shift, a quarter counter-clockwise");
+        dlg.rotateSelected(false);
+        check(w.brick(x)->rot == 0, "turn: without, clockwise");
+        const double was = w.brick(x)->drawTurnDeg;
+        QKeyEvent r(QEvent::KeyPress, Qt::Key_R, Qt::ShiftModifier);
+        QApplication::sendEvent(canvas, &r);
+        std::printf("  turn: Shift+R takes the drawing from %.0f to %.0f\n", was, w.brick(x)->drawTurnDeg);
+        check(std::abs(std::remainder(w.brick(x)->drawTurnDeg - was + 45.0, 360.0)) < 1e-9,
+              "turn: Shift+R turns the drawing 45 degrees counter-clockwise");
+        dlg.hide();
+    }
+    {
+        BrickDesign d;
+        const QString sa = d.addBrick(BrickType::End, PartKind::Connector, 0, 1);
+        const QString a2 = d.addBrick(BrickType::End, PartKind::Connector, 0, 3);
+        const QString sb = d.addBrick(BrickType::End, PartKind::Connector, 4, 2);
+        const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 3, 2);
+        const QString b1 = d.addBrick(BrickType::Run, PartKind::Wire, 1, 1);
+        const QString b2 = d.addBrick(BrickType::Run, PartKind::Wire, 1, 3);
+        makeBranch(*d.brick(b1));
+        makeBranch(*d.brick(b2));
+        d.connect(c, sb, nullptr, 1, -1);
+        d.brick(c)->run.wires = 8;
+        d.brick(c)->run.lengthMm = 150.0;
+        d.brick(c)->run.transitions = RunEnds::Both;
+        d.brick(b1)->run.lengthMm = 100.0;
+        d.brick(b2)->run.lengthMm = 100.0;
+        d.brick(b1)->run.wireWidthMm = 2.0;   // fatter wires than the cable's: packed, wider than its face
+        d.brick(b2)->run.wireWidthMm = 2.0;
+        d.connect(b1, c, nullptr, 1, 0);
+        d.connect(b2, c, nullptr, 1, 0);
+        d.connect(sa, b1, nullptr, -1, 0);
+        d.connect(a2, b2, nullptr, -1, 0);
+        const BrickBuild b = buildBrickHarness(d, nullptr);
+        Vec2 split;
+        double face = 0.0;
+        std::vector<Vec2> starts;
+        for (const Entity& e : b.entities) {
+            if (e.type != EntityType::TwistedPair) continue;
+            const QString id = e.meta.value(QStringLiteral("brickId")).toString();
+            if (id == c && e.meta.value(QStringLiteral("brickTrunk")).toBool()) {
+                split = e.points.back();
+                face = e.meta.value(QStringLiteral("twistBodyFace")).toDouble();
+            } else if (id == b1 || id == b2) {
+                starts.push_back(e.points.front());
+            }
+        }
+        double widest = 0.0;
+        for (const Vec2& p : starts) widest = std::max(widest, std::abs(p.y - split.y));
+        std::printf("  converge: the face %.2f across, the branches start up to %.2f off its middle\n", face, widest);
+        check(starts.size() == 2 && face > 0.0 && widest <= face / 2.0 + 1e-6,
+              "converge: every branch starts on the transition's entry face where the cable divides");
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -4925,6 +5009,7 @@ int run_brickharness_tests() {
     testRoundTwentyNine();
     testRoundThirty();
     testRoundThirtyOne();
+    testRoundThirtyTwo();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

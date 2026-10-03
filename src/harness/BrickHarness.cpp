@@ -2868,6 +2868,9 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
     // parts, the cable carrying on loose from there. Each run out of it starts side by side across the
     // cable's end, in the order of where they go.
     std::vector<Vec2> splitAt(branches.size()), splitDir(branches.size(), Vec2{1.0, 0.0});
+    // Each branch's slot across the transition's entry face where the cable divides: its middle and its width, as parts
+    // of all the branches' together (a width of nought: no slot - every branch from the middle).
+    std::vector<std::pair<double, double>> slotOf(branches.size(), {0.0, 0.0});
     for (size_t t = 0; t < branches.size(); ++t) {
         if (!branches[t].trunk) continue;
         const BrickRunSpec& r = branches[t].special->run;
@@ -2932,6 +2935,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                 for (size_t k : subs) {
                     const double w = packed * std::max(1, branches[k].wires);
                     splitAt[k] = at + toward.perp() * (pos + w / 2.0);
+                    slotOf[k] = {(pos + w / 2.0) / total, w / total};
                     pos += w;
                 }
             }
@@ -3069,6 +3073,9 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         double half = 0.0;   // half the width of the face it comes out of
     };
     QHash<QString, BridgeStart> bridgeStart;
+    // How wide the face is at the end of each cable that divides - what its branches converge onto (the trunk is drawn
+    // before its branches).
+    std::vector<double> trunkFace(branches.size(), 0.0);
     std::vector<size_t> runOrder;
     for (size_t i = 0; i < branches.size(); ++i)
         if (!brickIsBridge(*branches[i].special)) runOrder.push_back(i);
@@ -3093,6 +3100,13 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             la.centre = splitAt[i];
             la.lane = packed;
             la.share = packed * wires;
+        }
+        // CONVERGED ONTO THE TRANSITION'S ENTRY FACE where the cable divides: every branch's wires come out of that face,
+        // each branch in its own slot across it - as wide as its share of the face, not as wide as its wires lie packed.
+        if (isSub && slotOf[i].second > 1e-9 && trunkFace[static_cast<size_t>(br.splitOf)] > 1e-9) {
+            const double face = trunkFace[static_cast<size_t>(br.splitOf)];
+            la.centre = splitAt[static_cast<size_t>(br.splitOf)] + splitDir[i].perp() * (slotOf[i].first * face);
+            la.share = std::max(ww, slotOf[i].second * face);
         }
         Landing lb = loose ? la : atB[i];
         // A BRIDGE WIRE starts where the fan of the run it leaves begins - out of that fan, heading the way it
@@ -3691,6 +3705,10 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             // CONVERGED TO so many lines where the wires are gathered, when it is said.
             if (!laidUp && r.trunkWires > 0)
                 run.meta.insert(QStringLiteral("twistTrunkWires"), std::clamp(r.trunkWires, 1, wires));
+            // What its branches converge onto, where it divides: the transition's entry face (the bundle going into it),
+            // never wider than the cable.
+            if (isTrunk) trunkFace[i] = outer != QLatin1String("wires") ? std::min(bodyWidth, packed * (wires - 1) + ww)
+                                                                         : packed * (wires - 1) + ww;
             // STRETCHED OVER THE PART at an end: the transition cut square there, the piece over the part carrying on.
             if (stretchA > 1e-9) run.meta.insert(QStringLiteral("twistEndBootSquareStart"), true);
             if (stretchB > 1e-9) run.meta.insert(QStringLiteral("twistEndBootSquareFinish"), true);

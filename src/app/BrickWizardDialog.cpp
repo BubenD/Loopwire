@@ -531,10 +531,10 @@ void BrickCanvas::mirrorOnDrawing() {
     update();
 }
 
-void BrickCanvas::rotateSelection() {
+void BrickCanvas::rotateSelection(bool back) {
     if (sel_.isEmpty()) return;
     for (const QString& id : sel_)
-        if (Brick* b = d_->brick(id)) b->rot = (b->rot + 1) % 4;
+        if (Brick* b = d_->brick(id)) b->rot = (b->rot + (back ? 3 : 1)) % 4;
     emit designChanged();
     update();
 }
@@ -1188,12 +1188,14 @@ void BrickCanvas::keyPressEvent(QKeyEvent* e) {
         return;
     }
     // ON THE DRAWING: R turns what is picked 45 degrees, Space 90, M mirrors it - the bricks on the pane stay as they are.
+    // WITH SHIFT, the other way round: counter-clockwise.
+    const bool back = e->modifiers() & Qt::ShiftModifier;
     if (e->key() == Qt::Key_R && !(e->modifiers() & (Qt::ControlModifier | Qt::AltModifier))) {
-        turnOnDrawing(45.0);
+        turnOnDrawing(back ? -45.0 : 45.0);
         return;
     }
     if (e->key() == Qt::Key_Space) {
-        turnOnDrawing(90.0);
+        turnOnDrawing(back ? -90.0 : 90.0);
         return;
     }
     if (e->key() == Qt::Key_M && !(e->modifiers() & (Qt::ControlModifier | Qt::AltModifier))) {
@@ -1404,38 +1406,46 @@ void BrickWizardDialog::buildUi() {
         bar->addWidget(b);
         return b;
     };
-    button("brickRotate", QStringLiteral("⟳ Rotate"),
-           QStringLiteral("Turn the brick a quarter. On the drawing only: R turns 45°, Space 90°, M mirrors"),
-           [this] { rotateSelected(); });
+    // THE NAVIGATION - turning, moving, Symmetric and the tie - is round buttons on the pane itself (see placeNav); they
+    // are made here and moved there once the pane is.
+    QList<QWidget*> nav;
+    auto navButton = [&](const char* name, const QString& text, const QString& tip, auto fn) {
+        auto* b = button(name, text, tip, fn);
+        bar->removeWidget(b);
+        nav << b;
+        return b;
+    };
+    // WITH SHIFT HELD, counter-clockwise.
+    navButton("brickRotate", QStringLiteral("⟳"),
+              QStringLiteral("Turn the brick a quarter clockwise - with Shift, counter-clockwise. On the drawing only: "
+                             "R turns 45°, Space 90° (Shift: the other way), M mirrors"),
+              [this] { rotateSelected(QApplication::keyboardModifiers() & Qt::ShiftModifier); });
     for (auto [name, text, dc, dr] : {std::tuple<const char*, const char*, double, double>{"brickLeft", "←", -1, 0},
                                       {"brickRight", "→", 1, 0},
                                       {"brickUp", "↑", 0, -1},
-                                      {"brickDown", "↓", 0, 1}}) {
-        auto* b = button(name, QString::fromUtf8(text), QStringLiteral("Move what is picked a grid step"),
-                         [this, dc = dc, dr = dr] { moveSelected(dc, dr); });
-        b->setFixedWidth(34);
-    }
+                                      {"brickDown", "↓", 0, 1}})
+        navButton(name, QString::fromUtf8(text), QStringLiteral("Move what is picked a grid step"),
+                  [this, dc = dc, dr = dr] { moveSelected(dc, dr); });
     button("brickDelete", QStringLiteral("Delete"), QStringLiteral("Delete what is picked"),
            [this] { canvas_->deleteSelected(); });
     button("brickClear", QStringLiteral("Clear"), QStringLiteral("Clear every brick off the pane (Ctrl+Z brings it back)"),
            [this] { clearAll(); });
     // SYMMETRIC, in x and y, the bricks and the drawing alike: the parts laid out either side of the axis,
     // each column the same step apart, and both panes brought round to show the whole of it.
-    button("brickArrange", QStringLiteral("Symmetric"),
-           QStringLiteral("Lay the bricks and the drawing out symmetrically in x and y: the most connected "
-                          "part on the axis, the rest evenly either side, every brick turned to face what it "
-                          "is linked to - then both panes fitted to show it all"),
-           [this] { arrange(); });
+    navButton("brickArrange", QStringLiteral("⇕"),
+              QStringLiteral("Symmetric: lay the drawing out evenly either side of the part picked in the list below "
+                             "(Auto: the part alone at the main body's other end) - the bricks stay where they are"),
+              [this] { arrange(); });
     // ABOUT WHICH PART: Auto - the part alone at the main body's other end (of several there, the middle one).
     symRef_ = new QComboBox(this);
     symRef_->setObjectName(QStringLiteral("brickSymRef"));
     symRef_->setToolTip(QStringLiteral("The part Symmetric lays the drawing out about. Auto: the part alone at the main "
                                        "body's other end - of several there, the middle one"));
     symRef_->addItem(QStringLiteral("about: Auto"), QString());
-    bar->addWidget(symRef_);
+    nav << symRef_;
     // THE BRICKS TURN WITH THE DRAWING, or not: R and Space turn the part on the drawing, and - ticked - its brick's
     // connections round it on the pane too.
-    tieTurn_ = new QCheckBox(QStringLiteral("Bricks turn with drawing"), this);
+    tieTurn_ = new QCheckBox(QStringLiteral("⛓"), this);
     tieTurn_->setObjectName(QStringLiteral("brickTieTurn"));
     tieTurn_->setToolTip(QStringLiteral("Ticked, R (45°) and Space (90°) turn the brick's connections on this pane as "
                                         "well as the part on the drawing. Unticked, only the drawing turns."));
@@ -1445,7 +1455,10 @@ void BrickWizardDialog::buildUi() {
         canvas_->update();
         designChanged();
     });
-    bar->addWidget(tieTurn_);
+    tieTurn_->setToolTip(QStringLiteral("Bricks turn with the drawing. Lit, R (45°) and Space (90°) turn the brick's "
+                                        "connections on this pane as well as the part on the drawing. Off, only the "
+                                        "drawing turns."));
+    nav << tieTurn_;
     // A DIMENSION BY HAND: pressed, click two bricks - it goes between them, above them or below.
     dimTool_ = new QToolButton(this);
     dimTool_->setObjectName(QStringLiteral("brickDimTool"));
@@ -1548,6 +1561,44 @@ void BrickWizardDialog::buildUi() {
     middle_ = new QSplitter(Qt::Vertical, split);
     canvas_ = new BrickCanvas(&design_, middle_);
     canvas_->setObjectName(QStringLiteral("brickCanvas"));
+    // THE NAVIGATION ON THE PANE: round, see-through buttons in its top right corner - the arrows round in a ring with
+    // turn, Symmetric and the tie at its corners, the part Symmetric is about under them.
+    {
+        navBox_ = new QWidget(canvas_);
+        navBox_->setObjectName(QStringLiteral("brickNav"));
+        navBox_->setStyleSheet(QStringLiteral(
+            "QPushButton, QCheckBox{min-width:28px;max-width:28px;min-height:28px;max-height:28px;border-radius:14px;"
+            "background:rgba(70,92,118,140);color:#e8eef5;border:1px solid rgba(170,190,210,110);font-size:14px;"
+            "padding:0px;}"
+            "QPushButton:hover, QCheckBox:hover{background:rgba(90,120,155,200);}"
+            "QPushButton:pressed{background:rgba(43,208,255,170);}"
+            "QCheckBox{padding-left:7px;}"
+            "QCheckBox::indicator{width:0px;height:0px;}"
+            "QCheckBox:checked{background:rgba(47,133,90,190);}"
+            "QComboBox{background:rgba(70,92,118,140);color:#e8eef5;border:1px solid rgba(170,190,210,110);"
+            "border-radius:10px;padding:1px 8px;}"));
+        auto* g = new QGridLayout(navBox_);
+        g->setContentsMargins(0, 0, 0, 0);
+        g->setSpacing(3);
+        auto take = [&](const char* name) {
+            for (QWidget* w : nav)
+                if (w->objectName() == QLatin1String(name)) return w;
+            return static_cast<QWidget*>(nullptr);
+        };
+        g->addWidget(take("brickRotate"), 0, 0);
+        g->addWidget(take("brickUp"), 0, 1);
+        g->addWidget(take("brickArrange"), 0, 2);
+        g->addWidget(take("brickLeft"), 1, 0);
+        g->addWidget(take("brickRight"), 1, 2);
+        g->addWidget(tieTurn_, 2, 0);
+        g->addWidget(take("brickDown"), 2, 1);
+        g->addWidget(symRef_, 3, 0, 1, 3);
+        symRef_->setMaximumWidth(3 * 28 + 6);
+        symRef_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        symRef_->setMinimumContentsLength(6);
+        canvas_->installEventFilter(this);   // kept in the corner as the pane is resized
+        placeNav();
+    }
     preview_ = new DrawingPreview(QStringLiteral("Preview"), middle_);
     preview_->setEmptyText(QStringLiteral("The drawing appears here as the bricks are linked"));
     preview_->setMinimapAvailable(true);
@@ -3209,12 +3260,20 @@ void BrickWizardDialog::moveSelected(double dCol, double dRow) {
     canvas_->moveSelection(dCol, dRow);
 }
 
-void BrickWizardDialog::rotateSelected() {
+void BrickWizardDialog::rotateSelected(bool back) {
     if (canvas_->selection().isEmpty()) {
         status_->setText(QStringLiteral("Pick a brick to turn"));
         return;
     }
-    canvas_->rotateSelection();
+    canvas_->rotateSelection(back);
+}
+
+void BrickWizardDialog::placeNav() {
+    if (!navBox_ || !canvas_) return;
+    navBox_->adjustSize();
+    // In the top right corner, under the pane's Fit and Map.
+    navBox_->move(std::max(0, canvas_->width() - navBox_->width() - 8), 30);
+    navBox_->raise();
 }
 
 void BrickWizardDialog::arrange() {
@@ -4181,6 +4240,7 @@ bool BrickWizardDialog::moveBomRow(int from, int gap) {
 }
 
 bool BrickWizardDialog::eventFilter(QObject* o, QEvent* e) {
+    if (o == canvas_ && (e->type() == QEvent::Resize || e->type() == QEvent::Show)) placeNav();
     // A PART DRAGGED ON THE DRAWING: pressed on an end part in the preview and moved, its run's length follows -
     // along, and across (farther off, more cable) - and it goes up or down on the drawing with it.
     if (o == preview_) {

@@ -90,7 +90,8 @@ public:
     void resetZoom();
     void deleteSelected();
     void moveSelection(double dCol, double dRow);
-    void rotateSelection();
+    // A quarter on: clockwise, or counter-clockwise (back).
+    void rotateSelection(bool back = false);
     // ON THE DRAWING ONLY: the picked parts turned (R 45, Space 90) or mirrored (M).
     void turnOnDrawing(double deg);
     void mirrorOnDrawing();
@@ -224,7 +225,7 @@ public:
     QString addFromPalette(const QString& what);
     void selectBrick(const QString& id);
     void moveSelected(double dCol, double dRow);
-    void rotateSelected();
+    void rotateSelected(bool back = false);
     void arrange();
     std::vector<Entity> drawing() const;
     void place();
@@ -543,6 +544,8 @@ private:
     QDoubleSpinBox* transLenFin2_ = nullptr;     // the finish's length, in its own frame
     QToolButton* transLenFin2Auto_ = nullptr;
     QComboBox* symRef_ = nullptr;                // the part Symmetric lays the drawing out about
+    QWidget* navBox_ = nullptr;                  // the round buttons in the pane's top right corner
+    void placeNav();
     QString symRefKey_;
     void frameTransitionSides();
     void loadLayers(int side);
