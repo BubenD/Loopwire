@@ -40,6 +40,7 @@ struct BrickDrcRule {
     QString id;
     QString label;
     QString group;   // "Logical" or "Compatibility"
+    QString description;   // what it checks, and what to do about it
 };
 const std::vector<BrickDrcRule>& brickDrcRules();
 

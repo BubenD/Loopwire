@@ -437,47 +437,67 @@ BrickMark brickCompatibility(const BrickDesign& d, const Brick& b, const PartsLi
 }
 
 const std::vector<BrickDrcRule>& brickDrcRules() {
+    // THE RULES BY THEIR TRADE NAMES, each with what it checks - the label in the list, the description when it is
+    // hovered and in its explainer.
+    auto rule = [](const char* id, const char* label, const char* group, const char* text) {
+        return BrickDrcRule{QString::fromLatin1(id), QString::fromUtf8(label), QString::fromLatin1(group),
+                            QString::fromUtf8(text)};
+    };
     static const std::vector<BrickDrcRule> rules = {
-        // LOGICAL: what is linked, named, chosen, long enough, on the bill.
-        {QStringLiteral("unlinked"), QStringLiteral("A brick linked to nothing"), QStringLiteral("Logical")},
-        {QStringLiteral("openside"), QStringLiteral("A part with a side not linked (a joint's other side, a Y-split's leg)"),
-         QStringLiteral("Logical")},
-        {QStringLiteral("nopart"), QStringLiteral("An end part with no library part chosen"), QStringLiteral("Logical")},
-        {QStringLiteral("notinlib"), QStringLiteral("A part number not found in the parts library"), QStringLiteral("Logical")},
-        {QStringLiteral("nodesig"), QStringLiteral("An end part with no designator"), QStringLiteral("Logical")},
-        {QStringLiteral("dupdesig"), QStringLiteral("Two parts with the same designator"), QStringLiteral("Logical")},
-        {QStringLiteral("openrun"), QStringLiteral("A run with nothing at one end (a fanout's loose end excepted)"),
-         QStringLiteral("Logical")},
-        {QStringLiteral("nolength"), QStringLiteral("A run of no length"), QStringLiteral("Logical")},
-        {QStringLiteral("shortrun"), QStringLiteral("A run shorter than its fans and transitions"), QStringLiteral("Logical")},
-        {QStringLiteral("wirecount"), QStringLiteral("A run giving its parts more wires than it has"), QStringLiteral("Logical")},
-        {QStringLiteral("nolayerpn"), QStringLiteral("A layer of a run's stack with no part number"), QStringLiteral("Logical")},
-        {QStringLiteral("bridge"), QStringLiteral("A bridge wire not joined to a cable, or taking wires the cable has not got"),
-         QStringLiteral("Logical")},
-        {QStringLiteral("branch"), QStringLiteral("A branch brick not joined to a cable, or with no part at its end"),
-         QStringLiteral("Logical")},
-        {QStringLiteral("joint"), QStringLiteral("A joint not tied to a run, with no splice part, or with no wires going in"),
-         QStringLiteral("Logical")},
-        {QStringLiteral("transpn"), QStringLiteral("A transition heatshrink with no part number"), QStringLiteral("Logical")},
-        {QStringLiteral("fanshrinkpn"), QStringLiteral("Heatshrink over the wire ends with no part number"),
-         QStringLiteral("Logical")},
-        {QStringLiteral("notonbom"), QStringLiteral("A part used that is not on the BOM"), QStringLiteral("Logical")},
-        // COMPATIBILITY: what fits over, into and onto what.
-        {QStringLiteral("compat-stack"), QStringLiteral("A run's layers that do not fit one over another"),
-         QStringLiteral("Compatibility")},
-        {QStringLiteral("compat-entry"), QStringLiteral("A run's bundle that does not go into - or is loose in - its entry"),
-         QStringLiteral("Compatibility")},
-        {QStringLiteral("compat-gauge"), QStringLiteral("Wires that do not suit the contacts, ferrule or terminal they go into"),
-         QStringLiteral("Compatibility")},
-        {QStringLiteral("compat-ways"), QStringLiteral("More wires into a connector than it has ways"),
-         QStringLiteral("Compatibility")},
-        {QStringLiteral("compat-solid"), QStringLiteral("Solid wire into crimp contacts"), QStringLiteral("Compatibility")},
-        {QStringLiteral("compat-contacts"), QStringLiteral("A connector bought without pins whose contacts are not on the BOM"),
-         QStringLiteral("Compatibility")},
-        {QStringLiteral("compat-joint"), QStringLiteral("The bundle at a joint too big for what covers the run there"),
-         QStringLiteral("Compatibility")},
-        {QStringLiteral("compat-data"), QStringLiteral("A figure a fit check needs that is not in the parts library"),
-         QStringLiteral("Compatibility")},
+        // LOGICAL DRC: connectivity, identification, definition, procurement.
+        rule("unlinked", "Unconnected element", "Logical",
+             "A part or run on the harness with no connection to anything else. Connect it, or delete it."),
+        rule("openside", "Open port", "Logical",
+             "A part with a mating face left unconnected - a splice's far side, a Y-split leg. Connect every port."),
+        rule("nopart", "Undefined part", "Logical",
+             "An end part with no library part assigned. Assign a library part so it has a part number."),
+        rule("notinlib", "Part not found in library", "Logical",
+             "The part number given is in none of the connected parts libraries. Correct it, or add the part."),
+        rule("nodesig", "Missing reference designator", "Logical",
+             "An end part with no reference designator (X1, P2, F3...). Give every part a designator."),
+        rule("dupdesig", "Duplicate reference designator", "Logical",
+             "The same reference designator on two or more parts. Every designator must be unique."),
+        rule("openrun", "Unterminated run", "Logical",
+             "A cable or twisted run with nothing at one end. A fan-out or bridge may end loose; a cable may not."),
+        rule("nolength", "Zero-length run", "Logical", "A run with no length set. Give it its build length."),
+        rule("shortrun", "Run shorter than its terminations", "Logical",
+             "The fans and transition sleeves at its ends take more than the run's length. Lengthen it, or shorten them."),
+        rule("wirecount", "Conductor count exceeded", "Logical",
+             "The links take more conductors out of a run than it carries. Check the wires given to each part."),
+        rule("nolayerpn", "Stack layer without part number", "Logical",
+             "A layer of a run's construction (wires, cable, braid, sleeve) with no part number. Assign one."),
+        rule("bridge", "Invalid bridge wire", "Logical",
+             "A bridge wire not joined to a cable, or taking a conductor number the cable does not carry."),
+        rule("branch", "Orphan branch", "Logical",
+             "A branch not joined to a cable body, or with no part at its end."),
+        rule("joint", "Incomplete splice", "Logical",
+             "A splice not tied to a run, with no splice part, or with no conductors going into it."),
+        rule("transpn", "Transition sleeve without part number", "Logical",
+             "A transition heatshrink drawn with no part number - it cannot be bought or cut."),
+        rule("fanshrinkpn", "Wire-end sleeve without part number", "Logical",
+             "Heatshrink over the wire ends with no part number."),
+        rule("notonbom", "Part not on BOM", "Logical",
+             "A part used on the harness that is not on the bill of materials. Add it to the BOM."),
+        // COMPATIBILITY VALIDATION: mechanical fit and electrical suitability.
+        rule("compat-stack", "Stack-up interference", "Compatibility",
+             "A run's layers do not fit one over another - a sleeve smaller than what it covers, or too big to recover onto it."),
+        rule("compat-entry", "Bundle-to-entry mismatch", "Compatibility",
+             "A run's bundle does not go into - or is loose in - the entry of the part it ends in (backshell, boot, gland, Y-split)."),
+        rule("compat-entrysize", "Entry size out of range", "Compatibility",
+             "A part's entry size from its library parameters does not suit what goes into it: a transition sleeve over the "
+             "cable and onto the wires, a layer over the sleeve under it, a wire-end sleeve on its wire, a splice on its wires."),
+        rule("compat-gauge", "Conductor gauge mismatch", "Compatibility",
+             "Wires outside the gauge range of the contact, ferrule, terminal or splice they go into."),
+        rule("compat-ways", "Cavity count exceeded", "Compatibility",
+             "More conductors into a connector than it has cavities."),
+        rule("compat-solid", "Solid conductor in crimp contact", "Compatibility",
+             "A solid-core wire into a crimp contact - a crimp is made on stranded wire. Use stranded wire, or solder contacts."),
+        rule("compat-contacts", "Contacts not on BOM", "Compatibility",
+             "A connector bought without its contacts, and none of its contacts on the bill of materials."),
+        rule("compat-joint", "Splice bundle oversize", "Compatibility",
+             "At a splice the bundle, splices and all, is bigger than the sleeve or cable that covers the run there."),
+        rule("compat-data", "Missing library data", "Compatibility",
+             "A figure a fit check needs is not in the parts library (a diameter, an entry size, a wall). The check cannot be made."),
     };
     return rules;
 }
@@ -513,6 +533,150 @@ std::vector<BrickIssue> brickDrc(const BrickDesign& d, const QString& harness, c
         }
         if (bomItemOf && bomItemOf(p->id) <= 0)
             add(QStringLiteral("notonbom"), 1, &b, QStringLiteral("%1 %2 is not on the BOM").arg(what, pnOf(*p)));
+    };
+
+    // A size range from a part's parameters - "entry" from entryMin / entryMax, one of them alone both ends.
+    auto rangeOf = [](const LibraryPart& q, const QString& key, double& lo, double& hi) {
+        bool okLo = false, okHi = false;
+        lo = q.value(key + QStringLiteral("Min")).toDouble(&okLo);
+        hi = q.value(key + QStringLiteral("Max")).toDouble(&okHi);
+        if (!okLo && !okHi) {
+            bool one = false;
+            lo = hi = q.value(key).toDouble(&one);
+            return one && lo > 0.0;
+        }
+        if (!okLo) lo = hi;
+        if (!okHi) hi = lo;
+        if (lo > hi) std::swap(lo, hi);
+        return hi > 0.0;
+    };
+    // A sleeve's entry: a heatshrink's "entry", a boot's cable side.
+    auto sleeveRange = [&](const LibraryPart& q, double& lo, double& hi) {
+        return rangeOf(q, QStringLiteral("entry"), lo, hi) || rangeOf(q, QStringLiteral("cableEntry"), lo, hi);
+    };
+    auto wallOf = [](const LibraryPart& q) {
+        const double w = q.value(QStringLiteral("wall")).toDouble();
+        return w > 0.0 ? w : 0.30;
+    };
+    // A RUN'S SIZES: one of its wires across, the wires packed round, and the whole of it at the outside.
+    struct RunSize {
+        double wire = 0.0, wires = 0.0, outside = 0.0;
+    };
+    auto sizeOf = [&](const Brick& s) {
+        RunSize z;
+        const BrickRunSpec& r = s.run;
+        const int n = s.type == BrickType::TwistedPair ? 2 * std::max(1, r.pairs) : std::max(1, r.wires);
+        for (const QString& layer : r.stack) {
+            const LibraryPart* lp = partOf(r.stackParts.value(layer));
+            if (!lp) continue;
+            const double od = lp->value(QStringLiteral("od")).toDouble();
+            if (layer == QLatin1String("wires") && od > 0.0) {
+                z.wire = od;
+                z.wires = z.outside = n > 1 ? od * std::sqrt(n / 0.7) : od;
+            } else if (layer == QLatin1String("cable") && od > 0.0) {
+                z.outside = od;
+            } else if (layer == QLatin1String("braid") && z.outside > 0.0) {
+                z.outside += 1.0;
+            } else if (layer == QLatin1String("heatshrink") && z.outside > 0.0) {
+                z.outside += 2.0 * wallOf(*lp);
+            }
+        }
+        return z;
+    };
+    auto mm = [](double v) { return QString::number(v, 'f', 1); };
+    auto checkEntrySizes = [&](const Brick& b) {
+        const QString rule = QStringLiteral("compat-entrysize");
+        if (brickIsSpecial(b.type)) {
+            const BrickRunSpec& r = b.run;
+            const RunSize z = sizeOf(b);
+            // THE TRANSITION SLEEVE: open wide enough to go over the cable body, and recovering small enough to grip
+            // the wires coming out of it - at each end, its own part where the two ends are their own.
+            if (r.transitions != RunEnds::None && r.outermost() != QLatin1String("wires")) {
+                const bool tStart = r.transitions == RunEnds::Start || r.transitions == RunEnds::Both;
+                const bool tFinish = r.transitions == RunEnds::Finish || r.transitions == RunEnds::Both;
+                QStringList sleeves;
+                if (tStart || r.transitionSame) sleeves << r.transitionPart;
+                if (tFinish && !r.transitionSame) sleeves << r.transitionPartFinish;
+                for (const QString& id : sleeves) {
+                    const LibraryPart* sp = partOf(id);
+                    if (!sp) continue;
+                    double lo = 0.0, hi = 0.0;
+                    if (!sleeveRange(*sp, lo, hi)) {
+                        add(QStringLiteral("compat-data"), 1, &b,
+                            QStringLiteral("the entry size of transition %1 is not in the library").arg(pnOf(*sp)));
+                        continue;
+                    }
+                    if (z.outside > 0.0 && hi < z.outside * 0.98)
+                        add(rule, 2, &b,
+                            QStringLiteral("transition %1 opens to %2 mm - the cable body is %3 mm").arg(pnOf(*sp), mm(hi), mm(z.outside)));
+                    if (z.wires > 0.0 && lo > z.wires * 1.02)
+                        add(rule, 2, &b,
+                            QStringLiteral("transition %1 recovers only to %2 mm - loose on the %3 mm wire bundle")
+                                .arg(pnOf(*sp), mm(lo), mm(z.wires)));
+                    // EACH LAYER OVER IT: open wide enough to go over the one under it, recovered.
+                    double under = z.outside > 0.0 ? z.outside + 2.0 * wallOf(*sp) : 0.0;
+                    const QStringList& layers = id == r.transitionPartFinish && !r.transitionSame ? r.transitionLayersFinish
+                                                                                                 : r.transitionLayers;
+                    for (const QString& lid : layers) {
+                        const LibraryPart* lp = partOf(lid);
+                        if (!lp) continue;
+                        double llo = 0.0, lhi = 0.0;
+                        if (!sleeveRange(*lp, llo, lhi)) {
+                            add(QStringLiteral("compat-data"), 1, &b,
+                                QStringLiteral("the entry size of layer %1 is not in the library").arg(pnOf(*lp)));
+                            continue;
+                        }
+                        if (under > 0.0 && lhi < under * 0.98)
+                            add(rule, 2, &b,
+                                QStringLiteral("layer %1 opens to %2 mm - the sleeve under it is %3 mm").arg(pnOf(*lp), mm(lhi), mm(under)));
+                        if (under > 0.0) under += 2.0 * wallOf(*lp);
+                    }
+                }
+            }
+            // A SLEEVE OVER EACH WIRE END: over one wire, and onto it.
+            if (r.fanEndShrink)
+                if (const LibraryPart* fp = partOf(r.fanEndShrinkPart)) {
+                    double lo = 0.0, hi = 0.0;
+                    if (!sleeveRange(*fp, lo, hi))
+                        add(QStringLiteral("compat-data"), 1, &b,
+                            QStringLiteral("the entry size of wire-end sleeve %1 is not in the library").arg(pnOf(*fp)));
+                    else if (z.wire > 0.0 && hi < z.wire * 0.98)
+                        add(rule, 2, &b, QStringLiteral("wire-end sleeve %1 opens to %2 mm - the wire is %3 mm").arg(pnOf(*fp), mm(hi), mm(z.wire)));
+                    else if (z.wire > 0.0 && lo > z.wire * 1.02)
+                        add(rule, 2, &b,
+                            QStringLiteral("wire-end sleeve %1 recovers only to %2 mm - loose on the %3 mm wire").arg(pnOf(*fp), mm(lo), mm(z.wire)));
+                }
+            return;
+        }
+        if (b.type != BrickType::End) return;
+        const LibraryPart* p = partOf(b.libPart);
+        if (!p) return;
+        for (const QString& o : d.linksOf(b.id)) {
+            const Brick* s = d.brick(o);
+            if (!s || !brickIsSpecial(s->type)) continue;
+            const RunSize z = sizeOf(*s);
+            const QString from = drcTitle(*s);
+            // A SPLICE: the wires that go into it against its insertion size.
+            if (p->kind == PartKind::Splice) {
+                double lo = 0.0, hi = 0.0;
+                if (!rangeOf(*p, QStringLiteral("insertion"), lo, hi)) continue;
+                const BrickLink* l = d.link(b.id, o);
+                const int n = l && l->wires > 0 ? l->wires : std::max(1, s->run.wires);
+                const double bundle = z.wire > 0.0 ? (n > 1 ? z.wire * std::sqrt(n / 0.7) : z.wire) : 0.0;
+                if (bundle > 0.0 && bundle > hi * 1.02)
+                    add(rule, 2, &b,
+                        QStringLiteral("the %1 wire(s) of %2 (%3 mm) do not go into its insertion size (%4-%5 mm)")
+                            .arg(n).arg(from, mm(bundle), mm(lo), mm(hi)), true);
+                continue;
+            }
+            // A CONNECTOR A COVERED RUN GOES INTO: its cable entry known, to check the run against.
+            if (p->kind == PartKind::Connector && s->run.outermost() != QLatin1String("wires")) {
+                double lo = 0.0, hi = 0.0;
+                if (!rangeOf(*p, QStringLiteral("cableEntry"), lo, hi))
+                    add(QStringLiteral("compat-data"), 1, &b,
+                        QStringLiteral("the cable entry of %1 is not in the library - %2 cannot be checked into it").arg(pnOf(*p), from));
+            }
+        }
     };
 
     // DESIGNATORS: every end part has one, and no two the same.
@@ -635,6 +799,8 @@ std::vector<BrickIssue> brickDrc(const BrickDesign& d, const QString& harness, c
             if (run && parseWireList(b.joint.inWires, run->run.wires).isEmpty())
                 add(QStringLiteral("joint"), 1, &b, QStringLiteral("has no wires going into it"));
         }
+        // ENTRY SIZES FROM THE PARTS' OWN PARAMETERS against what goes into them.
+        checkEntrySizes(b);
         // COMPATIBILITY: every finding the fit checks make, each under its rule - what the logical rules above already
         // say (not linked, no part) left to them.
         std::vector<BrickFinding> found;

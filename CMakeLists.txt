@@ -148,6 +148,8 @@ add_library(edraw_core STATIC
     src/app/PartWebDataDialog.cpp
     src/app/MechanicalValidationDialog.h
     src/app/MechanicalValidationDialog.cpp
+    src/app/RuleExplainer.h
+    src/app/RuleExplainer.cpp
     src/app/BlockDialog.h
     src/app/BlockDialog.cpp
     src/app/TemplateDialog.h

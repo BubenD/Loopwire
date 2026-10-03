@@ -9,6 +9,7 @@
 #include "app/DrawingPreview.h"
 #include "app/Editor.h"
 #include "app/MechanicalValidationDialog.h"
+#include "app/RuleExplainer.h"
 #include "harness/BrickHarness.h"
 #include "harness/PartsLibrary.h"
 #include "model/Block.h"
@@ -5104,6 +5105,99 @@ void testRoundThirtyThree() {
     }
 }
 
+// ROUND THIRTY-FOUR: entry sizes from the parts' own parameters; the rules by their trade names, each explained;
+// hovered, a rule shows its animated explainer; the DRC's rules and bypass table open on their own.
+void testRoundThirtyFour() {
+    auto part = [](const char* id, PartKind k, std::initializer_list<std::pair<const char*, const char*>> ps) {
+        LibraryPart p;
+        p.id = p.mfrPn = QString::fromLatin1(id);
+        p.kind = k;
+        for (const auto& [key, v] : ps) p.params[QString::fromLatin1(key)] = QString::fromLatin1(v);
+        return p;
+    };
+    PartsLibrary lib;
+    lib.parts = {part("ES-WIRE", PartKind::Wire, {{"od", "1.0"}}), part("ES-CABLE", PartKind::Cable, {{"od", "8"}}),
+                 part("ES-SMALL", PartKind::Heatshrink, {{"entryMin", "2"}, {"entryMax", "5"}, {"wall", "0.5"}}),
+                 part("ES-BIG", PartKind::Heatshrink, {{"entryMin", "2"}, {"entryMax", "12"}, {"wall", "0.5"}}),
+                 part("ES-END", PartKind::Heatshrink, {{"entryMin", "2"}, {"entryMax", "4"}}),
+                 part("ES-CONN", PartKind::Connector, {{"pins", "4"}})};
+    BrickDesign d;
+    const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+    const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+    const QString y = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+    d.connect(x, c);
+    d.connect(c, y);
+    d.brick(x)->libPart = QStringLiteral("ES-CONN");
+    BrickRunSpec& r = d.brick(c)->run;
+    r.wires = 4;
+    r.stack = {QStringLiteral("wires"), QStringLiteral("cable")};
+    r.stackParts.insert(QStringLiteral("wires"), QStringLiteral("ES-WIRE"));
+    r.stackParts.insert(QStringLiteral("cable"), QStringLiteral("ES-CABLE"));
+    r.transitions = RunEnds::Both;
+    r.transitionPart = QStringLiteral("ES-SMALL");   // opens to 5 over an 8 mm cable
+    r.fanEndShrink = true;
+    r.fanEndShrinkPart = QStringLiteral("ES-END");    // recovers to 2 on a 1 mm wire
+    auto said = [&] {
+        QStringList out;
+        for (const BrickIssue& i : brickDrc(d, QStringLiteral("W1"), lib, [](const QString&) { return 1; }))
+            if (i.rule == QLatin1String("compat-entrysize") || i.rule == QLatin1String("compat-data")) out << i.message;
+        return out;
+    };
+    const QStringList wrong = said();
+    for (const QString& m : wrong) std::printf("  entry size: %s\n", qPrintable(m));
+    auto has = [&](const QStringList& l, const char* bit) {
+        for (const QString& m : l)
+            if (m.contains(QLatin1String(bit))) return true;
+        return false;
+    };
+    check(has(wrong, "opens to 5.0 mm - the cable body is 8.0 mm"), "entry size: a transition too small to go over the cable");
+    check(has(wrong, "wire-end sleeve ES-END recovers only to 2.0 mm"), "entry size: a wire-end sleeve too big to grip its wire");
+    check(has(wrong, "cable entry of ES-CONN is not in the library"), "entry size: a connector's cable entry missing from the library");
+    r.transitionPart = QStringLiteral("ES-BIG");
+    r.fanEndShrink = false;
+    check(!has(said(), "opens to"), "entry size: a transition that goes over the cable passes");
+
+    // THE RULES BY THEIR TRADE NAMES, every one explained, every one with its picture.
+    bool named = false, explained = true, pictured = true;
+    for (const BrickDrcRule& rule : brickDrcRules()) {
+        named = named || rule.label == QStringLiteral("Duplicate reference designator");
+        explained = explained && rule.description.size() > 20;
+        pictured = pictured && RuleExplainer::hasScene(rule.id);
+    }
+    for (const char* id : {"nc", "openwire", "dup", "mixedpins", "norefdes", "nopn", "shieldpair", "twistpair", "shielddrain"})
+        pictured = pictured && RuleExplainer::hasScene(QLatin1String(id));
+    check(named && explained, "rules: by their trade names, each with what it checks");
+    check(pictured, "rules: every harness and schematic rule has its own animated picture");
+
+    // HOVERED IN THE RULES LIST, the explainer shows beside it; left, it goes. And the rules open on their own.
+    {
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        MechanicalValidationDialog drc(&ed);
+        drc.showRules();
+        auto* rules = drc.findChild<QDialog*>(QStringLiteral("harnessDrcRulesDialog"));
+        check(rules && rules->isVisible() && !drc.isVisible(), "rules: open on their own, without the DRC window");
+        drc.showBypass();
+        auto* bypass = drc.findChild<QDialog*>(QStringLiteral("harnessDrcBypassDialog"));
+        check(bypass && bypass->isVisible() && !drc.isVisible(), "bypass table: opens on its own too");
+        auto* cb = drc.findChild<QCheckBox*>(QStringLiteral("harnessDrcRule_compat-entrysize"));
+        if (cb) {
+            QEvent enter(QEvent::Enter);
+            QApplication::sendEvent(cb, &enter);
+            RuleExplainer* x = RuleExplainer::instance();
+            check(x->isVisible() && x->rule() == QStringLiteral("compat-entrysize"), "rules: hovered, its explainer shows");
+            QEvent leave(QEvent::Leave);
+            QApplication::sendEvent(cb, &leave);
+            check(!x->isVisible(), "rules: left, it goes");
+        } else {
+            check(false, "rules: the entry size rule in the list");
+        }
+        if (rules) rules->close();
+        if (bypass) bypass->close();
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -5151,6 +5245,7 @@ int run_brickharness_tests() {
     testRoundThirtyOne();
     testRoundThirtyTwo();
     testRoundThirtyThree();
+    testRoundThirtyFour();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

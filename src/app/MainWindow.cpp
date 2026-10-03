@@ -24,6 +24,7 @@
 #include "app/HarnessStepsDialog.h"
 #include "app/MechModelsDialog.h"
 #include "app/MechanicalValidationDialog.h"
+#include "app/RuleExplainer.h"
 #include "app/TemplateDialog.h"
 #include "app/ScientificCalculatorDialog.h"
 #include "model/Block.h"
@@ -13584,9 +13585,30 @@ void MainWindow::showValidationRules() {
     auto* lay = new QVBoxLayout(dlg);
     lay->addWidget(new QLabel(QStringLiteral("Tick the checks to run when validating:"), dlg));
 
+    // HOVERED, each rule shows the fault and the fix, animated, with what it means.
+    static const QHash<QString, QString> meaning = {
+        {QStringLiteral("nc"), QStringLiteral("Every pin either carries a wire or is marked not-connected with an X. "
+                                              "A pin with neither is a connection forgotten.")},
+        {QStringLiteral("openwire"), QStringLiteral("Both ends of every wire land on a pin. A wire ending in free space "
+                                                    "goes nowhere.")},
+        {QStringLiteral("dup"), QStringLiteral("Every pin of a connector has its own name. Two pins with the same name "
+                                               "cannot be wired apart.")},
+        {QStringLiteral("mixedpins"), QStringLiteral("A connector's pins are all numbers or all letters, as its "
+                                                     "manufacturer names them - not a mix of the two.")},
+        {QStringLiteral("norefdes"), QStringLiteral("Every connector has a reference designator (J1, P2...) for the "
+                                                    "drawing, the BOM and the wire list.")},
+        {QStringLiteral("nopn"), QStringLiteral("Every connector has a part number, so it can be bought.")},
+        {QStringLiteral("shieldpair"), QStringLiteral("A shield is drawn around the wires it screens - two or more, "
+                                                      "never one alone.")},
+        {QStringLiteral("twistpair"), QStringLiteral("A twist is drawn across the wires twisted together - two or "
+                                                     "more, never one alone.")},
+        {QStringLiteral("shielddrain"), QStringLiteral("A shield's drain lands on a pin or a wire, or is terminated - "
+                                                       "a drain left free screens nothing.")},
+    };
     for (const auto& [id, label] : validationRuleDefs()) {
         auto* cb = new QCheckBox(label, dlg);
         cb->setChecked(editor_->ruleEnabled(id));
+        RuleExplainer::attach(cb, id, label, meaning.value(id, label));
         const QString rid = id;
         connect(cb, &QCheckBox::toggled, this, [this, rid](bool on) {
             editor_->setRuleEnabled(rid, on);
@@ -13817,8 +13839,13 @@ void MainWindow::showBomDialog() {
 QToolButton* MainWindow::makeHarnessStepsButton(QWidget* parent) {
     auto* btn = new QToolButton(parent);
     btn->setText(QStringLiteral("Harness build\nwizard"));
+    btn->setObjectName(QStringLiteral("harnessWizardButton"));
     btn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
     btn->setIconSize(QSize(26, 26));
+    // WIDE ENOUGH FOR ITS WHOLE NAME, and the same look as the buttons beside it.
+    btn->setMinimumWidth(std::max(96, btn->fontMetrics().horizontalAdvance(QStringLiteral("Harness build")) + 16));
+    btn->setAutoRaise(true);
+    btn->setFocusPolicy(Qt::NoFocus);
     btn->setToolTip(QStringLiteral(
         "Lay a harness out as bricks - end parts and the runs between them - with the real drawing "
         "previewed as you go"));
@@ -13976,9 +14003,10 @@ QToolButton* MainWindow::makeDrcRulesButton(QWidget* parent) {
         ip.end();
         btn->setIcon(QIcon(pm));
     }
+    // THE RULES ALONE, not the DRC window with them.
     connect(btn, &QToolButton::clicked, this, [this] {
-        showMechanicalValidation();
-        if (mechCheckDlg_) mechCheckDlg_->showRules();
+        prepareMechanicalValidation();
+        mechCheckDlg_->showRules();
     });
     return btn;
 }
@@ -13994,20 +14022,25 @@ QToolButton* MainWindow::makeDrcBypassButton(QWidget* parent) {
     btn->setFocusPolicy(Qt::NoFocus);
     btn->setToolTip(QStringLiteral("The harness DRC findings you have bypassed (accepted) - its own, not the schematic's"));
     btn->setIcon(makeBypassIcon());
+    // THE BYPASS TABLE ALONE, not the DRC window with it.
     connect(btn, &QToolButton::clicked, this, [this] {
-        showMechanicalValidation();
-        if (mechCheckDlg_) mechCheckDlg_->showBypass();
+        prepareMechanicalValidation();
+        mechCheckDlg_->showBypass();
     });
     return btn;
 }
 
-void MainWindow::showMechanicalValidation() {
+void MainWindow::prepareMechanicalValidation() {
     // Modeless and kept alive: a gauge is changed on the drawing, Check again is pressed, and the
     // answers follow - which is the whole point of checking against the bundle rather than a figure.
     if (!mechCheckDlg_) mechCheckDlg_ = new MechanicalValidationDialog(editor_, this);
     // THE HARNESS OPEN IN THE WIZARD is checked as it is now, saved or not.
     if (brickWizard_) mechCheckDlg_->setOpenHarness(&brickWizard_->design(), brickWizard_->harnessName());
     mechCheckDlg_->readFromDrawing();
+}
+
+void MainWindow::showMechanicalValidation() {
+    prepareMechanicalValidation();
     mechCheckDlg_->show();
     mechCheckDlg_->raise();
     mechCheckDlg_->activateWindow();

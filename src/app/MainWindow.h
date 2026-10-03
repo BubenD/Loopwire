@@ -667,6 +667,8 @@ private:
     // Mark (or unmark) the selection as the part's connection line.
     void markConnectionLine();
     void showMechanicalValidation();
+    // The DRC made and checked, not shown - for its rules or bypass table on their own.
+    void prepareMechanicalValidation();
     // The Tools group: the calculations, on both harness tabs because they are asked on one side and
     // checked on the other.
     void showBundleDiameter();

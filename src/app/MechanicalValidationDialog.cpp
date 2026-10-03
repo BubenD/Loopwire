@@ -1,6 +1,7 @@
 #include "app/MechanicalValidationDialog.h"
 
 #include "app/Editor.h"
+#include "app/RuleExplainer.h"
 #include "harness/Bom.h"
 #include "model/Document.h"
 
@@ -249,6 +250,8 @@ void MechanicalValidationDialog::showRules() {
             if (r.group != group) continue;
             auto* cb = new QCheckBox(r.label, box);
             cb->setObjectName(QStringLiteral("harnessDrcRule_") + r.id);
+            // HOVERED: the fault and the fix, animated, with what the rule means.
+            RuleExplainer::attach(cb, r.id, r.label, r.description);
             cb->setChecked(!editor_ || editor_->drcRuleEnabled(r.id));
             const QString id = r.id;
             connect(cb, &QCheckBox::toggled, this, [this, id](bool on) {
