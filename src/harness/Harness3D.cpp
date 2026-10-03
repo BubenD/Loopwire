@@ -5,6 +5,7 @@
 #include <QDateTime>
 #include <QFileInfo>
 #include <QHash>
+#include <QJsonArray>
 
 #include <algorithm>
 #include <cmath>
@@ -79,6 +80,18 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
         const QString copy = e.meta.value(QStringLiteral("partCopy")).toString();
         return !copy.isEmpty() ? copy : e.meta.value(QStringLiteral("brickId")).toString();
     };
+    auto brickOf = [](const Entity& e) {
+        const QString id = e.meta.value(QStringLiteral("brickId")).toString();
+        return !id.isEmpty() ? id : e.meta.value(QStringLiteral("harnessBrick")).toString();
+    };
+    // A wire's colour: the one the run carries for it, else the general colours.
+    auto colourOf = [](const Entity& e, int k) {
+        const QJsonArray said = e.meta.value(QStringLiteral("wireColours")).toArray();
+        const QColor c(k < said.size() ? said.at(k).toString() : QString());
+        return c.isValid() ? c : wireColour(k);
+    };
+    const size_t firstRunItem = scene.items.size();
+    (void)firstRunItem;
     for (const Entity& e : ents) {
         // A RUN OF ONE WIRE is drawn as a wire - a double line, not a bundle: one tube along it.
         if (e.type == EntityType::Polyline && e.meta.value(QStringLiteral("double")).toBool() && e.points.size() >= 2 &&
@@ -91,8 +104,9 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
             for (const Vec2& p : e.points) path.push_back(at3(p));
             Harness3DItem wi;
             wi.mesh = tubeMesh(path, std::max(0.2, e.meta.value(QStringLiteral("gap")).toDouble(1.0)) / 2.0, 8, true);
-            wi.color = wireColour(0);
+            wi.color = colourOf(e, 0);
             wi.what = QStringLiteral("wire");
+            wi.brick = brickOf(e);
             scene.items.push_back(std::move(wi));
             continue;
         }
@@ -115,6 +129,7 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
             it.mesh = tubeMesh(stretch(route, fanA, total - fanB), bodyW / 2.0, 18, true);
             it.color = body == QLatin1String("heatshrink") ? QColor(42, 42, 46) : QColor(70, 74, 82);
             it.what = QStringLiteral("run");
+            it.brick = brickOf(e);
             scene.items.push_back(std::move(it));
             // ITS TRANSITION SLEEVES, on the body at the ends it says.
             const QString sides = e.meta.value(QStringLiteral("twistBodyTransitionSides")).toString();
@@ -128,6 +143,7 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
                 sl.mesh = tubeMesh(stretch(route, s0, s1), std::max(width, bodyW * 1.05) / 2.0, 18, true);
                 sl.color = QColor(28, 28, 30);
                 sl.what = QStringLiteral("transition");
+                sl.brick = brickOf(e);
                 scene.items.push_back(std::move(sl));
             };
             if (sides == QLatin1String("both") || sides == QLatin1String("start")) sleeve(fanA, fanA + bootA, wA);
@@ -150,8 +166,9 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
                 if (piece.size() < 2) return;
                 Harness3DItem wi;
                 wi.mesh = tubeMesh(piece, ww / 2.0, 8, false);
-                wi.color = wireColour(k);
+                wi.color = colourOf(e, k);
                 wi.what = QStringLiteral("wire");
+                wi.brick = brickOf(e);
                 scene.items.push_back(std::move(wi));
             };
             if (!covered) wire(0.0, len);
@@ -165,7 +182,7 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
     // ---- THE PARTS ---------------------------------------------------------------------------------
     struct Part {
         Bounds box;
-        QString lib, name;
+        QString lib, name, brick;
     };
     QHash<QString, Part> parts;
     QStringList order;
@@ -187,6 +204,7 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
         p.box.expand(e.bounds());
         if (p.lib.isEmpty()) p.lib = e.meta.value(QStringLiteral("libPart")).toString();
         if (p.name.isEmpty()) p.name = e.meta.value(QStringLiteral("partName")).toString();
+        if (p.brick.isEmpty()) p.brick = brickOf(e);
     }
     for (const QString& g : order) {
         const Part& p = parts.value(g);
@@ -222,6 +240,7 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
         const V3 centre{c.x, c.y, 0.0};
         Harness3DItem it;
         it.what = !p.name.isEmpty() ? p.name : p.lib;
+        it.brick = p.brick;
         // ITS OWN 3D MODEL, where one is attached to its library part: its longest side along the way it goes in, its
         // next across, its shortest standing up - scaled to the length it is drawn.
         const QString file = modelOf && !p.lib.isEmpty() ? modelOf(p.lib) : QString();

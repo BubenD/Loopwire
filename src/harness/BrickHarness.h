@@ -297,6 +297,9 @@ struct BrickDesign {
     // A DIMENSION MOVED IN OR OUT on the drawing (its line dragged in the preview): by its key - "manual:<n>" for one
     // put on between two bricks, "<special>:<kind>:<part>" for a run's - how far off its own place, in mm.
     QHash<QString, double> dimShift;
+    // THE SCHEMATIC'S WIRE COLOURS by net (its colour code - WH, RD, #rrggbb), for the drawn wires to take. Not saved:
+    // read from the drawing's schematic each time.
+    QHash<QString, QString> netColours;
     // HELD WHERE IT IS on the drawing while a part is dragged there: this part stays at this x, so only what the drag
     // changes moves. Not saved.
     QString holdPart;

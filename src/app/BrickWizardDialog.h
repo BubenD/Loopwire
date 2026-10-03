@@ -308,6 +308,8 @@ public:
 signals:
     // The bill was changed from here, so the window showing it can catch up.
     void bomChanged();
+    // The bricks picked, so a 3D view elsewhere lights them too.
+    void brickSelectionChanged(const QStringList& ids);
     // A brick's part asked to be opened in the parts library.
     void openInLibraryRequested(const QString& partId);
 
@@ -577,6 +579,12 @@ private:
     QToolButton* transLenFin2Auto_ = nullptr;
     QComboBox* symRef_ = nullptr;                // the part Symmetric lays the drawing out about
     QWidget* navBox_ = nullptr;                  // the wheel in the pane's top right corner, and the list under it
+    // THE BRICKS OR THE HARNESS IN 3D, in the pane's place - chosen at the window's bottom left.
+    QStackedWidget* paneStack_ = nullptr;
+    class View3DPane* view3d_ = nullptr;
+    QComboBox* paneSwitch_ = nullptr;
+    // The schematic's wire colours by net, for the drawn wires to take (BrickDesign::netColours).
+    void syncNetColours();
     NavWheel* navWheel_ = nullptr;
     void placeNav();
     QString symRefKey_;

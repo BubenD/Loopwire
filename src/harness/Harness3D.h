@@ -20,6 +20,7 @@ struct Harness3DItem {
     QString what;          // a part's name or P/N, or the run's
     bool model = false;    // a part shown by its own 3D model
     bool cube = false;     // a part shown as a box, having none
+    QString brick;         // the wizard brick it is (on the sheet: the brick it was placed from)
 };
 
 struct Harness3DScene {

@@ -1,6 +1,8 @@
 #include "harness/BrickHarness.h"
 
 #include "geometry/Geometry.h"
+#include "harness/CableSpec.h"
+#include "harness/Harness.h"
 #include "harness/MechanicalHarness.h"
 #include "harness/MechModels.h"
 #include "tools/EntityTransforms.h"
@@ -1949,6 +1951,21 @@ static double runLeadMm(const BrickRunSpec& r) {
     return std::max({fanA, fanB, 10.0}) + std::max(0.0, r.kneeRadiusMm) + 5.0;
 }
 
+namespace {
+// A wire colour as it is written - a code (WH, GNYE), its name (White), a stripe (WH/RD: the base), or #rrggbb - as hex;
+// empty when it is none of these.
+QString colourHexOf(const QString& said) {
+    QString s = said.trimmed();
+    if (s.isEmpty()) return QString();
+    if (s.startsWith(QLatin1Char('#'))) return s;
+    s = s.section(QRegularExpression(QStringLiteral("[/\\-\\s,]")), 0, 0);
+    for (const QString& code : wireColorCodes())
+        if (code.compare(s, Qt::CaseInsensitive) == 0 || wireColorName(code).compare(s, Qt::CaseInsensitive) == 0)
+            return wireColorHex(code);
+    return QString();
+}
+} // namespace
+
 BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* catalog,
                              const std::function<int(const QString& libPart)>& itemOf) {
     // AUTO SCALE: an end left on Auto is made the size of the drawing's usual entry - its entry faces as
@@ -3503,9 +3520,50 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             const bool finishSide = atB != br.flipped;
             return !r.transitionSame && finishSide ? r.transitionLayerStepsFinish : r.transitionLayerSteps;
         };
+        // THE COLOUR OF EACH OF ITS WIRES: the schematic's wire on that wire's net, else the cable's conductor of that
+        // number, else the wire part's own colour - none of them, nothing (shown in general colours).
+        const QJsonArray wireColours = [&] {
+            const Brick* cable = isSub ? branches[static_cast<size_t>(br.splitOf)].special : &s;
+            QList<int> nums;
+            if (isSub && br.viaBranch) nums = parseWireList(s.run.bridgeWires, cable->run.wires);
+            if (brickIsBridge(s))
+                if (const Brick* from = design.brick(joinedSpecial(design, s.id))) {
+                    cable = from;
+                    nums = parseWireList(s.run.bridgeWires, from->run.wires);
+                }
+            if (nums.isEmpty())
+                for (int k = 1; k <= wires; ++k) nums << k;
+            const BrickRunSpec& cr = cable->run;
+            QStringList conductor;
+            if (const LibraryPart* cp = catalog ? catalog->byId(cr.stackParts.value(QStringLiteral("cable"))) : nullptr) {
+                const CableSpec cs = cableSpecOf(*cp);
+                for (const CableElement& el : cs.elements)
+                    for (int n = 0; n < std::max(1, el.count); ++n)
+                        for (int c = 0; c < cableConductorsPerElement(el.kind); ++c)
+                            conductor << (c < el.colours.size() ? el.colours[c] : QString());
+            }
+            QString wireColour;
+            for (const BrickRunSpec* spec : {&r, &cr})
+                if (const LibraryPart* wp = catalog ? catalog->byId(spec->stackParts.value(QStringLiteral("wires"))) : nullptr)
+                    if (wireColour.isEmpty()) wireColour = wp->value(QStringLiteral("colour"));
+            QJsonArray out;
+            bool any = false;
+            for (int i = 0; i < wires; ++i) {
+                const int n = i < nums.size() ? nums[i] : i + 1;
+                QString hex;
+                const QString net = n - 1 < cr.nets.size() ? cr.nets[n - 1].trimmed() : QString();
+                if (!net.isEmpty()) hex = colourHexOf(design.netColours.value(net));
+                if (hex.isEmpty() && n - 1 < conductor.size()) hex = colourHexOf(conductor[n - 1]);
+                if (hex.isEmpty()) hex = colourHexOf(wireColour);
+                any = any || !hex.isEmpty();
+                out.append(hex);
+            }
+            return any ? out : QJsonArray();
+        }();
         if (wires == 1) {
             // ONE WIRE is a wire, not a bundle.
             Entity w;
+            if (!wireColours.isEmpty()) w.meta.insert(QStringLiteral("wireColours"), wireColours);
             w.type = EntityType::Polyline;
             // ITS BENDS ROUNDED like a bundle's - the bend radius said, or three times the wire across.
             w.points = filletedRoute(route, r.kneeRadiusMm >= 0.0 ? r.kneeRadiusMm : ww * 3.0);
@@ -3712,6 +3770,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             // STRETCHED OVER THE PART at an end: the transition cut square there, the piece over the part carrying on.
             if (stretchA > 1e-9) run.meta.insert(QStringLiteral("twistEndBootSquareStart"), true);
             if (stretchB > 1e-9) run.meta.insert(QStringLiteral("twistEndBootSquareFinish"), true);
+            if (!wireColours.isEmpty()) run.meta.insert(QStringLiteral("wireColours"), wireColours);
             made.push_back(run);
             for (Entity& e : overRun) made.push_back(std::move(e));
             overRun.clear();

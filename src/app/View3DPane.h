@@ -29,6 +29,10 @@ public:
     void setModelLookup(std::function<QString(const QString& libPart)> modelOf);
     // Built again from its source, and brought round to show the whole of it.
     void rebuild(bool fit = true);
+    // The harness from one place only - the wizard's own view: no choice of where from.
+    void setSourceChoice(bool shown);
+    // THE BRICKS PICKED: their parts and runs lit in the picture.
+    void setHighlight(const QStringList& bricks);
     const Harness3DScene& scene() const { return scene_; }
     View3DCanvas* canvas() const { return canvas_; }
 
@@ -51,6 +55,8 @@ public:
     // From the top, the front, the side, or at an angle (isometric).
     void viewFrom(const QString& which);
     void setWireframe(bool on);
+    void setHighlight(const QStringList& bricks);
+    QStringList highlighted() const { return lit_; }
     Camera3D& camera() { return cam_; }
     // The picture as it is now, for the tests.
     QImage render(const QSize& size) const;
@@ -67,6 +73,7 @@ private:
     const Harness3DScene* scene_ = nullptr;
     Camera3D cam_;
     bool wire_ = false;
+    QStringList lit_;
     QPoint last_;
     Qt::MouseButton dragging_ = Qt::NoButton;
 };

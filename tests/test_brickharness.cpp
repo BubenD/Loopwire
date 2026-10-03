@@ -5469,6 +5469,92 @@ void testRoundThirtySix() {
     }
 }
 
+// ROUND THIRTY-SEVEN: the wires in their own colours (the schematic's by net, the wire part's), general colours where
+// none is known; the wizard's pane switched to 3D; the bricks picked lit in 3D.
+void testRoundThirtySeven() {
+    PartsCatalog cat;
+    cat.setRemembering(false);
+    QString red;
+    {
+        LibraryPart& w = cat.active().add(PartKind::Wire);
+        w.mfrPn = QStringLiteral("RED-WIRE");
+        w.params[QStringLiteral("colour")] = QStringLiteral("Red");
+        red = w.id;
+    }
+    BrickDesign d;
+    d.catalog = &cat;
+    const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+    const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+    const QString y = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+    d.connect(x, c);
+    d.connect(c, y);
+    BrickRunSpec& r = d.brick(c)->run;
+    r.wires = 3;
+    auto coloursOf = [&] {
+        for (const Entity& e : buildBrickHarness(d, &cat).entities)
+            if (e.type == EntityType::TwistedPair) return e.meta.value(QStringLiteral("wireColours")).toArray();
+        return QJsonArray();
+    };
+    check(coloursOf().isEmpty(), "colours: none known - none said, the general colours shown");
+    r.stackParts.insert(QStringLiteral("wires"), red);
+    QJsonArray said = coloursOf();
+    std::printf("  colours: from the wire part %s %s %s\n", qPrintable(said.at(0).toString()), qPrintable(said.at(1).toString()),
+                qPrintable(said.at(2).toString()));
+    check(said.size() == 3 && QColor(said.at(0).toString()).red() > 150 && QColor(said.at(0).toString()).green() < 100,
+          "colours: the wire part's colour on every wire");
+    // THE SCHEMATIC'S COLOUR BY NET comes first.
+    r.nets = {QStringLiteral("N1"), QString(), QString()};
+    d.netColours.insert(QStringLiteral("N1"), QStringLiteral("BU"));
+    said = coloursOf();
+    check(said.size() == 3 && QColor(said.at(0).toString()).blue() > QColor(said.at(0).toString()).red() &&
+              QColor(said.at(1).toString()).red() > 150,
+          "colours: the schematic's wire on a wire's net first, the wire part's for the rest");
+    // In 3D, each wire in its colour.
+    {
+        std::vector<Entity> ents = buildBrickHarness(d, &cat).entities;
+        const Harness3DScene sc = buildHarness3D(ents, {});
+        bool blue = false, redWire = false;
+        for (const Harness3DItem& it : sc.items)
+            if (it.what == QLatin1String("wire")) {
+                blue = blue || (it.color.blue() > 150 && it.color.red() < 100);
+                redWire = redWire || (it.color.red() > 150 && it.color.green() < 100);
+                check(it.brick == c, "3d: each wire knows its run's brick");
+            }
+        check(blue && redWire, "3d: the wires drawn in their own colours");
+    }
+    // THE WIZARD: its pane switched to 3D, the bricks picked lit there.
+    {
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        BrickWizardDialog dlg(&ed);
+        dlg.resize(1300, 850);
+        dlg.show();
+        BrickDesign& w = dlg.design();
+        const QString a = w.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString run = w.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString b = w.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        w.connect(a, run);
+        w.connect(run, b);
+        auto* sw = dlg.findChild<QComboBox*>(QStringLiteral("brickPaneSwitch"));
+        auto* stack = dlg.findChild<QStackedWidget*>(QStringLiteral("brickPaneStack"));
+        auto* v3 = dlg.findChild<View3DPane*>(QStringLiteral("brickView3d"));
+        check(sw && stack && v3 && sw->count() == 2, "wizard: a switch at the bottom left - Bricks or 3D view");
+        if (sw && stack && v3) {
+            sw->setCurrentIndex(1);
+            emit sw->activated(1);
+            check(stack->currentWidget() == v3 && v3->scene().parts == 2 && v3->scene().runs == 1,
+                  "wizard: 3D in the pane's place, the harness as it is being built");
+            dlg.selectBrick(b);
+            check(v3->canvas()->highlighted().contains(b), "wizard: the brick picked lit in 3D");
+            sw->setCurrentIndex(0);
+            emit sw->activated(0);
+            check(stack->currentWidget() == dlg.canvas(), "wizard: and back to the bricks");
+        }
+        dlg.hide();
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -5519,6 +5605,7 @@ int run_brickharness_tests() {
     testRoundThirtyFour();
     testRoundThirtyFive();
     testRoundThirtySix();
+    testRoundThirtySeven();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

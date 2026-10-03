@@ -15398,6 +15398,10 @@ void MainWindow::showMechWizard() {
             refreshBomPanel();
             if (bomDlg_) bomDlg_->reload();
         });
+        // THE BRICKS PICKED in the wizard, lit in the 3D view.
+        connect(brickWizard_, &BrickWizardDialog::brickSelectionChanged, this, [this](const QStringList& ids) {
+            if (view3dPane_) view3dPane_->setHighlight(ids);
+        });
         // "Open in library" on a brick: the parts library, on that part.
         connect(brickWizard_, &BrickWizardDialog::openInLibraryRequested, this, [this](const QString& partId) {
             showPartsLibrary();

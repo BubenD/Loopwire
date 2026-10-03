@@ -67,6 +67,15 @@ void View3DPane::setSources(std::function<std::vector<Entity>()> drawing, std::f
 
 void View3DPane::setModelLookup(std::function<QString(const QString&)> modelOf) { modelOf_ = std::move(modelOf); }
 
+void View3DPane::setSourceChoice(bool shown) { source_->setVisible(shown); }
+
+void View3DPane::setHighlight(const QStringList& bricks) { canvas_->setHighlight(bricks); }
+
+void View3DCanvas::setHighlight(const QStringList& bricks) {
+    lit_ = bricks;
+    update();
+}
+
 void View3DPane::rebuild(bool fit) {
     const bool fromWizard = source_->currentIndex() == 1;
     std::vector<Entity> ents = fromWizard ? (wizard_ ? wizard_() : std::vector<Entity>{})
@@ -152,7 +161,13 @@ QImage View3DCanvas::render(const QSize& size) const {
     QImage img(size.expandedTo(QSize(1, 1)), QImage::Format_RGB32);
     std::vector<DrawItem3D> items;
     if (scene_)
-        for (const Harness3DItem& it : scene_->items) items.push_back({&it.mesh, it.color});
+        for (const Harness3DItem& it : scene_->items) {
+            // PICKED: lit in the pane's highlight colour, the part still read through it.
+            QColor c = it.color;
+            if (!it.brick.isEmpty() && lit_.contains(it.brick))
+                c = QColor((c.red() + 2 * 43) / 3, (c.green() + 2 * 208) / 3, (c.blue() + 2 * 255) / 3);
+            items.push_back({&it.mesh, c});
+        }
     renderScene3D(img, items, cam_, wire_, QColor(30, 36, 44));
     return img;
 }

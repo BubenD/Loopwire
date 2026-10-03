@@ -1,4 +1,6 @@
 #include "app/BrickWizardDialog.h"
+#include "app/View3DPane.h"
+#include "harness/Datasheet.h"
 
 #include "app/DrawingPreview.h"
 #include "app/Editor.h"
@@ -1744,8 +1746,23 @@ void BrickWizardDialog::buildUi() {
 
     // THE MIDDLE: the low-detail pane above the preview.
     middle_ = new QSplitter(Qt::Vertical, split);
-    canvas_ = new BrickCanvas(&design_, middle_);
+    paneStack_ = new QStackedWidget(middle_);
+    paneStack_->setObjectName(QStringLiteral("brickPaneStack"));
+    canvas_ = new BrickCanvas(&design_, paneStack_);
     canvas_->setObjectName(QStringLiteral("brickCanvas"));
+    paneStack_->addWidget(canvas_);
+    // THE HARNESS IN 3D, in the bricks' place when it is chosen: the harness as it is being built, its parts as their
+    // 3D models, the bricks picked lit.
+    view3d_ = new View3DPane(paneStack_);
+    view3d_->setObjectName(QStringLiteral("brickView3d"));
+    view3d_->setSourceChoice(false);
+    view3d_->setSources([this] { return buildBrickHarness(design_, &catalog_).entities; }, {});
+    view3d_->setModelLookup([this](const QString& libPart) {
+        const LibraryPart* p = catalog_.byId(libPart);
+        const QString stored = p ? p->value(QStringLiteral("model3d")) : QString();
+        return stored.isEmpty() ? QString() : DatasheetStore::pathOf(stored);
+    });
+    paneStack_->addWidget(view3d_);
     // THE NAVIGATION ON THE PANE: a round wheel in its top right corner - move up, turn, right, Symmetric, down, the tie,
     // left, turn back, clockwise from the top - the part Symmetric is about in the list under it. The buttons it works
     // are kept, out of sight, as what it presses.
@@ -1883,6 +1900,11 @@ void BrickWizardDialog::buildUi() {
         bl->addLayout(row);
         connect(rm, &QPushButton::clicked, this, [this] { removeFromBom(bom_->currentRow()); });
     }
+    // THE BRICKS PICKED, lit in 3D - here, and in the main window's 3D view.
+    connect(canvas_, &BrickCanvas::selectionChanged, this, [this](const QString&) {
+        if (view3d_) view3d_->setHighlight(canvas_->selection());
+        emit brickSelectionChanged(canvas_->selection());
+    });
     connect(canvas_, &BrickCanvas::selectionChanged, this, [this](const QString& now) {
         // Matching a part to another: the brick just clicked is the other one.
         if (!matchSource_.isEmpty() && !now.isEmpty() && now != matchSource_) {
@@ -2006,6 +2028,20 @@ void BrickWizardDialog::buildUi() {
     split->setSizes({400, 700, 440});
 
     auto* bottom = new QHBoxLayout;
+    // THE BRICKS OR THE HARNESS IN 3D, in the pane's place.
+    paneSwitch_ = new QComboBox(this);
+    paneSwitch_->setObjectName(QStringLiteral("brickPaneSwitch"));
+    paneSwitch_->addItems({QStringLiteral("Bricks"), QStringLiteral("3D view")});
+    paneSwitch_->setToolTip(QStringLiteral("The brick pane, or the harness in 3D in its place - the bricks picked lit in it"));
+    connect(paneSwitch_, &QComboBox::activated, this, [this](int i) {
+        paneStack_->setCurrentIndex(i);
+        if (i == 1) {
+            syncNetColours();
+            view3d_->rebuild(true);
+            view3d_->setHighlight(canvas_->selection());
+        }
+    });
+    bottom->addWidget(paneSwitch_);
     status_ = new QLabel(this);
     status_->setObjectName(QStringLiteral("brickStatus"));
     bottom->addWidget(status_, 1);
@@ -5356,7 +5392,21 @@ void BrickWizardDialog::redo() {
     status_->setText(QStringLiteral("Redone"));
 }
 
+void BrickWizardDialog::syncNetColours() {
+    design_.netColours.clear();
+    const Document* doc = document();
+    if (!doc) return;
+    for (const Entity& w : doc->entities()) {
+        if (w.type != EntityType::Wire) continue;
+        QString net = w.meta.value(QStringLiteral("netName")).toString().trimmed();
+        if (net.isEmpty()) net = w.meta.value(QStringLiteral("wireLabel")).toString().trimmed();
+        const QString colour = w.meta.value(QStringLiteral("wireColor")).toString().trimmed();
+        if (!net.isEmpty() && !colour.isEmpty() && !design_.netColours.contains(net)) design_.netColours.insert(net, colour);
+    }
+}
+
 void BrickWizardDialog::refreshPreview() {
+    syncNetColours();   // the schematic's colours, for the wires to take
     if (editor_) design_.faceFanPct = editor_->faceFanScale();
     syncBridgeWires(design_);   // wires taken from a joined special follow it
     recordHistory();
@@ -5397,6 +5447,11 @@ void BrickWizardDialog::refreshPreview() {
     drawnScales_ = built.scales;
     lastFaces_ = built.faces;
     lastPartX_ = built.partX;
+    // THE 3D VIEW, when it is the one in the pane's place, built again as the harness changes - the view kept.
+    if (paneStack_ && paneStack_->currentIndex() == 1 && view3d_) {
+        view3d_->rebuild(false);
+        view3d_->setHighlight(canvas_->selection());
+    }
     std::vector<Entity> ents = built.entities;
     const QStringList sel = canvas_->selection();
     for (Entity& e : ents)
