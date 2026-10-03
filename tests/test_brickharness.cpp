@@ -5564,6 +5564,35 @@ void testRoundThirtySeven() {
     }
 }
 
+// ROUND THIRTY-EIGHT: a twisted pair and a twisted bundle in 3D, their wires laid up round one another for real.
+void testRoundThirtyEight() {
+    BrickDesign d;
+    const QString a = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+    const QString tp = d.addBrick(BrickType::TwistedPair, PartKind::Wire, 1, 0);
+    const QString b = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+    const QString c = d.addBrick(BrickType::End, PartKind::Connector, 0, 2);
+    const QString tb = d.addBrick(BrickType::TwistedBundle, PartKind::Wire, 1, 2);
+    const QString e = d.addBrick(BrickType::End, PartKind::Connector, 2, 2);
+    d.connect(a, tp);
+    d.connect(tp, b);
+    d.connect(c, tb);
+    d.connect(tb, e);
+    d.brick(tb)->run.wires = 4;
+    const Harness3DScene sc = buildHarness3D(buildBrickHarness(d, nullptr).entities, {});
+    int pair = 0, bundle = 0;
+    bool rises = true;
+    for (const Harness3DItem& it : sc.items) {
+        if (it.what != QLatin1String("wire")) continue;
+        (it.brick == tp ? pair : bundle)++;
+        V3 lo, hi;
+        // Laid up round its middle: up out of the sheet and down under it, not flat in it.
+        rises = rises && it.mesh.bounds(lo, hi) && hi.z > 0.4 && lo.z < -0.4;
+    }
+    std::printf("  3d twist: the pair %d wire(s), the bundle %d\n", pair, bundle);
+    check(sc.runs == 2 && pair == 2 && bundle == 4, "3d twist: a twisted pair and a twisted bundle shown, each wire of them");
+    check(rises, "3d twist: each wire a helix round the run - over and under, not flat on the sheet");
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -5615,6 +5644,7 @@ int run_brickharness_tests() {
     testRoundThirtyFive();
     testRoundThirtySix();
     testRoundThirtySeven();
+    testRoundThirtyEight();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

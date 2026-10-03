@@ -150,6 +150,51 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
             if (sides == QLatin1String("both") || sides == QLatin1String("finish"))
                 sleeve(total - fanB - bootB, total - fanB, wB);
         }
+        // A TWISTED PAIR OR BUNDLE: its wires laid up round one another for real - each a helix round the run's middle,
+        // a whole turn every pitch, the wires evenly round it and touching - not the flat crossings it is drawn with.
+        if (!e.meta.value(QStringLiteral("twistStraight")).toBool(true)) {
+            const int n = std::max(2, e.meta.value(QStringLiteral("twistWires")).toInt(2));
+            const double pitch = std::max(2.0, e.meta.value(QStringLiteral("twistPitch")).toDouble(18.0));
+            const double rad = ww / (2.0 * std::sin(M_PI / n));
+            const double step = std::min(pitch / 18.0, std::max(0.2, total / 400.0));
+            // The run's middle, square across it in the sheet, and up out of it.
+            auto frameAt = [&](double s, V3& at, V3& across) {
+                double acc = 0.0;
+                for (size_t i = 1; i < route.size(); ++i) {
+                    const double seg = distance(route[i - 1], route[i]);
+                    if (seg < 1e-12) continue;
+                    if (acc + seg >= s || i + 1 == route.size()) {
+                        const double u = std::clamp((s - acc) / seg, 0.0, 1.0);
+                        const Vec2 p = route[i - 1] + (route[i] - route[i - 1]) * u;
+                        const Vec2 t = (route[i] - route[i - 1]).normalized();
+                        at = at3(p);
+                        across = V3{-t.y, t.x, 0.0};
+                        return;
+                    }
+                    acc += seg;
+                }
+                at = at3(route.back());
+                across = V3{0.0, 1.0, 0.0};
+            };
+            for (int k = 0; k < n; ++k) {
+                std::vector<V3> helix;
+                for (double s = 0.0;; s += step) {
+                    const double ss = std::min(s, total);
+                    V3 at, across;
+                    frameAt(ss, at, across);
+                    const double th = 2.0 * M_PI * (ss / pitch + static_cast<double>(k) / n);
+                    helix.push_back(at + across * (rad * std::cos(th)) + V3{0.0, 0.0, 1.0} * (rad * std::sin(th)));
+                    if (ss >= total) break;
+                }
+                Harness3DItem wi;
+                wi.mesh = tubeMesh(helix, ww / 2.0, 8, true);
+                wi.color = colourOf(e, k);
+                wi.what = QStringLiteral("wire");
+                wi.brick = brickOf(e);
+                scene.items.push_back(std::move(wi));
+            }
+            continue;
+        }
         // ITS WIRES: each one round, where it fans out (the whole way, with no body over them).
         const std::vector<std::vector<Vec2>> strands = twistedPairStrands(e);
         const int wires = std::max(1, e.meta.value(QStringLiteral("twistWires")).toInt(2));
