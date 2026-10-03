@@ -1679,7 +1679,12 @@ void testRoundSeven() {
         return -2.0;
     };
     double body = 0.0;
-    check(bootOf(body) == -1.0, "transition: left alone, the drawing sizes it");
+    // Left alone: the body's width and a quarter, whatever the wires going into it.
+    {
+        const double w = bootOf(body);
+        std::printf("  transition: left alone %.2f on a cable %.2f wide\n", w, body);
+        check(w == -1.0 || std::abs(w - body * 1.25) < 1e-9, "transition: left alone, the body's width and a quarter");
+    }
     d.brick(c)->run.transitionWidthMm = 0.5;
     const double held = bootOf(body);
     std::printf("  transition: asked 0.5, drawn %.2f on a cable %.2f wide\n", held, body);
@@ -1798,7 +1803,7 @@ void testPartSizeByEntry() {
         std::printf("  size: in the harness its face is %.2f\n", face);
         check(std::abs(face - 10.0) < 1e-6, "size: in the harness, the part is drawn at its size");
     }
-    // A NOMINAL PART IS NOT MEASURED THROUGH: dimensioned "from far point", it is measured from its face.
+    // FROM THE FAR POINT OF ANY PART, a nominal one too: as the window says, whatever the part.
     {
         d.brick(r)->run.dimTotal = true;
         d.dimFromFar = true;
@@ -1808,13 +1813,11 @@ void testPartSizeByEntry() {
                     return e.meta.value(QStringLiteral("brickMeasured")).toDouble();
             return -1.0;
         };
-        const double nominal = said();
-        setPartSizeMode(p, PartSizeMode::AsDrawn);
-        d.shapeCache.clear();
-        const double real = said();
-        std::printf("  size: from far point %.1f on the nominal part, %.1f on the real one\n", nominal, real);
-        check(nominal > 0.0 && real > nominal + 1.0, "size: the far point of a nominal part is not measured to");
+        const double far = said();
         d.dimFromFar = false;
+        const double near = said();
+        std::printf("  size: on the nominal part from its far point %.1f, from its near point %.1f\n", far, near);
+        check(near > 0.0 && far > near + 1.0, "size: the far point of a nominal part is measured from, as asked");
         d.brick(r)->run.dimTotal = false;
     }
     // AUTO: chosen in the wizard, it comes in on Auto.
@@ -4005,10 +4008,12 @@ void testRoundTwentyFour() {
             if (e.type == EntityType::TwistedPair && e.meta.value(QStringLiteral("brickId")).toString() == c &&
                 e.meta.value(QStringLiteral("twistWires")).toInt() != 6 && e.points.size() >= 2) {
                 ++branches;
+                // STRAIGHT OUT A LITTLE FIRST, then on the slant.
                 const Vec2 first = (e.points[1] - e.points[0]).normalized();
-                if (std::abs(first.y) < 0.3) slanted = false;
+                const Vec2 second = e.points.size() >= 3 ? (e.points[2] - e.points[1]).normalized() : first;
+                if (std::abs(first.y) > 0.3 || std::abs(second.y) < 0.3) slanted = false;
             }
-        check(branches == 2 && slanted, "branches: each turns off toward its part right where the cable's body ends");
+        check(branches == 2 && slanted, "branches: each straight out of the cable's body a little, then toward its part");
     }
 }
 
@@ -4327,11 +4332,17 @@ void testRoundTwentySeven() {
         r.fanStartMm = 0.0;   // no fan at the start: the cable goes into its part
         r.transitions = RunEnds::Start;
         // The piece over the part: how far into it, and how far across it goes - and the part's own height.
-        auto overPart = [&d, &x](double& along, double& across, double& partAcross, bool& masked) {
+        auto overPart = [&d, &x, &c](double& along, double& across, double& partAcross, bool& masked) {
             along = across = partAcross = 0.0;
             masked = false;
             Bounds pb;
-            for (const Entity& e : buildBrickHarness(d, nullptr).entities) {
+            // Into the part from its face - where the run starts.
+            double faceX = 0.0;
+            const BrickBuild built = buildBrickHarness(d, nullptr);
+            for (const Entity& e : built.entities)
+                if (e.type == EntityType::TwistedPair && e.meta.value(QStringLiteral("brickId")).toString() == c)
+                    faceX = e.points.front().x;
+            for (const Entity& e : built.entities) {
                 const QString role = e.meta.value(QStringLiteral("mechRole")).toString();
                 if (e.meta.value(QStringLiteral("brickId")).toString() == x && role != QLatin1String("designator") &&
                     e.type != EntityType::Text)
@@ -4340,7 +4351,7 @@ void testRoundTwentySeven() {
                 if (e.type == EntityType::Wipeout) masked = true;
                 if (e.type != EntityType::Polyline) continue;
                 const Bounds bb = e.bounds();
-                along = bb.max.x - bb.min.x - 0.4;   // it starts a little back over the transition
+                along = faceX - bb.min.x;   // it starts back over the transition: how far it goes into the part
                 across = bb.max.y - bb.min.y;
             }
             if (pb.valid) partAcross = pb.max.y - pb.min.y;
@@ -4627,6 +4638,152 @@ void testRoundTwentyNine() {
     }
 }
 
+// ROUND THIRTY: the transition's Auto width the body's alone; each end its own (width, part, stretch); the piece over the
+// part rising from halfway along the transition; a branch straight out a little before it bends; the whole length to
+// each part a cable divides into; one Electronic component on the palette; the dimension wizard out of the way while
+// two bricks are clicked.
+void testRoundThirty() {
+    auto twist = [](const BrickBuild& b, const QString& id) {
+        for (const Entity& e : b.entities)
+            if (e.type == EntityType::TwistedPair && e.meta.value(QStringLiteral("brickId")).toString() == id) return e;
+        return Entity{};
+    };
+    {
+        BrickDesign d;
+        const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString y = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        d.connect(x, c);
+        d.connect(c, y);
+        BrickRunSpec& r = d.brick(c)->run;
+        r.transitions = RunEnds::Both;
+        r.wires = 8;
+        r.lengthMm = 300.0;
+        BrickBuild b = buildBrickHarness(d, nullptr);
+        const double body = b.actual.value(c).bodyWidth;
+        const Entity run = twist(b, c);
+        std::printf("  transition: body %.2f, Auto width %.2f / %.2f\n", body,
+                    run.meta.value(QStringLiteral("twistBootWidth")).toDouble(),
+                    run.meta.value(QStringLiteral("twistBootWidthFinish")).toDouble());
+        check(std::abs(run.meta.value(QStringLiteral("twistBootWidth")).toDouble() - body * 1.25) < 1e-6 &&
+                  std::abs(run.meta.value(QStringLiteral("twistBootWidthFinish")).toDouble() - body * 1.25) < 1e-6,
+              "transition: on Auto the body's width and a quarter at both ends, not the wires'");
+        // EACH END ITS OWN.
+        r.transitionPart = QStringLiteral("P-START");
+        r.transitionPartFinish = QStringLiteral("P-FINISH");
+        r.transitionWidthFinishMm = body + 4.0;
+        b = buildBrickHarness(d, nullptr);
+        check(b.transitionPartCount.value(c + QStringLiteral("|P-START")) == 2,
+              "transition: the same at both ends - the start's part at both");
+        r.transitionSame = false;
+        b = buildBrickHarness(d, nullptr);
+        check(std::abs(twist(b, c).meta.value(QStringLiteral("twistBootWidthFinish")).toDouble() - (body + 4.0)) < 1e-6 &&
+                  std::abs(b.actual.value(c).transitionWidthFinish - (body + 4.0)) < 1e-6,
+              "transition: each its own - the finish's width");
+        check(b.transitionPartCount.value(c + QStringLiteral("|P-START")) == 1 &&
+                  b.transitionPartCount.value(c + QStringLiteral("|P-FINISH")) == 1,
+              "transition: each its own - each end's part on the bill");
+        const BrickDesign back = BrickDesign::fromJson(d.toJson());
+        check(!back.brick(c)->run.transitionSame && back.brick(c)->run.transitionPartFinish == QStringLiteral("P-FINISH") &&
+                  std::abs(back.brick(c)->run.transitionWidthFinishMm - (body + 4.0)) < 1e-9,
+              "transition: each its own, kept");
+        // STRETCHED AT THE FINISH ONLY: no fans, the start's stretch off and the finish's on.
+        r.fanStartMm = 0.0;
+        r.fanFinishMm = 0.0;
+        r.transitionStretch = false;
+        r.transitionStretchFinish = true;
+        b = buildBrickHarness(d, nullptr);
+        const Entity cab = twist(b, c);
+        double minX = 1e300, maxX = -1e300;
+        int pieces = 0;
+        for (const Entity& e : b.entities)
+            if (e.type == EntityType::Polyline &&
+                e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("transitionOverPart")) {
+                ++pieces;
+                const Bounds bb = e.bounds();
+                minX = std::min(minX, bb.min.x);
+                maxX = std::max(maxX, bb.max.x);
+            }
+        const double faceB = cab.points.empty() ? 0.0 : cab.points.back().x;
+        std::printf("  over the part at the finish: %d piece(s), %.1f..%.1f, the face at %.1f, its transition %.1f\n", pieces,
+                    minX, maxX, faceB, b.actual.value(c).transitionLenFinish);
+        check(pieces == 1 && minX < faceB - 0.5 * b.actual.value(c).transitionLenFinish + 0.6 && maxX > faceB + 0.5,
+              "over the part: at the finish only, rising from halfway along its transition");
+    }
+    // A BRANCH STRAIGHT OUT A LITTLE, then its own way; THE WHOLE LENGTH to each part the cable divides into.
+    {
+        BrickDesign d;
+        const QString sa = d.addBrick(BrickType::End, PartKind::Connector, 0, 1);
+        const QString a2 = d.addBrick(BrickType::End, PartKind::Connector, 0, 3);
+        const QString sb = d.addBrick(BrickType::End, PartKind::Connector, 4, 2);
+        const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 3, 2);
+        const QString b1 = d.addBrick(BrickType::Run, PartKind::Wire, 1, 1);
+        const QString b2 = d.addBrick(BrickType::Run, PartKind::Wire, 1, 3);
+        makeBranch(*d.brick(b1));
+        makeBranch(*d.brick(b2));
+        d.connect(c, sb, nullptr, 1, -1);
+        d.brick(c)->run.wires = 6;
+        d.brick(c)->run.lengthMm = 150.0;
+        d.brick(c)->run.dimTotal = true;
+        d.brick(b1)->run.lengthMm = 100.0;
+        d.brick(b2)->run.lengthMm = 100.0;
+        d.connect(b1, c, nullptr, 1, 0);
+        d.connect(b2, c, nullptr, 1, 0);
+        d.connect(sa, b1, nullptr, -1, 0);
+        d.connect(a2, b2, nullptr, -1, 0);
+        const BrickBuild b = buildBrickHarness(d, nullptr);
+        const Entity br1 = twist(b, b1);
+        const bool straightOut = br1.points.size() >= 3 && std::abs(br1.points[1].y - br1.points[0].y) < 1e-6 &&
+                                 std::abs(br1.points[1].x - br1.points[0].x) > 2.0;
+        check(straightOut, "branch: straight out of the cable a little before it bends");
+        int totals = 0;
+        double measured = 0.0;
+        for (const Entity& e : b.entities)
+            if (e.type == EntityType::Dimension && e.meta.value(QStringLiteral("brickDim")).toString() == QLatin1String("total")) {
+                ++totals;
+                measured = e.meta.value(QStringLiteral("brickMeasured")).toDouble();
+            }
+        std::printf("  whole length where the cable divides: %d dimension(s), %.1f\n", totals, measured);
+        check(totals == 2 && measured >= 250.0 - 1e-6, "dims: the whole length from the cable's part to each part it divides into");
+    }
+    {
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        BrickWizardDialog dlg(&ed);
+        auto* palette = dlg.findChild<BrickPalette*>(QStringLiteral("brickPalette"));
+        int electronic = 0, capacitor = 0;
+        for (int i = 0; palette && i < palette->count(); ++i) {
+            if (palette->item(i)->text().trimmed() == QStringLiteral("Electronic component")) ++electronic;
+            if (palette->item(i)->data(Qt::UserRole).toString().endsWith(QLatin1Char('|') + partKindKey(PartKind::Capacitor)))
+                ++capacitor;
+        }
+        check(electronic == 1 && capacitor == 0, "palette: one Electronic component for the resistor, capacitor, coil and bead");
+        const QString part = dlg.addFromPalette(brickTypeKey(BrickType::End) + QLatin1Char('|') + partKindKey(PartKind::Resistor));
+        dlg.selectBrick(part);
+        auto* kind = dlg.findChild<QComboBox*>(QStringLiteral("brickComponentKind"));
+        check(kind != nullptr, "electronic component: which one it is, on its panel");
+        if (kind) {
+            const int at = kind->findData(partKindKey(PartKind::Capacitor));
+            kind->setCurrentIndex(at);
+            emit kind->activated(at);
+            check(dlg.design().brick(part) && dlg.design().brick(part)->kind == PartKind::Capacitor,
+                  "electronic component: made a capacitor");
+        }
+        // THE DIMENSION WIZARD put away while two bricks are clicked, back on Esc.
+        dlg.show();
+        dlg.openDimensionWizard();
+        auto* wiz = dlg.findChild<QDialog*>(QStringLiteral("brickDimWizard"));
+        auto* add = dlg.findChild<QPushButton*>(QStringLiteral("dimWizAdd"));
+        if (add) add->setChecked(true);
+        check(wiz && !wiz->isVisible(), "dimension wizard: out of the way while two bricks are clicked");
+        QKeyEvent esc(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QApplication::sendEvent(&dlg, &esc);
+        check(wiz && wiz->isVisible() && add && !add->isChecked(), "dimension wizard: back on Esc, the pick called off");
+        if (wiz) wiz->hide();
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -4670,6 +4827,7 @@ int run_brickharness_tests() {
     testRoundTwentySeven();
     testRoundTwentyEight();
     testRoundTwentyNine();
+    testRoundThirty();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

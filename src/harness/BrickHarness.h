@@ -51,6 +51,8 @@ inline bool brickIsSpecial(BrickType t) { return t != BrickType::End && t != Bri
 // The kinds an end brick can be: the parts a harness finishes on, then the joints it passes through.
 std::vector<PartKind> brickEndKinds();
 std::vector<PartKind> brickJointKinds();
+// A resistor, a capacitor, a coil or a ferrite bead: one Electronic component on the palette.
+bool brickKindIsElectronic(PartKind kind);
 // A JOINT has an entry face each side (a Y-split three); an end part has one.
 bool brickKindIsJoint(PartKind kind);
 // How many connection faces a part of this kind has when no library part says.
@@ -146,6 +148,12 @@ struct BrickRunSpec {
     // WHICH TRANSITION IS INSIDE THE BACKSHELL (transitionInside): the start's, the finish's or both - not drawn, on the
     // bill with its length all the same.
     RunEnds transitionInsideEnds = RunEnds::Both;
+    // THE SAME AT BOTH ENDS, or each its own: where they are not, these are the finish's - the fields above the start's.
+    bool transitionSame = true;
+    double transitionWidthFinishMm = 0.0;   // 0: Auto
+    QString transitionPartFinish;
+    bool transitionStretchFinish = false;
+    double transitionStretchFinishMm = 0.0;
     // WHICH END A FANOUT SPREADS AT: -1 the end on a part (the start when both are), 0 the start,
     // 1 the finish.
     int fanSide = -1;
@@ -462,6 +470,8 @@ struct BrickActual {
     double trunk = 0.0;
     double transitionWidth = 0.0;   // the transition heatshrink, as drawn
     double transitionStretch = 0.0; // how far it is stretched over the end part, as drawn (or would be, asked)
+    double transitionWidthFinish = 0.0;     // the finish's, where the two ends are not the same
+    double transitionStretchFinish = 0.0;
     double transitionLenStart = 0.0;   // each transition's length, as the drawing makes it
     double transitionLenFinish = 0.0;
 };
@@ -483,6 +493,9 @@ struct BrickBuild {
     // The layers over them, by "<special>|<part>": how many, and how long all told.
     QHash<QString, int> layerCount;
     QHash<QString, double> layerMm;
+    // The transitions themselves by the part each end has, by "<special>|<part>": how many, how long.
+    QHash<QString, int> transitionPartCount;
+    QHash<QString, double> transitionPartMm;
     // Where each end part was laid out along the harness, by id.
     QHash<QString, double> partX;
 };

@@ -1276,9 +1276,16 @@ BrickPalette::BrickPalette(QWidget* parent) : QListWidget(parent) {
     for (PartKind k : brickEndKinds())
         brick(partKindName(k), brickTypeKey(BrickType::End) + QLatin1Char('|') + partKindKey(k));
     header(QStringLiteral("Joints"));
-    for (PartKind k : brickJointKinds())
-        if (k != PartKind::Heatshrink)   // a heatshrink goes on a run (its stack, its transitions), not between parts
-            brick(partKindName(k), brickTypeKey(BrickType::End) + QLatin1Char('|') + partKindKey(k));
+    for (PartKind k : brickJointKinds()) {
+        if (k == PartKind::Heatshrink) continue;   // a heatshrink goes on a run (its stack, its transitions), not between parts
+        // ONE ELECTRONIC COMPONENT for a resistor, a capacitor, a coil or a ferrite bead - which one, on its panel.
+        if (brickKindIsElectronic(k)) {
+            if (k == PartKind::Resistor)
+                brick(QStringLiteral("Electronic component"), brickTypeKey(BrickType::End) + QLatin1Char('|') + partKindKey(k));
+            continue;
+        }
+        brick(partKindName(k), brickTypeKey(BrickType::End) + QLatin1Char('|') + partKindKey(k));
+    }
     header(QStringLiteral("Specials"));
     for (BrickType t : {BrickType::Fanout, BrickType::Run, BrickType::TwistedPair,
                         BrickType::TwistedBundle})
@@ -1576,15 +1583,21 @@ void BrickWizardDialog::buildUi() {
         Document* doc = document();
         if (!doc || row < 0 || row >= static_cast<int>(bomShown_.size())) return;
         bool ok = false;
-        const double qty = it->text().trimmed().toDouble(&ok);
+        double qty = it->text().trimmed().toDouble(&ok);
         if (!ok || qty < 0.0) {
             refreshBom();
             return;
         }
         BomTable table;
         table.fromJson(doc->bom());
+        // Typed in the unit it is shown in: back to the line's own.
+        const BomRow& shown = bomShown_[static_cast<size_t>(row)];
+        if (partUnitDimension(shown.unit) == QLatin1String("length") && table.config.lengthUnit != shown.unit) {
+            double v = 0.0;
+            if (convertPartUnit(qty, table.config.lengthUnit, shown.unit, v)) qty = v;
+        }
         for (BomRow& r : table.rows)
-            if (bomSameThing(r, bomShown_[static_cast<size_t>(row)])) r.qty = qty;
+            if (bomSameThing(r, shown)) r.qty = qty;
         doc->bom() = table.toJson();
         doc->setDirty(true);
         emit bomChanged();
@@ -1673,8 +1686,10 @@ void BrickWizardDialog::buildUi() {
         // Which side is the part's own (its Dimensions setting): above unless it says below.
         design_.dims.push_back({a, b, design_.brick(a) && design_.brick(a)->dimBelow});
         designChanged();
-        status_->setText(QStringLiteral("Dimension put on between %1 and %2 - click two more for another")
+        status_->setText(QStringLiteral("Dimension put on between %1 and %2")
                              .arg(brickTitle(*design_.brick(a)), brickTitle(*design_.brick(b))));
+        // Put on from the wizard: the wizard back.
+        if (dimWizPicking_) endDimPick();
     });
     // UNDO AND REDO, Ctrl+Z and Ctrl+Y (and Ctrl+Shift+Z).
     for (const auto& [keys, fn] : {std::pair<QKeySequence, void (BrickWizardDialog::*)()>{QKeySequence::Undo,
@@ -1782,6 +1797,24 @@ QWidget* BrickWizardDialog::buildEndPage() {
     auto* f = new QFormLayout(page);
     endKind_ = new QLabel(page);
     f->addRow(QStringLiteral("Part"), endKind_);
+    endForm_ = f;
+    // AN ELECTRONIC COMPONENT: which one it is - its library parts are that kind's.
+    componentKind_ = new QComboBox(page);
+    componentKind_->setObjectName(QStringLiteral("brickComponentKind"));
+    for (PartKind k : {PartKind::Resistor, PartKind::Capacitor, PartKind::Inductor, PartKind::FerriteBead})
+        componentKind_->addItem(partKindName(k), partKindKey(k));
+    f->addRow(QStringLiteral("Component"), componentKind_);
+    connect(componentKind_, &QComboBox::activated, this, [this](int i) {
+        Brick* b = design_.brick(canvas_->selected());
+        if (!b || b->type != BrickType::End) return;
+        const PartKind k = partKindFromKey(componentKind_->itemData(i).toString());
+        if (k == b->kind) return;
+        b->kind = k;
+        // A library part of another kind is not this one.
+        if (const LibraryPart* p = catalog_.byId(b->libPart); p && p->kind != k) b->libPart.clear();
+        designChanged();
+        loadPanel();
+    });
     part_ = new QComboBox(page);
     part_->setObjectName(QStringLiteral("brickPart"));
     // Wide enough to read the whole P/N and description, in the field and in the list it opens.
@@ -2191,6 +2224,20 @@ QWidget* BrickWizardDialog::buildRunPage() {
     transitions_->addItems({QStringLiteral("None"), QStringLiteral("Start"), QStringLiteral("Finish"),
                             QStringLiteral("Both")});
     transForm->addRow(QStringLiteral("Where"), transitions_);
+    // THE SAME AT BOTH ENDS, or each its own: unticked, the finish has its own width, part number and stretch.
+    transSame_ = new QCheckBox(QStringLiteral("Parameters for both sides"), page);
+    transSame_->setObjectName(QStringLiteral("brickTransSame"));
+    transSame_->setToolTip(QStringLiteral("Ticked, both transitions are the same. Unticked, the start and the finish each "
+                                          "have their own width, part number and stretch over the part"));
+    transSame_->setChecked(true);
+    transForm->addRow(transSame_);
+    connect(transSame_, &QCheckBox::toggled, this, [this](bool on) {
+        if (Brick* b = design_.brick(canvas_->selected()); b && brickIsSpecial(b->type)) {
+            b->run.transitionSame = on;
+            designChanged();
+            loadBranches();
+        }
+    });
     // ITS WIDTH, which cannot be less than the cable it goes over: turned down past that, the field stops at
     // the cable's width.
     transitionWidth_ = spin("brickTransitionWidth", 0.0, 1000.0, 0.5, QStringLiteral(" mm"));
@@ -2490,6 +2537,76 @@ QWidget* BrickWizardDialog::buildRunPage() {
             hl->addWidget(transStretchAuto_);
             hl->addStretch(1);
             (transitionForm_ ? transitionForm_ : bl)->addRow(QStringLiteral("Over the part"), host);
+        }
+        // THE FINISH'S OWN, where the two ends are not the same: its width, its part number, its stretch over the part.
+        {
+            QFormLayout* tf2 = transitionForm_ ? transitionForm_ : bl;
+            auto withA = [box](QDoubleSpinBox*& s, QToolButton*& a, const char* name, const char* aName, const QString& tip) {
+                auto* host = new QWidget(box);
+                auto* hl = new QHBoxLayout(host);
+                hl->setContentsMargins(0, 0, 0, 0);
+                hl->setSpacing(3);
+                s = new QDoubleSpinBox(host);
+                s->setObjectName(QLatin1String(name));
+                s->setRange(0.0, 1000.0);
+                s->setDecimals(1);
+                s->setSuffix(QStringLiteral(" mm"));
+                hl->addWidget(s);
+                a = new QToolButton(host);
+                a->setObjectName(QLatin1String(aName));
+                a->setText(QStringLiteral("A"));
+                a->setCheckable(true);
+                a->setToolTip(tip);
+                hl->addWidget(a);
+                hl->addStretch(1);
+                return host;
+            };
+            tf2->addRow(QStringLiteral("Width, finish"),
+                        withA(transWidthFin_, transWidthFinAuto_, "brickTransWidthFin", "brickTransWidthFinAuto",
+                              QStringLiteral("Auto: the body's width and a quarter")));
+            transPartFin_ = new QComboBox(box);
+            transPartFin_->setObjectName(QStringLiteral("brickTransPartFin"));
+            for (int i = 0; i < transitionPart_->count(); ++i)
+                transPartFin_->addItem(transitionPart_->itemText(i), transitionPart_->itemData(i));
+            tf2->addRow(QStringLiteral("P/N, finish"), transPartFin_);
+            transStretchFin_ = new QCheckBox(QStringLiteral("Stretch over end part, finish"), box);
+            transStretchFin_->setObjectName(QStringLiteral("brickTransStretchFin"));
+            tf2->addRow(transStretchFin_);
+            tf2->addRow(QStringLiteral("Over the part, finish"),
+                        withA(transStretchLenFin_, transStretchAutoFin_, "brickTransStretchLenFin", "brickTransStretchAutoFin",
+                              QStringLiteral("Auto: a tenth of the end part's length")));
+            auto editRun = [this](const std::function<void(BrickRunSpec&)>& fn, bool reload) {
+                if (Brick* b = design_.brick(canvas_->selected()); b && brickIsSpecial(b->type)) {
+                    fn(b->run);
+                    designChanged();
+                    if (reload) loadBranches();
+                }
+            };
+            connect(transWidthFin_, &QDoubleSpinBox::valueChanged, this, [this, editRun](double v) {
+                const QSignalBlocker hush(transWidthFinAuto_);
+                transWidthFinAuto_->setChecked(false);
+                editRun([v](BrickRunSpec& r) { r.transitionWidthFinishMm = std::max(0.5, v); }, false);
+            });
+            connect(transWidthFinAuto_, &QToolButton::toggled, this, [this, editRun](bool on) {
+                const double v = transWidthFin_->value();
+                editRun([on, v](BrickRunSpec& r) { r.transitionWidthFinishMm = on ? 0.0 : std::max(0.5, v); }, true);
+            });
+            connect(transPartFin_, &QComboBox::activated, this, [this, editRun](int i) {
+                const QString id = transPartFin_->itemData(i).toString();
+                editRun([id](BrickRunSpec& r) { r.transitionPartFinish = id; }, false);
+            });
+            connect(transStretchFin_, &QCheckBox::toggled, this, [editRun](bool on) {
+                editRun([on](BrickRunSpec& r) { r.transitionStretchFinish = on; }, true);
+            });
+            connect(transStretchLenFin_, &QDoubleSpinBox::valueChanged, this, [this, editRun](double v) {
+                const QSignalBlocker hush(transStretchAutoFin_);
+                transStretchAutoFin_->setChecked(false);
+                editRun([v](BrickRunSpec& r) { r.transitionStretchFinishMm = v; }, false);
+            });
+            connect(transStretchAutoFin_, &QToolButton::toggled, this, [this, editRun](bool on) {
+                const double v = transStretchLenFin_->value();
+                editRun([on, v](BrickRunSpec& r) { r.transitionStretchFinishMm = on ? 0.0 : std::max(0.5, v); }, true);
+            });
         }
         connect(transStretch_, &QCheckBox::toggled, this, [this](bool on) {
             if (Brick* b = design_.brick(canvas_->selected()); b && brickIsSpecial(b->type)) {
@@ -3194,7 +3311,12 @@ void BrickWizardDialog::openDimensionWizard() {
         add->setChecked(dimTool_ && dimTool_->isChecked());
         connect(add, &QPushButton::toggled, this, [this](bool on) {
             if (dimTool_) dimTool_->setChecked(on);
-            status_->setText(on ? QStringLiteral("Click two bricks on the pane to dimension between them")
+            // OUT OF THE WAY WHILE THE TWO BRICKS ARE CLICKED: back when they are, or on Esc.
+            if (on) {
+                dimWizPicking_ = true;
+                dimWizard_->hide();
+            }
+            status_->setText(on ? QStringLiteral("Click two bricks on the pane to dimension between them - Esc to cancel")
                                 : QStringLiteral("Dimensioning off"));
         });
         connect(dimTool_, &QToolButton::toggled, add, [add](bool on) {
@@ -3374,9 +3496,15 @@ void BrickWizardDialog::loadPanel() {
         showDesignator_->setChecked(b->showDesignator);
         designatorHeight_->setValue(b->designatorHeightMm);
         designatorHeight_->setEnabled(b->showDesignator);
-        endKind_->setText(partKindName(b->kind) +
+        endKind_->setText((brickKindIsElectronic(b->kind) ? QStringLiteral("Electronic component")
+                                                         : partKindName(b->kind)) +
                           (brickKindIsJoint(b->kind) ? QStringLiteral(" (a joint: a face each side)")
                                                      : QString()));
+        {
+            const QSignalBlocker hush(componentKind_);
+            componentKind_->setCurrentIndex(std::max(0, componentKind_->findData(partKindKey(b->kind))));
+            endForm_->setRowVisible(componentKind_, brickKindIsElectronic(b->kind));
+        }
         part_->clear();
         part_->addItem(QStringLiteral("(none yet)"), QString());
         for (const LibraryPart* p : catalog_.ofKind(b->kind)) {
@@ -3622,6 +3750,35 @@ void BrickWizardDialog::loadBranches() {
     transStretch_->setEnabled(r.transitions != RunEnds::None);
     transStretchLen_->setEnabled(r.transitionStretch);
     transStretchAuto_->setEnabled(r.transitionStretch);
+    // EACH END ITS OWN: the finish's rows shown, the start's named so.
+    {
+        const bool apart = !r.transitionSame;
+        const BrickActual act = actual_.value(b->id);
+        const QSignalBlocker s0(transSame_), s1(transWidthFin_), s2(transWidthFinAuto_), s3(transPartFin_),
+            s4(transStretchFin_), s5(transStretchLenFin_), s6(transStretchAutoFin_);
+        transSame_->setChecked(r.transitionSame);
+        transWidthFinAuto_->setChecked(r.transitionWidthFinishMm <= 1e-9);
+        transWidthFin_->setValue(r.transitionWidthFinishMm > 1e-9 ? r.transitionWidthFinishMm : act.transitionWidthFinish);
+        transPartFin_->setCurrentIndex(std::max(0, transPartFin_->findData(r.transitionPartFinish)));
+        transStretchFin_->setChecked(r.transitionStretchFinish);
+        transStretchAutoFin_->setChecked(r.transitionStretchFinishMm <= 1e-9);
+        transStretchLenFin_->setValue(r.transitionStretchFinishMm > 1e-9 ? r.transitionStretchFinishMm
+                                                                         : act.transitionStretchFinish);
+        transStretchLenFin_->setEnabled(r.transitionStretchFinish);
+        transStretchAutoFin_->setEnabled(r.transitionStretchFinish);
+        if (QFormLayout* tf = transitionForm_) {
+            for (QWidget* w : {static_cast<QWidget*>(transWidthFin_->parentWidget()), static_cast<QWidget*>(transPartFin_),
+                               static_cast<QWidget*>(transStretchFin_), static_cast<QWidget*>(transStretchLenFin_->parentWidget())})
+                tf->setRowVisible(w, apart);
+            auto relabel = [tf](QWidget* field, const QString& text) {
+                if (auto* l = qobject_cast<QLabel*>(tf->labelForField(field))) l->setText(text);
+            };
+            relabel(transitionWidth_->parentWidget(), apart ? QStringLiteral("Width, start") : QStringLiteral("Width"));
+            relabel(transitionPart_, apart ? QStringLiteral("P/N, start") : QStringLiteral("P/N"));
+            relabel(transStretchLen_->parentWidget(), apart ? QStringLiteral("Over the part, start") : QStringLiteral("Over the part"));
+        }
+        transStretch_->setText(apart ? QStringLiteral("Stretch over end part, start") : QStringLiteral("Stretch over end part"));
+    }
     fanShrinkInside_->setEnabled(r.fanEndShrink);
     {
         const QSignalBlocker s1(transLenStart_), s2(transLenFinish_), s3(transLenStartAuto_), s4(transLenFinishAuto_);
@@ -4489,8 +4646,12 @@ QHash<QString, int> BrickWizardDialog::partCounts() const {
     }
     for (const Brick& b : design_.bricks) {
         if (!brickIsSpecial(b.type)) continue;
-        if (pieces(b.run.transitionPart) && extraTransitions_.value(b.id) > 0)
-            n[b.run.transitionPart] += extraTransitions_.value(b.id);
+        // ITS TRANSITIONS, by the part each end has.
+        for (auto it = extraTransPartCount_.cbegin(); it != extraTransPartCount_.cend(); ++it) {
+            if (!it.key().startsWith(b.id + QLatin1Char('|'))) continue;
+            const QString id = it.key().section(QLatin1Char('|'), 1);
+            if (pieces(id) && it.value() > 0) n[id] += it.value();
+        }
         if (b.run.fanEndShrink && pieces(b.run.fanEndShrinkPart) && extraFanEnds_.value(b.id) > 0)
             n[b.run.fanEndShrinkPart] += extraFanEnds_.value(b.id);
     }
@@ -4528,12 +4689,15 @@ QHash<QString, double> BrickWizardDialog::partLengths() const {
         }
         // ITS TRANSITION HEATSHRINKS, where their part is bought by length: as long as each is cut - drawn or inside a
         // backshell - all told.
-        if (!b.run.transitionPart.isEmpty() && extraTransitionMm_.value(b.id) > 1e-9)
-            if (const LibraryPart* p = catalog_.byId(b.run.transitionPart)) {
+        for (auto it = extraTransPartMm_.cbegin(); it != extraTransPartMm_.cend(); ++it) {
+            if (!it.key().startsWith(b.id + QLatin1Char('|'))) continue;
+            const QString id = it.key().section(QLatin1Char('|'), 1);
+            if (const LibraryPart* p = catalog_.byId(id)) {
                 const QString unit = p->unit.isEmpty() ? defaultUnitForKind(p->kind) : p->unit;
                 if (unit == QLatin1String("m") || unit == QLatin1String("mm") || unit == QLatin1String("cm"))
-                    mm[b.run.transitionPart] += extraTransitionMm_.value(b.id);
+                    mm[id] += it.value();
             }
+        }
         // THE LAYERS OVER ITS TRANSITIONS, by length.
         for (auto it = extraLayerMm_.cbegin(); it != extraLayerMm_.cend(); ++it) {
             if (!it.key().startsWith(b.id + QLatin1Char('|'))) continue;
@@ -4700,6 +4864,16 @@ void BrickWizardDialog::restoreHistory(int at) {
     restoring_ = false;
 }
 
+void BrickWizardDialog::endDimPick() {
+    const bool back = dimWizPicking_;
+    dimWizPicking_ = false;
+    if (dimTool_) dimTool_->setChecked(false);
+    if (back && dimWizard_) {
+        dimWizard_->show();
+        dimWizard_->raise();
+    }
+}
+
 void BrickWizardDialog::clearAll() {
     design_.bricks.clear();
     design_.links.clear();
@@ -4736,7 +4910,7 @@ void BrickWizardDialog::refreshPreview() {
         bool extras = false;
         for (const Brick& b : design_.bricks)
             extras = extras || (brickIsSpecial(b.type) && (!b.run.transitionPart.isEmpty() || !b.run.branchShrinkPart.isEmpty() ||
-                                                           !b.run.transitionLayers.isEmpty() ||
+                                                           !b.run.transitionLayers.isEmpty() || !b.run.transitionPartFinish.isEmpty() ||
                                                            (b.run.fanEndShrink && !b.run.fanEndShrinkPart.isEmpty())));
         if (extras) {
             const BrickBuild pre = buildBrickHarness(design_, &catalog_);
@@ -4744,6 +4918,8 @@ void BrickWizardDialog::refreshPreview() {
             extraTransitions_ = pre.transitionCount;
             extraTransitionMm_ = pre.transitionMm;
             extraLayerCount_ = pre.layerCount;
+            extraTransPartCount_ = pre.transitionPartCount;
+            extraTransPartMm_ = pre.transitionPartMm;
             extraLayerMm_ = pre.layerMm;
             extraFanEnds_ = pre.fanEndCount;
         } else {
@@ -4751,6 +4927,8 @@ void BrickWizardDialog::refreshPreview() {
             extraTransitions_.clear();
             extraTransitionMm_.clear();
             extraLayerCount_.clear();
+            extraTransPartCount_.clear();
+            extraTransPartMm_.clear();
             extraLayerMm_.clear();
             extraFanEnds_.clear();
         }
@@ -4872,6 +5050,13 @@ void BrickWizardDialog::keyPressEvent(QKeyEvent* e) {
     // NOR DOES ESC. It lets go of what is picked; the window closes by Close, not by a key pressed to get out of
     // something else - a harness half built was lost to it.
     if (e->key() == Qt::Key_Escape) {
+        // Clicking two bricks for a dimension: called off, the wizard back.
+        if (dimWizPicking_ || (dimTool_ && dimTool_->isChecked())) {
+            endDimPick();
+            status_->setText(QStringLiteral("Dimension called off"));
+            e->accept();
+            return;
+        }
         canvas_->setSelection({});
         loadPanel();
         refreshPreview();
@@ -5337,8 +5522,21 @@ void BrickWizardDialog::refreshBom() {
         const BomRow& r = rows[i];
         const int at = bom_->rowCount();
         bom_->insertRow(at);
-        const QStringList cells{QString::number(i + 1), QString::number(r.qty), r.unit,
-                                r.mfrPn.isEmpty() ? r.internalPn : r.mfrPn, r.description};
+        // A LENGTH IN THE UNIT THE DRAWING'S BILL IS SET TO (Options, BOM: Lengths in) - a piece is a piece.
+        double qty = r.qty;
+        QString unit = r.unit;
+        if (partUnitDimension(r.unit) == QLatin1String("length") && table.config.lengthUnit != r.unit) {
+            double v = 0.0;
+            if (convertPartUnit(r.qty, r.unit, table.config.lengthUnit, v)) {
+                qty = v;
+                unit = table.config.lengthUnit;
+            }
+        }
+        const QString qtyText = unit != r.unit || partUnitDimension(unit) == QLatin1String("length")
+                                    ? QString::number(qty, 'f', std::clamp(table.config.qtyDecimals, 0, 6))
+                                    : QString::number(qty);
+        const QStringList cells{QString::number(i + 1), qtyText, unit, r.mfrPn.isEmpty() ? r.internalPn : r.mfrPn,
+                                r.description};
         for (int c = 0; c < cells.size(); ++c) {
             auto* it = new QTableWidgetItem(cells[c]);
             // Only the quantity of a line of the bill itself may be typed over.

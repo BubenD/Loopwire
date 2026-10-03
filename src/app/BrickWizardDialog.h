@@ -461,6 +461,8 @@ private:
 public:
     // CLEAR: every brick and link off the pane - the name and what is saved stay, Ctrl+Z brings it back.
     void clearAll();
+    // Done clicking two bricks for a dimension (or called off): the tool off, the dimension wizard back if it was put away.
+    void endDimPick();
     void undo();
     void redo();
     bool canUndo() const { return historyAt_ > 0; }
@@ -479,6 +481,18 @@ private:
     QComboBox* dimWizTo_ = nullptr;
     QComboBox* dimWizSide_ = nullptr;
     bool dimWizQueued_ = false;
+    bool dimWizPicking_ = false;   // the wizard put away while two bricks are clicked for a dimension
+    QFormLayout* endForm_ = nullptr;
+    QComboBox* componentKind_ = nullptr;   // an electronic component: which one it is
+    QHash<QString, int> extraTransPartCount_;      // the transitions by the part each end has, "<special>|<part>"
+    QHash<QString, double> extraTransPartMm_;
+    QCheckBox* transSame_ = nullptr;               // the same figures at both ends, or each its own
+    QDoubleSpinBox* transWidthFin_ = nullptr;      // the finish's, each its own
+    QToolButton* transWidthFinAuto_ = nullptr;
+    QComboBox* transPartFin_ = nullptr;
+    QCheckBox* transStretchFin_ = nullptr;
+    QDoubleSpinBox* transStretchLenFin_ = nullptr;
+    QToolButton* transStretchAutoFin_ = nullptr;
     void refreshDimensionWizard();
     void setAllDimsSide(bool below);
     // THE MARKS ON THE BRICKS: on the bill or not, and whether the part suits what is linked to it.
