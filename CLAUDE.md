@@ -76,6 +76,7 @@ which one wasn't and why.
 |---|---|
 | `src/app/` | Dialogs and the main window. The brick wizard is `BrickWizardDialog.*`. |
 | `src/harness/` | Harness domain: `BrickHarness.*` (brick design → drawing), `Harness.cpp` (twisted-pair / cable rendering and its cache key), `Bom.*`, `PartsLibrary.*` |
+| `src/harness/BrickDrc.*` | The harness DRC: `brickCompatibility()` (the brick dots) and `brickDrc()`, the logical and compatibility rules, each finding with a rule id and a bypass key. The DRC window is `src/app/MechanicalValidationDialog.*`; its rule switches and bypasses live in `Editor` (`drc*`), apart from the schematic's. |
 | `src/model/` | `Document`, `Entity` (`EntityType` enum), layers, blocks |
 | `src/render/` | Canvas and entity renderer |
 | `src/geometry/` | `Vec2`, `Bounds`, offsets, snapping |

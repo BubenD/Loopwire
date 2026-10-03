@@ -636,6 +636,17 @@ public:
     void bypassIssue(const QString& key) { bypassed_.insert(key); }
     void restoreIssue(const QString& key) { bypassed_.remove(key); }
 
+    // THE HARNESS DRC'S OWN RULES AND BYPASSES - kept apart from the schematic's: findings the user has accepted, and
+    // the rules turned off (all on by default; session-scoped, not written to the drawing).
+    const QSet<QString>& drcBypassed() const { return drcBypassed_; }
+    void drcBypass(const QString& key) { drcBypassed_.insert(key); }
+    void drcRestore(const QString& key) { drcBypassed_.remove(key); }
+    bool drcRuleEnabled(const QString& id) const { return !drcRulesOff_.contains(id); }
+    void setDrcRuleEnabled(const QString& id, bool on) {
+        if (on) drcRulesOff_.remove(id);
+        else drcRulesOff_.insert(id);
+    }
+
     // Per-rule enable flags for validateSchematic (all on by default; session-scoped).
     // `id` is the rule's key prefix: nc / dup / openwire / mixedpins / norefdes / nopn.
     bool ruleEnabled(const QString& id) const { return !disabledRules_.contains(id); }
@@ -1787,6 +1798,8 @@ private:
     bool awaitAlignRef_ = false; // next click picks the align-routing reference connector
 
     QSet<QString> bypassed_;        // validation discrepancy keys the user accepted
+    QSet<QString> drcBypassed_;     // the harness DRC's, likewise
+    QSet<QString> drcRulesOff_;     // the harness DRC rules turned off
     QSet<QString> disabledRules_;   // validation rule ids the user turned off
     bool flashOn_ = false;          // a locate-highlight ring is currently shown
     Vec2 flashPt_{0.0, 0.0};        // where to draw it (world)

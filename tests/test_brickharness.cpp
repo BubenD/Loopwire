@@ -8,6 +8,7 @@
 #include "app/BrickWizardDialog.h"
 #include "app/DrawingPreview.h"
 #include "app/Editor.h"
+#include "app/MechanicalValidationDialog.h"
 #include "harness/BrickHarness.h"
 #include "harness/PartsLibrary.h"
 #include "model/Block.h"
@@ -36,6 +37,7 @@
 #include "io/Dwx.h"
 #include <QDir>
 #include <QFile>
+#include <QJsonObject>
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QGroupBox>
@@ -4992,6 +4994,116 @@ void testRoundThirtyTwo() {
     }
 }
 
+// ROUND THIRTY-THREE: the harness DRC - its logical rules and compatibility, each finding under a rule that can be
+// turned off and a key that can be bypassed (its own, not the schematic's); the wheel a twentieth bigger.
+void testRoundThirtyThree() {
+    auto part = [](const char* id, PartKind k, std::initializer_list<std::pair<const char*, const char*>> ps) {
+        LibraryPart p;
+        p.id = p.mfrPn = QString::fromLatin1(id);
+        p.kind = k;
+        for (const auto& [key, v] : ps) p.params[QString::fromLatin1(key)] = QString::fromLatin1(v);
+        return p;
+    };
+    PartsLibrary lib;
+    lib.parts = {part("DRC-CONN2", PartKind::Connector, {{"pins", "2"}}), part("DRC-WIRE", PartKind::Wire, {}),
+                 part("DRC-CABLE", PartKind::Cable, {{"od", "6"}})};
+    // A HARNESS WITH SOMETHING WRONG EVERYWHERE.
+    BrickDesign d;
+    const QString x1 = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+    const QString x2 = d.addBrick(BrickType::End, PartKind::Connector, 4, 0);
+    const QString lone = d.addBrick(BrickType::End, PartKind::Connector, 0, 4);
+    const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 2, 0);
+    const QString open = d.addBrick(BrickType::Run, PartKind::Cable, 2, 3);
+    const QString br = d.addBrick(BrickType::Run, PartKind::Wire, 2, 5);
+    const QString bw = d.addBrick(BrickType::Run, PartKind::Wire, 3, 1);
+    const QString j = d.addBrick(BrickType::Joint, PartKind::Splice, 1, 6);
+    makeBranch(*d.brick(br));
+    makeBridgeWire(*d.brick(bw));
+    d.connect(x1, c);
+    d.connect(c, x2);
+    d.connect(x2, open);   // nothing at its other end
+    d.connect(bw, c, nullptr, 1, 0);
+    d.brick(x1)->name = QStringLiteral("X1");
+    d.brick(x2)->name = QStringLiteral("X1");   // the same designator twice
+    d.brick(x1)->libPart = QStringLiteral("DRC-CONN2");
+    d.brick(x2)->libPart = QStringLiteral("NOT-IN-LIB");
+    BrickRunSpec& r = d.brick(c)->run;
+    r.wires = 4;   // four wires into a two-way connector
+    r.stack = {QStringLiteral("wires"), QStringLiteral("cable")};
+    r.stackParts.insert(QStringLiteral("wires"), QStringLiteral("DRC-WIRE"));
+    r.lengthMm = 20.0;
+    r.fanStartMm = 15.0;
+    r.fanFinishMm = 15.0;   // fans longer than the run
+    r.transitions = RunEnds::Both;   // and no part number for its transitions
+    d.brick(bw)->run.bridgeWires = QStringLiteral("7");   // the cable has four
+    d.brick(open)->run.lengthMm = 0.0;
+    const std::vector<BrickIssue> found = brickDrc(d, QStringLiteral("W9"), lib, [](const QString&) { return 0; });
+    QSet<QString> rules;
+    for (const BrickIssue& i : found) rules.insert(i.rule);
+    std::printf("  drc: %d finding(s) under %d rule(s):", static_cast<int>(found.size()), static_cast<int>(rules.size()));
+    for (const QString& rule : rules) std::printf(" %s", qPrintable(rule));
+    std::printf("\n");
+    for (const char* rule : {"dupdesig", "nodesig", "nopart", "notinlib", "unlinked", "openrun", "nolength", "shortrun",
+                             "nolayerpn", "bridge", "branch", "joint", "transpn", "notonbom", "compat-ways", "compat-data"})
+        check(rules.contains(QLatin1String(rule)), qPrintable(QStringLiteral("drc: the %1 rule finds its fault").arg(QLatin1String(rule))));
+    QSet<QString> known;
+    for (const BrickDrcRule& rule : brickDrcRules()) known.insert(rule.id);
+    bool allKnown = true;
+    for (const QString& rule : rules) allKnown = allKnown && known.contains(rule);
+    check(allKnown, "drc: every finding is under a rule the rules list has");
+    QSet<QString> keys;
+    for (const BrickIssue& i : found) keys.insert(i.key);
+    check(keys.size() == static_cast<int>(found.size()) && !found.front().key.startsWith(QStringLiteral("|")),
+          "drc: each finding its own key, its harness first");
+    (void)lone;
+    (void)j;
+
+    // THE DRC WINDOW: a harness saved in the drawing checked; bypass one, turn a rule off.
+    {
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        QJsonObject all;
+        QJsonObject saved;
+        saved.insert(QStringLiteral("W9"), d.toJson());
+        all.insert(QStringLiteral("harnesses"), saved);
+        doc.wizards() = all;
+        MechanicalValidationDialog drc(&ed);
+        drc.readFromDrawing();
+        const int before = static_cast<int>(drc.shownHarnessIssues().size());
+        auto* table = drc.findChild<QTableWidget*>(QStringLiteral("harnessDrcTable"));
+        std::printf("  drc window: %d finding(s) shown, %d row(s)\n", before, table ? table->rowCount() : -1);
+        check(before > 0 && table && table->rowCount() == before, "drc window: the saved harness's findings listed");
+        auto* by = table ? qobject_cast<QPushButton*>(table->cellWidget(0, 4)) : nullptr;
+        if (by) by->click();
+        check(static_cast<int>(drc.shownHarnessIssues().size()) == before - 1 && ed.drcBypassed().size() == 1 &&
+                  ed.bypassedIssues().isEmpty(),
+              "drc window: bypassed, it leaves the list - in the DRC's own bypasses, not the schematic's");
+        drc.showBypass();
+        auto* bt = drc.findChild<QTableWidget*>(QStringLiteral("harnessDrcBypassTable"));
+        check(bt && bt->rowCount() == 1, "drc window: and is in its bypass table");
+        ed.setDrcRuleEnabled(QStringLiteral("dupdesig"), false);
+        drc.revalidate();
+        bool dup = false;
+        for (const BrickIssue& i : drc.shownHarnessIssues()) dup = dup || i.rule == QLatin1String("dupdesig");
+        check(!dup && ed.ruleEnabled(QStringLiteral("dup")), "drc window: a rule turned off finds nothing - the schematic's untouched");
+        drc.showRules();
+        check(drc.findChild<QCheckBox*>(QStringLiteral("harnessDrcRule_dupdesig")) &&
+                  !drc.findChild<QCheckBox*>(QStringLiteral("harnessDrcRule_dupdesig"))->isChecked() &&
+                  drc.findChild<QCheckBox*>(QStringLiteral("harnessDrcRule_compat-gauge")),
+              "drc window: its rules, logical and compatibility, each a tick");
+    }
+    // THE WHEEL a twentieth bigger.
+    {
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        BrickWizardDialog dlg(&ed);
+        auto* wheel = dlg.findChild<NavWheel*>(QStringLiteral("brickNavWheel"));
+        check(wheel && wheel->width() >= 117, "nav: the wheel a twentieth bigger");
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -5038,6 +5150,7 @@ int run_brickharness_tests() {
     testRoundThirty();
     testRoundThirtyOne();
     testRoundThirtyTwo();
+    testRoundThirtyThree();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

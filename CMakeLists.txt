@@ -79,6 +79,8 @@ add_library(edraw_core STATIC
     src/harness/MechanicalHarness.cpp
     src/harness/BrickHarness.h
     src/harness/BrickHarness.cpp
+    src/harness/BrickDrc.h
+    src/harness/BrickDrc.cpp
     src/harness/Bom.h
     src/harness/Bom.cpp
     src/harness/CableSpec.h
@@ -116,7 +118,6 @@ add_library(edraw_core STATIC
     src/app/PartsLibraryDialog.cpp
     src/app/DrawingPreview.h
     src/app/DrawingPreview.cpp
-    src/app/MechanicalBuilderDialog.h
     src/app/HarnessStepsDialog.h
     src/app/HarnessStepsDialog.cpp
     src/app/MechModelCanvasDialog.h
@@ -145,7 +146,6 @@ add_library(edraw_core STATIC
     src/harness/PartDataFromWeb.cpp
     src/app/PartWebDataDialog.h
     src/app/PartWebDataDialog.cpp
-    src/app/MechanicalBuilderDialog.cpp
     src/app/MechanicalValidationDialog.h
     src/app/MechanicalValidationDialog.cpp
     src/app/BlockDialog.h

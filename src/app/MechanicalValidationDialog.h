@@ -1,5 +1,6 @@
 #pragma once
 
+#include "harness/BrickDrc.h"
 #include "harness/MechanicalHarness.h"
 #include "harness/PartsLibrary.h"
 
@@ -14,7 +15,6 @@ class QTextBrowser;
 namespace Edraw_Desktop {
 
 class Editor;
-class MechanicalBuilderDialog;
 
 // Mechanical compatibility: whether the parts fitted to this harness will physically go on it.
 //
@@ -35,10 +35,22 @@ public:
     const std::vector<MechIssue>& issues() const { return issues_; }
     int countOf(MechIssueKind kind) const;
 
+    // THE HARNESS DRC: every harness the wizard made - the one open in it as it is now, saved or not, and every one
+    // saved in the drawing - checked by the logical and compatibility rules turned on, less what is bypassed.
+    void setOpenHarness(const BrickDesign* design, const QString& name);
+    const std::vector<BrickIssue>& harnessIssues() const { return harnessIssues_; }   // all found
+    std::vector<BrickIssue> shownHarnessIssues() const;                                // rules on, not bypassed
+    // Its rules (which are checked) and its bypass table - the DRC's own, not the schematic's.
+    void showRules();
+    void showBypass();
+
 private:
     void buildUi();
     void refreshTable();
     void refreshExplanation();
+    void checkHarnesses();
+    void refreshHarnessTable();
+    int bomItemOf(const QString& partId) const;
 
     Editor* editor_ = nullptr;
     PartsCatalog catalog_;
@@ -49,6 +61,15 @@ private:
     QTableWidget* table_ = nullptr;
     QCheckBox* showNotes_ = nullptr;
     QTextBrowser* detail_ = nullptr;
+
+    const BrickDesign* openDesign_ = nullptr;
+    QString openName_;
+    PartsLibrary merged_;
+    std::vector<BrickIssue> harnessIssues_;
+    QLabel* harnessSummary_ = nullptr;
+    QTableWidget* harnessTable_ = nullptr;
+    QDialog* rulesDlg_ = nullptr;
+    QDialog* bypassDlg_ = nullptr;
 };
 
 } // namespace Edraw_Desktop

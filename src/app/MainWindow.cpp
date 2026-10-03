@@ -23,7 +23,6 @@
 #include "app/BundleDiameterDialog.h"
 #include "app/HarnessStepsDialog.h"
 #include "app/MechModelsDialog.h"
-#include "app/MechanicalBuilderDialog.h"
 #include "app/MechanicalValidationDialog.h"
 #include "app/TemplateDialog.h"
 #include "app/ScientificCalculatorDialog.h"
@@ -11648,12 +11647,9 @@ void MainWindow::buildCommands() {
         {{"thermal", "temp", "heat"}, "Harness",
          "Lumped thermal model: how hot the bundle gets, and what it could carry",
          [this] { showThermalModel(); }},
-        {{"mechvalidate", "mdrc"}, "Harness",
-         "Mechanical compatibility: whether what is fitted will go on",
+        {{"mechvalidate", "mdrc", "drc"}, "Harness",
+         "Harness DRC: the logical design rules and compatibility - whether what is fitted will go on",
          [this] { showMechanicalValidation(); }},
-        {{"mechanical", "mhb", "mech"}, "Harness",
-         "Mechanical builder: the harness as a physical object, generated to scale",
-         [this] { showMechanicalBuilder(); }},
         {{"publish", "output", "plot"}, "Output",
          "Plot the model and the layouts, in order, to a printer or a PDF",
          [this] { showOutput(); }},
@@ -13827,41 +13823,6 @@ QToolButton* MainWindow::makeHarnessStepsButton(QWidget* parent) {
         "Lay a harness out as bricks - end parts and the runs between them - with the real drawing "
         "previewed as you go"));
     {
-        // Three numbered steps with an arrow through them: a sequence, not a form.
-        QPixmap pm(28, 28);
-        pm.fill(Qt::transparent);
-        QPainter ip(&pm);
-        ip.setRenderHint(QPainter::Antialiasing, true);
-        ip.setPen(QPen(QColor("#8fb7ff"), 1.5));
-        for (int i = 0; i < 3; ++i) ip.drawRect(3, 3 + i * 8, 8, 6);
-        ip.setPen(QPen(QColor("#7ee0a0"), 1.6));
-        ip.drawLine(14, 6, 24, 6);
-        ip.drawLine(14, 14, 24, 14);
-        ip.drawLine(14, 22, 24, 22);
-        ip.setPen(QPen(QColor("#e6b45a"), 1.6));
-        ip.drawLine(12, 6, 12, 22);           // the thread the steps hang on
-        ip.end();
-        btn->setIcon(QIcon(pm));
-    }
-    // THE REBUILT WIZARD is what this button opens. The old fixed-script one is still reachable from
-    // the command palette while the new one is being proven on real harnesses - see MechWizardDialog
-    // for why the two are different tools rather than two versions of one.
-    connect(btn, &QToolButton::clicked, this, [this] { showMechWizard(); });
-    return btn;
-}
-
-QToolButton* MainWindow::makeMechanicalBuilderButton(QWidget* parent) {
-    auto* btn = new QToolButton(parent);
-    btn->setText(QStringLiteral("Mechanical\nbuilder"));
-    btn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-    btn->setIconSize(QSize(26, 26));
-    btn->setMinimumWidth(84);
-    btn->setAutoRaise(true);
-    btn->setFocusPolicy(Qt::NoFocus);
-    btn->setToolTip(QStringLiteral(
-        "The harness as a physical object: a trunk that breaks out to each connector, every run drawn "
-        "at the bundle its own conductors make, dimensioned and called out"));
-    {
         // A trunk breaking out to three ends, drawn as the bundle it is: a body, not a line.
         QPixmap pm(28, 28);
         pm.fill(Qt::transparent);
@@ -13880,21 +13841,25 @@ QToolButton* MainWindow::makeMechanicalBuilderButton(QWidget* parent) {
         ip.end();
         btn->setIcon(QIcon(pm));
     }
-    connect(btn, &QToolButton::clicked, this, [this] { showMechanicalBuilder(); });
+    // THE REBUILT WIZARD is what this button opens. The old fixed-script one is still reachable from
+    // the command palette while the new one is being proven on real harnesses - see MechWizardDialog
+    // for why the two are different tools rather than two versions of one.
+    connect(btn, &QToolButton::clicked, this, [this] { showMechWizard(); });
     return btn;
 }
 
 QToolButton* MainWindow::makeMechanicalValidationButton(QWidget* parent) {
     auto* btn = new QToolButton(parent);
-    btn->setText(QStringLiteral("Mechanical\nchecks"));
+    btn->setText(QStringLiteral("DRC"));
+    btn->setObjectName(QStringLiteral("harnessDrcButton"));
     btn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
     btn->setIconSize(QSize(26, 26));
     btn->setMinimumWidth(84);
     btn->setAutoRaise(true);
     btn->setFocusPolicy(Qt::NoFocus);
     btn->setToolTip(QStringLiteral(
-        "Whether what is fitted will physically go on: every boot, backshell, sleeve and gland "
-        "against the bundle its own conductors make"));
+        "Design rule check of the harness: its logic - every part linked, named, chosen, on the BOM - and "
+        "compatibility - every layer, entry, contact and ferrule against what goes into it"));
     {
         // A bundle going into something, with a tick beside it.
         QPixmap pm(28, 28);
@@ -13984,10 +13949,64 @@ QToolButton* MainWindow::makeThermalButton(QWidget* parent) {
     return btn;
 }
 
+QToolButton* MainWindow::makeDrcRulesButton(QWidget* parent) {
+    auto* btn = new QToolButton(parent);
+    btn->setText(QStringLiteral("DRC\nrules"));
+    btn->setObjectName(QStringLiteral("harnessDrcRulesButton"));
+    btn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    btn->setIconSize(QSize(26, 26));
+    btn->setMinimumWidth(64);
+    btn->setAutoRaise(true);
+    btn->setFocusPolicy(Qt::NoFocus);
+    btn->setToolTip(QStringLiteral("Which harness design rules the DRC checks - its own, not the schematic's"));
+    {
+        // A list, each line ticked.
+        QPixmap pm(28, 28);
+        pm.fill(Qt::transparent);
+        QPainter ip(&pm);
+        ip.setRenderHint(QPainter::Antialiasing, true);
+        for (int i = 0; i < 3; ++i) {
+            const int y = 6 + i * 8;
+            ip.setPen(QPen(QColor("#7ee0a0"), 1.8));
+            ip.drawLine(3, y, 5, y + 2);
+            ip.drawLine(5, y + 2, 9, y - 2);
+            ip.setPen(QPen(QColor("#8fb7ff"), 1.6));
+            ip.drawLine(12, y, 25, y);
+        }
+        ip.end();
+        btn->setIcon(QIcon(pm));
+    }
+    connect(btn, &QToolButton::clicked, this, [this] {
+        showMechanicalValidation();
+        if (mechCheckDlg_) mechCheckDlg_->showRules();
+    });
+    return btn;
+}
+
+QToolButton* MainWindow::makeDrcBypassButton(QWidget* parent) {
+    auto* btn = new QToolButton(parent);
+    btn->setText(QStringLiteral("Bypass\ntable"));
+    btn->setObjectName(QStringLiteral("harnessDrcBypassButton"));
+    btn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    btn->setIconSize(QSize(26, 26));
+    btn->setMinimumWidth(64);
+    btn->setAutoRaise(true);
+    btn->setFocusPolicy(Qt::NoFocus);
+    btn->setToolTip(QStringLiteral("The harness DRC findings you have bypassed (accepted) - its own, not the schematic's"));
+    btn->setIcon(makeBypassIcon());
+    connect(btn, &QToolButton::clicked, this, [this] {
+        showMechanicalValidation();
+        if (mechCheckDlg_) mechCheckDlg_->showBypass();
+    });
+    return btn;
+}
+
 void MainWindow::showMechanicalValidation() {
     // Modeless and kept alive: a gauge is changed on the drawing, Check again is pressed, and the
     // answers follow - which is the whole point of checking against the bundle rather than a figure.
     if (!mechCheckDlg_) mechCheckDlg_ = new MechanicalValidationDialog(editor_, this);
+    // THE HARNESS OPEN IN THE WIZARD is checked as it is now, saved or not.
+    if (brickWizard_) mechCheckDlg_->setOpenHarness(&brickWizard_->design(), brickWizard_->harnessName());
     mechCheckDlg_->readFromDrawing();
     mechCheckDlg_->show();
     mechCheckDlg_->raise();
@@ -14499,15 +14518,6 @@ void MainWindow::showCalculator() {
     calculatorDock_->raise();
     if (auto* calc = calculatorDock_->findChild<ScientificCalculatorDialog*>())
         calc->focusExpression();
-}
-
-void MainWindow::showMechanicalBuilder() {
-    // Modeless and kept alive: the schematic is edited, read in again, and the mechanical drawing
-    // regenerated, without the definition being retyped each time.
-    if (!mechDlg_) mechDlg_ = new MechanicalBuilderDialog(editor_, this);
-    mechDlg_->show();
-    mechDlg_->raise();
-    mechDlg_->activateWindow();
 }
 
 void MainWindow::showMechModels() {

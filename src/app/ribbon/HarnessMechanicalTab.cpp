@@ -1536,11 +1536,12 @@ void MainWindow::buildHarnessMechanicalTab() {
         auto* ag = new QGridLayout(anW);
         ag->setContentsMargins(0, 0, 0, 0);
         ag->setSpacing(2);
-        // The guided build first: it is where a harness that does not exist yet is started, and the
-        // builder proper is where one that does is changed.
+        // The wizard builds the harness; the DRC checks it - its logic and what fits - by its own rules, with its
+        // own bypasses (not the schematic's).
         ag->addWidget(makeHarnessStepsButton(anW), 0, 0);
-        ag->addWidget(makeMechanicalBuilderButton(anW), 0, 1);
-        ag->addWidget(makeMechanicalValidationButton(anW), 0, 2);
+        ag->addWidget(makeMechanicalValidationButton(anW), 0, 1);
+        ag->addWidget(makeDrcRulesButton(anW), 0, 2);
+        ag->addWidget(makeDrcBypassButton(anW), 0, 3);
         QWidget* buildGroup = addGroupKeep(lay, QStringLiteral("Build and check"), anW);
         mechGroups_ << buildGroup;
         mechModelHiddenGroups_ << buildGroup;

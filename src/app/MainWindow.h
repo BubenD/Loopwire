@@ -61,7 +61,6 @@ class BomDialog;
 class VoltageDropDialog;
 class HarnessStepsDialog;
 class MechModelsDialog;
-class MechanicalBuilderDialog;
 class MechanicalValidationDialog;
 class BundleDiameterDialog;
 class ThermalModelDialog;
@@ -571,7 +570,6 @@ private:
     QShortcut* captureDropSc_ = nullptr;
     BomDialog* bomDlg_ = nullptr;
     VoltageDropDialog* voltageDropDlg_ = nullptr;
-    MechanicalBuilderDialog* mechDlg_ = nullptr;
     HarnessStepsDialog* stepsDlg_ = nullptr;
     class MechWizardDialog* mechWizard_ = nullptr;
     class BrickWizardDialog* brickWizard_ = nullptr;
@@ -657,7 +655,6 @@ private:
     void buildConnectorBuildTab(QWidget* page, QHBoxLayout* lay);
     void showBomDialog();
     void showVoltageDropDialog();
-    void showMechanicalBuilder();
     // The same harness, asked for one step at a time - the way it is built.
     void showHarnessSteps();
     // The rebuilt wizard: an open sequence rather than a fixed script. Opened beside the old one
@@ -716,13 +713,15 @@ private:
     void endTemplateEdit();
     QToolButton* makeTemplateSessionButton(QWidget* parent, int which);
     QToolButton* makeMechanicalValidationButton(QWidget* parent);
+    // The harness DRC's rules and its bypass table, on the ribbon beside it.
+    QToolButton* makeDrcRulesButton(QWidget* parent);
+    QToolButton* makeDrcBypassButton(QWidget* parent);
     QToolButton* makeBundleDiameterButton(QWidget* parent);
     QToolButton* makeThermalButton(QWidget* parent);
     // The ribbon button that opens it. The mechanical tab carries it; so does the schematic one,
     // because that is where the harness it reads from is drawn.
     QToolButton* makeHarnessStepsButton(QWidget* parent);
     QToolButton* makeMechModelsButton(QWidget* parent);
-    QToolButton* makeMechanicalBuilderButton(QWidget* parent);
     // Run the schematic design-rule check and (re)open the validation window. On a
     // fresh open (revalidate=false) the current discrepancies become the tracked set;
     // on Revalidate (true) that set is kept so issues now fixed can be shown ticked.

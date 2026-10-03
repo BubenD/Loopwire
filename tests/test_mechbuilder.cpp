@@ -1,6 +1,5 @@
 // The mechanical builder: sizes worked out from the conductors, a tree laid out from lengths and
 // angles, and a drawing generated from both. Every figure here can be checked by hand.
-#include "app/MechanicalBuilderDialog.h"
 #include <QStringList>
 #include "harness/Harness.h"
 #include "harness/MechanicalHarness.h"
@@ -1981,26 +1980,7 @@ int run_mechbuilder_tests() {
         seg.coverings.push_back(near);
         def.segments.push_back(seg);
 
-        MechanicalBuilderDialog dlg(nullptr);
-        dlg.setDefinition(def);
-        const std::vector<QString> steps = dlg.stepLines();
-        for (const QString& line : steps) std::printf("  step: %s\n", qPrintable(line));
-        check(steps.size() >= 3, "step: the run and the two things fitted to it are all steps");
-        // IN BUILD ORDER: the run first, then what is fitted along it in the order it is reached, whatever order
-        // they happened to be added in.
-        if (steps.size() >= 3) {
-            check(steps[0].contains(QStringLiteral("300")), "step: the run comes first, with its length");
-            const int nearAt = static_cast<int>(steps[1].indexOf(QStringLiteral("sleeve")));
-            const int farAt = static_cast<int>(steps[2].indexOf(QStringLiteral("shrink")));
-            check(nearAt >= 0 && farAt >= 0,
-                  "step: then the parts along it, nearest first - not the order they were typed in");
-            check(steps[1].contains(QStringLiteral("40")) && steps[2].contains(QStringLiteral("200")),
-                  "step: each saying how far along it goes, which is what somebody building it needs");
-        }
-        // Nothing is dimensioned until it is asked for.
-        for (const QString& line : steps)
-            check(!line.contains(QStringLiteral("| dim")),
-                  "step: and none of them carries a size until one is asked for");
+        // (The build steps were the mechanical builder window's - the harness wizard builds the harness now.)
 
         // ASKED FOR, on the run and on one part, with what each is to READ. The drawing then has those
         // dimensions and they say what they were told to say rather than what they measure.

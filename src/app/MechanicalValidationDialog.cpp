@@ -1,7 +1,14 @@
 #include "app/MechanicalValidationDialog.h"
 
 #include "app/Editor.h"
+#include "harness/Bom.h"
 #include "model/Document.h"
+
+#include <QDialogButtonBox>
+#include <QHash>
+#include <QSet>
+#include <QJsonObject>
+#include <QScrollArea>
 
 #include <QCheckBox>
 #include <QGroupBox>
@@ -17,7 +24,8 @@ namespace Edraw_Desktop {
 
 MechanicalValidationDialog::MechanicalValidationDialog(Editor* editor, QWidget* parent)
     : QDialog(parent), editor_(editor) {
-    setWindowTitle(QStringLiteral("Mechanical compatibility"));
+    setWindowTitle(QStringLiteral("DRC - harness design rules and compatibility"));
+    setObjectName(QStringLiteral("harnessDrc"));
     resize(1000, 680);
     catalog_.openRemembered();
     buildUi();
@@ -44,8 +52,36 @@ void MechanicalValidationDialog::buildUi() {
     connect(showNotes_, &QCheckBox::toggled, this, [this](bool) { refreshTable(); });
     head->addWidget(showNotes_);
     head->addStretch(1);
+    auto* rulesBtn = new QPushButton(QStringLiteral("Rules…"), this);
+    rulesBtn->setObjectName(QStringLiteral("harnessDrcRules"));
+    rulesBtn->setToolTip(QStringLiteral("Choose which harness design rules are checked"));
+    connect(rulesBtn, &QPushButton::clicked, this, [this] { showRules(); });
+    head->addWidget(rulesBtn);
+    auto* bypassBtn = new QPushButton(QStringLiteral("Bypass table"), this);
+    bypassBtn->setObjectName(QStringLiteral("harnessDrcBypass"));
+    bypassBtn->setToolTip(QStringLiteral("The findings you have bypassed (accepted)"));
+    connect(bypassBtn, &QPushButton::clicked, this, [this] { showBypass(); });
+    head->addWidget(bypassBtn);
     root->addLayout(head);
 
+    // THE HARNESS WIZARD'S HARNESSES: the logical design rules and compatibility, finding by finding.
+    harnessSummary_ = new QLabel(QString(), this);
+    harnessSummary_->setWordWrap(true);
+    root->addWidget(harnessSummary_);
+    harnessTable_ = new QTableWidget(this);
+    harnessTable_->setObjectName(QStringLiteral("harnessDrcTable"));
+    harnessTable_->setColumnCount(5);
+    harnessTable_->setHorizontalHeaderLabels({QStringLiteral("What"), QStringLiteral("Rule"), QStringLiteral("Harness"),
+                                              QStringLiteral("Finding"), QString()});
+    harnessTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    harnessTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    harnessTable_->verticalHeader()->setVisible(false);
+    harnessTable_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
+    root->addWidget(harnessTable_, 3);
+
+    auto* fitLabel = new QLabel(QStringLiteral("On the drawing: what is fitted against the bundle it goes on"), this);
+    fitLabel->setStyleSheet(QStringLiteral("color:#8fb0d6;font-weight:600;"));
+    root->addWidget(fitLabel);
     summary_ = new QLabel(QString(), this);
     summary_->setWordWrap(true);
     summary_->setStyleSheet(QStringLiteral("color:#8fb0d6;font-weight:600;font-size:14px;"));
@@ -87,6 +123,190 @@ void MechanicalValidationDialog::revalidate() {
     issues_ = validateMechanicalHarness(def_, &catalog_);
     refreshTable();
     refreshExplanation();
+    checkHarnesses();
+    refreshHarnessTable();
+}
+
+void MechanicalValidationDialog::setOpenHarness(const BrickDesign* design, const QString& name) {
+    openDesign_ = design;
+    openName_ = name.trimmed().isEmpty() ? QStringLiteral("(open in the wizard)") : name.trimmed();
+}
+
+int MechanicalValidationDialog::bomItemOf(const QString& partId) const {
+    const Document* doc = editor_ ? editor_->document() : nullptr;
+    const LibraryPart* p = merged_.byId(partId);
+    if (!doc || !p) return 0;
+    return bomItemLookup(*doc, merged_)(partId, p->kind, p->description);
+}
+
+void MechanicalValidationDialog::checkHarnesses() {
+    harnessIssues_.clear();
+    merged_ = catalog_.merged();
+    const auto bom = [this](const QString& id) { return bomItemOf(id); };
+    auto check = [&](const BrickDesign& from, const QString& name) {
+        BrickDesign d = from;
+        d.catalog = &catalog_;
+        for (BrickIssue& i : brickDrc(d, name, merged_, bom)) harnessIssues_.push_back(std::move(i));
+    };
+    QStringList done;
+    if (openDesign_ && !openDesign_->bricks.empty()) {
+        check(*openDesign_, openName_);
+        done << openName_;
+    }
+    const Document* doc = editor_ ? editor_->document() : nullptr;
+    if (!doc) return;
+    const QJsonObject saved = doc->wizards().value(QStringLiteral("harnesses")).toObject();
+    for (auto it = saved.begin(); it != saved.end(); ++it)
+        if (!done.contains(it.key())) check(BrickDesign::fromJson(it.value().toObject()), it.key());
+}
+
+std::vector<BrickIssue> MechanicalValidationDialog::shownHarnessIssues() const {
+    std::vector<BrickIssue> out;
+    for (const BrickIssue& i : harnessIssues_) {
+        if (editor_ && (!editor_->drcRuleEnabled(i.rule) || editor_->drcBypassed().contains(i.key))) continue;
+        out.push_back(i);
+    }
+    // Worst first.
+    std::stable_sort(out.begin(), out.end(), [](const BrickIssue& a, const BrickIssue& b) { return a.level > b.level; });
+    return out;
+}
+
+void MechanicalValidationDialog::refreshHarnessTable() {
+    if (!harnessTable_) return;
+    const std::vector<BrickIssue> shown = shownHarnessIssues();
+    int wrong = 0, check = 0, bypassed = 0;
+    QSet<QString> harnesses;
+    for (const BrickIssue& i : harnessIssues_) {
+        harnesses.insert(i.harness);
+        if (editor_ && editor_->drcBypassed().contains(i.key)) ++bypassed;
+    }
+    for (const BrickIssue& i : shown) (i.level >= 2 ? wrong : check)++;
+    if (harnessSummary_) {
+        harnessSummary_->setText(
+            harnessIssues_.empty() && (!openDesign_ || openDesign_->bricks.empty()) &&
+                    !(editor_ && editor_->document() &&
+                      !editor_->document()->wizards().value(QStringLiteral("harnesses")).toObject().isEmpty())
+                ? QStringLiteral("Harness wizard: no harness to check yet - build one in the Harness build wizard.")
+            : shown.empty()
+                ? QStringLiteral("Harness wizard: every rule passes%1.")
+                      .arg(bypassed ? QStringLiteral(" (%1 bypassed)").arg(bypassed) : QString())
+                : QStringLiteral("Harness wizard: %1 wrong, %2 to check%3 - Bypass to accept one.")
+                      .arg(wrong)
+                      .arg(check)
+                      .arg(bypassed ? QStringLiteral(", %1 bypassed").arg(bypassed) : QString()));
+        harnessSummary_->setStyleSheet(wrong > 0   ? QStringLiteral("color:#e06c6c;font-weight:600;font-size:14px;")
+                                       : check > 0 ? QStringLiteral("color:#e6b45a;font-weight:600;font-size:14px;")
+                                                   : QStringLiteral("color:#7ee0a0;font-weight:600;font-size:14px;"));
+    }
+    QHash<QString, QString> labelOf;
+    for (const BrickDrcRule& r : brickDrcRules()) labelOf.insert(r.id, r.label);
+    harnessTable_->setRowCount(0);
+    harnessTable_->setRowCount(static_cast<int>(shown.size()));
+    for (int row = 0; row < static_cast<int>(shown.size()); ++row) {
+        const BrickIssue& i = shown[static_cast<size_t>(row)];
+        const QColor colour = i.level >= 2 ? QColor("#e06c6c") : i.level == 1 ? QColor("#e6b45a") : QColor("#9fb4c8");
+        const QString cells[4] = {i.level >= 2 ? QStringLiteral("wrong") : i.level == 1 ? QStringLiteral("check")
+                                                                                         : QStringLiteral("note"),
+                                  labelOf.value(i.rule, i.rule), i.harness, i.message};
+        for (int c = 0; c < 4; ++c) {
+            auto* item = new QTableWidgetItem(cells[c]);
+            item->setForeground(colour);
+            if (c == 1) item->setToolTip(labelOf.value(i.rule, i.rule));
+            harnessTable_->setItem(row, c, item);
+        }
+        auto* by = new QPushButton(QStringLiteral("Bypass"), harnessTable_);
+        by->setObjectName(QStringLiteral("harnessDrcBypassRow"));
+        const QString key = i.key;
+        connect(by, &QPushButton::clicked, this, [this, key] {
+            if (editor_) editor_->drcBypass(key);
+            refreshHarnessTable();
+            if (bypassDlg_) showBypass();
+        });
+        harnessTable_->setCellWidget(row, 4, by);
+    }
+    harnessTable_->resizeColumnToContents(0);
+    harnessTable_->resizeColumnToContents(1);
+    harnessTable_->resizeColumnToContents(2);
+}
+
+void MechanicalValidationDialog::showRules() {
+    if (rulesDlg_) rulesDlg_->close();
+    auto* dlg = new QDialog(this);
+    rulesDlg_ = dlg;
+    dlg->setObjectName(QStringLiteral("harnessDrcRulesDialog"));
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dlg, &QObject::destroyed, this, [this] { rulesDlg_ = nullptr; });
+    dlg->setWindowTitle(QStringLiteral("Harness DRC rules"));
+    dlg->resize(560, 620);
+    auto* lay = new QVBoxLayout(dlg);
+    lay->addWidget(new QLabel(QStringLiteral("Tick the rules the harness DRC checks - its own, apart from the schematic's:"), dlg));
+    for (const QString group : {QStringLiteral("Logical"), QStringLiteral("Compatibility")}) {
+        auto* box = new QGroupBox(group == QLatin1String("Logical") ? QStringLiteral("Logical DRC")
+                                                                    : QStringLiteral("Compatibility validation"),
+                                  dlg);
+        auto* bl = new QVBoxLayout(box);
+        for (const BrickDrcRule& r : brickDrcRules()) {
+            if (r.group != group) continue;
+            auto* cb = new QCheckBox(r.label, box);
+            cb->setObjectName(QStringLiteral("harnessDrcRule_") + r.id);
+            cb->setChecked(!editor_ || editor_->drcRuleEnabled(r.id));
+            const QString id = r.id;
+            connect(cb, &QCheckBox::toggled, this, [this, id](bool on) {
+                if (editor_) editor_->setDrcRuleEnabled(id, on);
+                refreshHarnessTable();
+            });
+            bl->addWidget(cb);
+        }
+        lay->addWidget(box);
+    }
+    lay->addStretch(1);
+    auto* box = new QDialogButtonBox(QDialogButtonBox::Close, dlg);
+    connect(box, &QDialogButtonBox::rejected, dlg, &QDialog::close);
+    lay->addWidget(box);
+    dlg->show();
+    dlg->raise();
+}
+
+void MechanicalValidationDialog::showBypass() {
+    if (bypassDlg_) bypassDlg_->close();
+    std::vector<BrickIssue> by;
+    for (const BrickIssue& i : harnessIssues_)
+        if (editor_ && editor_->drcBypassed().contains(i.key)) by.push_back(i);
+    auto* dlg = new QDialog(this);
+    bypassDlg_ = dlg;
+    dlg->setObjectName(QStringLiteral("harnessDrcBypassDialog"));
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dlg, &QObject::destroyed, this, [this] { bypassDlg_ = nullptr; });
+    dlg->setWindowTitle(QStringLiteral("Harness DRC - bypassed findings"));
+    dlg->resize(640, 360);
+    auto* lay = new QVBoxLayout(dlg);
+    lay->addWidget(new QLabel(by.empty() ? QStringLiteral("No bypassed findings.")
+                                         : QStringLiteral("%1 bypassed finding(s) - Restore to flag one again.").arg(by.size()),
+                              dlg));
+    auto* table = new QTableWidget(static_cast<int>(by.size()), 3, dlg);
+    table->setObjectName(QStringLiteral("harnessDrcBypassTable"));
+    table->setHorizontalHeaderLabels({QStringLiteral("Harness"), QStringLiteral("Bypassed finding"), QString()});
+    table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    table->verticalHeader()->setVisible(false);
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    for (int r = 0; r < static_cast<int>(by.size()); ++r) {
+        table->setItem(r, 0, new QTableWidgetItem(by[static_cast<size_t>(r)].harness));
+        table->setItem(r, 1, new QTableWidgetItem(by[static_cast<size_t>(r)].message));
+        auto* rest = new QPushButton(QStringLiteral("Restore"), table);
+        const QString key = by[static_cast<size_t>(r)].key;
+        connect(rest, &QPushButton::clicked, this, [this, key] {
+            if (editor_) editor_->drcRestore(key);
+            refreshHarnessTable();
+            showBypass();
+        });
+        table->setCellWidget(r, 2, rest);
+    }
+    lay->addWidget(table);
+    auto* box = new QDialogButtonBox(QDialogButtonBox::Close, dlg);
+    connect(box, &QDialogButtonBox::rejected, dlg, &QDialog::close);
+    lay->addWidget(box);
+    dlg->show();
+    dlg->raise();
 }
 
 int MechanicalValidationDialog::countOf(MechIssueKind kind) const {

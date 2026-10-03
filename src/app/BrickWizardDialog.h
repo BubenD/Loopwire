@@ -1,6 +1,7 @@
 #pragma once
 
 #include "harness/Bom.h"
+#include "harness/BrickDrc.h"
 #include "harness/BrickHarness.h"
 #include "harness/PartsLibrary.h"
 
@@ -37,15 +38,6 @@ class Editor;
 
 // What a palette drag carries: "<brick type key>|<part kind key>".
 inline constexpr char kBrickMime[] = "application/x-edraw-brick";
-
-// THE MARKS ON A BRICK: whether its part is on the bill (-1 no part to put on it, 0 not on it, 1 on it), and how
-// well it suits what is linked to it (-1 not checked, 0 suits, 1 something unknown or not linked yet, 2 does not
-// suit) - with why.
-struct BrickMark {
-    int bom = -1;
-    int compat = -1;
-    QString why;
-};
 
 // ==================================================================================================
 // THE LOW-DETAIL PANE: the bricks of a harness on a coarse grid, each with a port on its left and its
@@ -231,8 +223,9 @@ private:
     std::vector<Item> items_;
     int hover_ = -1;
     int pressed_ = -1;
-    static constexpr double kOuter = 56.0;
-    static constexpr double kInner = 23.0;
+    // A twentieth bigger than first drawn, so the middle has room for its longest word.
+    static constexpr double kOuter = 58.8;
+    static constexpr double kInner = 24.15;
 };
 
 class BrickPalette : public QListWidget {
@@ -255,6 +248,8 @@ public:
     explicit BrickWizardDialog(Editor* editor, QWidget* parent = nullptr);
 
     BrickDesign& design() { return design_; }
+    // The harness's name as the window has it (empty: not named yet).
+    QString harnessName() const;
     BrickCanvas* canvas() const { return canvas_; }
     DrawingPreview* preview() const { return preview_; }
     const PartsCatalog& catalog() const { return catalog_; }
