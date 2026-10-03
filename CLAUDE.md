@@ -53,6 +53,23 @@ Don't use it.
   a `DrawingPreview`, and `grab()` it to a PNG. Look at the PNG before calling a drawing change
   done.
 
+### Every wizard change that affects the drawing preview
+
+Before calling such a change done, render a harness that has branches, transition heatshrinks and a
+bridge wire, and check all three:
+
+1. **Every connection is made.** Each run, branch and bridge wire starts and ends on the part, run or
+   transition it is linked to. Nothing floats free or stops short.
+2. **Everything meets the face it goes into.** Every physical wire, heatshrink and fan-out cable
+   touches the transition heatshrink or cable body it connects to, and enters within that face, not
+   past its edges.
+3. **Symmetric still works.** Run Symmetric with "about: Auto" and with a chosen part. The parts must
+   sit evenly either side of the reference part's line, without overlapping, and the bricks on the
+   pane must not move.
+
+A test or a look at the PNG covers each point. Say in the reply that all three were checked, or
+which one wasn't and why.
+
 ## Layout
 
 | Path | What |
