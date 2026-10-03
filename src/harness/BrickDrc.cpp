@@ -837,7 +837,9 @@ std::vector<BrickIssue> drawingConnectivity(const std::vector<Entity>& ents) {
     for (const Entity& e : ents) {
         const QString copy = e.meta.value(QStringLiteral("partCopy")).toString();
         if (copy.isEmpty()) continue;
-        if (e.type == EntityType::TwistedPair) {
+        // A run: a bundle, or one wire drawn as a double line.
+        if (e.type == EntityType::TwistedPair ||
+            (e.type == EntityType::Polyline && e.meta.value(QStringLiteral("double")).toBool())) {
             if (e.points.size() >= 2) {
                 ends.push_back(e.points.front());
                 ends.push_back(e.points.back());

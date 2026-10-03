@@ -80,6 +80,22 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
         return !copy.isEmpty() ? copy : e.meta.value(QStringLiteral("brickId")).toString();
     };
     for (const Entity& e : ents) {
+        // A RUN OF ONE WIRE is drawn as a wire - a double line, not a bundle: one tube along it.
+        if (e.type == EntityType::Polyline && e.meta.value(QStringLiteral("double")).toBool() && e.points.size() >= 2 &&
+            !groupOf(e).isEmpty()) {
+            isRun.insert(groupOf(e), true);
+            ++scene.runs;
+            runEnds.push_back(e.points.front());
+            runEnds.push_back(e.points.back());
+            std::vector<V3> path;
+            for (const Vec2& p : e.points) path.push_back(at3(p));
+            Harness3DItem wi;
+            wi.mesh = tubeMesh(path, std::max(0.2, e.meta.value(QStringLiteral("gap")).toDouble(1.0)) / 2.0, 8, true);
+            wi.color = wireColour(0);
+            wi.what = QStringLiteral("wire");
+            scene.items.push_back(std::move(wi));
+            continue;
+        }
         if (e.type != EntityType::TwistedPair || e.points.size() < 2) continue;
         isRun.insert(groupOf(e), true);
         ++scene.runs;
@@ -156,6 +172,8 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
     for (const Entity& e : ents) {
         const QString g = groupOf(e);
         if (g.isEmpty() || isRun.value(g) || e.type == EntityType::TwistedPair) continue;
+        // A run's own marks (a stripped end, a label) are the run's, not a part.
+        if (e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("strip")) continue;
         const QString role = e.meta.value(QStringLiteral("mechRole")).toString();
         if (role == QLatin1String("designator")) {
             parts[g].name = e.meta.value(QStringLiteral("text")).toString();

@@ -5402,6 +5402,26 @@ void testRoundThirtySix() {
                       "3d model: fitted to the part - as long as it is drawn, where it is");
             }
     }
+    // A RUN OF ONE WIRE - drawn as a wire, not a bundle - is a run in 3D too, not a part: no box over its length; and on
+    // the placed drawing its parts are on it.
+    {
+        BrickDesign one;
+        const QString p = one.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString w = one.addBrick(BrickType::Run, PartKind::Wire, 1, 0);
+        const QString q = one.addBrick(BrickType::End, PartKind::Ferrule, 2, 0);
+        one.connect(p, w);
+        one.connect(w, q);
+        one.brick(w)->run.wires = 1;
+        std::vector<Entity> oe = buildBrickHarness(one, nullptr).entities;
+        const Harness3DScene os = buildHarness3D(oe, {});
+        std::printf("  3d one wire: %d part(s), %d run(s)\n", os.parts, os.runs);
+        check(os.parts == 2 && os.runs == 1, "3d: a run of one wire is a run, not a part boxed over its length");
+        for (Entity& e : oe) {
+            e.meta.insert(QStringLiteral("partCopy"), QStringLiteral("c-") + e.meta.value(QStringLiteral("brickId")).toString());
+            e.meta.remove(QStringLiteral("brickId"));
+        }
+        check(drawingConnectivity(oe).empty(), "drawn: the parts on a run of one wire are on it");
+    }
     // ---- DRAWN ----
     {
         std::vector<DrawItem3D> items;
