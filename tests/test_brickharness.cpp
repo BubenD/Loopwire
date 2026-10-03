@@ -4892,12 +4892,10 @@ void testRoundThirtyTwo() {
         dlg.show();
         auto* nav = dlg.findChild<QWidget*>(QStringLiteral("brickNav"));
         auto* canvas = dlg.canvas();
-        bool inNav = nav != nullptr;
-        for (const char* name : {"brickRotate", "brickLeft", "brickRight", "brickUp", "brickDown", "brickArrange"})
-            inNav = inNav && nav->findChild<QPushButton*>(QLatin1String(name)) != nullptr;
-        inNav = inNav && nav->findChild<QCheckBox*>(QStringLiteral("brickTieTurn")) &&
-                nav->findChild<QComboBox*>(QStringLiteral("brickSymRef"));
-        check(inNav && nav->parentWidget() == canvas, "nav: arrows, turn, Symmetric and the tie on the pane itself");
+        auto* wheel = nav ? nav->findChild<NavWheel*>(QStringLiteral("brickNavWheel")) : nullptr;
+        check(nav && wheel && wheel->count() == 8 && nav->findChild<QComboBox*>(QStringLiteral("brickSymRef")) &&
+                  nav->parentWidget() == canvas,
+              "nav: a wheel of eight on the pane itself - arrows, turns, Symmetric and the tie - its part list under it");
         if (nav && canvas) {
             const QRect r = nav->geometry();
             std::printf("  nav: at %d,%d %dx%d on a pane %dx%d\n", r.x(), r.y(), r.width(), r.height(), canvas->width(),
@@ -4908,6 +4906,22 @@ void testRoundThirtyTwo() {
         BrickDesign& w = dlg.design();
         const QString x = w.addBrick(BrickType::End, PartKind::Connector, 0, 0);
         canvas->setSelection({x});
+        // ITS SEGMENTS DO WHAT THEY SAY: right moves the brick a step, the tie toggles.
+        if (wheel) {
+            const double col0 = w.brick(x)->col;
+            const QPointF at = wheel->segmentCentre(2);
+            check(wheel->segmentAt(at) == 2 && wheel->segmentAt(QRectF(wheel->rect()).center()) == -1,
+                  "nav: a segment found where it is drawn, nothing in the middle");
+            mouse(wheel, QEvent::MouseButtonPress, at);
+            mouse(wheel, QEvent::MouseButtonRelease, at);
+            check(std::abs(w.brick(x)->col - (col0 + 1.0)) < 1e-9, "nav: the right segment moves the brick a step right");
+            const bool tied = w.tieBrickTurn;
+            mouse(wheel, QEvent::MouseButtonPress, wheel->segmentCentre(3));
+            mouse(wheel, QEvent::MouseButtonRelease, wheel->segmentCentre(3));
+            check(w.tieBrickTurn == !tied, "nav: the tie segment turns the tie over");
+            mouse(wheel, QEvent::MouseButtonPress, wheel->segmentCentre(3));
+            mouse(wheel, QEvent::MouseButtonRelease, wheel->segmentCentre(3));
+        }
         dlg.rotateSelected(true);
         check(w.brick(x)->rot == 3, "turn: with Shift, a quarter counter-clockwise");
         dlg.rotateSelected(false);

@@ -198,6 +198,43 @@ private:
 
 // The bricks to choose from: the end parts, the joints, then the specials. Dragged onto the pane;
 // double-click puts one in the next free place.
+// THE NAVIGATION WHEEL: round and see-through, in the brick pane's corner - segments round a middle that names the one
+// under the pointer. Each segment an action, drawn as its own little picture (no font needed), lit while it is on.
+class NavWheel : public QWidget {
+    Q_OBJECT
+public:
+    struct Item {
+        QString key;     // its picture: up, right, down, left, cw, ccw, sym, tie
+        QString label;   // said in the middle while the pointer is on it
+        QString tip;
+        std::function<void()> act;
+        std::function<bool()> lit;   // on (a toggle), or empty
+    };
+    explicit NavWheel(QWidget* parent = nullptr);
+    void setItems(std::vector<Item> items);
+    int count() const { return static_cast<int>(items_.size()); }
+    // The segment at a point (-1 off the ring), and the middle of a segment - for the tests to click.
+    int segmentAt(const QPointF& p) const;
+    QPointF segmentCentre(int i) const;
+    QSize sizeHint() const override;
+
+protected:
+    void paintEvent(QPaintEvent*) override;
+    void mouseMoveEvent(QMouseEvent* e) override;
+    void mousePressEvent(QMouseEvent* e) override;
+    void mouseReleaseEvent(QMouseEvent* e) override;
+    void leaveEvent(QEvent*) override;
+    void resizeEvent(QResizeEvent*) override;
+
+private:
+    double angleOf(int i) const;   // the middle of segment i, degrees counter-clockwise from three o'clock
+    std::vector<Item> items_;
+    int hover_ = -1;
+    int pressed_ = -1;
+    static constexpr double kOuter = 56.0;
+    static constexpr double kInner = 23.0;
+};
+
 class BrickPalette : public QListWidget {
     Q_OBJECT
 public:
@@ -544,7 +581,8 @@ private:
     QDoubleSpinBox* transLenFin2_ = nullptr;     // the finish's length, in its own frame
     QToolButton* transLenFin2Auto_ = nullptr;
     QComboBox* symRef_ = nullptr;                // the part Symmetric lays the drawing out about
-    QWidget* navBox_ = nullptr;                  // the round buttons in the pane's top right corner
+    QWidget* navBox_ = nullptr;                  // the wheel in the pane's top right corner, and the list under it
+    NavWheel* navWheel_ = nullptr;
     void placeNav();
     QString symRefKey_;
     void frameTransitionSides();
