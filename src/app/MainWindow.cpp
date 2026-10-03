@@ -25,6 +25,8 @@
 #include "app/MechModelsDialog.h"
 #include "app/MechanicalValidationDialog.h"
 #include "app/RuleExplainer.h"
+#include "app/View3DPane.h"
+#include "harness/Datasheet.h"
 #include "app/TemplateDialog.h"
 #include "app/ScientificCalculatorDialog.h"
 #include "model/Block.h"
@@ -7289,6 +7291,7 @@ void MainWindow::buildPanels() {
     partsDock_ = makePartsPanel();
     blocksDock_ = makeBlocksPanel();
     calculatorDock_ = makeCalculatorPanel();
+    view3dDock_ = makeView3DPanel();
 
     // Pin / auto-hide acts on a whole side, and each side is independent: the left column (Properties)
     // and the right column (the bill of materials above the layers) each carry ONE pin - on the panel at
@@ -16531,6 +16534,36 @@ QDockWidget* MainWindow::makeCalculatorPanel() {
     // that may not need it. The Tools button and the View tab bring it back.
     addDockWidget(Qt::RightDockWidgetArea, dock);
     if (layersDock_) splitDockWidget(layersDock_, dock, Qt::Vertical);
+    dock->hide();
+    return dock;
+}
+
+QDockWidget* MainWindow::makeView3DPanel() {
+    auto* dock = new AutoHideDock(QStringLiteral("3D VIEW"), this);
+    dock->setObjectName(QStringLiteral("view3dDock"));
+    dock->setAllowedAreas(Qt::AllDockWidgetAreas);
+    dock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable | QDockWidget::DockWidgetClosable);
+    view3dPane_ = new View3DPane(dock);
+    dock->setManaged(new DockTitleBar(dock, QStringLiteral("3D VIEW")), view3dPane_);
+    // FROM THE SHEET, or from the harness wizard when it is open.
+    view3dPane_->setSources([this] { return doc_ ? doc_->entities() : std::vector<Entity>{}; },
+                            [this] { return brickWizard_ ? brickWizard_->drawing() : std::vector<Entity>{}; });
+    // EACH PART'S 3D MODEL, from the library as it is now.
+    auto catalog = std::make_shared<PartsCatalog>();
+    catalog->openRemembered();
+    view3dPane_->setModelLookup([catalog](const QString& libPart) {
+        const LibraryPart* p = catalog->byId(libPart);
+        const QString stored = p ? p->value(QStringLiteral("model3d")) : QString();
+        return stored.isEmpty() ? QString() : DatasheetStore::pathOf(stored);
+    });
+    connect(dock, &QDockWidget::visibilityChanged, this, [this, catalog](bool on) {
+        if (!on || !view3dPane_) return;
+        *catalog = PartsCatalog();
+        catalog->openRemembered();
+        view3dPane_->rebuild(true);
+    });
+    // Off to begin with, and wide when it is opened: a picture wants room.
+    addDockWidget(Qt::BottomDockWidgetArea, dock);
     dock->hide();
     return dock;
 }

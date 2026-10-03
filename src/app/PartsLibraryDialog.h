@@ -140,6 +140,11 @@ public:
     void openDatasheet();
     void removeDatasheet();
     void refreshDatasheetRow();
+    // ITS 3D MODEL (.stp, .stl, .obj): attached into the same folder, shown on the harness in the 3D view - a box where
+    // a part has none.
+    void attachModel3D();
+    void removeModel3D();
+    void refreshModel3DRow();
     // THE SIZE a mechanical drawing drawn to proportion is put at - by its entry face (see partSizeFactor).
     void refreshSizeRow();
     // Which file is picked in the list, or the part's first when none is.
@@ -210,6 +215,9 @@ private:
     QPushButton* attachBtn_ = nullptr;
     QPushButton* openDsBtn_ = nullptr;
     QPushButton* removeDsBtn_ = nullptr;
+    QLabel* model3dLabel_ = nullptr;
+    QPushButton* model3dAttach_ = nullptr;
+    QPushButton* model3dRemove_ = nullptr;
     QWidget* paramHost_ = nullptr;
     QVBoxLayout* paramLay_ = nullptr;
     QLabel* summary_ = nullptr;

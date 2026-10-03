@@ -63,6 +63,13 @@ QIcon panelIcon(const QString& key) {
         // Two blocks, one of them a copy of the other.
         p.drawRect(QRectF(5.5, 6.5, 7, 6));
         p.drawRect(QRectF(11.5, 12.5, 7, 6));
+    } else if (key == QLatin1String("view3d")) {
+        // A cube in perspective: three faces.
+        p.setRenderHint(QPainter::Antialiasing, true);
+        const QPointF a(7, 9), b(14, 6), c(19, 9), d(12, 12), a2(7, 17), d2(12, 20), c2(19, 17);
+        p.drawPolygon(QPolygonF({a, b, c, d}));
+        p.drawPolygon(QPolygonF({a, d, d2, a2}));
+        p.drawPolygon(QPolygonF({d, c, c2, d2}));
     } else if (key == QLatin1String("calculator")) {
         // A calculator: a small body, its display and a keypad.
         p.drawRect(QRectF(7.5, 5.5, 10, 14));
@@ -108,6 +115,7 @@ void MainWindow::buildViewTab() {
         {"parts", QStringLiteral("Parts list"), QStringLiteral("the library, to place from")},
         {"blocks", QStringLiteral("Blocks list"), QStringLiteral("the blocks, to place from")},
         {"calculator", QStringLiteral("Calculator"), QStringLiteral("a scientific calculator")},
+        {"view3d", QStringLiteral("3D view"), QStringLiteral("the harness in 3D - turn it, zoom it, each part as its 3D model")},
     };
 
     auto* w = new QWidget(page);
@@ -245,6 +253,7 @@ QDockWidget* MainWindow::panelByKey(const QString& key) const {
     if (key == QLatin1String("parts")) return partsDock_;
     if (key == QLatin1String("blocks")) return blocksDock_;
     if (key == QLatin1String("calculator")) return calculatorDock_;
+    if (key == QLatin1String("view3d")) return view3dDock_;
     return nullptr;
 }
 

@@ -288,6 +288,8 @@ private:
     QDockWidget* makePartsPanel();
     QDockWidget* makeBlocksPanel();
     QDockWidget* makeCalculatorPanel();
+    // THE 3D VIEW: the harness on the sheet - or open in the wizard - in 3D (View tab, "3D view").
+    QDockWidget* makeView3DPanel();
     void refreshPartsPanel();
     // Which of the connected libraries the parts panel draws from. Remembered by path, so connecting
     // another library does not disturb what is in view.
@@ -1004,6 +1006,8 @@ private:
     QDockWidget* partsDock_ = nullptr;
     QDockWidget* blocksDock_ = nullptr;
     QDockWidget* calculatorDock_ = nullptr;
+    QDockWidget* view3dDock_ = nullptr;
+    class View3DPane* view3dPane_ = nullptr;
     QList<QPair<QString, QToolButton*>> viewPanelButtons_;
     // The shelf, as a table: the part, and a column each for the mechanical drawing, the schematic symbol
     // and the fanout. A tree rather than a list because several libraries in view are shown under their own

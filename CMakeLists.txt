@@ -152,6 +152,14 @@ add_library(edraw_core STATIC
     src/app/MechanicalValidationDialog.cpp
     src/app/RuleExplainer.h
     src/app/RuleExplainer.cpp
+    src/app/View3DPane.h
+    src/app/View3DPane.cpp
+    src/geometry/Mesh3D.h
+    src/geometry/Mesh3D.cpp
+    src/render/Render3D.h
+    src/render/Render3D.cpp
+    src/harness/Harness3D.h
+    src/harness/Harness3D.cpp
     src/app/BlockDialog.h
     src/app/BlockDialog.cpp
     src/app/TemplateDialog.h

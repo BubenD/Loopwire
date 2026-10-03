@@ -10,6 +10,10 @@
 #include "app/Editor.h"
 #include "app/MechanicalValidationDialog.h"
 #include "app/RuleExplainer.h"
+#include "app/View3DPane.h"
+#include "geometry/Mesh3D.h"
+#include "harness/Harness3D.h"
+#include "render/Render3D.h"
 #include "harness/BrickHarness.h"
 #include "harness/PartsLibrary.h"
 #include "model/Block.h"
@@ -5277,6 +5281,174 @@ void testRoundThirtyFive() {
     if (legend) legend->close();
 }
 
+// ROUND THIRTY-SIX: the 3D preview - models read (STL, OBJ, STEP), the harness built in 3D (tubes for its runs, a part's
+// own model or a box), drawn by the software renderer, turned, moved and zoomed in its pane.
+void testRoundThirtySix() {
+    const QString dir = QDir::tempPath() + QStringLiteral("/edraw3d");
+    QDir().mkpath(dir);
+    // ---- SHAPES ----
+    {
+        const Mesh3D box = boxMesh({0, 0, 0}, {2, 3, 4});
+        V3 lo, hi;
+        check(box.f.size() == 12 && box.bounds(lo, hi) && std::abs(hi.z - 4.0) < 1e-9, "3d: a box of twelve triangles");
+        const Mesh3D tube = tubeMesh({{0, 0, 0}, {10, 0, 0}, {10, 10, 0}}, 1.0, 12, true);
+        check(!tube.empty() && tube.bounds(lo, hi) && std::abs(hi.y - 10.0) < 0.05 && std::abs(hi.x - 11.0) < 0.2 && std::abs(lo.z + 1.0) < 0.05,
+              "3d: a tube along a path, round it by its radius");
+    }
+    // ---- READING MODELS ----
+    {
+        QFile a(dir + QStringLiteral("/tri.stl"));
+        a.open(QIODevice::WriteOnly);
+        a.write("solid t\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\n"
+                "facet normal 0 0 1\nouter loop\nvertex 1 0 0\nvertex 1 1 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid t\n");
+        a.close();
+        QString how;
+        check(loadMesh3D(a.fileName(), &how).f.size() == 2, "3d: a text STL read");
+        // Binary: one triangle.
+        QFile b(dir + QStringLiteral("/tri_b.stl"));
+        b.open(QIODevice::WriteOnly);
+        QByteArray bin(80, ' ');
+        quint32 n = 1;
+        bin.append(reinterpret_cast<const char*>(&n), 4);
+        float f[12] = {0, 0, 1, 0, 0, 0, 5, 0, 0, 0, 5, 0};
+        bin.append(reinterpret_cast<const char*>(f), 48);
+        bin.append(2, '\0');
+        b.write(bin);
+        b.close();
+        V3 lo, hi;
+        const Mesh3D bm = loadMesh3D(b.fileName(), &how);
+        check(bm.f.size() == 1 && bm.bounds(lo, hi) && std::abs(hi.x - 5.0) < 1e-6, "3d: a binary STL read");
+        QFile o(dir + QStringLiteral("/quad.obj"));
+        o.open(QIODevice::WriteOnly);
+        o.write("v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nf 1 2 3 4\n");
+        o.close();
+        check(loadMesh3D(o.fileName(), &how).f.size() == 2, "3d: an OBJ read, its quad as two triangles");
+        // STEP: a cylinder between two circles, with its caps.
+        QByteArray s = "ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\n";
+        int id = 1;
+        auto add = [&](const QByteArray& body) {
+            s += "#" + QByteArray::number(id) + "=" + body + ";\n";
+            return id++;
+        };
+        auto ref = [](int i) { return "#" + QByteArray::number(i); };
+        auto pt = [&](double x, double y, double z) {
+            return add("CARTESIAN_POINT('',(" + QByteArray::number(x) + "," + QByteArray::number(y) + "," + QByteArray::number(z) + "))");
+        };
+        const int ax = add("DIRECTION('',(1.,0.,0.))"), rd = add("DIRECTION('',(0.,1.,0.))");
+        const int pl0 = add("AXIS2_PLACEMENT_3D(''," + ref(pt(0, 0, 0)) + "," + ref(ax) + "," + ref(rd) + ")");
+        const int pl1 = add("AXIS2_PLACEMENT_3D(''," + ref(pt(40, 0, 0)) + "," + ref(ax) + "," + ref(rd) + ")");
+        const int c0 = add("CIRCLE(''," + ref(pl0) + ",8.)"), c1 = add("CIRCLE(''," + ref(pl1) + ",8.)");
+        const int v0 = add("VERTEX_POINT(''," + ref(pt(0, 8, 0)) + ")"), v1 = add("VERTEX_POINT(''," + ref(pt(40, 8, 0)) + ")");
+        const int e0 = add("EDGE_CURVE(''," + ref(v0) + "," + ref(v0) + "," + ref(c0) + ",.T.)");
+        const int e1 = add("EDGE_CURVE(''," + ref(v1) + "," + ref(v1) + "," + ref(c1) + ",.T.)");
+        const int l0 = add("EDGE_LOOP('',(" + ref(add("ORIENTED_EDGE('',*,*," + ref(e0) + ",.T.)")) + "))");
+        const int l1 = add("EDGE_LOOP('',(" + ref(add("ORIENTED_EDGE('',*,*," + ref(e1) + ",.F.)")) + "))");
+        add("ADVANCED_FACE('',(" + ref(add("FACE_OUTER_BOUND(''," + ref(l0) + ",.T.)")) + "," + ref(add("FACE_BOUND(''," + ref(l1) + ",.T.)")) +
+            ")," + ref(add("CYLINDRICAL_SURFACE(''," + ref(pl0) + ",8.)")) + ",.T.)");
+        add("ADVANCED_FACE('',(" + ref(add("FACE_OUTER_BOUND(''," + ref(l0) + ",.T.)")) + ")," + ref(add("PLANE(''," + ref(pl0) + ")")) + ",.T.)");
+        add("ADVANCED_FACE('',(" + ref(add("FACE_OUTER_BOUND(''," + ref(l1) + ",.T.)")) + ")," + ref(add("PLANE(''," + ref(pl1) + ")")) + ",.T.)");
+        s += "ENDSEC;\nEND-ISO-10303-21;\n";
+        const Mesh3D step = loadStepText(s, &how);
+        std::printf("  3d: %s\n", qPrintable(how));
+        check(!step.empty() && step.bounds(lo, hi) && std::abs(hi.x - 40.0) < 1e-6 && std::abs(hi.y - 8.0) < 0.05 &&
+                  std::abs(lo.z + 8.0) < 0.05,
+              "3d: a STEP cylinder read from its circles - as long and as round as it is");
+        check(loadStepText("ISO-10303-21;\nHEADER;\nENDSEC;\n", &how).empty() && how.contains(QStringLiteral("DATA")),
+              "3d: not a STEP solid - nothing, and why");
+        QFile sf(dir + QStringLiteral("/cyl.stp"));
+        sf.open(QIODevice::WriteOnly);
+        sf.write(s);
+        sf.close();
+    }
+    // ---- THE HARNESS IN 3D ----
+    BrickDesign d;
+    const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+    const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+    const QString y = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+    d.connect(x, c);
+    d.connect(c, y);
+    d.brick(c)->run.wires = 4;
+    d.brick(c)->run.transitions = RunEnds::Both;
+    std::vector<Entity> ents = buildBrickHarness(d, nullptr).entities;
+    for (Entity& e : ents)
+        if (e.meta.value(QStringLiteral("brickId")).toString() == y) e.meta.insert(QStringLiteral("libPart"), QStringLiteral("HAS-3D"));
+    const QString stp = dir + QStringLiteral("/cyl.stp");
+    const Harness3DScene sc = buildHarness3D(ents, [&](const QString& lib) { return lib == QLatin1String("HAS-3D") ? stp : QString(); });
+    int cubes = 0, models = 0, sleeves = 0, wires = 0;
+    for (const Harness3DItem& it : sc.items) {
+        cubes += it.cube ? 1 : 0;
+        models += it.model ? 1 : 0;
+        sleeves += it.what == QLatin1String("transition") ? 1 : 0;
+        wires += it.what == QLatin1String("wire") ? 1 : 0;
+    }
+    std::printf("  3d harness: %d part(s), %d model(s), %d cube(s), %d run(s), %d sleeve(s), %d wire piece(s)\n", sc.parts,
+                models, cubes, sc.runs, sleeves, wires);
+    check(sc.parts == 2 && models == 1 && cubes == 1 && sc.modelled == 1, "3d harness: a part with a 3D model shown by it, one without as a box");
+    check(sc.runs == 1 && sleeves == 2 && wires >= 4, "3d harness: the run's body, its two transitions and its wires");
+    // The model fitted to the part as drawn: as long as it is, where it is.
+    {
+        Bounds drawn;
+        for (const Entity& e : ents)
+            if (e.meta.value(QStringLiteral("brickId")).toString() == y && e.type != EntityType::Text &&
+                e.meta.value(QStringLiteral("mechRole")).toString() != QLatin1String("designator"))
+                drawn.expand(e.bounds());
+        for (const Harness3DItem& it : sc.items)
+            if (it.model) {
+                V3 lo, hi;
+                it.mesh.bounds(lo, hi);
+                std::printf("  3d model: %.1f..%.1f across a part drawn %.1f..%.1f\n", lo.x, hi.x, drawn.min.x, drawn.max.x);
+                check(std::abs((hi.x - lo.x) - (drawn.max.x - drawn.min.x)) < 0.5 &&
+                          std::abs((hi.x + lo.x) / 2.0 - (drawn.max.x + drawn.min.x) / 2.0) < 0.5,
+                      "3d model: fitted to the part - as long as it is drawn, where it is");
+            }
+    }
+    // ---- DRAWN ----
+    {
+        std::vector<DrawItem3D> items;
+        for (const Harness3DItem& it : sc.items) items.push_back({&it.mesh, it.color});
+        Camera3D cam;
+        V3 lo{-50, -50, -20}, hi{250, 50, 20};
+        cam.fit(lo, hi, 1.5);
+        QImage img(300, 200, QImage::Format_RGB32);
+        const QColor bg(30, 36, 44);
+        renderScene3D(img, items, cam, false, bg);
+        int lit = 0;
+        for (int yy = 0; yy < img.height(); ++yy)
+            for (int xx = 0; xx < img.width(); ++xx) lit += img.pixel(xx, yy) != bg.rgb() ? 1 : 0;
+        std::printf("  3d picture: %d of %d pixels drawn\n", lit, img.width() * img.height());
+        check(lit > 500, "3d picture: the harness drawn");
+    }
+    // ---- THE PANE ----
+    {
+        View3DPane pane;
+        pane.resize(640, 420);
+        pane.setSources([&] { return ents; }, [] { return std::vector<Entity>{}; });
+        pane.setModelLookup([&](const QString& lib) { return lib == QLatin1String("HAS-3D") ? stp : QString(); });
+        pane.show();
+        pane.rebuild(true);
+        auto* status = pane.findChild<QLabel*>(QStringLiteral("view3dStatus"));
+        check(pane.scene().parts == 2 && status && status->text().contains(QStringLiteral("1 with a 3D model")),
+              "3d pane: built from the drawing, and says what it shows");
+        View3DCanvas* canvas = pane.canvas();
+        const double yaw = canvas->camera().yawDeg, dist = canvas->camera().distance;
+        mouse(canvas, QEvent::MouseButtonPress, QPointF(100, 100));
+        QMouseEvent mv(QEvent::MouseMove, QPointF(160, 120), canvas->mapToGlobal(QPointF(160, 120)), Qt::NoButton, Qt::LeftButton,
+                       Qt::NoModifier);
+        QApplication::sendEvent(canvas, &mv);
+        mouse(canvas, QEvent::MouseButtonRelease, QPointF(160, 120));
+        check(std::abs(canvas->camera().yawDeg - yaw) > 1.0, "3d pane: dragged, it turns");
+        QWheelEvent wheel(QPointF(100, 100), canvas->mapToGlobal(QPointF(100, 100)), QPoint(), QPoint(0, 120), Qt::NoButton,
+                          Qt::NoModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(canvas, &wheel);
+        check(canvas->camera().distance < dist, "3d pane: wheeled, it zooms in");
+        if (auto* top = pane.findChild<QToolButton*>(QStringLiteral("view3dTop"))) top->click();
+        check(canvas->camera().pitchDeg > 80.0, "3d pane: Top - from above");
+        if (auto* wf = pane.findChild<QCheckBox*>(QStringLiteral("view3dWireframe"))) wf->setChecked(true);
+        const QImage pic = canvas->render(QSize(200, 150));
+        check(!pic.isNull(), "3d pane: drawn in wireframe too");
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -5326,6 +5498,7 @@ int run_brickharness_tests() {
     testRoundThirtyThree();
     testRoundThirtyFour();
     testRoundThirtyFive();
+    testRoundThirtySix();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

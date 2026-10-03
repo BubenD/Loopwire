@@ -16,6 +16,7 @@
 #include "harness/CableSpec.h"
 #include "app/CableBuilderDialog.h"
 #include "harness/Datasheet.h"
+#include "geometry/Mesh3D.h"
 #include "io/AppPaths.h"
 #include "app/Editor.h"
 #include "model/Block.h"
@@ -1131,6 +1132,27 @@ void PartsLibraryDialog::buildUi() {
         setRole(datasheetLabel_, "caption");
         datasheetLabel_->hide();   // what it used to say is in the rows themselves now
         headRow(QStringLiteral("Datasheets"), dsRow);
+    }
+    // ITS 3D MODEL: a STEP, STL or OBJ file, attached like a datasheet - shown on the harness in the 3D view.
+    {
+        auto* row = new QWidget(head);
+        auto* rl = new QHBoxLayout(row);
+        rl->setContentsMargins(0, 0, 0, 0);
+        rl->setSpacing(4);
+        model3dLabel_ = new QLabel(row);
+        model3dLabel_->setObjectName(QStringLiteral("partModel3dLabel"));
+        rl->addWidget(model3dLabel_, 1);
+        model3dAttach_ = new QPushButton(QStringLiteral("Attach 3D…"), row);
+        model3dAttach_->setObjectName(QStringLiteral("partModel3dAttach"));
+        model3dAttach_->setToolTip(QStringLiteral("Attach a 3D model of the part (.stp, .step, .stl, .obj) - it is shown "
+                                                  "at the harness's end in the 3D view; a part with none is shown as a box"));
+        connect(model3dAttach_, &QPushButton::clicked, this, [this] { attachModel3D(); });
+        rl->addWidget(model3dAttach_);
+        model3dRemove_ = new QPushButton(QStringLiteral("Remove"), row);
+        model3dRemove_->setObjectName(QStringLiteral("partModel3dRemove"));
+        connect(model3dRemove_, &QPushButton::clicked, this, [this] { removeModel3D(); });
+        rl->addWidget(model3dRemove_);
+        headRow(QStringLiteral("3D model"), row);
     }
     rv->addWidget(head);
 
@@ -2610,7 +2632,53 @@ QString PartsLibraryDialog::selectedDatasheet() const {
     return p ? p->datasheet() : QString();
 }
 
+void PartsLibraryDialog::attachModel3D() {
+    LibraryPart* p = current();
+    if (!p) return;
+    const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Attach a 3D model"), QString(), mesh3DFileFilter());
+    if (path.isEmpty()) return;
+    // READ ONCE ON THE WAY IN, so a file that holds nothing this can show is said so now, not in the 3D view later.
+    QString how;
+    const Mesh3D mesh = loadMesh3D(path, &how);
+    QString error;
+    const QString stored = DatasheetStore::attach(path, &error);
+    if (stored.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("3D model"), error);
+        return;
+    }
+    p->params[QStringLiteral("model3d")] = stored;
+    touched();
+    refreshModel3DRow();
+    if (summary_)
+        summary_->setText(mesh.empty() ? QStringLiteral("Attached %1 - but nothing could be shown from it (%2): the part "
+                                                        "is shown as a box").arg(QFileInfo(path).fileName(), how)
+                                       : QStringLiteral("Attached %1 - %2").arg(QFileInfo(path).fileName(), how));
+}
+
+void PartsLibraryDialog::removeModel3D() {
+    LibraryPart* p = current();
+    if (!p) return;
+    p->params.remove(QStringLiteral("model3d"));
+    touched();
+    refreshModel3DRow();
+    if (summary_) summary_->setText(QStringLiteral("3D model taken off - the part is shown as a box"));
+}
+
+void PartsLibraryDialog::refreshModel3DRow() {
+    LibraryPart* p = current();
+    const QString stored = p ? p->value(QStringLiteral("model3d")) : QString();
+    if (model3dLabel_)
+        model3dLabel_->setText(!p                ? QString()
+                               : stored.isEmpty() ? QStringLiteral("none - shown as a box in the 3D view")
+                               : DatasheetStore::exists(stored)
+                                   ? DatasheetStore::originalName(stored)
+                                   : DatasheetStore::originalName(stored) + QStringLiteral("   (missing from the folder)"));
+    if (model3dAttach_) model3dAttach_->setEnabled(p != nullptr);
+    if (model3dRemove_) model3dRemove_->setEnabled(p && !stored.isEmpty());
+}
+
 void PartsLibraryDialog::refreshDatasheetRow() {
+    refreshModel3DRow();
     LibraryPart* p = current();
     const bool have = p != nullptr;
     if (attachBtn_) attachBtn_->setEnabled(have);
