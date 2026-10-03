@@ -97,6 +97,12 @@ struct BrickRunSpec {
     QString transitionPart;
     // MORE TRANSITION HEATSHRINKS, one over another over the first (transitionPart): their part numbers, inside out.
     QStringList transitionLayers;
+    // EACH LAYER'S STEP: how far short of the bottom transition's cable-side end it stops (0: Auto, a little more for
+    // each layer out).
+    QList<double> transitionLayerSteps;
+    // The finish's layers and steps, where the two ends are each their own (transitionSame off).
+    QStringList transitionLayersFinish;
+    QList<double> transitionLayerStepsFinish;
     // A CABLE TO SEVERAL PARTS AT ONE END: what its wires are after its body ends - 0 bare wires fanning out to each
     // part, 1 each branch of wires under heatshrink (with a transition where the body ends) and then its fan.
     int branchCover = 0;
@@ -171,6 +177,10 @@ struct BrickRunSpec {
     // What is outermost, and so what the body is drawn as.
     QString outermost() const;
 };
+
+// THE TRANSITION INSIDE THE BACKSHELL at one end (in the special's own terms), and set so at each end.
+bool transitionInsideAt(const BrickRunSpec& r, bool finish);
+void setTransitionInside(BrickRunSpec& r, bool start, bool finish);
 
 // A JOINT IN A RUN: wires of the harness soldered or crimped together - one to one, several to one, so many to so
 // many - with a splice part (or several), the wires that go out of it, and where along the run it is made.
@@ -444,6 +454,12 @@ double brickRowPitchMm(const BrickDesign& d);
 // SYMMETRIC ON THE DRAWING ONLY: every part set up or down on the drawing to where a symmetric layout puts it, the
 // bricks on the pane left exactly where they are. `rowPitch` is how far apart the drawing's rows are.
 void symmetricOnDrawing(BrickDesign& d, double rowPitch);
+// SYMMETRIC TO A PART: the parts set up or down on the drawing evenly either side of that part's line - those across
+// the harness from it and those on its own side each spread about it. Empty: the part alone at its end of the main
+// body (of several there, the middle one). Returns the part it was laid out about.
+QString symmetricAbout(BrickDesign& d, const QString& ref, const PartsCatalog* catalog);
+// The part Symmetric lays the drawing out about when none is chosen.
+QString symmetricReference(const BrickDesign& d, const BrickBuild& built);
 // EVERY DIMENSION TO ONE SIDE: each part's, each run's (whole length, fans, between) and each put on by hand - above
 // the objects, or below them.
 void setAllDimensionsBelow(BrickDesign& d, bool below);
@@ -498,6 +514,8 @@ struct BrickBuild {
     QHash<QString, double> transitionPartMm;
     // Where each end part was laid out along the harness, by id.
     QHash<QString, double> partX;
+    // And where each was set down across it (its centre), by id.
+    QHash<QString, double> partY;
 };
 
 // THE DRAWING: every end as its library part (or a placeholder of its kind) set down by its entry

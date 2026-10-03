@@ -1426,6 +1426,13 @@ void BrickWizardDialog::buildUi() {
                           "part on the axis, the rest evenly either side, every brick turned to face what it "
                           "is linked to - then both panes fitted to show it all"),
            [this] { arrange(); });
+    // ABOUT WHICH PART: Auto - the part alone at the main body's other end (of several there, the middle one).
+    symRef_ = new QComboBox(this);
+    symRef_->setObjectName(QStringLiteral("brickSymRef"));
+    symRef_->setToolTip(QStringLiteral("The part Symmetric lays the drawing out about. Auto: the part alone at the main "
+                                       "body's other end - of several there, the middle one"));
+    symRef_->addItem(QStringLiteral("about: Auto"), QString());
+    bar->addWidget(symRef_);
     // THE BRICKS TURN WITH THE DRAWING, or not: R and Space turn the part on the drawing, and - ticked - its brick's
     // connections round it on the pane too.
     tieTurn_ = new QCheckBox(QStringLiteral("Bricks turn with drawing"), this);
@@ -2363,44 +2370,63 @@ QWidget* BrickWizardDialog::buildRunPage() {
         transitionPart_ = partBox("brickTransitionPart", {PartKind::Heatshrink, PartKind::HeatshrinkBoot});
         QFormLayout* tf = transitionForm_ ? transitionForm_ : bl;   // with the rest of the transition's figures
         tf->addRow(QStringLiteral("P/N"), transitionPart_);
-        // MORE OF THEM, ONE OVER ANOTHER: picked and added over the first, taken off again.
-        {
+        // MORE OF THEM, ONE OVER ANOTHER: picked and added over the first, taken off again - at the start (or both
+        // ends) and at the finish, each layer with its step from the bottom transition's cable-side end. Put in their
+        // frames by frameTransitionSides.
+        for (int side = 0; side < 2; ++side) {
+            const QString fin = side ? QStringLiteral("Fin") : QString();
             auto* host = new QWidget(box);
             auto* hl = new QHBoxLayout(host);
             hl->setContentsMargins(0, 0, 0, 0);
             hl->setSpacing(3);
-            transLayerPick_ = partBox("brickTransLayerPick", {PartKind::Heatshrink, PartKind::HeatshrinkBoot});
-            transLayerPick_->setParent(host);
-            hl->addWidget(transLayerPick_, 1);
+            transLayerPick_[side] = partBox(side ? "brickTransLayerPickFin" : "brickTransLayerPick",
+                                            {PartKind::Heatshrink, PartKind::HeatshrinkBoot});
+            transLayerPick_[side]->setParent(host);
+            hl->addWidget(transLayerPick_[side], 1);
             auto* add = new QToolButton(host);
-            add->setObjectName(QStringLiteral("brickTransLayerAdd"));
+            add->setObjectName(QStringLiteral("brickTransLayerAdd") + fin);
             add->setText(QStringLiteral("+"));
             add->setToolTip(QStringLiteral("Put this heatshrink on over the transition"));
             hl->addWidget(add);
             auto* del = new QToolButton(host);
-            del->setObjectName(QStringLiteral("brickTransLayerRemove"));
+            del->setObjectName(QStringLiteral("brickTransLayerRemove") + fin);
             del->setText(QStringLiteral("−"));
             del->setToolTip(QStringLiteral("Take the picked layer off"));
             hl->addWidget(del);
-            tf->addRow(QStringLiteral("Over it"), host);
-            transLayers_ = new QListWidget(box);
-            transLayers_->setObjectName(QStringLiteral("brickTransLayers"));
-            transLayers_->setMaximumHeight(58);
-            transLayers_->setToolTip(QStringLiteral("Heatshrinks over the transition, one over another - inside out"));
-            tf->addRow(QString(), transLayers_);
-            connect(add, &QToolButton::clicked, this, [this] {
+            transLayersHost_[side] = host;
+            auto* t = new QTableWidget(0, 2, box);
+            t->setObjectName(QStringLiteral("brickTransLayers") + fin);
+            t->setHorizontalHeaderLabels({QStringLiteral("P/N"), QStringLiteral("Step from cable side")});
+            t->verticalHeader()->setVisible(false);
+            t->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+            t->setSelectionBehavior(QAbstractItemView::SelectRows);
+            t->setMaximumHeight(96);
+            t->setToolTip(QStringLiteral("Heatshrinks over the transition, one over another - inside out. Each stops its "
+                                         "step short of the bottom transition's cable-side end (Auto: a little more for "
+                                         "each layer out)"));
+            transLayers_[side] = t;
+            connect(add, &QToolButton::clicked, this, [this, side] {
                 Brick* b = design_.brick(canvas_->selected());
-                const QString id = transLayerPick_->currentData().toString();
+                const QString id = transLayerPick_[side]->currentData().toString();
                 if (!b || !brickIsSpecial(b->type) || id.isEmpty()) return;
-                b->run.transitionLayers << id;
+                QStringList& layers = side ? b->run.transitionLayersFinish : b->run.transitionLayers;
+                QList<double>& steps = side ? b->run.transitionLayerStepsFinish : b->run.transitionLayerSteps;
+                while (steps.size() < layers.size()) steps << 0.0;
+                layers << id;
+                steps << 0.0;
                 designChanged();
                 loadBranches();
             });
-            connect(del, &QToolButton::clicked, this, [this] {
+            connect(del, &QToolButton::clicked, this, [this, side] {
                 Brick* b = design_.brick(canvas_->selected());
-                const int row = transLayers_->currentRow() >= 0 ? transLayers_->currentRow() : transLayers_->count() - 1;
-                if (!b || !brickIsSpecial(b->type) || row < 0 || row >= b->run.transitionLayers.size()) return;
-                b->run.transitionLayers.removeAt(row);
+                if (!b || !brickIsSpecial(b->type)) return;
+                QStringList& layers = side ? b->run.transitionLayersFinish : b->run.transitionLayers;
+                QList<double>& steps = side ? b->run.transitionLayerStepsFinish : b->run.transitionLayerSteps;
+                const int row = transLayers_[side]->currentRow() >= 0 ? transLayers_[side]->currentRow()
+                                                                      : static_cast<int>(layers.size()) - 1;
+                if (row < 0 || row >= layers.size()) return;
+                layers.removeAt(row);
+                if (row < steps.size()) steps.removeAt(row);
                 designChanged();
                 loadBranches();
             });
@@ -2500,7 +2526,9 @@ QWidget* BrickWizardDialog::buildRunPage() {
         (transitionForm_ ? transitionForm_ : bl)->addRow(QStringLiteral("Inside, which"), transInsideEnds_);
         connect(transitionInside_, &QCheckBox::toggled, this, [this](bool on) {
             if (Brick* b = design_.brick(canvas_->selected()); b && brickIsSpecial(b->type)) {
-                b->run.transitionInside = on;
+                // Both sides the same: on or off, at the ends "which" says. Each its own: the start's.
+                if (b->run.transitionSame) b->run.transitionInside = on;
+                else setTransitionInside(b->run, on, transitionInsideAt(b->run, true));
                 designChanged();
                 loadBranches();
             }
@@ -2631,6 +2659,55 @@ QWidget* BrickWizardDialog::buildRunPage() {
                 loadBranches();
             }
         });
+        // THE FINISH'S LENGTH AND INSIDE THE BACKSHELL, in its own frame.
+        {
+            auto* host = new QWidget(box);
+            auto* hl = new QHBoxLayout(host);
+            hl->setContentsMargins(0, 0, 0, 0);
+            hl->setSpacing(3);
+            transLenFin2_ = new QDoubleSpinBox(host);
+            transLenFin2_->setObjectName(QStringLiteral("brickTransLenFin2"));
+            transLenFin2_->setRange(0.0, 1000.0);
+            transLenFin2_->setDecimals(1);
+            transLenFin2_->setSuffix(QStringLiteral(" mm"));
+            hl->addWidget(transLenFin2_);
+            transLenFin2Auto_ = new QToolButton(host);
+            transLenFin2Auto_->setObjectName(QStringLiteral("brickTransLenFin2Auto"));
+            transLenFin2Auto_->setText(QStringLiteral("A"));
+            transLenFin2Auto_->setCheckable(true);
+            transLenFin2Auto_->setToolTip(QStringLiteral("Auto: as long as the drawing makes it"));
+            hl->addWidget(transLenFin2Auto_);
+            hl->addStretch(1);
+            bl->addRow(QStringLiteral("Length"), host);
+            connect(transLenFin2_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
+                if (Brick* b = design_.brick(canvas_->selected()); b && brickIsSpecial(b->type)) {
+                    b->run.transitionLenFinishMm = std::max(0.0, v);
+                    const QSignalBlocker hush(transLenFin2Auto_);
+                    transLenFin2Auto_->setChecked(v <= 1e-9);
+                    designChanged();
+                }
+            });
+            connect(transLenFin2Auto_, &QToolButton::toggled, this, [this](bool on) {
+                if (Brick* b = design_.brick(canvas_->selected()); b && brickIsSpecial(b->type)) {
+                    b->run.transitionLenFinishMm = on ? 0.0 : std::max(0.5, transLenFin2_->value());
+                    designChanged();
+                    loadBranches();
+                }
+            });
+            transInsideFin_ = new QCheckBox(QStringLiteral("Inside backshell"), box);
+            transInsideFin_->setObjectName(QStringLiteral("brickTransInsideFin"));
+            transInsideFin_->setToolTip(QStringLiteral("Inside the backshell: the finish's transition heatshrink is added "
+                                                       "to the BOM but not drawn"));
+            bl->addRow(transInsideFin_);
+            connect(transInsideFin_, &QCheckBox::toggled, this, [this](bool on) {
+                if (Brick* b = design_.brick(canvas_->selected()); b && brickIsSpecial(b->type)) {
+                    setTransitionInside(b->run, transitionInsideAt(b->run, false), on);
+                    designChanged();
+                    loadBranches();
+                }
+            });
+        }
+        frameTransitionSides();
         connect(fanShrinkParts_, &QListWidget::itemChanged, this, [this](QListWidgetItem* it) {
             Brick* b = design_.brick(canvas_->selected());
             if (!b || !it) return;
@@ -3143,10 +3220,14 @@ void BrickWizardDialog::rotateSelected() {
 void BrickWizardDialog::arrange() {
     // SYMMETRIC ON THE DRAWING: the parts set up or down on it where a symmetric layout puts them - the bricks on the
     // pane are left exactly where they were put.
-    symmetricOnDrawing(design_, canvas_ ? lastRowPitch() : 0.0);
+    // ABOUT THE PART CHOSEN (or the one Auto finds): the rest either side of its line, on the drawing.
+    const QString about = symmetricAbout(design_, symRef_ ? symRef_->currentData().toString() : QString(), &catalog_);
     designChanged();
     preview_->fitToView();
-    status_->setText(QStringLiteral("The drawing laid out symmetrically - the bricks left where they are"));
+    const Brick* rb = design_.brick(about);
+    status_->setText(rb ? QStringLiteral("The drawing laid out symmetrically about %1 - the bricks left where they are")
+                              .arg(brickTitle(*rb))
+                        : QStringLiteral("Nothing to lay out symmetrically"));
 }
 
 double BrickWizardDialog::lastRowPitch() const {
@@ -3434,6 +3515,7 @@ void BrickWizardDialog::refreshDimensionWizard() {
 }
 
 void BrickWizardDialog::designChanged() {
+    refreshSymRef();
     if (dimAllSide_) {
         const QSignalBlocker hush(dimAllSide_);
         dimAllSide_->setCurrentIndex(allDimensionsBelow(design_) ? 1 : 0);
@@ -3711,15 +3793,8 @@ void BrickWizardDialog::loadBranches() {
         c->setCurrentIndex(at >= 0 ? at : 0);
     };
     pick(transitionPart_, r.transitionPart);
-    {
-        const QSignalBlocker hush(transLayers_);
-        transLayers_->clear();
-        for (const QString& id : r.transitionLayers) {
-            const LibraryPart* p = catalog_.byId(id);
-            transLayers_->addItem(!p ? id : p->mfrPn.isEmpty() ? p->title() : p->mfrPn);
-        }
-        transLayers_->setEnabled(r.transitions != RunEnds::None);
-    }
+    loadLayers(0);
+    loadLayers(1);
     pick(branchShrink_, r.branchShrinkPart);
     pick(fanShrinkPart_, r.fanEndShrinkPart);
     {
@@ -3731,14 +3806,16 @@ void BrickWizardDialog::loadBranches() {
     fanShrinkLen_->setEnabled(r.fanEndShrink);
     fanShrinkPart_->setEnabled(r.fanEndShrink);
     {
-        const QSignalBlocker i1(fanShrinkInside_), i2(transitionInside_), i3(transInsideEnds_);
+        const QSignalBlocker i1(fanShrinkInside_), i2(transitionInside_), i3(transInsideEnds_), i4(transInsideFin_);
         fanShrinkInside_->setChecked(r.fanEndShrinkInside);
-        transitionInside_->setChecked(r.transitionInside);
+        // Both sides the same: on or off, and which; each its own: the start's here, the finish's in its frame.
+        transitionInside_->setChecked(r.transitionSame ? r.transitionInside : transitionInsideAt(r, false));
+        transInsideFin_->setChecked(transitionInsideAt(r, true));
         transInsideEnds_->setCurrentIndex(r.transitionInsideEnds == RunEnds::Start    ? 0
                                           : r.transitionInsideEnds == RunEnds::Finish ? 1
                                                                                        : 2);
     }
-    if (transitionForm_) transitionForm_->setRowVisible(transInsideEnds_, r.transitionInside);
+    if (transSideForm_[0]) transSideForm_[0]->setRowVisible(transInsideEnds_, r.transitionSame && r.transitionInside);
     {
         const QSignalBlocker t1(transStretch_), t2(transStretchLen_), t3(transStretchAuto_);
         transStretch_->setChecked(r.transitionStretch);
@@ -3766,18 +3843,19 @@ void BrickWizardDialog::loadBranches() {
                                                                          : act.transitionStretchFinish);
         transStretchLenFin_->setEnabled(r.transitionStretchFinish);
         transStretchAutoFin_->setEnabled(r.transitionStretchFinish);
-        if (QFormLayout* tf = transitionForm_) {
-            for (QWidget* w : {static_cast<QWidget*>(transWidthFin_->parentWidget()), static_cast<QWidget*>(transPartFin_),
-                               static_cast<QWidget*>(transStretchFin_), static_cast<QWidget*>(transStretchLenFin_->parentWidget())})
-                tf->setRowVisible(w, apart);
-            auto relabel = [tf](QWidget* field, const QString& text) {
-                if (auto* l = qobject_cast<QLabel*>(tf->labelForField(field))) l->setText(text);
-            };
-            relabel(transitionWidth_->parentWidget(), apart ? QStringLiteral("Width, start") : QStringLiteral("Width"));
-            relabel(transitionPart_, apart ? QStringLiteral("P/N, start") : QStringLiteral("P/N"));
-            relabel(transStretchLen_->parentWidget(), apart ? QStringLiteral("Over the part, start") : QStringLiteral("Over the part"));
+        // FRAMED BY SIDE: one frame for both, or the start's and the finish's each with all its figures.
+        if (transSide_[0] && transSide_[1]) {
+            transSide_[0]->setTitle(apart ? QStringLiteral("Start") : QStringLiteral("Both sides"));
+            transSide_[1]->setVisible(apart);
+            transSideForm_[0]->setRowVisible(transLenFinish_->parentWidget(), !apart);
+            if (auto* l = qobject_cast<QLabel*>(transSideForm_[0]->labelForField(transLenStart_->parentWidget())))
+                l->setText(apart ? QStringLiteral("Length") : QStringLiteral("Length, start"));
         }
-        transStretch_->setText(apart ? QStringLiteral("Stretch over end part, start") : QStringLiteral("Stretch over end part"));
+        {
+            const QSignalBlocker f1(transLenFin2_), f2(transLenFin2Auto_);
+            transLenFin2Auto_->setChecked(r.transitionLenFinishMm <= 1e-9);
+            transLenFin2_->setValue(r.transitionLenFinishMm > 1e-9 ? r.transitionLenFinishMm : act.transitionLenFinish);
+        }
     }
     fanShrinkInside_->setEnabled(r.fanEndShrink);
     {
@@ -4862,6 +4940,115 @@ void BrickWizardDialog::restoreHistory(int at) {
     canvas_->setSelection(keep);
     designChanged();
     restoring_ = false;
+}
+
+void BrickWizardDialog::frameTransitionSides() {
+    QFormLayout* tf = transitionForm_;
+    if (!tf) return;
+    QWidget* host = tf->parentWidget();
+    for (int i = 0; i < 2; ++i) {
+        transSide_[i] = new QGroupBox(i == 0 ? QStringLiteral("Both sides") : QStringLiteral("Finish"), host);
+        transSide_[i]->setObjectName(i == 0 ? QStringLiteral("brickTransSideStart") : QStringLiteral("brickTransSideFinish"));
+        transSideForm_[i] = new QFormLayout(transSide_[i]);
+        transSideForm_[i]->setFieldGrowthPolicy(QFormLayout::FieldsStayAtSizeHint);
+        tf->addRow(transSide_[i]);
+    }
+    // Out of wherever it was put, into its side's frame under the name it has there.
+    auto put = [&](QWidget* field, int side, const QString& label) {
+        if (!field) return;
+        for (QFormLayout* from : {tf, qobject_cast<QFormLayout*>(field->parentWidget() ? field->parentWidget()->layout() : nullptr)}) {
+            if (!from || from == transSideForm_[0] || from == transSideForm_[1]) continue;
+            int row = -1;
+            QFormLayout::ItemRole role = QFormLayout::FieldRole;
+            from->getWidgetPosition(field, &row, &role);
+            if (row < 0) continue;
+            const QFormLayout::TakeRowResult taken = from->takeRow(row);
+            for (QLayoutItem* item : {taken.labelItem, taken.fieldItem}) {
+                if (!item) continue;
+                if (QWidget* w = item->widget(); w && w != field) w->deleteLater();
+                delete item;
+            }
+            break;
+        }
+        if (label.isNull()) transSideForm_[side]->addRow(field);
+        else transSideForm_[side]->addRow(label, field);
+    };
+    put(transitionWidth_->parentWidget(), 0, QStringLiteral("Width"));
+    put(transitionPart_, 0, QStringLiteral("P/N"));
+    put(transLenStart_->parentWidget(), 0, QStringLiteral("Length, start"));
+    put(transLenFinish_->parentWidget(), 0, QStringLiteral("Length, finish"));
+    put(transitionInside_, 0, QString());
+    put(transInsideEnds_, 0, QStringLiteral("Inside, which"));
+    put(transStretch_, 0, QString());
+    put(transStretchLen_->parentWidget(), 0, QStringLiteral("Over the part"));
+    put(transLayersHost_[0], 0, QStringLiteral("Over it"));
+    put(transLayers_[0], 0, QString());
+    put(transWidthFin_->parentWidget(), 1, QStringLiteral("Width"));
+    put(transPartFin_, 1, QStringLiteral("P/N"));
+    put(transLenFin2_->parentWidget(), 1, QStringLiteral("Length"));
+    put(transInsideFin_, 1, QString());
+    put(transStretchFin_, 1, QString());
+    put(transStretchLenFin_->parentWidget(), 1, QStringLiteral("Over the part"));
+    put(transLayersHost_[1], 1, QStringLiteral("Over it"));
+    put(transLayers_[1], 1, QString());
+    transStretchFin_->setText(QStringLiteral("Stretch over end part"));
+    transSide_[1]->setVisible(false);
+}
+
+void BrickWizardDialog::loadLayers(int side) {
+    QTableWidget* t = transLayers_[side];
+    if (!t) return;
+    const QSignalBlocker hush(t);
+    t->setRowCount(0);
+    const Brick* b = design_.brick(canvas_->selected());
+    if (!b || !brickIsSpecial(b->type)) return;
+    const QStringList& layers = side ? b->run.transitionLayersFinish : b->run.transitionLayers;
+    const QList<double>& steps = side ? b->run.transitionLayerStepsFinish : b->run.transitionLayerSteps;
+    for (int k = 0; k < layers.size(); ++k) {
+        t->insertRow(k);
+        const LibraryPart* p = catalog_.byId(layers[k]);
+        auto* it = new QTableWidgetItem(!p ? layers[k] : p->mfrPn.isEmpty() ? p->title() : p->mfrPn);
+        it->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        t->setItem(k, 0, it);
+        auto* sp = new QDoubleSpinBox(t);
+        sp->setObjectName(QStringLiteral("brickTransLayerStep%1_%2").arg(side).arg(k));
+        sp->setRange(0.0, 1000.0);
+        sp->setDecimals(1);
+        sp->setSuffix(QStringLiteral(" mm"));
+        sp->setSpecialValueText(QStringLiteral("Auto"));
+        sp->setValue(k < steps.size() ? steps[k] : 0.0);
+        // Its step: how far short of the bottom transition's cable-side end it stops.
+        connect(sp, &QDoubleSpinBox::valueChanged, this, [this, side, k](double v) {
+            Brick* b = design_.brick(canvas_->selected());
+            if (!b || !brickIsSpecial(b->type)) return;
+            const QStringList& layers = side ? b->run.transitionLayersFinish : b->run.transitionLayers;
+            QList<double>& steps = side ? b->run.transitionLayerStepsFinish : b->run.transitionLayerSteps;
+            while (steps.size() < layers.size()) steps << 0.0;
+            if (k >= steps.size()) return;
+            steps[k] = std::max(0.0, v);
+            canvas_->update();
+            refreshPreview();
+        });
+        t->setCellWidget(k, 1, sp);
+    }
+    t->setEnabled(b->run.transitions != RunEnds::None);
+}
+
+void BrickWizardDialog::refreshSymRef() {
+    if (!symRef_) return;
+    QStringList parts;
+    for (const Brick& b : design_.bricks)
+        if (b.type == BrickType::End) parts << b.id + QLatin1Char('\t') + brickTitle(b);
+    const QString key = parts.join(QLatin1Char('\n'));
+    if (key == symRefKey_) return;
+    symRefKey_ = key;
+    const QString keep = symRef_->currentData().toString();
+    const QSignalBlocker hush(symRef_);
+    symRef_->clear();
+    symRef_->addItem(QStringLiteral("about: Auto"), QString());
+    for (const Brick& b : design_.bricks)
+        if (b.type == BrickType::End) symRef_->addItem(QStringLiteral("about: ") + brickTitle(b), b.id);
+    symRef_->setCurrentIndex(std::max(0, symRef_->findData(keep)));
 }
 
 void BrickWizardDialog::endDimPick() {

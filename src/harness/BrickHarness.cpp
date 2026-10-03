@@ -62,6 +62,26 @@ std::vector<PartKind> brickJointKinds() {
             PartKind::HeatshrinkBoot, PartKind::Backshell};
 }
 
+namespace {
+QJsonArray numbersJson(const QList<double>& v) {
+    QJsonArray a;
+    for (double x : v) a.append(x);
+    return a;
+}
+} // namespace
+
+bool transitionInsideAt(const BrickRunSpec& r, bool finish) {
+    return r.transitionInside && (r.transitionInsideEnds == RunEnds::Both ||
+                                  r.transitionInsideEnds == (finish ? RunEnds::Finish : RunEnds::Start));
+}
+
+void setTransitionInside(BrickRunSpec& r, bool start, bool finish) {
+    r.transitionInside = start || finish;
+    if (start && finish) r.transitionInsideEnds = RunEnds::Both;
+    else if (start) r.transitionInsideEnds = RunEnds::Start;
+    else if (finish) r.transitionInsideEnds = RunEnds::Finish;
+}
+
 bool brickKindIsElectronic(PartKind kind) {
     return kind == PartKind::Resistor || kind == PartKind::Capacitor || kind == PartKind::Inductor ||
            kind == PartKind::FerriteBead;
@@ -523,6 +543,9 @@ QJsonObject BrickDesign::toJson() const {
                                                    {"transitionWidthMm", r.transitionWidthMm},
                                                    {"transitionPart", r.transitionPart},
                                                    {"transitionLayers", QJsonArray::fromStringList(r.transitionLayers)},
+                                                   {"transitionLayerSteps", numbersJson(r.transitionLayerSteps)},
+                                                   {"transitionLayersFinish", QJsonArray::fromStringList(r.transitionLayersFinish)},
+                                                   {"transitionLayerStepsFinish", numbersJson(r.transitionLayerStepsFinish)},
                                                    {"branchCover", r.branchCover},
                                                    {"branchShrinkPart", r.branchShrinkPart},
                                                    {"fanEndShrink", r.fanEndShrink},
@@ -689,6 +712,15 @@ BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
             s.transitionLayers.clear();
             for (const QJsonValue x : r.value(QStringLiteral("transitionLayers")).toArray())
                 if (!x.toString().isEmpty()) s.transitionLayers << x.toString();
+            s.transitionLayersFinish.clear();
+            for (const QJsonValue x : r.value(QStringLiteral("transitionLayersFinish")).toArray())
+                if (!x.toString().isEmpty()) s.transitionLayersFinish << x.toString();
+            s.transitionLayerSteps.clear();
+            for (const QJsonValue x : r.value(QStringLiteral("transitionLayerSteps")).toArray())
+                s.transitionLayerSteps << std::max(0.0, x.toDouble(0.0));
+            s.transitionLayerStepsFinish.clear();
+            for (const QJsonValue x : r.value(QStringLiteral("transitionLayerStepsFinish")).toArray())
+                s.transitionLayerStepsFinish << std::max(0.0, x.toDouble(0.0));
             s.branchCover = r.value(QStringLiteral("branchCover")).toInt(0);
             s.branchShrinkPart = r.value(QStringLiteral("branchShrinkPart")).toString();
             s.fanEndShrink = r.value(QStringLiteral("fanEndShrink")).toBool(false);
@@ -950,6 +982,147 @@ void symmetricOnDrawing(BrickDesign& d, double rowPitch) {
         const Brick* s = laid.brick(b.id);
         if (s) b.drawDyMm = (b.row - s->row) * rowPitch;
     }
+}
+
+namespace {
+// THE MAIN BODY'S TWO ENDS: the parts at each end of the special with the most of them (through a branch brick, the
+// parts it goes on to).
+std::pair<QStringList, QStringList> mainBodyEnds(const BrickDesign& d) {
+    auto partsOn = [&](const QString& sid, int port) {
+        QStringList out;
+        for (const QString& o : d.sideOf(sid, port)) {
+            const Brick* ob = d.brick(o);
+            if (!ob) continue;
+            if (ob->type == BrickType::End) out << o;
+            else if (brickIsBranch(*ob))
+                for (const QString& p : d.sideOf(o, 1 - d.portOn(o, sid)))
+                    if (const Brick* pb = d.brick(p); pb && pb->type == BrickType::End) out << p;
+        }
+        return out;
+    };
+    QStringList bestA, bestB;
+    int most = 0;
+    for (const Brick& s : d.bricks) {
+        if (!brickIsSpecial(s.type) || brickIsBridge(s) || brickIsBranch(s)) continue;
+        const QStringList a = partsOn(s.id, kPortLeft), b = partsOn(s.id, kPortRight);
+        if (a.size() + b.size() > most) {
+            most = static_cast<int>(a.size() + b.size());
+            bestA = a;
+            bestB = b;
+        }
+    }
+    return {bestA, bestB};
+}
+} // namespace
+
+QString symmetricReference(const BrickDesign& d, const BrickBuild& built) {
+    // The parts at one end of a special - through a branch brick, the parts it goes on to.
+    auto partsOn = [&](const QString& sid, int port) {
+        QStringList out;
+        for (const QString& o : d.sideOf(sid, port)) {
+            const Brick* ob = d.brick(o);
+            if (!ob) continue;
+            if (ob->type == BrickType::End) out << o;
+            else if (brickIsBranch(*ob))
+                for (const QString& p : d.sideOf(o, 1 - d.portOn(o, sid)))
+                    if (const Brick* pb = d.brick(p); pb && pb->type == BrickType::End) out << p;
+        }
+        return out;
+    };
+    // THE MAIN BODY: the special with the most parts at its two ends.
+    QStringList bestA, bestB;
+    int most = 0;
+    for (const Brick& s : d.bricks) {
+        if (!brickIsSpecial(s.type) || brickIsBridge(s) || brickIsBranch(s)) continue;
+        const QStringList a = partsOn(s.id, kPortLeft), b = partsOn(s.id, kPortRight);
+        if (a.size() + b.size() > most) {
+            most = static_cast<int>(a.size() + b.size());
+            bestA = a;
+            bestB = b;
+        }
+    }
+    // Its end with the fewer parts - and of several there, the middle one.
+    QStringList side = bestB.isEmpty() || (!bestA.isEmpty() && bestA.size() <= bestB.size()) ? bestA : bestB;
+    side.erase(std::remove_if(side.begin(), side.end(), [&](const QString& id) { return !built.partY.contains(id); }),
+               side.end());
+    if (side.isEmpty()) {
+        for (const Brick& b : d.bricks)
+            if (b.type == BrickType::End && built.partY.contains(b.id)) return b.id;
+        return QString();
+    }
+    std::sort(side.begin(), side.end(),
+              [&](const QString& x, const QString& y) { return built.partY.value(x) > built.partY.value(y); });
+    return side[side.size() / 2];
+}
+
+QString symmetricAbout(BrickDesign& d, const QString& refIn, const PartsCatalog* catalog) {
+    const BrickBuild built = buildBrickHarness(d, catalog);
+    const QString ref = !refIn.isEmpty() && built.partY.contains(refIn) ? refIn : symmetricReference(d, built);
+    if (ref.isEmpty()) return ref;
+    const double pitch = built.rowPitch > 1e-9 ? built.rowPitch : brickRowPitchMm(d);
+    const double y0 = built.partY.value(ref), xr = built.partX.value(ref);
+    // What moves on its own: every part but the one it is about - not a part fitted face to face on another (a boot),
+    // which goes with that one, nor a part on a bridge wire alone, which stays by the run it comes out of.
+    QStringList movers;
+    double span = 0.0;
+    for (const Brick& b : d.bricks) {
+        if (b.type != BrickType::End || b.id == ref || !built.partY.contains(b.id)) continue;
+        bool onPart = false, onRun = false;
+        for (const QString& o : d.linksOf(b.id))
+            if (const Brick* ob = d.brick(o)) {
+                if (ob->type == BrickType::End) onPart = true;
+                else if (brickIsSpecial(ob->type) && !brickIsBridge(*ob)) onRun = true;
+            }
+        if (onPart || !onRun) continue;
+        movers << b.id;
+        span = std::max(span, std::abs(built.partX.value(b.id) - xr));
+    }
+    // ACROSS OR ON ITS OWN SIDE: by the main body's end each is at - the part it is about at one, the rest at that one or
+    // the other; a part off the main body by how far along from it it is.
+    const auto [endA, endB] = mainBodyEnds(d);
+    const QStringList* mine = endA.contains(ref) ? &endA : endB.contains(ref) ? &endB : nullptr;
+    const QStringList* other = mine == &endA ? &endB : mine == &endB ? &endA : nullptr;
+    QStringList across, same;
+    for (const QString& id : movers) {
+        if (mine && mine->contains(id)) same << id;
+        else if (other && other->contains(id)) across << id;
+        else (span > 1e-6 && std::abs(built.partX.value(id) - xr) > 0.5 * span ? across : same) << id;
+    }
+    auto byY = [&](QStringList& l) {
+        std::sort(l.begin(), l.end(),
+                  [&](const QString& x, const QString& y) { return built.partY.value(x) > built.partY.value(y); });
+    };
+    byY(across);
+    byY(same);
+    // How far above (+) or below (-) its line each goes - and the pairs that mirror one another.
+    QHash<QString, double> offset;
+    std::vector<std::pair<QString, QString>> pairs;
+    // ACROSS THE HARNESS: evenly either side of its line.
+    for (int i = 0; i < across.size(); ++i) offset.insert(across[i], ((across.size() - 1) / 2.0 - i) * pitch);
+    for (int i = 0; i < across.size() / 2; ++i) pairs.emplace_back(across[i], across[across.size() - 1 - i]);
+    // ON ITS OWN SIDE: either side of it, as many above as below (one more above, of an odd number).
+    const int above = static_cast<int>((same.size() + 1) / 2);
+    for (int i = 0; i < same.size(); ++i) offset.insert(same[i], i < above ? (above - i) * pitch : -(i - above + 1) * pitch);
+    for (int k = 0; k < same.size() - above; ++k) pairs.emplace_back(same[above - 1 - k], same[above + k]);
+    // Set where it is put (-row x pitch + its offset), not moved by where it landed: a part pulled across by a short
+    // run lands nearer than it was put, and once it is put level there is nothing to pull.
+    auto put = [&](const QHash<QString, double>& off) {
+        for (auto it = off.cbegin(); it != off.cend(); ++it)
+            if (Brick* b = d.brick(it.key())) b->drawDyMm = y0 + it.value() + b->row * built.rowPitch;
+    };
+    put(offset);
+    // AS FAR AS THE RUNS REACH: a part on a run too short to climb all the way lands nearer the line - its mirror is
+    // brought in to match, so the two are still the same distance either side of it.
+    const BrickBuild landed = buildBrickHarness(d, catalog);
+    QHash<QString, double> matched;
+    for (const auto& [up, down] : pairs) {
+        const double reach = std::max(0.0, std::min(landed.partY.value(up) - y0, y0 - landed.partY.value(down)));
+        if (reach + 1e-6 >= std::min(offset.value(up), -offset.value(down))) continue;   // both got there
+        matched.insert(up, reach);
+        matched.insert(down, -reach);
+    }
+    put(matched);
+    return ref;
 }
 
 double brickRowPitchMm(const BrickDesign& d) {
@@ -2437,6 +2610,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         if (b.type != BrickType::End) continue;
         const BrickShape& shape = shapes[b.id];
         const Vec2 at = posOf(b.id);
+        out.partY.insert(b.id, at.y);
         const double extra = linedUp.contains(b.id) ? linedUp.value(b.id).turn : 0.0;
         const double turn = -b.rot * M_PI / 2.0 - b.drawTurnDeg * M_PI / 180.0;
         auto place = [&](const Vec2& v) { return at + turnOnDrawing(b, v, extra); };
@@ -3306,6 +3480,15 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             const bool finishSide = atB != br.flipped;
             return !r.transitionSame && finishSide ? r.transitionPartFinish : r.transitionPart;
         };
+        // The layers over it at each end, and each one's step.
+        auto layersAt = [&](bool atB) -> const QStringList& {
+            const bool finishSide = atB != br.flipped;
+            return !r.transitionSame && finishSide ? r.transitionLayersFinish : r.transitionLayers;
+        };
+        auto stepsAt = [&](bool atB) -> const QList<double>& {
+            const bool finishSide = atB != br.flipped;
+            return !r.transitionSame && finishSide ? r.transitionLayerStepsFinish : r.transitionLayerSteps;
+        };
         if (wires == 1) {
             // ONE WIRE is a wire, not a bundle.
             Entity w;
@@ -3463,17 +3646,25 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                             }
                             // THE LAYERS OVER IT, one over another: each a little wider and shorter than the one under
                             // it, from where the transition starts - drawn where it is, on the bill wherever it is.
-                            if (!r.transitionLayers.isEmpty()) {
+                            // EACH ONE STOPS ITS STEP SHORT of the bottom transition's cable-side end - as said, or on
+                            // Auto a little more for each layer out.
+                            {
                                 const double most = std::max(0.0, (routeLength(route) - fanA - fanB) * 0.45);
-                                for (int k = 0; k < r.transitionLayers.size(); ++k) {
-                                    const double shorter = std::max(0.4, 1.0 - 0.18 * (k + 1));
-                                    const double lenA = std::min(transLenA, most) * shorter;
-                                    const double lenB = std::min(transLenB, most) * shorter;
-                                    if (wantA) layerSleeve(false, fanA, lenA, bootWidthAt(false) / 2.0 + 0.5 * (k + 1));
-                                    if (wantB) layerSleeve(true, fanB, lenB, bootWidthAt(true) / 2.0 + 0.5 * (k + 1));
-                                    const QString key = s.id + QLatin1Char('|') + r.transitionLayers[k];
-                                    out.layerCount[key] += (countA ? 1 : 0) + (countB ? 1 : 0);
-                                    out.layerMm[key] += (countA ? lenA : 0.0) + (countB ? lenB : 0.0);
+                                for (bool atB : {false, true}) {
+                                    const QStringList& layers = layersAt(atB);
+                                    const QList<double>& steps = stepsAt(atB);
+                                    const double bottom = std::min(atB ? transLenB : transLenA, most);
+                                    for (int k = 0; k < layers.size(); ++k) {
+                                        const double said = k < steps.size() ? steps[k] : 0.0;
+                                        const double step = said > 1e-9 ? said : 0.18 * (k + 1) * bottom;
+                                        const double len = std::max(0.5, bottom - step);
+                                        if (atB ? wantB : wantA)
+                                            layerSleeve(atB, atB ? fanB : fanA, len, bootWidthAt(atB) / 2.0 + 0.5 * (k + 1));
+                                        if (!(atB ? countB : countA)) continue;
+                                        const QString key = s.id + QLatin1Char('|') + layers[k];
+                                        out.layerCount[key] += 1;
+                                        out.layerMm[key] += len;
+                                    }
                                 }
                             }
                         }
@@ -3508,12 +3699,13 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             overRun.clear();
             if (stretchA > 1e-9 || stretchB > 1e-9) {
                 // From the outermost layer, which is what is seen there; rising from halfway along the transition as drawn.
-                const double layers = 0.5 * r.transitionLayers.size();
                 const double most = std::max(0.0, (routeLength(route) - fanA - fanB) * 0.45);
                 if (stretchA > 1e-9)
-                    overPart(fa, br.a.id, route.front(), stretchA, bootWidthAt(false) / 2.0 + layers, std::min(transLenA, most));
+                    overPart(fa, br.a.id, route.front(), stretchA, bootWidthAt(false) / 2.0 + 0.5 * layersAt(false).size(),
+                             std::min(transLenA, most));
                 if (stretchB > 1e-9)
-                    overPart(fb, br.b.id, route.back(), stretchB, bootWidthAt(true) / 2.0 + layers, std::min(transLenB, most));
+                    overPart(fb, br.b.id, route.back(), stretchB, bootWidthAt(true) / 2.0 + 0.5 * layersAt(true).size(),
+                             std::min(transLenB, most));
             }
             // HEATSHRINK OVER EACH WIRE'S END where they fan out into a part: a sleeve on the last so many millimetres
             // of every wire, its own outline round the wire.

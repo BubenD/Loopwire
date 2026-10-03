@@ -1315,8 +1315,12 @@ void testDialog() {
         const double pitch = buildBrickHarness(dlg.design(), &dlg.catalog()).rowPitch;
         const double yf = -dlg.design().brick(f1)->row * pitch + dlg.design().brick(f1)->drawDyMm;
         const double yx = -dlg.design().brick(x1)->row * pitch + dlg.design().brick(x1)->drawDyMm;
-        std::printf("  symmetric: drawn at %.1f and %.1f\n", yf, yx);
-        check(std::abs(yf - yx) < 1e-6, "wizard: and on the drawing a single run is laid straight along the axis");
+        // Where they are really set down - a part pulled across by a short run included.
+        const BrickBuild laid = buildBrickHarness(dlg.design(), &dlg.catalog());
+        std::printf("  symmetric: drawn at %.1f and %.1f (set down at %.1f and %.1f)\n", yf, yx, laid.partY.value(f1),
+                    laid.partY.value(x1));
+        check(std::abs(laid.partY.value(f1) - laid.partY.value(x1)) < 1.0,
+              "wizard: and on the drawing a single run is laid straight along the axis");
     }
 
     // PLACED: onto the editor's cursor, the window out of the way.
@@ -4632,7 +4636,7 @@ void testRoundTwentyNine() {
             if (what.endsWith(QLatin1Char('|') + partKindKey(PartKind::Heatshrink))) heatshrink = true;
         }
         check(backshell && !heatshrink, "palette: a backshell among the joints, no heatshrink");
-        check(dlg.findChild<QListWidget*>(QStringLiteral("brickTransLayers")) &&
+        check(dlg.findChild<QTableWidget*>(QStringLiteral("brickTransLayers")) &&
                   dlg.findChild<QToolButton*>(QStringLiteral("brickTransLayerAdd")),
               "layers: a list of them on the transition, and + to add one");
     }
@@ -4784,6 +4788,98 @@ void testRoundThirty() {
     }
 }
 
+// ROUND THIRTY-ONE: each end's transition framed with all its figures, its layers included; each layer's step from the
+// bottom transition's cable-side end; Symmetric about a part - Auto or the one picked.
+void testRoundThirtyOne() {
+    {
+        BrickDesign d;
+        const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString y = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        d.connect(x, c);
+        d.connect(c, y);
+        BrickRunSpec& r = d.brick(c)->run;
+        r.transitions = RunEnds::Both;
+        r.lengthMm = 300.0;
+        r.transitionLayers = {QStringLiteral("L-A")};
+        BrickBuild b = buildBrickHarness(d, nullptr);
+        const double autoMm = b.layerMm.value(c + QStringLiteral("|L-A"));
+        r.transitionLayerSteps = {5.0};
+        b = buildBrickHarness(d, nullptr);
+        const double both = b.actual.value(c).transitionLenStart + b.actual.value(c).transitionLenFinish;
+        std::printf("  layer step: Auto %.1f mm, 5 mm short of the cable side %.1f (the transitions %.1f)\n", autoMm,
+                    b.layerMm.value(c + QStringLiteral("|L-A")), both);
+        check(std::abs(b.layerMm.value(c + QStringLiteral("|L-A")) - (both - 10.0)) < 1e-6 && autoMm < both - 10.0,
+              "layer step: each layer stops its step short of the bottom transition's cable-side end");
+        // EACH END ITS OWN LAYERS.
+        r.transitionSame = false;
+        r.transitionLayersFinish = {QStringLiteral("L-B"), QStringLiteral("L-C")};
+        b = buildBrickHarness(d, nullptr);
+        check(b.layerCount.value(c + QStringLiteral("|L-A")) == 1 && b.layerCount.value(c + QStringLiteral("|L-B")) == 1 &&
+                  b.layerCount.value(c + QStringLiteral("|L-C")) == 1,
+              "layers: each end its own, when the two are not the same");
+        const BrickDesign back = BrickDesign::fromJson(d.toJson());
+        check(back.brick(c)->run.transitionLayersFinish.size() == 2 && back.brick(c)->run.transitionLayerSteps.size() == 1 &&
+                  std::abs(back.brick(c)->run.transitionLayerSteps.front() - 5.0) < 1e-9,
+              "layers: each end's and their steps kept");
+        // INSIDE THE BACKSHELL AT ONE END.
+        BrickRunSpec t;
+        setTransitionInside(t, false, true);
+        check(t.transitionInside && transitionInsideAt(t, true) && !transitionInsideAt(t, false),
+              "inside: the finish's alone");
+    }
+    // FRAMED BY SIDE in the window.
+    {
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        BrickWizardDialog dlg(&ed);
+        dlg.show();
+        BrickDesign& w = dlg.design();
+        const QString x = w.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString c = w.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString y = w.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        w.connect(x, c);
+        w.connect(c, y);
+        w.brick(c)->run.transitions = RunEnds::Both;
+        dlg.selectBrick(c);
+        auto* start = dlg.findChild<QGroupBox*>(QStringLiteral("brickTransSideStart"));
+        auto* finish = dlg.findChild<QGroupBox*>(QStringLiteral("brickTransSideFinish"));
+        auto* same = dlg.findChild<QCheckBox*>(QStringLiteral("brickTransSame"));
+        check(start && finish && same && start->title() == QStringLiteral("Both sides") && !finish->isVisibleTo(&dlg),
+              "frames: one for both sides while they are the same");
+        if (same) same->setChecked(false);
+        check(start && finish && start->title() == QStringLiteral("Start") && finish->isVisibleTo(&dlg) &&
+                  dlg.findChild<QTableWidget*>(QStringLiteral("brickTransLayersFin")) &&
+                  dlg.findChild<QCheckBox*>(QStringLiteral("brickTransInsideFin")),
+              "frames: unticked, the start's and the finish's - each with its layers and inside the backshell");
+        check(dlg.findChild<QComboBox*>(QStringLiteral("brickSymRef")) != nullptr, "symmetric: a list of the part it is about");
+        dlg.hide();
+    }
+    // SYMMETRIC ABOUT A PART.
+    {
+        BrickDesign d;
+        const QString a = d.addBrick(BrickType::End, PartKind::Connector, 0, 1);
+        const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 2, 1);
+        const QString p = d.addBrick(BrickType::End, PartKind::Connector, 5, 0);
+        const QString q = d.addBrick(BrickType::End, PartKind::Connector, 5, 6);
+        d.connect(a, c, nullptr, -1, 0);
+        d.connect(c, p, nullptr, 1, -1);
+        d.connect(c, q, nullptr, 1, -1);
+        d.brick(c)->run.lengthMm = 400.0;
+        const QString about = symmetricAbout(d, QString(), nullptr);
+        BrickBuild b = buildBrickHarness(d, nullptr);
+        std::printf("  symmetric: about %s at %.1f, the two at %.1f and %.1f\n", qPrintable(about == a ? QStringLiteral("the one") : about),
+                    b.partY.value(a), b.partY.value(p), b.partY.value(q));
+        check(about == a && std::abs((b.partY.value(p) + b.partY.value(q)) / 2.0 - b.partY.value(a)) < 1.0 &&
+                  std::abs(b.partY.value(p) - b.partY.value(q)) > 10.0,
+              "symmetric: Auto, the two either side of the one at the main body's other end");
+        symmetricAbout(d, p, nullptr);
+        b = buildBrickHarness(d, nullptr);
+        check(std::abs(b.partY.value(a) - b.partY.value(p)) < 1.0, "symmetric: about the part picked, the one across on its line");
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -4828,6 +4924,7 @@ int run_brickharness_tests() {
     testRoundTwentyEight();
     testRoundTwentyNine();
     testRoundThirty();
+    testRoundThirtyOne();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

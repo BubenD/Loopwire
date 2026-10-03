@@ -15,6 +15,7 @@
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
+class QGroupBox;
 class QLabel;
 class QLineEdit;
 class QFormLayout;
@@ -530,8 +531,22 @@ private:
     QToolButton* transLenStartAuto_ = nullptr;  // "A": as long as the drawing makes it, the field showing that
     QToolButton* transLenFinishAuto_ = nullptr;
     QComboBox* transInsideEnds_ = nullptr;      // which transition is inside the backshell
-    QComboBox* transLayerPick_ = nullptr;       // a heatshrink to put on over the transition
-    QListWidget* transLayers_ = nullptr;        // the layers over it, inside out
+    // THE LAYERS OVER IT, at the start (or both) and at the finish: a heatshrink to put on, and the list of them with
+    // each one's step from the bottom transition's cable-side end.
+    QComboBox* transLayerPick_[2] = {nullptr, nullptr};
+    QWidget* transLayersHost_[2] = {nullptr, nullptr};
+    QTableWidget* transLayers_[2] = {nullptr, nullptr};
+    // FRAMED BY SIDE: "Both sides" (or the start's) and the finish's, each with all its figures.
+    QGroupBox* transSide_[2] = {nullptr, nullptr};
+    QFormLayout* transSideForm_[2] = {nullptr, nullptr};
+    QCheckBox* transInsideFin_ = nullptr;        // the finish's inside the backshell
+    QDoubleSpinBox* transLenFin2_ = nullptr;     // the finish's length, in its own frame
+    QToolButton* transLenFin2Auto_ = nullptr;
+    QComboBox* symRef_ = nullptr;                // the part Symmetric lays the drawing out about
+    QString symRefKey_;
+    void frameTransitionSides();
+    void loadLayers(int side);
+    void refreshSymRef();
     QListWidget* fanShrinkParts_ = nullptr;     // the parts whose wire ends get heatshrink
     QFormLayout* transitionForm_ = nullptr;     // the run's transition heatshrink box
     QCheckBox* fanShrinkInside_ = nullptr;      // the wire-end heatshrink inside the backshell: on the bill, not drawn
