@@ -5539,7 +5539,7 @@ void testRoundThirtySeven() {
         auto* sw = dlg.findChild<QComboBox*>(QStringLiteral("brickPaneSwitch"));
         auto* stack = dlg.findChild<QStackedWidget*>(QStringLiteral("brickPaneStack"));
         auto* v3 = dlg.findChild<View3DPane*>(QStringLiteral("brickView3d"));
-        check(sw && stack && v3 && sw->count() == 2, "wizard: a switch at the bottom left - Bricks or 3D view");
+        check(sw && stack && v3 && sw->count() == 3, "wizard: a switch at the bottom left - bricks and preview, or 3D in either's place");
         if (sw && stack && v3) {
             sw->setCurrentIndex(1);
             emit sw->activated(1);
@@ -5547,9 +5547,18 @@ void testRoundThirtySeven() {
                   "wizard: 3D in the pane's place, the harness as it is being built");
             dlg.selectBrick(b);
             check(v3->canvas()->highlighted().contains(b), "wizard: the brick picked lit in 3D");
+            // 3D IN THE PREVIEW'S PLACE: the bricks beside it, picked there and lit in it.
+            auto* pstack = dlg.findChild<QStackedWidget*>(QStringLiteral("brickPreviewStack"));
+            sw->setCurrentIndex(2);
+            emit sw->activated(2);
+            check(pstack && pstack->currentWidget() == v3 && stack->currentWidget() == dlg.canvas(),
+                  "wizard: 3D in the preview's place, the bricks beside it");
+            dlg.selectBrick(a);
+            check(v3->canvas()->highlighted().contains(a), "wizard: a brick clicked there lit in the 3D beside it");
             sw->setCurrentIndex(0);
             emit sw->activated(0);
-            check(stack->currentWidget() == dlg.canvas(), "wizard: and back to the bricks");
+            check(stack->currentWidget() == dlg.canvas() && pstack && pstack->currentWidget() == dlg.preview(),
+                  "wizard: and back to the bricks and the preview");
         }
         dlg.hide();
     }

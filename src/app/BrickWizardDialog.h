@@ -581,6 +581,9 @@ private:
     QWidget* navBox_ = nullptr;                  // the wheel in the pane's top right corner, and the list under it
     // THE BRICKS OR THE HARNESS IN 3D, in the pane's place - chosen at the window's bottom left.
     QStackedWidget* paneStack_ = nullptr;
+    QStackedWidget* previewStack_ = nullptr;   // the preview, or the 3D view in its place
+    // The layout chosen: 0 bricks and preview, 1 the 3D view in the bricks' place, 2 in the preview's.
+    void showPanes(int layout);
     class View3DPane* view3d_ = nullptr;
     QComboBox* paneSwitch_ = nullptr;
     // The schematic's wire colours by net, for the drawn wires to take (BrickDesign::netColours).

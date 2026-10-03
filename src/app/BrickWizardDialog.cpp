@@ -1756,6 +1756,8 @@ void BrickWizardDialog::buildUi() {
     view3d_ = new View3DPane(paneStack_);
     view3d_->setObjectName(QStringLiteral("brickView3d"));
     view3d_->setSourceChoice(false);
+    // No say in how big the panes are: the bricks and the preview keep the room they always had.
+    view3d_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
     view3d_->setSources([this] { return buildBrickHarness(design_, &catalog_).entities; }, {});
     view3d_->setModelLookup([this](const QString& libPart) {
         const LibraryPart* p = catalog_.byId(libPart);
@@ -1809,7 +1811,10 @@ void BrickWizardDialog::buildUi() {
         canvas_->installEventFilter(this);   // kept in the corner as the pane is resized
         placeNav();
     }
-    preview_ = new DrawingPreview(QStringLiteral("Preview"), middle_);
+    previewStack_ = new QStackedWidget(middle_);
+    previewStack_->setObjectName(QStringLiteral("brickPreviewStack"));
+    preview_ = new DrawingPreview(QStringLiteral("Preview"), previewStack_);
+    previewStack_->addWidget(preview_);
     preview_->setEmptyText(QStringLiteral("The drawing appears here as the bricks are linked"));
     preview_->setMinimapAvailable(true);
     preview_->setKeepView(true);   // choosing a part must not make the drawing jump
@@ -2031,16 +2036,10 @@ void BrickWizardDialog::buildUi() {
     // THE BRICKS OR THE HARNESS IN 3D, in the pane's place.
     paneSwitch_ = new QComboBox(this);
     paneSwitch_->setObjectName(QStringLiteral("brickPaneSwitch"));
-    paneSwitch_->addItems({QStringLiteral("Bricks"), QStringLiteral("3D view")});
-    paneSwitch_->setToolTip(QStringLiteral("The brick pane, or the harness in 3D in its place - the bricks picked lit in it"));
-    connect(paneSwitch_, &QComboBox::activated, this, [this](int i) {
-        paneStack_->setCurrentIndex(i);
-        if (i == 1) {
-            syncNetColours();
-            view3d_->rebuild(true);
-            view3d_->setHighlight(canvas_->selection());
-        }
-    });
+    paneSwitch_->addItems({QStringLiteral("Bricks · Preview"), QStringLiteral("3D · Preview"), QStringLiteral("Bricks · 3D")});
+    paneSwitch_->setToolTip(QStringLiteral("What the two panes show: the bricks and the preview, or the harness in 3D in the "
+                                           "place of either - the bricks picked lit in it"));
+    connect(paneSwitch_, &QComboBox::activated, this, [this](int i) { showPanes(i); });
     bottom->addWidget(paneSwitch_);
     status_ = new QLabel(this);
     status_->setObjectName(QStringLiteral("brickStatus"));
@@ -5392,6 +5391,24 @@ void BrickWizardDialog::redo() {
     status_->setText(QStringLiteral("Redone"));
 }
 
+void BrickWizardDialog::showPanes(int layout) {
+    if (!paneStack_ || !previewStack_ || !view3d_) return;
+    // THE 3D VIEW MOVED to the place chosen - in the bricks' place, or in the preview's - and the other pane back.
+    QStackedWidget* want = layout == 1 ? paneStack_ : layout == 2 ? previewStack_ : nullptr;
+    QStackedWidget* has = paneStack_->indexOf(view3d_) >= 0 ? paneStack_ : previewStack_->indexOf(view3d_) >= 0 ? previewStack_ : nullptr;
+    if (want && has != want) {
+        if (has) has->removeWidget(view3d_);
+        want->addWidget(view3d_);
+    }
+    paneStack_->setCurrentWidget(layout == 1 ? static_cast<QWidget*>(view3d_) : canvas_);
+    previewStack_->setCurrentWidget(layout == 2 ? static_cast<QWidget*>(view3d_) : preview_);
+    if (layout != 0) {
+        syncNetColours();
+        view3d_->rebuild(true);
+        view3d_->setHighlight(canvas_->selection());
+    }
+}
+
 void BrickWizardDialog::syncNetColours() {
     design_.netColours.clear();
     const Document* doc = document();
@@ -5448,7 +5465,8 @@ void BrickWizardDialog::refreshPreview() {
     lastFaces_ = built.faces;
     lastPartX_ = built.partX;
     // THE 3D VIEW, when it is the one in the pane's place, built again as the harness changes - the view kept.
-    if (paneStack_ && paneStack_->currentIndex() == 1 && view3d_) {
+    if (view3d_ && ((paneStack_ && paneStack_->currentWidget() == view3d_) ||
+                    (previewStack_ && previewStack_->currentWidget() == view3d_))) {
         view3d_->rebuild(false);
         view3d_->setHighlight(canvas_->selection());
     }
