@@ -31,6 +31,8 @@ public:
     void rebuild(bool fit = true);
     // The harness from one place only - the wizard's own view: no choice of where from.
     void setSourceChoice(bool shown);
+    // How a part with no 3D model is shown: a box, or a solid made from its 2D drawing.
+    void setPartLook(PartLook look);
     // THE BRICKS PICKED: their parts and runs lit in the picture.
     void setHighlight(const QStringList& bricks);
     const Harness3DScene& scene() const { return scene_; }
@@ -42,6 +44,8 @@ private:
     Harness3DScene scene_;
     View3DCanvas* canvas_ = nullptr;
     QComboBox* source_ = nullptr;
+    QComboBox* look_ = nullptr;
+    PartLook partLook_ = PartLook::Revolved;
     QLabel* status_ = nullptr;
 };
 

@@ -71,7 +71,101 @@ const Mesh3D& cachedMesh3D(const QString& path, QString* how) {
     return it->mesh;
 }
 
-Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::function<QString(const QString&)>& modelOf) {
+namespace {
+// The points of an object's drawing, close enough together to read its shape from.
+void sampleInto(const Entity& e, std::vector<Vec2>& pts) {
+    auto seg = [&](const Vec2& a, const Vec2& b) {
+        const int n = std::clamp(static_cast<int>(distance(a, b) / 0.5), 1, 200);
+        for (int k = 0; k <= n; ++k) pts.push_back(a + (b - a) * (static_cast<double>(k) / n));
+    };
+    auto poly = [&](const std::vector<Vec2>& p, bool closed) {
+        for (size_t i = 1; i < p.size(); ++i) seg(p[i - 1], p[i]);
+        if (closed && p.size() > 2) seg(p.back(), p.front());
+    };
+    switch (e.type) {
+        case EntityType::Line: seg(e.a, e.b); break;
+        case EntityType::Polyline:
+        case EntityType::Spline: poly(e.points, e.meta.value(QStringLiteral("closed")).toBool()); break;
+        case EntityType::Rect:
+        case EntityType::Polygon:
+        case EntityType::Hatch: poly(e.points, true); break;
+        case EntityType::Circle:
+            for (int k = 0; k <= 48; ++k) {
+                const double a = 2.0 * M_PI * k / 48.0;
+                pts.push_back(e.center + Vec2{std::cos(a), std::sin(a)} * e.radius);
+            }
+            break;
+        default: {
+            const Bounds b = e.bounds();
+            if (b.valid) poly({b.min, Vec2{b.max.x, b.min.y}, b.max, Vec2{b.min.x, b.max.y}}, true);
+            break;
+        }
+    }
+}
+
+// A SOLID FROM A PART'S 2D DRAWING. Along the way it goes in (`A`, from `lo` to `hi` about `c`), how far its outline
+// reaches either side (`B`) at each step - turned round A (a round part), or given `depth` up and down (a square one).
+Mesh3D solidFromDrawing(const std::vector<Vec2>& pts, const Vec2& c, const V3& A, const V3& B, double lo, double hi,
+                        bool revolve, double depth) {
+    const int n = 40;
+    std::vector<double> top(n + 1, -1e300), bot(n + 1, 1e300);
+    const Vec2 a2{A.x, A.y}, b2{B.x, B.y};
+    for (const Vec2& p : pts) {
+        const double t = dot(p - c, a2), d = dot(p - c, b2);
+        const int i = std::clamp(static_cast<int>(std::lround((t - lo) / std::max(1e-9, hi - lo) * n)), 0, n);
+        top[static_cast<size_t>(i)] = std::max(top[static_cast<size_t>(i)], d);
+        bot[static_cast<size_t>(i)] = std::min(bot[static_cast<size_t>(i)], d);
+    }
+    // A step with nothing drawn across it takes after its neighbours.
+    for (int i = 0; i <= n; ++i) {
+        if (top[static_cast<size_t>(i)] > -1e299) continue;
+        int l = i - 1, r = i + 1;
+        while (l >= 0 && top[static_cast<size_t>(l)] < -1e299) --l;
+        while (r <= n && top[static_cast<size_t>(r)] < -1e299) ++r;
+        if (l < 0 && r > n) return {};
+        const int from = l >= 0 ? l : r, to = r <= n ? r : l;
+        const double u = to == from ? 0.0 : static_cast<double>(i - from) / (to - from);
+        top[static_cast<size_t>(i)] = top[static_cast<size_t>(from)] + (top[static_cast<size_t>(to)] - top[static_cast<size_t>(from)]) * u;
+        bot[static_cast<size_t>(i)] = bot[static_cast<size_t>(from)] + (bot[static_cast<size_t>(to)] - bot[static_cast<size_t>(from)]) * u;
+    }
+    const V3 centre{c.x, c.y, 0.0}, Z{0.0, 0.0, 1.0};
+    Mesh3D m;
+    const int sides = revolve ? 28 : 4;
+    for (int i = 0; i <= n; ++i) {
+        const double t = lo + (hi - lo) * i / n;
+        const V3 at = centre + A * t;
+        if (revolve) {
+            const double r = std::max(0.2, std::max(std::abs(top[static_cast<size_t>(i)]), std::abs(bot[static_cast<size_t>(i)])));
+            for (int k = 0; k < sides; ++k) {
+                const double ang = 2.0 * M_PI * k / sides;
+                m.addVertex(at + B * (r * std::cos(ang)) + Z * (r * std::sin(ang)));
+            }
+        } else {
+            const double up = top[static_cast<size_t>(i)], dn = std::min(bot[static_cast<size_t>(i)], up - 0.2);
+            m.addVertex(at + B * up + Z * (depth / 2.0));
+            m.addVertex(at + B * up - Z * (depth / 2.0));
+            m.addVertex(at + B * dn - Z * (depth / 2.0));
+            m.addVertex(at + B * dn + Z * (depth / 2.0));
+        }
+    }
+    for (int i = 0; i < n; ++i)
+        for (int k = 0; k < sides; ++k) {
+            const int a = i * sides + k, b = i * sides + (k + 1) % sides, cc = a + sides, d = b + sides;
+            m.addTri(a, b, d);
+            m.addTri(a, d, cc);
+        }
+    // Its two ends closed.
+    const int e0 = m.addVertex(centre + A * lo), e1 = m.addVertex(centre + A * hi);
+    for (int k = 0; k < sides; ++k) {
+        m.addTri(e0, (k + 1) % sides, k);
+        m.addTri(e1, n * sides + k, n * sides + (k + 1) % sides);
+    }
+    return m;
+}
+} // namespace
+
+Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::function<QString(const QString&)>& modelOf,
+                              PartLook look) {
     Harness3DScene scene;
     // ---- THE RUNS ----------------------------------------------------------------------------------
     std::vector<Vec2> runEnds;
@@ -93,19 +187,24 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
     const size_t firstRunItem = scene.items.size();
     (void)firstRunItem;
     for (const Entity& e : ents) {
-        // A RUN OF ONE WIRE is drawn as a wire - a double line, not a bundle: one tube along it.
-        if (e.type == EntityType::Polyline && e.meta.value(QStringLiteral("double")).toBool() && e.points.size() >= 2 &&
-            !groupOf(e).isEmpty()) {
-            isRun.insert(groupOf(e), true);
-            ++scene.runs;
-            runEnds.push_back(e.points.front());
-            runEnds.push_back(e.points.back());
+        // A RUN OF ONE WIRE is drawn as a wire - a double line, not a bundle: one tube along it. A HEATSHRINK SLEEVE drawn
+        // on the sheet is one too: a black tube as wide as it is drawn.
+        if (e.type == EntityType::Polyline && e.meta.value(QStringLiteral("double")).toBool() && e.points.size() >= 2) {
+            const bool sleeve = e.meta.value(QStringLiteral("shrunkEnds")).toBool();
+            if (!groupOf(e).isEmpty()) isRun.insert(groupOf(e), true);
+            if (!sleeve) {
+                ++scene.runs;
+                runEnds.push_back(e.points.front());
+                runEnds.push_back(e.points.back());
+            }
             std::vector<V3> path;
             for (const Vec2& p : e.points) path.push_back(at3(p));
+            const double across = sleeve ? e.meta.value(QStringLiteral("shrinkWidth")).toDouble(e.meta.value(QStringLiteral("gap")).toDouble(4.0))
+                                         : e.meta.value(QStringLiteral("gap")).toDouble(1.0);
             Harness3DItem wi;
-            wi.mesh = tubeMesh(path, std::max(0.2, e.meta.value(QStringLiteral("gap")).toDouble(1.0)) / 2.0, 8, true);
-            wi.color = colourOf(e, 0);
-            wi.what = QStringLiteral("wire");
+            wi.mesh = tubeMesh(path, std::max(0.2, across) / 2.0, sleeve ? 18 : 8, true);
+            wi.color = sleeve ? QColor(32, 32, 35) : colourOf(e, 0);
+            wi.what = sleeve ? QStringLiteral("sleeve") : QStringLiteral("wire");
             wi.brick = brickOf(e);
             scene.items.push_back(std::move(wi));
             continue;
@@ -152,10 +251,19 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
         }
         // A TWISTED PAIR OR BUNDLE: its wires laid up round one another for real - each a helix round the run's middle,
         // a whole turn every pitch, the wires evenly round it and touching - not the flat crossings it is drawn with.
-        if (!e.meta.value(QStringLiteral("twistStraight")).toBool(true)) {
+        // Twisted unless it is said to be straight - as the drawing reads it, so a twisted pair drawn on the sheet is
+        // twisted here too.
+        if (!e.meta.value(QStringLiteral("twistStraight")).toBool(false)) {
             const int n = std::max(2, e.meta.value(QStringLiteral("twistWires")).toInt(2));
             const double pitch = std::max(2.0, e.meta.value(QStringLiteral("twistPitch")).toDouble(18.0));
-            const double rad = ww / (2.0 * std::sin(M_PI / n));
+            // Each wire as thick as it is said - or, drawn on the sheet by its overall width, as thick as the wires
+            // laid round one another that wide.
+            double wire = ww;
+            if (!e.meta.contains(QStringLiteral("twistWireWidth")) && e.meta.value(QStringLiteral("twistWidth")).toDouble() > 0.0)
+                wire = e.meta.value(QStringLiteral("twistWidth")).toDouble() / (1.0 / std::sin(M_PI / n) + 1.0);
+            const double rad = wire / (2.0 * std::sin(M_PI / n));
+            // STRAIGHT AT ITS ENDS for as long as the drawing has them straight, twisted between.
+            const double ends = std::clamp(e.meta.value(QStringLiteral("twistEnds")).toDouble(0.0), 0.0, total * 0.45);
             const double step = std::min(pitch / 18.0, std::max(0.2, total / 400.0));
             // The run's middle, square across it in the sheet, and up out of it.
             auto frameAt = [&](double s, V3& at, V3& across) {
@@ -182,12 +290,13 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
                     const double ss = std::min(s, total);
                     V3 at, across;
                     frameAt(ss, at, across);
-                    const double th = 2.0 * M_PI * (ss / pitch + static_cast<double>(k) / n);
+                    const double twisted = std::clamp(ss - ends, 0.0, std::max(0.0, total - 2.0 * ends));
+                    const double th = 2.0 * M_PI * (twisted / pitch + static_cast<double>(k) / n);
                     helix.push_back(at + across * (rad * std::cos(th)) + V3{0.0, 0.0, 1.0} * (rad * std::sin(th)));
                     if (ss >= total) break;
                 }
                 Harness3DItem wi;
-                wi.mesh = tubeMesh(helix, ww / 2.0, 8, true);
+                wi.mesh = tubeMesh(helix, wire / 2.0, 8, true);
                 wi.color = colourOf(e, k);
                 wi.what = QStringLiteral("wire");
                 wi.brick = brickOf(e);
@@ -228,6 +337,7 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
     struct Part {
         Bounds box;
         QString lib, name, brick;
+        std::vector<Vec2> outline;   // the points of its drawing, for a solid made from it
     };
     QHash<QString, Part> parts;
     QStringList order;
@@ -247,6 +357,7 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
         if (!parts.contains(g)) order << g;
         Part& p = parts[g];
         p.box.expand(e.bounds());
+        if (look != PartLook::Box) sampleInto(e, p.outline);
         if (p.lib.isEmpty()) p.lib = e.meta.value(QStringLiteral("libPart")).toString();
         if (p.name.isEmpty()) p.name = e.meta.value(QStringLiteral("partName")).toString();
         if (p.brick.isEmpty()) p.brick = brickOf(e);
@@ -310,16 +421,24 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
             it.model = true;
             ++scene.modelled;
         } else {
-            // NONE: a box as long and as wide as it is drawn, and as tall as it is wide.
             if (!file.isEmpty())
-                scene.notes << QStringLiteral("%1: its 3D model could not be read (%2) - shown as a box")
+                scene.notes << QStringLiteral("%1: its 3D model could not be read (%2) - shown from its drawing")
                                    .arg(it.what.isEmpty() ? QStringLiteral("a part") : it.what, how);
-            const V3 corner = centre - A * (length / 2.0) - B * (width / 2.0) - Z * (width / 2.0);
-            Mesh3D box = boxMesh({0, 0, 0}, {1, 1, 1});
-            for (V3& v : box.v) v = corner + A * (v.x * length) + B * (v.y * width) + Z * (v.z * width);
-            it.mesh = box;
-            it.color = QColor(92, 128, 176);
-            it.cube = true;
+            // NONE: A SOLID FROM ITS 2D DRAWING, when that is asked for - its outline turned round the way it goes
+            // in, or given its width in depth.
+            if (look != PartLook::Box && !p.outline.empty()) {
+                it.mesh = solidFromDrawing(p.outline, c, A, B, lo, hi, look == PartLook::Revolved, width);
+                it.color = QColor(150, 158, 170);
+            }
+            // OR A BOX as long and as wide as it is drawn, and as tall as it is wide.
+            if (it.mesh.empty()) {
+                const V3 corner = centre - A * (length / 2.0) - B * (width / 2.0) - Z * (width / 2.0);
+                Mesh3D box = boxMesh({0, 0, 0}, {1, 1, 1});
+                for (V3& v : box.v) v = corner + A * (v.x * length) + B * (v.y * width) + Z * (v.z * width);
+                it.mesh = box;
+                it.color = QColor(92, 128, 176);
+                it.cube = true;
+            }
         }
         scene.items.push_back(std::move(it));
     }

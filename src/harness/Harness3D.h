@@ -29,9 +29,14 @@ struct Harness3DScene {
     QStringList notes;     // what could not be read, and why
 };
 
+// HOW A PART WITH NO 3D MODEL IS SHOWN: a box as big as it is drawn, or a solid made from its 2D drawing - its outline
+// turned round the way it goes into the harness (a round connector), or given depth across (a square one).
+enum class PartLook { Box, Revolved, Extruded };
+
 // From the objects of a harness drawing - placed on the sheet (each part by its copy mark) or straight out of the
 // wizard (each by its brick). `modelOf` gives the 3D model file attached to a library part, or nothing.
-Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::function<QString(const QString& libPart)>& modelOf);
+Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::function<QString(const QString& libPart)>& modelOf,
+                              PartLook look = PartLook::Box);
 
 // A model file read once and kept while it is unchanged on disk.
 const Mesh3D& cachedMesh3D(const QString& path, QString* how = nullptr);

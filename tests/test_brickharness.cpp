@@ -5650,6 +5650,70 @@ void testRoundThirtyNine() {
           "revision: its text made bigger - the frame grows for the strip and the words");
 }
 
+// ROUND FORTY: a twisted pair drawn on the sheet twisted in 3D too; a heatshrink sleeve a tube; a part with no 3D model
+// made from its 2D drawing - turned round the way it goes in, or extruded.
+void testRoundForty() {
+    std::vector<Entity> ents;
+    Entity t;
+    t.type = EntityType::TwistedPair;
+    t.points = {{0, 0}, {200, 0}};
+    t.meta.insert(QStringLiteral("twistWidth"), 4.0);
+    t.meta.insert(QStringLiteral("twistPitch"), 18.0);
+    t.meta.insert(QStringLiteral("twistEnds"), 15.0);
+    ents.push_back(t);
+    Entity s;
+    s.type = EntityType::Polyline;
+    s.points = {{60, 0}, {120, 0}};
+    s.meta.insert(QStringLiteral("double"), true);
+    s.meta.insert(QStringLiteral("shrunkEnds"), true);
+    s.meta.insert(QStringLiteral("shrinkWidth"), 8.0);
+    ents.push_back(s);
+    const Harness3DScene sc = buildHarness3D(ents, {});
+    int wires = 0, sleeves = 0;
+    bool rises = true;
+    for (const Harness3DItem& it : sc.items) {
+        V3 lo, hi;
+        it.mesh.bounds(lo, hi);
+        if (it.what == QLatin1String("wire")) {
+            ++wires;
+            rises = rises && hi.z > 0.5 && lo.z < -0.5;
+        }
+        if (it.what == QLatin1String("sleeve")) {
+            ++sleeves;
+            check(std::abs(hi.z - 4.0) < 0.1, "3d: a heatshrink sleeve as round as it is drawn wide");
+        }
+    }
+    check(wires == 2 && rises, "3d: a twisted pair drawn on the sheet - said neither straight nor twisted - twisted for real");
+    check(sleeves == 1, "3d: a heatshrink sleeve drawn on the sheet a tube");
+    // A PART FROM ITS DRAWING: a connector drawn 30 long and 20 across, on a run.
+    BrickDesign d;
+    const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+    const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+    const QString y = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+    d.connect(x, c);
+    d.connect(c, y);
+    const std::vector<Entity> h = buildBrickHarness(d, nullptr).entities;
+    for (PartLook look : {PartLook::Revolved, PartLook::Extruded}) {
+        const Harness3DScene ps = buildHarness3D(h, {}, look);
+        int made = 0, cubes = 0;
+        for (const Harness3DItem& it : ps.items) {
+            if (it.cube) ++cubes;
+            if (it.brick != x && it.brick != y) continue;
+            if (it.cube) continue;
+            V3 lo, hi;
+            it.mesh.bounds(lo, hi);
+            ++made;
+            if (look == PartLook::Revolved)
+                check(std::abs((hi.z - lo.z) - (hi.y - lo.y)) < 0.5, "3d part: turned from its drawing - as tall as it is wide, round");
+        }
+        std::printf("  3d parts %s: %d from the drawing, %d box(es)\n", look == PartLook::Revolved ? "turned" : "extruded", made, cubes);
+        check(made == 2 && cubes == 0, "3d part: each made from its 2D drawing, no box");
+    }
+    View3DPane pane;
+    check(pane.findChild<QComboBox*>(QStringLiteral("view3dPartLook")) != nullptr,
+          "3d pane: a choice of how a part with no 3D model is shown");
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -5703,6 +5767,7 @@ int run_brickharness_tests() {
     testRoundThirtySeven();
     testRoundThirtyEight();
     testRoundThirtyNine();
+    testRoundForty();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

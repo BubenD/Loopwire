@@ -28,6 +28,20 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     source_->setToolTip(QStringLiteral("Which harness to show: the one placed on the sheet, or the one open in the harness wizard"));
     connect(source_, &QComboBox::activated, this, [this](int) { rebuild(true); });
     bar->addWidget(source_);
+    // A PART WITH NO 3D MODEL: a box, or a solid made from its 2D drawing.
+    look_ = new QComboBox(this);
+    look_->setObjectName(QStringLiteral("view3dPartLook"));
+    look_->addItems({QStringLiteral("Parts as boxes"), QStringLiteral("Parts turned from the drawing"),
+                     QStringLiteral("Parts extruded from the drawing")});
+    look_->setCurrentIndex(1);
+    look_->setToolTip(QStringLiteral("A part with no 3D model attached: a box as big as it is drawn, or a solid made from "
+                                     "its 2D drawing - turned round the way it goes in (a round part), or given depth (a "
+                                     "square one)"));
+    connect(look_, &QComboBox::activated, this, [this](int i) {
+        partLook_ = i == 0 ? PartLook::Box : i == 1 ? PartLook::Revolved : PartLook::Extruded;
+        rebuild(false);
+    });
+    bar->addWidget(look_);
     auto button = [&](const char* name, const QString& text, const QString& tip, auto fn) {
         auto* b = new QToolButton(this);
         b->setObjectName(QLatin1String(name));
@@ -69,6 +83,12 @@ void View3DPane::setModelLookup(std::function<QString(const QString&)> modelOf) 
 
 void View3DPane::setSourceChoice(bool shown) { source_->setVisible(shown); }
 
+void View3DPane::setPartLook(PartLook look) {
+    partLook_ = look;
+    look_->setCurrentIndex(look == PartLook::Box ? 0 : look == PartLook::Revolved ? 1 : 2);
+    rebuild(false);
+}
+
 void View3DPane::setHighlight(const QStringList& bricks) { canvas_->setHighlight(bricks); }
 
 void View3DCanvas::setHighlight(const QStringList& bricks) {
@@ -90,17 +110,20 @@ void View3DPane::rebuild(bool fit) {
             fell = true;
         }
     }
-    scene_ = buildHarness3D(ents, modelOf_);
+    scene_ = buildHarness3D(ents, modelOf_, partLook_);
     canvas_->setScene(&scene_);
     if (fit) canvas_->fit();
     canvas_->update();
     QString said = scene_.runs == 0 && scene_.parts == 0
                        ? QStringLiteral("No harness to show - place one from the harness wizard, or open one in it.")
-                       : QStringLiteral("%1 part(s), %2 with a 3D model, the rest as boxes; %3 run(s)%4.")
+                       : QStringLiteral("%1 part(s), %2 with a 3D model, the rest %5; %3 run(s)%4.")
                              .arg(scene_.parts)
                              .arg(scene_.modelled)
                              .arg(scene_.runs)
-                             .arg(fell ? QStringLiteral(" - from the harness wizard, nothing being placed on the sheet") : QString());
+                             .arg(fell ? QStringLiteral(" - from the harness wizard, nothing being placed on the sheet") : QString())
+                             .arg(partLook_ == PartLook::Box        ? QStringLiteral("as boxes")
+                                  : partLook_ == PartLook::Revolved ? QStringLiteral("turned from their drawings")
+                                                                    : QStringLiteral("extruded from their drawings"));
     if (!scene_.notes.isEmpty()) said += QLatin1Char('\n') + scene_.notes.join(QLatin1Char('\n'));
     status_->setText(said);
 }
