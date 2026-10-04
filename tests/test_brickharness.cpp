@@ -6006,11 +6006,14 @@ void testRoundFortyTwo() {
     auto* sectionAt = pane.findChild<QSlider*>(QStringLiteral("view3dSectionAt"));
     section->setCurrentIndex(3);
     emit section->activated(3);
-    pane.environment().bounds(lo, hi);
-    sectionAt->setValue(static_cast<int>(std::lround((7.0 - lo.z) / (hi.z - lo.z) * 1000.0)));
+#ifdef EDRAW_HAVE_OCCT  // the stand-in without it is one flat square, with nothing below z = 7
+    V3 envLo, envHi;
+    pane.environment().bounds(envLo, envHi);
+    sectionAt->setValue(static_cast<int>(std::lround((7.0 - envLo.z) / (envHi.z - envLo.z) * 1000.0)));
     check(canvas->section().on && std::abs(canvas->section().offset - 7.0) < 0.1, "3d view: a section across Z, where it was set");
     const Pick3D cut = canvas->pickAt(at);
     check(cut.hit && cut.point.z < 7.01, "3d view: a pick through a section - past what is cut away");
+#endif
     // Opacity, the harness hidden: the picture still drawn.
     pane.findChild<QSlider*>(QStringLiteral("view3dEnvOpacity"))->setValue(40);
     pane.findChild<QCheckBox*>(QStringLiteral("view3dHarnessShown"))->setChecked(false);
