@@ -244,6 +244,7 @@ void MainWindow::restyleViewPanelIcons() {
     // ribbon's own sheet colours the words.
     for (const auto& pair : viewPanelButtons_)
         if (pair.second) pair.second->setIcon(panelIcon(pair.first));
+    restylePreview3DIcons();
 }
 
 QDockWidget* MainWindow::panelByKey(const QString& key) const {

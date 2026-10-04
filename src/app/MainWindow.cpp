@@ -69,6 +69,7 @@
 #include <QCompleter>
 #include <QSet>
 #include <QStandardItemModel>
+#include <QStackedWidget>
 #include <QGroupBox>
 #include <QRadioButton>
 #include <QSlider>
@@ -3053,7 +3054,15 @@ void MainWindow::buildDocumentArea() {
     spaceLayout->addSpacing(10);
 
     v->addWidget(topRow);
-    v->addWidget(canvas_, 1);
+    // THE MIDDLE: the drawing - or, while the 3D Preview tab is open, the 3D view in its place.
+    centralStack_ = new QStackedWidget(container);
+    centralStack_->addWidget(canvas_);
+    preview3dHost_ = new QWidget(centralStack_);
+    preview3dHost_->setObjectName(QStringLiteral("preview3dHost"));
+    auto* hostLay = new QVBoxLayout(preview3dHost_);
+    hostLay->setContentsMargins(0, 0, 0, 0);
+    centralStack_->addWidget(preview3dHost_);
+    v->addWidget(centralStack_, 1);
     setCentralWidget(container);
     canvas_->setBottomOverlay(spaceRow);
 
@@ -4657,6 +4666,9 @@ void MainWindow::buildRibbon() {
     // The View tab is a list of the panels there are. The panels themselves do not exist yet - buildPanels()
     // runs after this - so its buttons are wired by name and switched on later by syncViewPanelButtons().
     buildViewTab();
+    buildView3DTab();
+    // THE 3D PREVIEW TAB OPEN: the 3D view where the drawing is; any other tab, the drawing back.
+    connect(ribbon_, &QTabWidget::currentChanged, this, [this](int i) { showPreview3D(ribbon_->widget(i) == view3dTabPage_); });
 
     // (Parametric and Output ribbon tabs were removed — file New/Open/Save and the
     //  DXF/PDF/CSV exports live on the E (application) menu and the command line.)
@@ -16666,6 +16678,14 @@ QDockWidget* MainWindow::makeView3DPanel() {
         view3dPane_->rebuild(true);
     });
     view3dPane_->reloadRouting();
+    // The 3D Preview tab's route tools say which one the 3D view has.
+    connect(view3dPane_, &View3DPane::routeToolChanged, this, [this](RouteTool tool) {
+        for (const auto& pair : preview3dTools_)
+            if (pair.second && pair.first == static_cast<int>(tool)) {
+                const QSignalBlocker hold(pair.second);
+                pair.second->setChecked(true);
+            }
+    });
     // WHAT IS PUT ON THE SHEET SHOWS IN 3D: built again a moment after the drawing changes, while the view is open.
     connect(editor_, &Editor::changed, this, [this, dock] {
         if (view3dPane_ && (dock->isVisible() || view3dPane_->fullScreenView())) view3dPane_->scheduleRebuild();

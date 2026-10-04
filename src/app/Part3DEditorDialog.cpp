@@ -1,5 +1,6 @@
 #include "app/Part3DEditorDialog.h"
 
+#include "app/Icons3D.h"
 #include "app/NavWheel.h"
 #include "app/View3DPane.h"
 #include "render/Render3D.h"
@@ -23,6 +24,7 @@
 #include <QScrollArea>
 #include <QSpinBox>
 #include <QSplitter>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #include <cmath>
@@ -43,10 +45,19 @@ Part3DEditorDialog::Part3DEditorDialog(const LibraryPart& part, const PartModel3
     // ---- ADD: the simple solids, and what is made from the part ----
     auto* addRow = new QHBoxLayout;
     addRow->addWidget(new QLabel(QStringLiteral("Add:"), this));
+    // AS A 3D PROGRAM'S BUTTONS ARE: each a picture of what it does, its name under it.
+    auto cadButton = [this](const QString& text) {
+        auto* b = new QToolButton(this);
+        b->setText(text);
+        b->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        b->setIconSize(QSize(26, 26));
+        b->setAutoRaise(true);
+        return b;
+    };
     auto addButton = [&](BodyShape shape, const char* name) {
-        auto* b = new QPushButton(bodyShapeName(shape), this);
+        auto* b = cadButton(bodyShapeName(shape));
         b->setObjectName(QLatin1String(name));
-        connect(b, &QPushButton::clicked, this, [this, shape] { addBody(shape); });
+        connect(b, &QToolButton::clicked, this, [this, shape] { addBody(shape); });
         addRow->addWidget(b);
     };
     addButton(BodyShape::Box, "part3dAddBox");
@@ -67,10 +78,10 @@ Part3DEditorDialog::Part3DEditorDialog(const LibraryPart& part, const PartModel3
     auto* modRow = new QHBoxLayout;
     modRow->addWidget(new QLabel(QStringLiteral("Modify:"), this));
     auto modButton = [&](const char* name, const QString& text, const QString& tip, auto fn) {
-        auto* b = new QPushButton(text, this);
+        auto* b = cadButton(text);
         b->setObjectName(QLatin1String(name));
         b->setToolTip(tip);
-        connect(b, &QPushButton::clicked, this, fn);
+        connect(b, &QToolButton::clicked, this, fn);
         modRow->addWidget(b);
         return b;
     };
@@ -125,10 +136,31 @@ Part3DEditorDialog::Part3DEditorDialog(const LibraryPart& part, const PartModel3
     modButton("part3dRedo", QStringLiteral("Redo"), QStringLiteral("Do it again (Ctrl+Y)"), [this] { redo(); });
     modRow->addSpacing(12);
     for (const auto& [name, key] : {std::pair<const char*, const char*>{"Iso", "iso"}, {"Front", "front"}, {"Top", "top"}, {"Side", "side"}})
-        modButton("", QString::fromLatin1(name), QStringLiteral("View it from there"), [this, k = QString::fromLatin1(key)] { canvas_->viewFrom(k); });
+        modButton(QStringLiteral("part3dView%1").arg(QLatin1String(name)).toLatin1().constData(), QString::fromLatin1(name),
+                  QStringLiteral("View it from there"), [this, k = QString::fromLatin1(key)] { canvas_->viewFrom(k); });
     modButton("part3dFit", QStringLiteral("Fit"), QStringLiteral("All of it in view"), [this] { canvas_->fit(); });
     modRow->addStretch(1);
     lay->addLayout(modRow);
+    {
+        // THE PICTURES, by what each button does.
+        const QColor ink = palette().color(QPalette::WindowText);
+        const struct {
+            const char* name;
+            const char* icon;
+        } icons[] = {
+            {"part3dAddBox", "box"},       {"part3dAddCylinder", "cylinder"}, {"part3dAddTube", "tube"},
+            {"part3dAddCone", "cone"},     {"part3dAddSphere", "sphere"},     {"part3dAddTorus", "torus"},
+            {"part3dAddHex", "hex"},       {"part3dAddTurned", "turned"},     {"part3dAddExtruded", "extruded"},
+            {"part3dAddPins", "pins"},     {"part3dDuplicate", "duplicate"},  {"part3dDelete", "delete"},
+            {"part3dMirrorX", "mirrorx"},  {"part3dMirrorY", "mirrory"},      {"part3dMirrorZ", "mirrorz"},
+            {"part3dTurnX", "turnx"},      {"part3dTurnY", "turny"},          {"part3dTurnZ", "turnz"},
+            {"part3dArray", "array"},      {"part3dCentre", "middle"},        {"part3dUndo", "undo"},
+            {"part3dRedo", "redo"},        {"part3dViewIso", "iso"},          {"part3dViewFront", "front"},
+            {"part3dViewTop", "top"},      {"part3dViewSide", "side"},        {"part3dFit", "fit"},
+        };
+        for (const auto& i : icons)
+            if (auto* b = findChild<QToolButton*>(QLatin1String(i.name))) b->setIcon(icon3D(QLatin1String(i.icon), ink));
+    }
 
     // ---- THE BODIES, THE VIEW, THE ONE SELECTED ----
     auto* split = new QSplitter(Qt::Horizontal, this);
@@ -231,10 +263,12 @@ Part3DEditorDialog::Part3DEditorDialog(const LibraryPart& part, const PartModel3
     lay->addWidget(said_);
     auto* bottom = new QHBoxLayout;
     auto* exportBtn = new QPushButton(QStringLiteral("Export STL / OBJ..."), this);
+    exportBtn->setIcon(icon3D(QStringLiteral("export"), palette().color(QPalette::WindowText)));
     connect(exportBtn, &QPushButton::clicked, this, [this] { exportModel(); });
     bottom->addWidget(exportBtn);
     bottom->addStretch(1);
     auto* save = new QPushButton(QStringLiteral("Save to the part"), this);
+    save->setIcon(icon3D(QStringLiteral("save"), palette().color(QPalette::WindowText)));
     save->setObjectName(QStringLiteral("part3dSave"));
     save->setDefault(true);
     connect(save, &QPushButton::clicked, this, [this] {

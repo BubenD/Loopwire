@@ -39,7 +39,10 @@ class NavWheel;
 // WHAT A CLICK IN THE 3D VIEW DOES: picks (and selects a node or a bundle), puts a connector on a face, puts a branch
 // or a clip down (on a bundle, dividing it), lays a bundle from node to node through the points clicked, or takes a
 // node or a bundle away.
-enum class RouteTool { Select, Connector, Branch, Clip, Route, Delete };
+// MOVE takes a node somewhere else on the model, its bundles following from where they were laid; STRETCH pulls a node -
+// an end, to make the harness shorter or longer - and the points each of its bundles was laid through go with it, the
+// nearer the more, up to the node at the bundle's other end: a clip or a branch there holds the harness where it is.
+enum class RouteTool { Select, Connector, Branch, Clip, Route, Delete, Move, Stretch };
 
 // THE HARNESS THE ROUTE IS FOR: its name and the wizard's design of it - the one open in the wizard, or the one this
 // drawing has placed (or keeps, where it keeps one only). `ok` false: none.
@@ -103,6 +106,9 @@ public:
     void setRouteTool(RouteTool tool);
     // The last change to the route taken back.
     void undoRoute();
+    // An environment chosen from a file dialog and read.
+    void chooseEnvironment();
+    RouteTool routeTool() const;
     // HOW TO WORK IN IT: the help window, its recordings and its steps.
     void showHelp();
     // THE EXAMPLE the help works through, loaded as the environment: a plate, two boxes and a rib.
@@ -141,9 +147,12 @@ signals:
     void environmentChanged();
     // The route changed (and written back to the drawing).
     void routeChanged();
+    // The route tool chosen - here, or from outside.
+    void routeToolChanged(RouteTool tool);
 
 private:
     void takeEnvironment(Environment3D env, std::shared_ptr<RayIndex3D> index);
+    void applyIcons();
     void applySection();
     void showPick(const Pick3D& pick);
     void sayStatus();
@@ -190,6 +199,7 @@ private:
     std::function<void(const QJsonObject&)> saveRouting_;
     std::function<QString()> drawingDir_;
     QWidget* routeRow_ = nullptr;
+    QWidget* bundleRow_ = nullptr;
     QButtonGroup* tools_ = nullptr;
     QDoubleSpinBox* diameter_ = nullptr;
     QDoubleSpinBox* bend_ = nullptr;
@@ -315,6 +325,10 @@ signals:
     void routeChanged();
     void selectionChanged(const QString& segment);
     void undoRequested();
+    // The route being moved under the pointer - not yet a change to keep.
+    void routeMoving();
+    // Something to tell the user.
+    void message(const QString& text);
     // The camera turned, moved or zoomed.
     void cameraChanged();
     // Esc with nothing being laid.
@@ -382,7 +396,18 @@ private:
     bool swallowRelease_ = false;
     // Locked, and what a drag is moving. Not saved.
     bool viewLocked_ = false;
-    int dragKind_ = 0;        // 0 nothing, 1 a node, 2 a corner of a bundle, 3 a bundle (a corner to be put in it)
+    // A NODE TAKEN HOLD OF WITH MOVE OR STRETCH: where it was, and - stretching - each of its bundles' laid points as
+    // they were, with how far each goes with the node (one at the node, none at the bundle's other end).
+    bool beginNodeDrag(const QPointF& at, bool stretch);
+    struct Stretched {
+        QString segment;
+        std::vector<RouteVia3D> was;
+        std::vector<double> share;
+    };
+    std::vector<Stretched> stretched_;
+    V3 dragFrom_;
+    int dragKind_ = 0;        // 0 nothing, 1 a node, 2 a corner of a bundle, 3 a bundle (a corner to be put in it),
+                              // 4 a node stretched, 5 a node moved over the model
     QString dragId_;
     int dragVia_ = -1;
     RouteVia3D dragNew_;

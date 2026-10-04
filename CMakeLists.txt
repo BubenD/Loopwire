@@ -160,6 +160,9 @@ add_library(edraw_core STATIC
     src/app/RuleExplainer.cpp
     src/app/View3DPane.h
     src/app/View3DPane.cpp
+    src/app/Icons3D.h
+    src/app/Icons3D.cpp
+    src/app/ribbon/View3DTab.cpp
     src/app/View3DHelpDialog.h
     src/app/NavWheel.h
     src/app/Part3DEditorDialog.h

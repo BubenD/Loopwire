@@ -41,6 +41,7 @@ class QDockWidget;
 class QWidget;
 class QCloseEvent;
 class QToolButton;
+class QStackedWidget;
 class QPlainTextEdit;
 class QFontComboBox;
 class QDoubleSpinBox;
@@ -274,6 +275,10 @@ private:
     void buildAnnotationTab();
     // The View tab: which panels are on the screen and which side each is on.
     void buildViewTab();
+    // THE 3D PREVIEW TAB: the 3D view's commands, and the 3D view in the drawing's place while the tab is open.
+    void buildView3DTab();
+    void showPreview3D(bool on);
+    void restylePreview3DIcons();
     void setPanelsVisible(bool on);
     void applyPanelSizes();
     bool panelSizesApplied_ = false;
@@ -1009,6 +1014,17 @@ private:
     QDockWidget* view3dDock_ = nullptr;
     class View3DPane* view3dPane_ = nullptr;
     QList<QPair<QString, QToolButton*>> viewPanelButtons_;
+    // The 3D Preview tab: its page, its drawn buttons by icon, its route tools by tool; the middle of the window as
+    // the drawing or the 3D view, and what the 3D view's panel stood in for while it is there.
+    QWidget* view3dTabPage_ = nullptr;
+    QList<QPair<QString, QToolButton*>> preview3dIcons_;
+    QList<QPair<int, QToolButton*>> preview3dTools_;
+    QStackedWidget* centralStack_ = nullptr;
+    QWidget* preview3dHost_ = nullptr;
+    QWidget* preview3dStandIn_ = nullptr;
+    bool preview3dOn_ = false;
+    bool preview3dDockWas_ = false;
+    bool preview3dShownOnce_ = false;
     // The shelf, as a table: the part, and a column each for the mechanical drawing, the schematic symbol
     // and the fanout. A tree rather than a list because several libraries in view are shown under their own
     // names, and because the three drawings want columns of their own to be read down.

@@ -8,6 +8,7 @@
 #include "app/BrickWizardDialog.h"
 #include "app/DrawingPreview.h"
 #include "app/Editor.h"
+#include "app/MainWindow.h"
 #include "app/MechanicalValidationDialog.h"
 #include "app/RuleExplainer.h"
 #include "app/View3DPane.h"
@@ -45,6 +46,7 @@
 #include <QListWidget>
 #include <QSplitter>
 #include <QTabWidget>
+#include <QDockWidget>
 #include <QToolButton>
 #include <QMenu>
 #include <QWheelEvent>
@@ -7396,6 +7398,117 @@ void testRoundFiftyOne() {
     check(insert && deep, "3d frame: a pocket cut into the face where the frame is - its walls and its floor");
 }
 
+// ROUND FIFTY-TWO: STRETCH AND MOVE in the 3D view - an end pulled, the points its bundle was laid through going with
+// it, a clip holding the harness where it is; a node moved on its own. THE 3D PREVIEW TAB - the 3D view in the
+// drawing's place while it is open, its commands as pictures with their names.
+void testRoundFiftyTwo() {
+    Route3D r;
+    r.diameter = 6.0;
+    r.lead = 10.0;
+    const QString x1 = r.addNode(RouteNodeKind::Connector, {-60, 0, 0}, {0, 0, 1});
+    const QString c1 = r.addNode(RouteNodeKind::Clip, {0, 0, 0}, {0, 0, 1});
+    const QString x2 = r.addNode(RouteNodeKind::Connector, {60, 0, 0}, {0, 0, 1});
+    const QString s1 = r.addSegment(x1, c1, {{{-30, 0, 0}, {0, 0, 1}}});
+    const QString s2 = r.addSegment(c1, x2, {{{30, 0, 0}, {0, 0, 1}}});
+    QJsonObject stored = r.toJson();
+    View3DPane pane;
+    pane.setRoutingStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    pane.resize(1000, 700);
+    pane.show();
+    QApplication::processEvents();
+    pane.reloadRouting(true);
+    View3DCanvas* canvas = pane.canvas();
+    canvas->setUseGpu(false);
+    canvas->viewFrom(QStringLiteral("top"));
+    auto screen = [&](const V3& p) {
+        QPointF at;
+        canvas->toScreen(p, at);
+        return at;
+    };
+    auto drag = [&](const QPointF& from, const QPointF& to) {
+        QMouseEvent press(QEvent::MouseButtonPress, from, canvas->mapToGlobal(from), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &press);
+        for (int i = 1; i <= 8; ++i) {
+            const QPointF at = from + (to - from) * (i / 8.0);
+            QMouseEvent move(QEvent::MouseMove, at, canvas->mapToGlobal(at), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(canvas, &move);
+        }
+        QMouseEvent release(QEvent::MouseButtonRelease, to, canvas->mapToGlobal(to), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &release);
+    };
+    const Route3D& route = pane.route();
+    auto shown = [&](const QString& id) {
+        const RouteNode3D* n = route.node(id);
+        return screen(n->at + n->normal * (n->kind == RouteNodeKind::Connector ? route.lead * 0.5 : route.diameter * 0.5));
+    };
+    const double before = route.length(*route.segment(s2));
+    // STRETCHED: X2 pulled out along the ground from 60 to 90.
+    pane.setRouteTool(RouteTool::Stretch);
+    const QPointF grip = shown(x2);
+    drag(grip, grip + (screen({90, 0, 0}) - screen({60, 0, 0})));
+    const RouteNode3D* end = route.node(x2);
+    const RouteSegment3D* out = route.segment(s2);
+    std::printf("  stretch: X2 to %.1f, its bundle's laid point to %.1f, %.1f mm long (was %.1f)\n", end->at.x, out->via[0].at.x,
+                route.length(*out), before);
+    check(end->at.x > 80.0 && std::abs(out->via[0].at.x - (30.0 + (end->at.x - 60.0) / 2.0)) < 0.01,
+          "stretch: the end pulled out, its bundle's laid point going half as far - half way to the clip");
+    check(route.node(c1)->at.length() < 1e-9 && std::abs(route.segment(s1)->via[0].at.x + 30.0) < 1e-9,
+          "stretch: the clip holds the harness - it and the bundle beyond it stay where they are");
+    check(route.length(*out) > before + 25.0, "stretch: the bundle as much longer as the end was pulled");
+    // A CLIP IS NOT STRETCHED - it holds; it says so.
+    drag(shown(c1), shown(c1) + QPointF(0, 40));
+    check(route.node(c1)->at.length() < 1e-9 &&
+              pane.findChild<QLabel*>(QStringLiteral("view3dStatus"))->text().contains(QStringLiteral("clip")),
+          "stretch: a clip is not pulled - it holds the harness, and says so");
+    pane.undoRoute();
+    check(std::abs(route.node(x2)->at.x - 60.0) < 1e-6 && std::abs(route.segment(s2)->via[0].at.x - 30.0) < 1e-6,
+          "stretch: undone in one step");
+    // MOVED: the clip somewhere else, its bundles' laid points left where they are.
+    pane.setRouteTool(RouteTool::Move);
+    drag(shown(c1), shown(c1) + (screen({0, 20, 0}) - screen({0, 0, 0})));
+    check(std::abs(route.node(c1)->at.y - 20.0) < 1.0 && std::abs(route.segment(s2)->via[0].at.x - 30.0) < 1e-6 &&
+              std::abs(route.segment(s2)->via[0].at.y) < 1e-6,
+          "move: a node moved on the model, the points its bundles were laid through left as they were");
+    // THE BUTTONS: pictures with their names.
+    for (const char* name : {"view3dToolStretch", "view3dToolMove", "view3dFit", "view3dEnvLoad"}) {
+        auto* b = pane.findChild<QToolButton*>(QLatin1String(name));
+        check(b && !b->icon().isNull() && b->toolButtonStyle() == Qt::ToolButtonTextBesideIcon,
+              qPrintable(QStringLiteral("3d buttons: %1 has its picture, its name beside it").arg(QLatin1String(name))));
+    }
+    // ---- THE 3D PREVIEW TAB ----
+    MainWindow w;
+    w.show();
+    QApplication::processEvents();
+    QTabWidget* ribbon = nullptr;
+    int tab = -1;
+    for (QTabWidget* t : w.findChildren<QTabWidget*>())
+        for (int i = 0; i < t->count(); ++i)
+            if (t->tabText(i) == QLatin1String("3D Preview")) {
+                ribbon = t;
+                tab = i;
+            }
+    check(ribbon && tab >= 0 && ribbon->tabText(tab - 1) == QLatin1String("View"), "3d preview: a tab of its own, next to View");
+    if (!ribbon) return;
+    auto* view3d = w.findChild<View3DPane*>(QStringLiteral("view3d"));
+    auto* host = w.findChild<QWidget*>(QStringLiteral("preview3dHost"));
+    auto* dock = w.findChild<QDockWidget*>(QStringLiteral("view3dDock"));
+    ribbon->setCurrentIndex(tab);
+    QApplication::processEvents();
+    check(view3d && host && view3d->parentWidget() == host && host->isVisible(), "3d preview: open - the 3D view where the drawing was");
+    check(dock && dock->widget() != view3d && !dock->isVisible(), "3d preview: out of its panel while it is there");
+    auto* stretch = w.findChild<QToolButton*>(QStringLiteral("preview3dStretch"));
+    check(stretch && !stretch->icon().isNull() && stretch->toolButtonStyle() == Qt::ToolButtonTextUnderIcon,
+          "3d preview: its commands as pictures, their names under them");
+    if (stretch) stretch->click();
+    check(view3d && view3d->routeTool() == RouteTool::Stretch, "3d preview: Stretch on the tab - the 3D view's tool");
+    view3d->setRouteTool(RouteTool::Clip);
+    auto* clip = w.findChild<QToolButton*>(QStringLiteral("preview3dClip"));
+    check(clip && clip->isChecked(), "3d preview: the tool chosen in the view - pressed in on the tab too");
+    ribbon->setCurrentIndex(tab - 1);
+    QApplication::processEvents();
+    check(dock && dock->widget() == view3d && host && !host->isVisible(), "3d preview: another tab - the drawing back, the 3D view in its panel");
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -7461,6 +7574,7 @@ int run_brickharness_tests() {
     testRoundFortyNine();
     testRoundFifty();
     testRoundFiftyOne();
+    testRoundFiftyTwo();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }
