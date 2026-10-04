@@ -78,12 +78,23 @@ QString Route3D::freshId(const QString& prefix) const {
     return prefix + QString::number(most + 1);
 }
 
+bool Route3D::aimNode(const QString& id, const V3& dir, double spinDeg) {
+    for (RouteNode3D& n : nodes) {
+        if (n.id != id) continue;
+        n.normal = dir.length() < 1e-9 ? n.face : unitOr(dir, n.face);
+        n.spinDeg = spinDeg;
+        return true;
+    }
+    return false;
+}
+
 QString Route3D::addNode(RouteNodeKind kind, const V3& at, const V3& normal) {
     RouteNode3D n;
     n.id = freshId(QStringLiteral("n"));
     n.kind = kind;
     n.at = at;
     n.normal = unitOr(normal, {0.0, 0.0, 1.0});
+    n.face = n.normal;
     // LABELLED IN TURN by its kind, after the highest of that kind there is.
     const QString prefix = kind == RouteNodeKind::Connector ? QStringLiteral("X") : kind == RouteNodeKind::Clip ? QStringLiteral("C") : QStringLiteral("B");
     int most = 0;
@@ -231,6 +242,9 @@ QJsonObject Route3D::toJson() const {
         j[QStringLiteral("label")] = n.label;
         j[QStringLiteral("at")] = v3Json(n.at);
         j[QStringLiteral("normal")] = v3Json(n.normal);
+        // Turned from its face, and round its axis - written only where it has been.
+        if ((n.face - n.normal).length() > 1e-9) j[QStringLiteral("face")] = v3Json(n.face);
+        if (std::abs(n.spinDeg) > 1e-9) j[QStringLiteral("spin")] = n.spinDeg;
         if (!n.brick.isEmpty()) {
             j[QStringLiteral("brick")] = n.brick;
             j[QStringLiteral("part")] = n.part;
@@ -267,6 +281,8 @@ Route3D Route3D::fromJson(const QJsonObject& o) {
         n.label = j.value(QStringLiteral("label")).toString();
         n.at = v3From(j.value(QStringLiteral("at")));
         n.normal = unitOr(v3From(j.value(QStringLiteral("normal")), {0, 0, 1}), {0, 0, 1});
+        n.face = j.contains(QStringLiteral("face")) ? unitOr(v3From(j.value(QStringLiteral("face")), n.normal), n.normal) : n.normal;
+        n.spinDeg = j.value(QStringLiteral("spin")).toDouble(0.0);
         n.brick = j.value(QStringLiteral("brick")).toString();
         n.part = j.value(QStringLiteral("part")).toString();
         if (!n.id.isEmpty()) r.nodes.push_back(n);

@@ -15,10 +15,25 @@ V3 Camera3D::eye() const {
 
 void Camera3D::axes(V3& right, V3& up, V3& forward) const {
     forward = (target - eye()).normalized();
-    const V3 worldUp{0, 0, 1};
-    right = cross3(forward, worldUp).normalized();
-    if (right.length() < 0.5) right = V3{1, 0, 0};
+    // RIGHT FROM THE YAW ALONE, not from the world's upright: the same at every pitch, so the view goes on over the
+    // top - and comes up the other side upside down - instead of flipping round where it looks straight down.
+    const double y = yawDeg * M_PI / 180.0;
+    right = V3{-std::sin(y), std::cos(y), 0.0};
     up = cross3(right, forward).normalized();
+    // ROLLED round the way it looks.
+    if (std::abs(rollDeg) > 1e-9) {
+        const double r = rollDeg * M_PI / 180.0, cr = std::cos(r), sr = std::sin(r);
+        const V3 r0 = right, u0 = up;
+        right = r0 * cr + u0 * sr;
+        up = u0 * cr - r0 * sr;
+    }
+}
+
+double wrapDegrees(double deg) {
+    double d = std::fmod(deg, 360.0);
+    if (d <= -180.0) d += 360.0;
+    if (d > 180.0) d -= 360.0;
+    return d;
 }
 
 void Camera3D::fit(const V3& lo, const V3& hi, double aspect) {

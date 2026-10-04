@@ -21,6 +21,7 @@ class QDoubleSpinBox;
 class QLabel;
 class QListWidget;
 class QSlider;
+class QSpinBox;
 class QTableWidget;
 class QThread;
 class QToolButton;
@@ -100,6 +101,15 @@ public:
     void undoRoute();
     // HOW TO WORK IN IT: the help window, its recordings and its steps.
     void showHelp();
+    // THE EXAMPLE the help works through, loaded as the environment: a plate, two boxes and a rib.
+    bool loadExample();
+    static QString exampleResource() { return QStringLiteral(":/help3d/example.obj"); }
+    // THE WHOLE SCREEN: the view, with every row and the side panel, filling it - and back.
+    void setFullScreen(bool on);
+    bool fullScreenView() const { return fullScreen_; }
+    // THE WORK PLANE a click lands on: -1 the model's faces (the ground where there is none), 0/1/2 a plane across X,
+    // Y or Z, at `at` along that axis.
+    void setWorkPlane(int axis, double at);
     // The file of the environment the drawing names, found or not.
     const QString& environmentFile() const { return envRef_; }
 
@@ -129,6 +139,11 @@ private:
     void saveRouting();
     void refreshRoute();
     void beforeRouteChange();
+    // The turn, tilt and roll boxes brought into step with the camera.
+    void syncCamera();
+    // The connector selected - how it points, and how it is turned - into its boxes; and the boxes into it.
+    void syncConnector();
+    void applyAim(const V3& dir, double spinDeg);
 
     std::function<std::vector<Entity>()> drawing_, wizard_;
     std::function<QString(const QString&)> modelOf_;
@@ -181,6 +196,25 @@ private:
     QToolButton* lengths_ = nullptr;
     bool filling_ = false;
     QPointer<View3DHelpDialog> help_;
+    // The whole screen. Not saved.
+    bool fullScreen_ = false;
+    Qt::WindowFlags normalFlags_;
+    QToolButton* fullBtn_ = nullptr;
+    // The camera's three turns, in degrees, all the way round.
+    QSpinBox* turn_ = nullptr;
+    QSpinBox* tilt_ = nullptr;
+    QSpinBox* roll_ = nullptr;
+    // The work plane. Not saved.
+    QWidget* planeRow_ = nullptr;
+    QComboBox* plane_ = nullptr;
+    QDoubleSpinBox* planeAt_ = nullptr;
+    // The connector selected.
+    QWidget* connBox_ = nullptr;
+    QLabel* connSaid_ = nullptr;
+    QComboBox* aim_ = nullptr;
+    QSpinBox* aimTurn_ = nullptr;
+    QSpinBox* aimTilt_ = nullptr;
+    QSpinBox* spin_ = nullptr;
 };
 
 // The picture itself, and the mouse on it.
@@ -236,6 +270,11 @@ public:
     bool surfaceAt(const QPointF& at, V3& point, V3& normal);
     // Where a point in space is drawn in the picture; false behind the eye.
     bool toScreen(const V3& p, QPointF& at) const;
+    // THE WORK PLANE: a click lands on it rather than on the model - a plane across X, Y or Z (`axis` 0, 1, 2) at `at`
+    // along it, drawn see-through so it is seen where it is; -1, none.
+    void setWorkPlane(int axis, double at);
+    int workPlaneAxis() const { return planeAxis_; }
+    double workPlaneAt() const { return planeAt_; }
 
 signals:
     void picked(const Pick3D& pick);
@@ -243,6 +282,10 @@ signals:
     void routeChanged();
     void selectionChanged(const QString& segment);
     void undoRequested();
+    // The camera turned, moved or zoomed.
+    void cameraChanged();
+    // Esc with nothing being laid.
+    void escapePressed();
 
 protected:
     void paintEvent(QPaintEvent*) override;
@@ -303,6 +346,11 @@ private:
     Mesh3D layMesh_;
     // The release that ends a double-click is not another click.
     bool swallowRelease_ = false;
+    // The work plane. Not saved.
+    int planeAxis_ = -1;
+    double planeAt_ = 0.0;
+    mutable Mesh3D planeMesh_;
+    mutable bool planeDirty_ = true;
 };
 
 } // namespace Edraw_Desktop

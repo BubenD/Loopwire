@@ -45,6 +45,7 @@
 #include <QWheelEvent>
 #include <QElapsedTimer>
 #include <QSlider>
+#include <QVBoxLayout>
 #include <QImageReader>
 #include <QMovie>
 #include <QPainter>
@@ -6504,7 +6505,7 @@ void testRoundFortyFive() {
         if (help) help->click();
         QApplication::processEvents();
         auto* dlg = pane.findChild<View3DHelpDialog*>();
-        check(dlg && dlg->isVisible() && dlg->topicCount() == 3, "3d help: it opens, three topics");
+        check(dlg && dlg->isVisible() && dlg->topicCount() >= 10, "3d help: it opens, a topic for each thing to learn");
         for (const QString& rec : View3DHelpDialog::recordings()) {
             QImageReader r(rec);
             std::printf("  3d help: %s - %d picture(s)\n", qPrintable(rec), r.imageCount());
@@ -6519,6 +6520,196 @@ void testRoundFortyFive() {
                   "3d help: a topic chosen plays its own recording");
             dlg->close();
         }
+    }
+}
+
+// ROUND FORTY-SIX: THE 3D VIEW TO WORK IN - turned all the way round on every axis, on the whole screen, a work plane to
+// lay a bundle through the air at a height, a connector pointed and spun any way, and help that teaches it.
+void testRoundFortySix() {
+    // ---- ALL THE WAY ROUND ----
+    {
+        Camera3D cam;
+        cam.yawDeg = 30.0;
+        cam.pitchDeg = 120.0;   // past the top
+        V3 r, u, f;
+        cam.axes(r, u, f);
+        const bool orthonormal = std::abs(r.length() - 1.0) < 1e-9 && std::abs(u.length() - 1.0) < 1e-9 &&
+                                 std::abs(dot3(r, u)) < 1e-9 && std::abs(dot3(r, f)) < 1e-9 && std::abs(dot3(u, f)) < 1e-9;
+        check(orthonormal && u.z < 0.0, "3d camera: tilted past the top it goes on over, upside down - no stop, no flip");
+        // Either side of straight down, the picture turns smoothly: right is the same at 89 and at 91.
+        Camera3D a = cam, b = cam;
+        a.pitchDeg = 89.0;
+        b.pitchDeg = 91.0;
+        V3 ra, ua, fa, rb, ub, fb;
+        a.axes(ra, ua, fa);
+        b.axes(rb, ub, fb);
+        check((ra - rb).length() < 1e-9 && (ua - ub).length() < 0.1, "3d camera: over the top without a jump");
+        Camera3D rolled = cam;
+        rolled.rollDeg = 90.0;
+        V3 rr, ru, rf;
+        rolled.axes(rr, ru, rf);
+        check((rr - u).length() < 1e-9 && (rf - f).length() < 1e-9, "3d camera: rolled round the way it looks");
+        check(std::abs(wrapDegrees(190.0) + 170.0) < 1e-9 && std::abs(wrapDegrees(-190.0) - 170.0) < 1e-9,
+              "3d camera: angles kept to one turn either way");
+    }
+    View3DPane pane;
+    pane.setEnvironmentChoice(true);
+    pane.resize(1000, 640);
+    pane.show();
+    QApplication::processEvents();
+    View3DCanvas* canvas = pane.canvas();
+    canvas->setUseGpu(false);
+    {
+        // A drag down the picture tilts on past the top; the Tilt box says so; the boxes turn the camera.
+        canvas->viewFrom(QStringLiteral("iso"));
+        const QPointF c(canvas->width() / 2.0, canvas->height() / 2.0);
+        auto send = [&](QEvent::Type t, const QPointF& at, Qt::MouseButton b, Qt::MouseButtons held,
+                        Qt::KeyboardModifiers mods = Qt::NoModifier) {
+            QMouseEvent e(t, at, canvas->mapToGlobal(at), b, held, mods);
+            QApplication::sendEvent(canvas, &e);
+        };
+        send(QEvent::MouseButtonPress, c, Qt::LeftButton, Qt::LeftButton);
+        for (int i = 1; i <= 20; ++i) send(QEvent::MouseMove, c + QPointF(0, i * 12), Qt::NoButton, Qt::LeftButton);
+        send(QEvent::MouseButtonRelease, c + QPointF(0, 240), Qt::LeftButton, Qt::NoButton);
+        auto* tilt = pane.findChild<QSpinBox*>(QStringLiteral("view3dTilt"));
+        std::printf("  3d camera: dragged to pitch %.1f, the box says %d\n", canvas->camera().pitchDeg, tilt ? tilt->value() : -999);
+        check(canvas->camera().pitchDeg > 100.0 && tilt && tilt->value() == std::lround(canvas->camera().pitchDeg),
+              "3d camera: a drag tilts it on past the top, and the Tilt box follows");
+        const double yaw = canvas->camera().yawDeg;
+        send(QEvent::MouseButtonPress, c, Qt::LeftButton, Qt::LeftButton, Qt::ShiftModifier);
+        for (int i = 1; i <= 10; ++i) send(QEvent::MouseMove, c + QPointF(i * 10, 0), Qt::NoButton, Qt::LeftButton, Qt::ShiftModifier);
+        send(QEvent::MouseButtonRelease, c + QPointF(100, 0), Qt::LeftButton, Qt::NoButton, Qt::ShiftModifier);
+        check(std::abs(canvas->camera().rollDeg - 40.0) < 1e-6 && std::abs(canvas->camera().yawDeg - yaw) < 1e-9,
+              "3d camera: Shift and a drag rolls it, and only rolls it");
+        auto* turn = pane.findChild<QSpinBox*>(QStringLiteral("view3dTurn"));
+        if (turn) turn->setValue(170);
+        if (turn) turn->stepBy(1);   // on round past 180
+        check(turn && turn->value() == -175 && std::abs(canvas->camera().yawDeg + 175.0) < 1e-9,
+              "3d camera: the Turn box goes all the way round, and turns the camera");
+        canvas->viewFrom(QStringLiteral("iso"));
+        check(std::abs(canvas->camera().rollDeg) < 1e-9, "3d camera: a known view takes the roll off");
+    }
+
+    // ---- THE WORK PLANE ----
+    {
+        pane.setWorkPlane(2, 150.0);
+        V3 p, n;
+        const bool on = canvas->surfaceAt(QPointF(canvas->width() / 2.0, canvas->height() / 2.0), p, n);
+        check(on && std::abs(p.z - 150.0) < 1e-6 && std::abs(n.z) > 0.99, "3d work plane: a click lands at the plane's height");
+        auto* planeBox = pane.findChild<QComboBox*>(QStringLiteral("view3dWorkPlane"));
+        check(planeBox && planeBox->currentIndex() == 3, "3d work plane: the row says which plane");
+        pane.setWorkPlane(0, 42.0);
+        const bool onX = canvas->surfaceAt(QPointF(canvas->width() / 2.0, canvas->height() / 2.0), p, n);
+        check(onX && std::abs(p.x - 42.0) < 1e-6, "3d work plane: an upright plane across X, at its place");
+        pane.setWorkPlane(-1, 0.0);
+        canvas->surfaceAt(QPointF(canvas->width() / 2.0, canvas->height() / 2.0), p, n);
+        check(std::abs(p.z) < 1e-6, "3d work plane: none - on the ground again where there is no model");
+    }
+
+    // ---- A CONNECTOR POINTED AND SPUN ----
+    {
+        canvas->viewFrom(QStringLiteral("top"));
+        canvas->setRouteTool(RouteTool::Connector);
+        const QPointF c(canvas->width() / 2.0, canvas->height() / 2.0);
+        auto click = [&](const QPointF& at) {
+            QMouseEvent down(QEvent::MouseButtonPress, at, canvas->mapToGlobal(at), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QMouseEvent up(QEvent::MouseButtonRelease, at, canvas->mapToGlobal(at), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(canvas, &down);
+            QApplication::sendEvent(canvas, &up);
+            QApplication::processEvents();
+        };
+        click(c);
+        check(pane.route().nodes.size() == 1, "3d connector: put");
+        // Selected by a click on it with Select.
+        canvas->setRouteTool(RouteTool::Select);
+        const RouteNode3D n0 = pane.route().nodes.front();
+        QPointF at;
+        canvas->toScreen(n0.at + n0.normal * (pane.route().lead * 0.5), at);
+        click(at);
+        auto* box = pane.findChild<QWidget*>(QStringLiteral("view3dConnector"));
+        check(canvas->selectedNode() == n0.id && box && box->isVisible(), "3d connector: selected, its Connector box shown");
+        auto* aim = pane.findChild<QComboBox*>(QStringLiteral("view3dConnAim"));
+        auto choose = [&](int i) {
+            aim->setCurrentIndex(i);
+            emit aim->activated(i);
+            QApplication::processEvents();
+        };
+        choose(1);   // +X
+        check((pane.route().nodes.front().normal - V3{1, 0, 0}).length() < 1e-9, "3d connector: pointed along +X");
+        auto* turned = pane.findChild<QSpinBox*>(QStringLiteral("view3dConnTurn"));
+        auto* tilted = pane.findChild<QSpinBox*>(QStringLiteral("view3dConnTilt"));
+        turned->setValue(90);
+        tilted->setValue(30);
+        const V3 nn = pane.route().nodes.front().normal;
+        check(std::abs(nn.x) < 1e-6 && std::abs(nn.y - std::cos(M_PI / 6)) < 1e-6 && std::abs(nn.z - 0.5) < 1e-6 && aim->currentIndex() == 7,
+              "3d connector: turned and tilted any way - Points says so");
+        QKeyEvent r(QEvent::KeyPress, Qt::Key_R, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &r);
+        QApplication::processEvents();
+        auto* spun = pane.findChild<QSpinBox*>(QStringLiteral("view3dConnSpin"));
+        check(std::abs(pane.route().nodes.front().spinDeg - 90.0) < 1e-9 && spun->value() == 90, "3d connector: R spins it a quarter turn");
+        choose(0);
+        std::printf("  3d connector: back out of its face - normal %.2f %.2f %.2f, face %.2f %.2f %.2f, Points %d\n",
+                    pane.route().nodes.front().normal.x, pane.route().nodes.front().normal.y, pane.route().nodes.front().normal.z,
+                    pane.route().nodes.front().face.x, pane.route().nodes.front().face.y, pane.route().nodes.front().face.z,
+                    aim->currentIndex());
+        check((pane.route().nodes.front().normal - pane.route().nodes.front().face).length() < 1e-9 && aim->currentIndex() == 0,
+              "3d connector: pointed out of its face again");
+        // Kept: written, read back, and a drawing from before this read as it was.
+        choose(5);
+        const Route3D back = Route3D::fromJson(pane.route().toJson());
+        check(!back.nodes.empty() && (back.nodes.front().normal - V3{0, 0, 1}).length() < 1e-9 &&
+                  (back.nodes.front().face - n0.face).length() < 1e-9 && std::abs(back.nodes.front().spinDeg - 90.0) < 1e-9,
+              "3d connector: its pointing, its face and its spin saved");
+        QJsonObject old = pane.route().toJson();
+        QJsonArray ns = old.value(QStringLiteral("nodes")).toArray();
+        QJsonObject o = ns.at(0).toObject();
+        o.remove(QStringLiteral("face"));
+        o.remove(QStringLiteral("spin"));
+        ns.replace(0, o);
+        old.insert(QStringLiteral("nodes"), ns);
+        const Route3D before = Route3D::fromJson(old);
+        check((before.nodes.front().face - before.nodes.front().normal).length() < 1e-9 && before.nodes.front().spinDeg == 0.0,
+              "3d connector: a route saved before this reads as it was - out of its face, unspun");
+    }
+
+    // ---- THE WHOLE SCREEN ----
+    {
+        QWidget host;
+        auto* hl = new QVBoxLayout(&host);
+        auto* inside = new View3DPane(&host);
+        hl->addWidget(inside);
+        host.resize(800, 600);
+        host.show();
+        QApplication::processEvents();
+        auto* full = inside->findChild<QToolButton*>(QStringLiteral("view3dFullScreen"));
+        if (full) full->click();
+        QApplication::processEvents();
+        check(full && inside->fullScreenView() && inside->isWindow() && full->isChecked(),
+              "3d full screen: the view on a window of its own, the whole screen");
+        QKeyEvent esc(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QApplication::sendEvent(inside->canvas(), &esc);
+        QApplication::processEvents();
+        check(!inside->fullScreenView() && !inside->isWindow() && inside->parentWidget() == &host && !full->isChecked(),
+              "3d full screen: Esc puts it back where it was");
+    }
+
+    // ---- THE HELP ----
+    {
+        View3DHelpDialog help;
+        check(help.topicCount() >= 10, "3d help: a topic for each thing there is to learn");
+        int animated = 0;
+        for (const QString& rec : View3DHelpDialog::recordings()) {
+            QImageReader rd(rec);
+            if (QFile::exists(rec) && rd.imageCount() > 20) ++animated;
+        }
+        std::printf("  3d help: %d topic(s), %d recording(s) animated\n", help.topicCount(), animated);
+        check(animated == View3DHelpDialog::recordings().size() && animated >= 9, "3d help: every recording in the program");
+        bool asked = false;
+        QObject::connect(&help, &View3DHelpDialog::exampleRequested, [&] { asked = true; });
+        if (auto* ex = help.findChild<QPushButton*>(QStringLiteral("help3dExample"))) ex->click();
+        check(asked, "3d help: Open the example asks for it");
+        check(pane.loadExample() && pane.environment().parts.size() >= 1, "3d help: the example is a model the view loads");
     }
 }
 
@@ -6581,6 +6772,7 @@ int run_brickharness_tests() {
     testRoundFortyThree();
     testRoundFortyFour();
     testRoundFortyFive();
+    testRoundFortySix();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

@@ -22,6 +22,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QSlider>
+#include <QSpinBox>
 #include <QTableWidget>
 #include <QTextStream>
 #include <QWheelEvent>
@@ -117,16 +118,32 @@ public:
         hold(7);
     }
     // A DRAG over the picture, with the button held: turning it (left) or moving it (right).
-    void drag(Qt::MouseButton button, const QPointF& by, int steps = 24) {
-        send(QEvent::MouseButtonPress, canvasPoint(), button, button);
+    void drag(Qt::MouseButton button, const QPointF& by, int steps = 24, Qt::KeyboardModifiers mods = Qt::NoModifier) {
+        send(QEvent::MouseButtonPress, canvasPoint(), button, button, mods);
         const QPointF from = cursor_;
         for (int i = 1; i <= steps; ++i) {
             cursor_ = from + by * (static_cast<double>(i) / steps);
-            send(QEvent::MouseMove, canvasPoint(), Qt::NoButton, button);
+            send(QEvent::MouseMove, canvasPoint(), Qt::NoButton, button, mods);
             frame(4);
         }
-        send(QEvent::MouseButtonRelease, canvasPoint(), button, Qt::NoButton);
+        send(QEvent::MouseButtonRelease, canvasPoint(), button, Qt::NoButton, mods);
         hold(3);
+    }
+    // Pictures taken or not: the setting up of a recording about something else is not part of it.
+    void recording(bool on) { recording_ = on; }
+    // A key held while dragging, shown as one.
+    void showKey(const QString& said, int frames) {
+        key_ = said;
+        keyFor_ = frames;
+    }
+    void spinTo(QSpinBox* s, int to, int steps = 10) {
+        moveTo(centreOf(s), 12);
+        const int from = s->value();
+        for (int i = 1; i <= steps; ++i) {
+            s->setValue(from + (to - from) * i / steps);
+            frame(6);
+        }
+        hold(8);
     }
     void wheel(int notches) {
         for (int i = 0; i < std::abs(notches); ++i) {
@@ -187,8 +204,9 @@ public:
 
 private:
     QPointF canvasPoint() const { return QPointF(canvas_->mapFrom(pane_, cursor_.toPoint())); }
-    void send(QEvent::Type type, const QPointF& local, Qt::MouseButton b, Qt::MouseButtons held) {
-        QMouseEvent e(type, local, canvas_->mapToGlobal(local), b, held, Qt::NoModifier);
+    void send(QEvent::Type type, const QPointF& local, Qt::MouseButton b, Qt::MouseButtons held,
+              Qt::KeyboardModifiers mods = Qt::NoModifier) {
+        QMouseEvent e(type, local, canvas_->mapToGlobal(local), b, held, mods);
         QApplication::sendEvent(canvas_, &e);
     }
     void hover() {
@@ -197,6 +215,7 @@ private:
 
     void frame(int delayCs) {
         QApplication::processEvents();
+        if (!recording_) return;
         QImage img = pane_->grab().toImage().convertToFormat(QImage::Format_RGB32);
         QPainter p(&img);
         p.setRenderHint(QPainter::Antialiasing, true);
@@ -261,6 +280,7 @@ private:
     QString key_;
     int keyFor_ = 0;
     int ripple_ = 0;
+    bool recording_ = true;
     std::vector<gif::Frame> frames_;
 };
 
@@ -284,7 +304,50 @@ struct Scene {
 // THE CONNECTORS AND THE WAY ROUND THE RIB, in the model's millimetres.
 const V3 kOnDevice{160, 210, 30};
 const V3 kOnBox{500, 120, 25};
+const V3 kOnBoxSide{440, 175, 35};
 const V3 kCorners[] = {{235, 210, 0}, {235, 350, 0}, {340, 350, 0}, {390, 45, 0}};
+
+// Where a node of the route is drawn - what a click on it has to hit - by its label.
+V3 nodePoint(const View3DPane& pane, const QString& label) {
+    const Route3D& r = pane.route();
+    for (const RouteNode3D& n : r.nodes)
+        if (n.label == label)
+            return n.kind == RouteNodeKind::Connector ? n.at + n.normal * (r.lead * 0.5) : n.at + n.normal * (r.diameter * 0.5);
+    return {};
+}
+
+// A point on the first cable, `u` of the way along it.
+V3 cablePoint(const View3DPane& pane, double u) {
+    const Route3D& r = pane.route();
+    if (r.segments.empty()) return {};
+    const std::vector<V3> c = r.centreline(r.segments.front());
+    double total = 0.0;
+    for (size_t i = 1; i < c.size(); ++i) total += (c[i] - c[i - 1]).length();
+    double want = total * u, acc = 0.0;
+    for (size_t i = 1; i < c.size(); ++i) {
+        const double seg = (c[i] - c[i - 1]).length();
+        if (acc + seg >= want && seg > 1e-9) return c[i - 1] + (c[i] - c[i - 1]) * ((want - acc) / seg);
+        acc += seg;
+    }
+    return c.empty() ? V3{} : c.back();
+}
+
+// THE TWO CONNECTORS AND A CABLE BETWEEN THEM, put quickly - the start of a recording about something else.
+void quickRoute(Recorder& r, Scene& s, bool cable) {
+    r.recording(false);
+    r.press(s.child<QAbstractButton>("view3dToolConnector"));
+    r.clickAt(kOnDevice, 3);
+    r.clickAt(kOnBox, 3);
+    if (!cable) {
+        r.recording(true);
+        return;
+    }
+    r.press(s.child<QAbstractButton>("view3dToolRoute"));
+    r.clickAt(kOnDevice, 3);
+    for (const V3& c : kCorners) r.clickAt(c, 3);
+    r.clickAt(kOnBox, 3);
+    r.recording(true);
+}
 
 } // namespace
 
@@ -385,6 +448,158 @@ int main(int argc, char** argv) {
         r.hold(20);
         failed += !r.save(QDir(outDir).filePath(QStringLiteral("bend.gif")));
     }
+    // ---- GETTING STARTED: THE WHOLE OF IT ONCE --------------------------------------------------------------------
+    {
+        Scene s(model);
+        Recorder r(&s.pane, scale);
+        r.say(QStringLiteral("1  The model: Environment - Load... (here, the example)"));
+        r.moveTo(r.centreOf(s.child<QAbstractButton>("view3dEnvLoad")), 14);
+        r.hold(14);
+        r.say(QStringLiteral("2  Connector: click the face each end sits on"));
+        r.press(s.child<QAbstractButton>("view3dToolConnector"));
+        r.clickAt(kOnDevice);
+        r.clickAt(kOnBox);
+        r.say(QStringLiteral("3  Route: first connector, the corners, the other connector"));
+        r.press(s.child<QAbstractButton>("view3dToolRoute"));
+        r.clickAt(kOnDevice);
+        for (const V3& c : kCorners) r.clickAt(c, 12);
+        r.clickAt(kOnBox, 12);
+        r.say(QStringLiteral("4  Its length is in the table"));
+        r.moveTo(r.centreOf(s.child<QTableWidget>("view3dRoutes")), 14);
+        r.hold(30);
+        failed += !r.save(QDir(outDir).filePath(QStringLiteral("start.gif")));
+    }
+
+    // ---- THE VIEW, ALL THE WAY ROUND ------------------------------------------------------------------------------
+    {
+        Scene s(model);
+        Recorder r(&s.pane, scale);
+        r.moveTo(r.at({300, 200, 40}), 6);
+        r.say(QStringLiteral("Drag left and right: it turns - all the way round"));
+        for (int i = 0; i < 3; ++i) {
+            r.drag(Qt::LeftButton, QPointF(300, 0), 20);
+            r.moveTo(r.at({300, 200, 40}) - QPointF(150, 0), 6);
+        }
+        r.say(QStringLiteral("Drag up and down: it tilts - over the top and underneath"));
+        r.moveTo(r.at({300, 200, 40}) - QPointF(0, 150), 8);
+        for (int i = 0; i < 3; ++i) {
+            r.drag(Qt::LeftButton, QPointF(0, 300), 20);
+            r.moveTo(r.at({300, 200, 40}) - QPointF(0, 150), 6);
+        }
+        r.press(s.child<QAbstractButton>("view3dIso"));
+        r.say(QStringLiteral("Shift + drag: it rolls round the way it looks"));
+        r.moveTo(r.at({300, 200, 40}) - QPointF(150, 0), 8);
+        r.showKey(QStringLiteral("Shift"), 26);
+        r.drag(Qt::LeftButton, QPointF(300, 0), 24, Qt::ShiftModifier);
+        r.say(QStringLiteral("Turn, Tilt and Roll: the same, in degrees"));
+        r.spinTo(s.child<QSpinBox>("view3dRoll"), 0, 6);
+        r.spinTo(s.child<QSpinBox>("view3dTurn"), 120, 10);
+        r.spinTo(s.child<QSpinBox>("view3dTilt"), -30, 10);
+        r.say(QStringLiteral("Iso, Top, Front, Side bring it back"));
+        r.press(s.child<QAbstractButton>("view3dTop"));
+        r.hold(6);
+        r.press(s.child<QAbstractButton>("view3dIso"));
+        r.hold(14);
+        failed += !r.save(QDir(outDir).filePath(QStringLiteral("view.gif")));
+    }
+
+    // ---- ROUTING UP AND DOWN: THE WORK PLANE ----------------------------------------------------------------------
+    {
+        Scene s(model);
+        Recorder r(&s.pane, scale);
+        quickRoute(r, s, false);
+        r.say(QStringLiteral("Route: start at the connector"));
+        r.press(s.child<QAbstractButton>("view3dToolRoute"));
+        r.clickAt(kOnDevice);
+        r.say(QStringLiteral("Clicks land on: a level plane - set its height"));
+        r.choose(s.child<QComboBox>("view3dWorkPlane"), 3);
+        r.spinTo(s.child<QDoubleSpinBox>("view3dWorkPlaneAt"), 150.0, 12);
+        r.say(QStringLiteral("Each click lands at that height - in the air"));
+        r.clickAt({230, 210, 150}, 14);
+        r.clickAt({330, 300, 150}, 14);
+        r.clickAt({470, 300, 150}, 14);
+        r.say(QStringLiteral("An upright plane: clicks go up and down it"));
+        r.choose(s.child<QComboBox>("view3dWorkPlane"), 2);
+        r.spinTo(s.child<QDoubleSpinBox>("view3dWorkPlaneAt"), 60.0, 10);
+        r.clickAt({500, 60, 120}, 14);
+        r.clickAt({500, 60, 40}, 14);
+        r.say(QStringLiteral("Back to the model's faces - click the connector"));
+        r.choose(s.child<QComboBox>("view3dWorkPlane"), 0);
+        r.clickAt(kOnBox, 14);
+        r.hold(26);
+        failed += !r.save(QDir(outDir).filePath(QStringLiteral("workplane.gif")));
+    }
+
+    // ---- CONNECTORS: PUTTING AND TURNING ---------------------------------------------------------------------------
+    {
+        Scene s(model);
+        Recorder r(&s.pane, scale);
+        quickRoute(r, s, true);
+        // Close in on it: a connector is small beside the model.
+        s.pane.canvas()->fitBox({90, 150, 0}, {300, 290, 90});
+        r.say(QStringLiteral("Select the connector"));
+        r.press(s.child<QAbstractButton>("view3dToolSelect"));
+        r.clickAt(nodePoint(s.pane, QStringLiteral("X1")));
+        r.hold(6);
+        r.say(QStringLiteral("Points: along an axis - here, up"));
+        r.choose(s.child<QComboBox>("view3dConnAim"), 5);
+        r.hold(8);
+        r.say(QStringLiteral("Turned and Tilted: point it any way at all"));
+        r.spinTo(s.child<QSpinBox>("view3dConnTurn"), 45, 8);
+        r.spinTo(s.child<QSpinBox>("view3dConnTilt"), 20, 8);
+        r.say(QStringLiteral("Spun: round its own axis - R, a quarter turn"));
+        r.moveTo(r.at(nodePoint(s.pane, QStringLiteral("X1"))) + QPointF(40, 40), 10);
+        r.key(Qt::Key_R, QStringLiteral("R"));
+        r.key(Qt::Key_R, QStringLiteral("R"));
+        r.say(QStringLiteral("Points: out of its face - as it was put"));
+        r.choose(s.child<QComboBox>("view3dConnAim"), 0);
+        r.hold(20);
+        failed += !r.save(QDir(outDir).filePath(QStringLiteral("connector.gif")));
+    }
+
+    // ---- BRANCH -----------------------------------------------------------------------------------------------------
+    {
+        Scene s(model);
+        Recorder r(&s.pane, scale);
+        quickRoute(r, s, true);
+        r.recording(false);
+        r.press(s.child<QAbstractButton>("view3dToolConnector"));
+        r.clickAt(kOnBoxSide, 3);
+        r.recording(true);
+        r.say(QStringLiteral("Branch: click the cable where it divides"));
+        r.press(s.child<QAbstractButton>("view3dToolBranch"));
+        r.clickAt(cablePoint(s.pane, 0.72));
+        r.hold(6);
+        r.say(QStringLiteral("Route: from the branch to the next connector"));
+        r.press(s.child<QAbstractButton>("view3dToolRoute"));
+        r.clickAt(nodePoint(s.pane, QStringLiteral("B1")));
+        r.clickAt(nodePoint(s.pane, QStringLiteral("X3")), 16);
+        r.hold(6);
+        r.say(QStringLiteral("Each piece has its own length"));
+        r.moveTo(r.centreOf(s.child<QTableWidget>("view3dRoutes")), 14);
+        r.hold(30);
+        failed += !r.save(QDir(outDir).filePath(QStringLiteral("branch.gif")));
+    }
+
+    // ---- CLIP ---------------------------------------------------------------------------------------------------------
+    {
+        Scene s(model);
+        Recorder r(&s.pane, scale);
+        quickRoute(r, s, true);
+        r.say(QStringLiteral("Clip: click the cable where it is held"));
+        r.press(s.child<QAbstractButton>("view3dToolClip"));
+        r.clickAt(cablePoint(s.pane, 0.35));
+        r.clickAt(cablePoint(s.pane, 0.6), 14);
+        r.hold(6);
+        r.say(QStringLiteral("Each piece's length: to the clip, clip to clip"));
+        r.moveTo(r.centreOf(s.child<QTableWidget>("view3dRoutes")), 14);
+        r.hold(30);
+        failed += !r.save(QDir(outDir).filePath(QStringLiteral("clip.gif")));
+    }
+
+    // THE EXAMPLE, for the help's "Open the example": the model all of the above were recorded on.
+    QFile::remove(QDir(outDir).filePath(QStringLiteral("example.obj")));
+    failed += !QFile::copy(model, QDir(outDir).filePath(QStringLiteral("example.obj")));
     QFile::remove(model);
     return failed;
 }

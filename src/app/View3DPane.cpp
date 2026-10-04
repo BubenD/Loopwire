@@ -8,6 +8,8 @@
 #include <QDoubleSpinBox>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFile>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QKeyEvent>
@@ -17,8 +19,10 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QSettings>
+#include <QShortcut>
 #include <QSlider>
 #include <QSplitter>
+#include <QSpinBox>
 #include <QTableWidget>
 #include <QThread>
 #include <QToolButton>
@@ -29,6 +33,21 @@
 #include <cmath>
 
 namespace Edraw_Desktop {
+
+namespace {
+// AN ANGLE BOX: a step past 180 comes round to -179 and on, as an angle does - not to a stop at the end.
+class AngleSpinBox : public QSpinBox {
+public:
+    using QSpinBox::QSpinBox;
+    void stepBy(int steps) override {
+        if (!wrapping()) {
+            QSpinBox::stepBy(steps);
+            return;
+        }
+        setValue(static_cast<int>(std::lround(wrapDegrees(value() + steps * singleStep()))));
+    }
+};
+} // namespace
 
 View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     setObjectName(QStringLiteral("view3d"));
@@ -77,7 +96,42 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     wire->setObjectName(QStringLiteral("view3dWireframe"));
     connect(wire, &QCheckBox::toggled, this, [this](bool on) { canvas_->setWireframe(on); });
     bar->addWidget(wire);
+    // THE VIEW'S THREE TURNS, in degrees, each all the way round: round the upright, up and over, and round the way it
+    // looks. The mouse does the same - a left drag turns and tilts, with Shift it rolls.
+    auto angle = [&](const char* name, const QString& label, const QString& tip) {
+        bar->addWidget(new QLabel(label, this));
+        auto* s = new AngleSpinBox(this);
+        s->setObjectName(QLatin1String(name));
+        s->setRange(-179, 180);   // -180 is 180: one stop for the one angle, so a step round wraps exactly
+        s->setWrapping(true);
+        s->setSingleStep(15);
+        s->setSuffix(QStringLiteral("°"));
+        s->setToolTip(tip);
+        s->setKeyboardTracking(false);
+        bar->addWidget(s);
+        return s;
+    };
+    turn_ = angle("view3dTurn", QStringLiteral("Turn"), QStringLiteral("Round the upright (Z), all the way round - or drag left and right"));
+    tilt_ = angle("view3dTilt", QStringLiteral("Tilt"), QStringLiteral("Up and over, all the way round - past the top it looks from the other "
+                                                                       "side, upside down - or drag up and down"));
+    roll_ = angle("view3dRoll", QStringLiteral("Roll"), QStringLiteral("Round the way it looks - or drag with Shift held"));
+    for (QSpinBox* s : {turn_, tilt_, roll_})
+        connect(s, &QSpinBox::valueChanged, this, [this] {
+            Camera3D& cam = canvas_->camera();
+            cam.yawDeg = turn_->value();
+            cam.pitchDeg = tilt_->value();
+            cam.rollDeg = roll_->value();
+            canvas_->update();
+        });
     bar->addStretch(1);
+    // THE WHOLE SCREEN, for routing with room to see: everything here goes with it. Esc, F11 or this again, back.
+    fullBtn_ = button(bar, "view3dFullScreen", QStringLiteral("Full screen"),
+                      QStringLiteral("The 3D view on the whole screen, with all its settings (F11; Esc to come back)"),
+                      [this] { setFullScreen(!fullScreen_); });
+    fullBtn_->setCheckable(true);
+    auto* f11 = new QShortcut(QKeySequence(Qt::Key_F11), this);
+    f11->setContext(Qt::WidgetWithChildrenShortcut);
+    connect(f11, &QShortcut::activated, this, [this] { setFullScreen(!fullScreen_); });
     lay->addLayout(bar);
 
     // THE ENVIRONMENT'S ROW: the model the harness is routed in, how it shows, and a section through it.
@@ -219,6 +273,62 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     rr->addStretch(1);
     lay->addWidget(routeRow_);
 
+    // THE WORK PLANE: where a click lands. On the model's faces (and the ground where there is no model) - or on a
+    // plane, level or upright, put at any height or place: how a bundle is laid through the air, up a riser, over a
+    // gap, at the height it really runs.
+    planeRow_ = new QWidget(this);
+    auto* pr = new QHBoxLayout(planeRow_);
+    pr->setContentsMargins(0, 0, 0, 0);
+    pr->setSpacing(3);
+    pr->addWidget(new QLabel(QStringLiteral("Clicks land on:"), planeRow_));
+    plane_ = new QComboBox(planeRow_);
+    plane_->setObjectName(QStringLiteral("view3dWorkPlane"));
+    plane_->addItems({QStringLiteral("the model's faces (the ground, Z = 0, beyond it)"), QStringLiteral("a plane across X (upright)"),
+                      QStringLiteral("a plane across Y (upright)"), QStringLiteral("a plane across Z (level - a height)")});
+    plane_->setToolTip(QStringLiteral("Where a click lands. A plane: the points of a bundle at that height (Z) or place (X, Y), in "
+                                      "the air if need be - drawn see-through where it is"));
+    pr->addWidget(plane_);
+    pr->addWidget(new QLabel(QStringLiteral("at"), planeRow_));
+    planeAt_ = new QDoubleSpinBox(planeRow_);
+    planeAt_->setObjectName(QStringLiteral("view3dWorkPlaneAt"));
+    planeAt_->setRange(-100000.0, 100000.0);
+    planeAt_->setDecimals(1);
+    planeAt_->setSingleStep(10.0);
+    planeAt_->setSuffix(QStringLiteral(" mm"));
+    planeAt_->setKeyboardTracking(false);
+    planeAt_->setToolTip(QStringLiteral("Where the plane is along its axis - for a level plane, its height"));
+    pr->addWidget(planeAt_);
+    button(pr, "view3dWorkPlaneHere", QStringLiteral("Through the point picked"),
+           QStringLiteral("The plane put through the node selected, or the point last picked on the model"), [this] {
+               const int axis = plane_->currentIndex() - 1;
+               if (axis < 0) return;
+               V3 p;
+               bool have = false;
+               if (const RouteNode3D* n = route_.node(canvas_->selectedNode())) {
+                   p = n->at;
+                   have = true;
+               } else if (canvas_->lastPick().hit) {
+                   p = canvas_->lastPick().point;
+                   have = true;
+               }
+               if (have) planeAt_->setValue(axis == 0 ? p.x : axis == 1 ? p.y : p.z);
+           });
+    pr->addStretch(1);
+    lay->addWidget(planeRow_);
+    connect(plane_, &QComboBox::currentIndexChanged, this, [this](int i) {
+        // A plane chosen afresh is put through the middle of the model, where it can be seen to be.
+        const int axis = i - 1;
+        V3 lo, hi;
+        if (axis >= 0 && env_.bounds(lo, hi)) {
+            const QSignalBlocker hold(planeAt_);
+            const double mid = axis == 0 ? (lo.x + hi.x) / 2 : axis == 1 ? (lo.y + hi.y) / 2 : (lo.z + hi.z) / 2;
+            planeAt_->setValue(mid);
+        }
+        canvas_->setWorkPlane(axis, planeAt_->value());
+    });
+    connect(planeAt_, &QDoubleSpinBox::valueChanged, this,
+            [this](double v) { canvas_->setWorkPlane(plane_->currentIndex() - 1, v); });
+
     // THE PICTURE, and beside it the bundles with their lengths.
     auto* split = new QSplitter(Qt::Horizontal, this);
     canvas_ = new View3DCanvas(split);
@@ -252,6 +362,57 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
                       [this] { applyLengths(true); });
     linkRow->addStretch(1);
     sl->addLayout(linkRow);
+    // THE CONNECTOR SELECTED, TURNED: which way it points - the way its bundle leaves it - and how it is turned round
+    // that, a rectangular housing lying one way or another. Shown while a connector is selected.
+    connBox_ = new QWidget(side_);
+    connBox_->setObjectName(QStringLiteral("view3dConnector"));
+    auto* cg = new QGridLayout(connBox_);
+    cg->setContentsMargins(0, 4, 0, 4);
+    cg->setHorizontalSpacing(4);
+    cg->setVerticalSpacing(2);
+    connSaid_ = new QLabel(connBox_);
+    cg->addWidget(connSaid_, 0, 0, 1, 2);
+    cg->addWidget(new QLabel(QStringLiteral("Points"), connBox_), 1, 0);
+    aim_ = new QComboBox(connBox_);
+    aim_->setObjectName(QStringLiteral("view3dConnAim"));
+    aim_->addItems({QStringLiteral("out of its face"), QStringLiteral("+X"), QStringLiteral("-X"), QStringLiteral("+Y"),
+                    QStringLiteral("-Y"), QStringLiteral("+Z (up)"), QStringLiteral("-Z (down)"), QStringLiteral("as turned")});
+    aim_->setToolTip(QStringLiteral("Which way it points - the way its bundle leaves it"));
+    cg->addWidget(aim_, 1, 1);
+    auto connSpin = [&](const char* name, const QString& label, int lo, int hi, bool wrap, const QString& tip, int row) {
+        cg->addWidget(new QLabel(label, connBox_), row, 0);
+        QSpinBox* s = wrap ? new AngleSpinBox(connBox_) : new QSpinBox(connBox_);
+        s->setObjectName(QLatin1String(name));
+        s->setRange(lo, hi);
+        s->setWrapping(wrap);
+        s->setSingleStep(15);
+        s->setSuffix(QStringLiteral("°"));
+        s->setKeyboardTracking(false);
+        s->setToolTip(tip);
+        cg->addWidget(s, row, 1);
+        return s;
+    };
+    aimTurn_ = connSpin("view3dConnTurn", QStringLiteral("Turned"), -179, 180, true,
+                        QStringLiteral("The way it points, round the upright (Z), all the way round"), 2);
+    aimTilt_ = connSpin("view3dConnTilt", QStringLiteral("Tilted"), -90, 90, false,
+                        QStringLiteral("The way it points, up (+) or down (-) from level"), 3);
+    spin_ = connSpin("view3dConnSpin", QStringLiteral("Spun"), -179, 180, true,
+                     QStringLiteral("Round its own axis: how its housing lies (R in the picture: a quarter turn)"), 4);
+    connBox_->setVisible(false);
+    sl->addWidget(connBox_);
+    connect(aim_, &QComboBox::activated, this, [this](int i) {
+        static const V3 dirs[] = {{0, 0, 0}, {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+        if (i >= 0 && i < 7) applyAim(dirs[i], spin_->value());
+    });
+    for (QSpinBox* s : {aimTurn_, aimTilt_})
+        connect(s, &QSpinBox::valueChanged, this, [this] {
+            const double t = aimTurn_->value() * M_PI / 180.0, p = aimTilt_->value() * M_PI / 180.0;
+            applyAim(V3{std::cos(p) * std::cos(t), std::cos(p) * std::sin(t), std::sin(p)}, spin_->value());
+        });
+    connect(spin_, &QSpinBox::valueChanged, this, [this](int v) {
+        if (const RouteNode3D* n = route_.node(canvas_->selectedNode())) applyAim(n->normal, v);
+    });
+
     table_ = new QTableWidget(0, 3, side_);
     table_->setObjectName(QStringLiteral("view3dRoutes"));
     table_->setHorizontalHeaderLabels({QStringLiteral("Bundle"), QStringLiteral("Length"), QStringLiteral("Ø")});
@@ -292,6 +453,12 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
         setPartToPlace(it ? it->data(Qt::UserRole).toString() : QString());
     });
     connect(canvas_, &View3DCanvas::undoRequested, this, [this] { undoRoute(); });
+    connect(canvas_, &View3DCanvas::cameraChanged, this, [this] { syncCamera(); });
+    connect(canvas_, &View3DCanvas::escapePressed, this, [this] {
+        if (fullScreen_) setFullScreen(false);
+    });
+    connect(canvas_, &View3DCanvas::routeChanged, this, [this] { syncConnector(); });
+    connect(canvas_, &View3DCanvas::selectionChanged, this, [this] { syncConnector(); });
     connect(canvas_, &View3DCanvas::selectionChanged, this, [this](const QString& id) {
         const QSignalBlocker hold(table_);
         table_->clearSelection();
@@ -317,6 +484,85 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     });
     applySection();
     refreshRoute();
+    syncCamera();
+}
+
+void View3DPane::syncCamera() {
+    const Camera3D& cam = canvas_->camera();
+    const QSignalBlocker a(turn_), b(tilt_), c(roll_);
+    turn_->setValue(static_cast<int>(std::lround(wrapDegrees(cam.yawDeg))));
+    tilt_->setValue(static_cast<int>(std::lround(wrapDegrees(cam.pitchDeg))));
+    roll_->setValue(static_cast<int>(std::lround(wrapDegrees(cam.rollDeg))));
+}
+
+void View3DPane::syncConnector() {
+    const RouteNode3D* n = route_.node(canvas_->selectedNode());
+    const bool show = n && n->kind == RouteNodeKind::Connector && !routeRow_->isHidden();
+    connBox_->setVisible(show);
+    if (!show) return;
+    const QSignalBlocker a(aim_), b(aimTurn_), c(aimTilt_), d(spin_);
+    connSaid_->setText(QStringLiteral("<b>Connector %1</b>").arg(n->label.toHtmlEscaped()));
+    static const V3 dirs[] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+    int which = 7;
+    if ((n->normal - n->face).length() < 1e-6) which = 0;
+    else
+        for (int i = 0; i < 6; ++i)
+            if ((n->normal - dirs[i]).length() < 1e-6) which = i + 1;
+    aim_->setCurrentIndex(which);
+    aimTurn_->setValue(static_cast<int>(std::lround(std::atan2(n->normal.y, n->normal.x) * 180.0 / M_PI)));
+    aimTilt_->setValue(static_cast<int>(std::lround(std::asin(std::clamp(n->normal.z, -1.0, 1.0)) * 180.0 / M_PI)));
+    spin_->setValue(static_cast<int>(std::lround(wrapDegrees(n->spinDeg))));
+}
+
+void View3DPane::applyAim(const V3& dir, double spinDeg) {
+    const QString id = canvas_->selectedNode();
+    if (!route_.node(id)) return;
+    beforeRouteChange();
+    route_.aimNode(id, dir, wrapDegrees(spinDeg));
+    saveRouting();
+    refreshRoute();
+    canvas_->routeRedraw();
+    syncConnector();
+    emit routeChanged();
+}
+
+void View3DPane::setFullScreen(bool on) {
+    if (on == fullScreen_) return;
+    fullScreen_ = on;
+    if (on) {
+        // OUT OF WHEREVER IT IS - the dock, the wizard - as a window of its own on the whole screen; back where it was
+        // when it comes back.
+        normalFlags_ = windowFlags();
+        setWindowFlags(Qt::Window);
+        setWindowTitle(QStringLiteral("3D view"));
+        showFullScreen();
+    } else {
+        setWindowFlags(normalFlags_);
+        showNormal();
+        show();
+    }
+    const QSignalBlocker hold(fullBtn_);
+    fullBtn_->setChecked(on);
+    fullBtn_->setText(on ? QStringLiteral("Back") : QStringLiteral("Full screen"));
+    canvas_->setFocus();
+}
+
+void View3DPane::setWorkPlane(int axis, double at) {
+    {
+        const QSignalBlocker a(plane_), b(planeAt_);
+        plane_->setCurrentIndex(std::clamp(axis, -1, 2) + 1);
+        planeAt_->setValue(at);
+    }
+    canvas_->setWorkPlane(axis, at);
+}
+
+bool View3DPane::loadExample() {
+    // The resource copied out to a file of its own: a model is read from a file, and kept by its path.
+    const QString path = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw-3d-example.obj"));
+    QFile::remove(path);
+    if (!QFile::copy(exampleResource(), path)) return false;
+    QFile::setPermissions(path, QFile::ReadOwner | QFile::WriteOwner);
+    return loadEnvironment(path, true);
 }
 
 View3DPane::~View3DPane() {
@@ -336,13 +582,20 @@ void View3DPane::setSourceChoice(bool shown) { source_->setVisible(shown); }
 void View3DPane::setEnvironmentChoice(bool shown) {
     envRow_->setVisible(shown);
     routeRow_->setVisible(shown);
+    planeRow_->setVisible(shown);
     side_->setVisible(shown);
     canvas_->setRoute(shown ? &route_ : nullptr);
 }
 
 void View3DPane::showHelp() {
     // One window, kept: asked for again, it comes to the front where it was.
-    if (!help_) help_ = new View3DHelpDialog(this);
+    if (!help_) {
+        help_ = new View3DHelpDialog(this);
+        connect(help_, &View3DHelpDialog::exampleRequested, this, [this] {
+            if (routeRow_->isHidden()) setEnvironmentChoice(true);
+            loadExample();
+        });
+    }
     help_->show();
     help_->raise();
     help_->activateWindow();
@@ -852,9 +1105,10 @@ void View3DCanvas::fit() {
 }
 
 void View3DCanvas::viewFrom(const QString& which) {
+    cam_.rollDeg = 0.0;
     if (which == QLatin1String("top")) {
         cam_.yawDeg = -90.0;
-        cam_.pitchDeg = 89.0;
+        cam_.pitchDeg = 90.0;
     } else if (which == QLatin1String("front")) {
         cam_.yawDeg = -90.0;
         cam_.pitchDeg = 0.0;
@@ -866,6 +1120,7 @@ void View3DCanvas::viewFrom(const QString& which) {
         cam_.pitchDeg = 35.0;
     }
     fit();
+    emit cameraChanged();
 }
 
 void View3DCanvas::setWireframe(bool on) {
@@ -911,9 +1166,28 @@ void View3DCanvas::remark() {
     marker_.append(tubeMesh({p, p + pick_.normal * (size * 6.0)}, size * 0.25, 10, true));
 }
 
+void View3DCanvas::setWorkPlane(int axis, double at) {
+    planeAxis_ = std::clamp(axis, -1, 2);
+    planeAt_ = at;
+    planeDirty_ = true;
+    update();
+}
+
 bool View3DCanvas::surfaceAt(const QPointF& at, V3& point, V3& normal) {
     V3 origin, dir;
     cam_.rayAt(at.x(), at.y(), width(), height(), origin, dir);
+    // ON THE WORK PLANE, where there is one - in front of the model or behind it, in the air or not: the plane is
+    // where the point is meant to be. Its face looks back at the eye.
+    if (planeAxis_ >= 0) {
+        const double o = planeAxis_ == 0 ? origin.x : planeAxis_ == 1 ? origin.y : origin.z;
+        const double d = planeAxis_ == 0 ? dir.x : planeAxis_ == 1 ? dir.y : dir.z;
+        if (std::abs(d) < 1e-9) return false;
+        const double t = (planeAt_ - o) / d;
+        if (t <= 0.0) return false;
+        point = origin + dir * t;
+        normal = V3{planeAxis_ == 0 ? 1.0 : 0.0, planeAxis_ == 1 ? 1.0 : 0.0, planeAxis_ == 2 ? 1.0 : 0.0} * (d > 0.0 ? -1.0 : 1.0);
+        return true;
+    }
     if (env_ && envIndex_ && envShown_ && !envIndex_->empty()) {
         for (int tries = 0; tries < 256; ++tries) {
             const Pick3D p = envIndex_->cast(origin, dir);
@@ -1004,9 +1278,22 @@ void View3DCanvas::buildRouteMeshes() const {
     for (const RouteNode3D& n : route_->nodes) {
         const bool on = n.id == selNode_ || n.id == layFrom_;
         if (n.kind == RouteNodeKind::Connector) {
-            // A CONNECTOR: a body standing out of the face, as far as the lead and a little wider than the bundle.
-            routeMeshes_.push_back({tubeMesh({n.at, n.at + n.normal * std::max(route_->lead, d)}, d * 0.95, 16, true),
-                                    on ? lit : QColor(205, 208, 214)});
+            // A CONNECTOR: a housing standing out of the face the way it points, as far as the lead - wider one way than
+            // the other, so how it is turned round its axis is seen - and a key on its top edge.
+            const V3 ax = n.normal;
+            V3 u = cross3(ax, V3{0, 0, 1});
+            if (u.length() < 1e-6) u = cross3(ax, V3{1, 0, 0});
+            u = u.normalized();
+            V3 v = cross3(ax, u).normalized();
+            const double s = n.spinDeg * M_PI / 180.0;
+            const V3 su = u * std::cos(s) + v * std::sin(s), sv = v * std::cos(s) - u * std::sin(s);
+            const double len = std::max(route_->lead, d), w = d * 2.2, h = d * 1.3;
+            Mesh3D body = boxMesh({0, 0, 0}, {1, 1, 1});
+            for (V3& q : body.v) q = n.at + ax * (q.x * len) + su * ((q.y - 0.5) * w) + sv * ((q.z - 0.5) * h);
+            Mesh3D key = boxMesh({0, 0, 0}, {1, 1, 1});
+            for (V3& q : key.v) q = n.at + ax * (q.x * len) + su * ((q.y - 0.5) * w * 0.3) + sv * (h * 0.5 + q.z * h * 0.25);
+            body.append(key);
+            routeMeshes_.push_back({body, on ? lit : QColor(205, 208, 214)});
         } else {
             const double h = n.kind == RouteNodeKind::Branch ? d * 0.6 : d * 0.5;
             const V3 c = nodeShown(n);
@@ -1039,6 +1326,36 @@ std::vector<DrawItem3D> View3DCanvas::drawItems() const {
     for (const Drawn& d : routeMeshes_) items.push_back({&d.mesh, d.color});
     if (!layMesh_.empty()) items.push_back({&layMesh_, QColor(255, 255, 255), 0.75});
     if (!marker_.empty()) items.push_back({&marker_, QColor(255, 196, 40)});
+    // THE WORK PLANE, see-through: over the model and a margin round it, so it is seen where a click will land.
+    if (planeAxis_ >= 0) {
+        if (planeDirty_) {
+            planeDirty_ = false;
+            planeMesh_ = Mesh3D();
+            V3 lo{-100, -100, -100}, hi{100, 100, 100};
+            bool any = false;
+            V3 a, b;
+            if (env_ && env_->bounds(a, b)) {
+                lo = a;
+                hi = b;
+                any = true;
+            }
+            if (route_)
+                for (const RouteNode3D& n : route_->nodes) {
+                    lo = any ? V3{std::min(lo.x, n.at.x), std::min(lo.y, n.at.y), std::min(lo.z, n.at.z)} : n.at;
+                    hi = any ? V3{std::max(hi.x, n.at.x), std::max(hi.y, n.at.y), std::max(hi.z, n.at.z)} : n.at;
+                    any = true;
+                }
+            const V3 m = (hi - lo) * 0.15 + V3{10, 10, 10};
+            lo = lo - m;
+            hi = hi + m;
+            double* lop = planeAxis_ == 0 ? &lo.x : planeAxis_ == 1 ? &lo.y : &lo.z;
+            double* hip = planeAxis_ == 0 ? &hi.x : planeAxis_ == 1 ? &hi.y : &hi.z;
+            *lop = planeAt_ - 0.05;
+            *hip = planeAt_ + 0.05;
+            planeMesh_ = boxMesh(lo, hi);
+        }
+        items.push_back({&planeMesh_, QColor(80, 170, 255), 0.22});
+    }
     return items;
 }
 
@@ -1129,6 +1446,7 @@ void View3DCanvas::routeClick(const QPointF& at) {
             selNode_ = node;
             selSegment_.clear();
             routeRedraw();
+            emit selectionChanged(selSegment_);
         } else if (surfaceAt(at, p, n)) {
             emit routeAboutToChange();
             // A HARNESS PART BEING PUT: there, or moved there where it was put already.
@@ -1138,6 +1456,7 @@ void View3DCanvas::routeClick(const QPointF& at) {
             if (put) {
                 put->at = p;
                 put->normal = n.normalized();
+                put->face = put->normal;
                 selNode_ = put->id;
             } else {
                 selNode_ = route_->addNode(placeBrick_.isEmpty() ? RouteNodeKind::Connector : placeKind_, p, n);
@@ -1321,10 +1640,15 @@ void View3DCanvas::mouseMoveEvent(QMouseEvent* e) {
     if (!moved_) return;
     const QPoint d = now - last_;
     last_ = now;
-    if (dragging_ == Qt::LeftButton) {
-        // TURNED: round the upright, and up and down - never over the top.
-        cam_.yawDeg -= d.x() * 0.4;
-        cam_.pitchDeg = std::clamp(cam_.pitchDeg + d.y() * 0.4, -89.0, 89.0);
+    if (dragging_ == Qt::LeftButton && (e->modifiers() & Qt::ShiftModifier)) {
+        // ROLLED round the way it looks.
+        cam_.rollDeg = wrapDegrees(cam_.rollDeg + d.x() * 0.4);
+    } else if (dragging_ == Qt::LeftButton) {
+        // TURNED: round the upright, and up and over - all the way round, upside down past the top. Upside down, a drag
+        // to the right still turns the picture to the right.
+        const double over = std::cos(cam_.pitchDeg * M_PI / 180.0) < 0.0 ? -1.0 : 1.0;
+        cam_.yawDeg = wrapDegrees(cam_.yawDeg - d.x() * 0.4 * over);
+        cam_.pitchDeg = wrapDegrees(cam_.pitchDeg + d.y() * 0.4);
     } else {
         // MOVED: the point it looks at, across the picture as far as the pointer went.
         V3 right, up, forward;
@@ -1333,6 +1657,7 @@ void View3DCanvas::mouseMoveEvent(QMouseEvent* e) {
         cam_.target = cam_.target - right * (d.x() * perPixel) + up * (d.y() * perPixel);
     }
     update();
+    emit cameraChanged();
 }
 
 void View3DCanvas::mouseReleaseEvent(QMouseEvent* e) {
@@ -1409,6 +1734,21 @@ void View3DCanvas::keyPressEvent(QKeyEvent* e) {
     if (e->key() == Qt::Key_Escape && !layFrom_.isEmpty()) {
         cancelLaying();
         return;
+    }
+    if (e->key() == Qt::Key_Escape) {
+        emit escapePressed();
+        return;
+    }
+    // R: THE CONNECTOR SELECTED A QUARTER TURN round its own axis.
+    if (e->key() == Qt::Key_R && !selNode_.isEmpty()) {
+        const RouteNode3D* n = route_->node(selNode_);
+        if (n && n->kind == RouteNodeKind::Connector) {
+            emit routeAboutToChange();
+            route_->aimNode(selNode_, n->normal, wrapDegrees(n->spinDeg + 90.0));
+            routeDirty_ = true;
+            emit routeChanged();
+            return;
+        }
     }
     if (e->key() == Qt::Key_Backspace && !layFrom_.isEmpty()) {
         if (!layVia_.empty()) layVia_.pop_back();

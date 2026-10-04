@@ -10,12 +10,14 @@
 
 namespace Edraw_Desktop {
 
-// THE CAMERA OF THE 3D VIEW: turned round a point it looks at - round the upright (yaw) and up and down (pitch) - from
-// so far away, with so wide a lens.
+// THE CAMERA OF THE 3D VIEW: turned round a point it looks at - round the upright (yaw), up and down (pitch) and round
+// the way it looks (roll) - from so far away, with so wide a lens. ALL THE WAY ROUND on every one: pitched past the
+// top it goes on over and looks from the other side, upside down, rather than stopping there.
 struct Camera3D {
     V3 target;
     double yawDeg = -55.0;
     double pitchDeg = 35.0;
+    double rollDeg = 0.0;
     double distance = 500.0;
     double fovDeg = 35.0;
     // Where it stands, and its three directions: right, up, and the way it looks.
@@ -28,6 +30,9 @@ struct Camera3D {
     // How far it sees: its near plane, a little way in front of the eye.
     double nearPlane() const { return std::max(0.01, distance * 0.001); }
 };
+
+// An angle brought into (-180, 180].
+double wrapDegrees(double deg);
 
 // A SECTION: everything beyond a plane cut away, so the inside of a model shows. A point p is cut away where
 // dot(p, normal) > offset.

@@ -31,7 +31,12 @@ struct RouteNode3D {
     RouteNodeKind kind = RouteNodeKind::Branch;
     QString label;
     V3 at;
+    // THE WAY IT POINTS - the way its bundle leaves it. Out of the face it was put on, unless it has been turned.
     V3 normal{0.0, 0.0, 1.0};
+    // The face it was put on looks this way: what "out of its face" puts it back to.
+    V3 face{0.0, 0.0, 1.0};
+    // TURNED ROUND ITS OWN AXIS, in degrees: a rectangular connector's housing lies one way or another across it.
+    double spinDeg = 0.0;
     // THE HARNESS PART IT IS PUT FOR: the wizard's End brick, by its id, and that part's designator as it was then.
     // Empty: a node of the route's own.
     QString brick;
@@ -63,6 +68,8 @@ struct Route3D {
     RouteSegment3D* segment(const QString& id);
     // A new node, labelled by its kind in turn - X1, X2 for connectors, B1 for branches, C1 for clips.
     QString addNode(RouteNodeKind kind, const V3& at, const V3& normal);
+    // A NODE TURNED: pointing along `dir` (out of its face when `dir` is nought), turned `spinDeg` round that.
+    bool aimNode(const QString& id, const V3& dir, double spinDeg);
     // A new bundle between two nodes; empty when either is not there or they are the same.
     QString addSegment(const QString& a, const QString& b, std::vector<RouteVia3D> via, double diameter = 0.0);
     // A node taken away, and every bundle to it.

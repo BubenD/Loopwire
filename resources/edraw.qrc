@@ -16,6 +16,13 @@
     <file alias="plane.gif">help3d/plane.gif</file>
     <file alias="route.gif">help3d/route.gif</file>
     <file alias="bend.gif">help3d/bend.gif</file>
+    <file alias="start.gif">help3d/start.gif</file>
+    <file alias="view.gif">help3d/view.gif</file>
+    <file alias="workplane.gif">help3d/workplane.gif</file>
+    <file alias="connector.gif">help3d/connector.gif</file>
+    <file alias="branch.gif">help3d/branch.gif</file>
+    <file alias="clip.gif">help3d/clip.gif</file>
+    <file alias="example.obj">help3d/example.obj</file>
   </qresource>
   <!--
     THE LICENCE PAPERWORK, COMPILED INTO THE EXECUTABLE.

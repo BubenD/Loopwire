@@ -23,8 +23,12 @@ public:
     // The recording showing, for the tests.
     QMovie* movie() const { return movie_; }
 
-    // The recordings, in the program's resources: one per topic.
+    // The recordings, in the program's resources: one for each topic that has one.
     static QStringList recordings();
+
+signals:
+    // The example model asked for, to try the steps on.
+    void exampleRequested();
 
 private:
     QListWidget* topics_ = nullptr;
@@ -32,6 +36,7 @@ private:
     QLabel* steps_ = nullptr;
     QMovie* movie_ = nullptr;
     QToolButton* pause_ = nullptr;
+    QToolButton* again_ = nullptr;
 };
 
 } // namespace Edraw_Desktop
