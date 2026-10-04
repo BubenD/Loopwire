@@ -42,13 +42,21 @@ Mesh3D boxMesh(const V3& lo, const V3& hi) {
 }
 
 Mesh3D tubeMesh(const std::vector<V3>& pathIn, double radius, int sides, bool caps) {
+    return tubeMeshVar(pathIn, [radius](double) { return radius; }, sides, caps);
+}
+
+Mesh3D tubeMeshVar(const std::vector<V3>& pathIn, const std::function<double(double)>& radiusAt, int sides, bool caps) {
     Mesh3D m;
+    const double radius = 1.0;   // checked below, per ring
     std::vector<V3> path;
     for (const V3& p : pathIn)
         if (path.empty() || (p - path.back()).length() > 1e-6) path.push_back(p);
     if (path.size() < 2 || radius <= 0.0) return m;
     sides = std::max(3, sides);
     const size_t n = path.size();
+    // How far along each point is, for its radius.
+    std::vector<double> along(n, 0.0);
+    for (size_t i = 1; i < n; ++i) along[i] = along[i - 1] + (path[i] - path[i - 1]).length();
     // FRAMES CARRIED ALONG THE PATH: each ring square to the path there, turned as little as it can be from the last.
     std::vector<V3> tan(n);
     for (size_t i = 0; i < n; ++i) {
@@ -63,9 +71,10 @@ Mesh3D tubeMesh(const std::vector<V3>& pathIn, double radius, int sides, bool ca
                                                                    : cross3(tan[i], V3{1, 0, 0}).normalized();
         }
         const V3 bin = cross3(tan[i], nrm).normalized();
+        const double r = std::max(1e-4, radiusAt(along[i]));
         for (int k = 0; k < sides; ++k) {
             const double a = 2.0 * M_PI * k / sides;
-            m.addVertex(path[i] + (nrm * std::cos(a) + bin * std::sin(a)) * radius);
+            m.addVertex(path[i] + (nrm * std::cos(a) + bin * std::sin(a)) * r);
         }
     }
     for (size_t i = 0; i + 1 < n; ++i)

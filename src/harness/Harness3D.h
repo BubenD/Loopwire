@@ -35,8 +35,20 @@ enum class PartLook { Box, Revolved, Extruded };
 
 // From the objects of a harness drawing - placed on the sheet (each part by its copy mark) or straight out of the
 // wizard (each by its brick). `modelOf` gives the 3D model file attached to a library part, or nothing.
+// A connector's pins as its library part has them: how many, and which half of the pair it is (male pins, or female
+// sockets) - for its front face.
+struct PartPins {
+    int count = 0;
+    bool female = false;
+};
+
+// A connector part's pins as the 3D view shows them: its way count, female where it is a receptacle or a socket.
+struct LibraryPart;
+PartPins partPinsOf(const LibraryPart* part);
+
 Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::function<QString(const QString& libPart)>& modelOf,
-                              PartLook look = PartLook::Box);
+                              PartLook look = PartLook::Box,
+                              const std::function<PartPins(const QString& libPart)>& pinsOf = {});
 
 // A model file read once and kept while it is unchanged on disk.
 const Mesh3D& cachedMesh3D(const QString& path, QString* how = nullptr);

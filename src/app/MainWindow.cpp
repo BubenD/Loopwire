@@ -16575,6 +16575,7 @@ QDockWidget* MainWindow::makeView3DPanel() {
         const QString stored = p ? p->value(QStringLiteral("model3d")) : QString();
         return stored.isEmpty() ? QString() : DatasheetStore::pathOf(stored);
     });
+    view3dPane_->setPinsLookup([catalog](const QString& libPart) { return partPinsOf(catalog->byId(libPart)); });
     connect(dock, &QDockWidget::visibilityChanged, this, [this, catalog](bool on) {
         if (!on || !view3dPane_) return;
         *catalog = PartsCatalog();

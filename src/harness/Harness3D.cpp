@@ -1,6 +1,7 @@
 #include "harness/Harness3D.h"
 
 #include "harness/Harness.h"
+#include "harness/PartsLibrary.h"
 
 #include <QDateTime>
 #include <QFileInfo>
@@ -57,6 +58,16 @@ QColor wireColour(int k) {
 
 } // namespace
 
+PartPins partPinsOf(const LibraryPart* p) {
+    PartPins pins;
+    if (!p || p->kind != PartKind::Connector) return pins;
+    pins.count = std::clamp(p->wayCount(), 1, 400);
+    const QString said = (p->value(QStringLiteral("gender")) + QLatin1Char(' ') + p->value(QStringLiteral("mounting"))).toLower();
+    pins.female = said.contains(QLatin1String("female")) || said.contains(QLatin1String("receptacle")) ||
+                  said.contains(QLatin1String("socket"));
+    return pins;
+}
+
 const Mesh3D& cachedMesh3D(const QString& path, QString* how) {
     static QHash<QString, Cached> cache;
     const QDateTime when = QFileInfo(path).lastModified();
@@ -106,7 +117,7 @@ void sampleInto(const Entity& e, std::vector<Vec2>& pts) {
 // A SOLID FROM A PART'S 2D DRAWING. Along the way it goes in (`A`, from `lo` to `hi` about `c`), how far its outline
 // reaches either side (`B`) at each step - turned round A (a round part), or given `depth` up and down (a square one).
 Mesh3D solidFromDrawing(const std::vector<Vec2>& pts, const Vec2& c, const V3& A, const V3& B, double lo, double hi,
-                        bool revolve, double depth) {
+                        bool revolve, double depth, double* faceRadius) {
     const int n = 40;
     std::vector<double> top(n + 1, -1e300), bot(n + 1, 1e300);
     const Vec2 a2{A.x, A.y}, b2{B.x, B.y};
@@ -128,6 +139,27 @@ Mesh3D solidFromDrawing(const std::vector<Vec2>& pts, const Vec2& c, const V3& A
         top[static_cast<size_t>(i)] = top[static_cast<size_t>(from)] + (top[static_cast<size_t>(to)] - top[static_cast<size_t>(from)]) * u;
         bot[static_cast<size_t>(i)] = bot[static_cast<size_t>(from)] + (bot[static_cast<size_t>(to)] - bot[static_cast<size_t>(from)]) * u;
     }
+    // A LINE OR TWO STANDING OUT ON THEIR OWN - a mark at the part's very end, a tick - is not its outline: each step
+    // taken as the middle of itself and its two neighbours, so a lone spike does not turn into a disc.
+    auto median3 = [n](std::vector<double>& v) {
+        std::vector<double> out = v;
+        for (int i = 0; i <= n; ++i) {
+            const int a = std::max(0, i - 1), b = i, cc = std::min(n, i + 1);
+            double t[3] = {v[static_cast<size_t>(a)], v[static_cast<size_t>(b)], v[static_cast<size_t>(cc)]};
+            if (i == 0 || i == n) {   // at an end: the end and its next two
+                const int j = i == 0 ? 1 : n - 1, k = i == 0 ? std::min(n, 2) : std::max(0, n - 2);
+                t[0] = v[static_cast<size_t>(i)];
+                t[1] = v[static_cast<size_t>(j)];
+                t[2] = v[static_cast<size_t>(k)];
+            }
+            std::sort(t, t + 3);
+            out[static_cast<size_t>(i)] = t[1];
+        }
+        v = out;
+    };
+    median3(top);
+    median3(bot);
+    if (faceRadius) *faceRadius = std::max(0.2, std::max(std::abs(top[static_cast<size_t>(n)]), std::abs(bot[static_cast<size_t>(n)])));
     const V3 centre{c.x, c.y, 0.0}, Z{0.0, 0.0, 1.0};
     Mesh3D m;
     const int sides = revolve ? 28 : 4;
@@ -165,7 +197,7 @@ Mesh3D solidFromDrawing(const std::vector<Vec2>& pts, const Vec2& c, const V3& A
 } // namespace
 
 Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::function<QString(const QString&)>& modelOf,
-                              PartLook look) {
+                              PartLook look, const std::function<PartPins(const QString&)>& pinsOf) {
     Harness3DScene scene;
     // ---- THE RUNS ----------------------------------------------------------------------------------
     std::vector<Vec2> runEnds;
@@ -184,9 +216,55 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
         const QColor c(k < said.size() ? said.at(k).toString() : QString());
         return c.isValid() ? c : wireColour(k);
     };
-    const size_t firstRunItem = scene.items.size();
-    (void)firstRunItem;
+    // A run's route: its points - or, drawn by its two ends alone (a twisted pair clicked end to end), those two.
+    auto routeOf = [](const Entity& e) {
+        if (e.points.size() >= 2) return e.points;
+        return std::vector<Vec2>{e.a, e.b};
+    };
+    // A SLEEVE OVER THE END OF A PATH: so long, a little over the wire.
+    auto endSleeve = [&](const std::vector<V3>& path, bool atEnd, double len, double radius, const QString& brick) {
+        if (path.size() < 2 || len <= 1e-6) return;
+        std::vector<V3> p = path;
+        if (atEnd) std::reverse(p.begin(), p.end());
+        std::vector<V3> piece{p.front()};
+        double acc = 0.0;
+        for (size_t i = 1; i < p.size() && acc < len; ++i) {
+            const double seg = (p[i] - p[i - 1]).length();
+            if (acc + seg >= len) {
+                piece.push_back(p[i - 1] + (p[i] - p[i - 1]) * ((len - acc) / std::max(1e-12, seg)));
+                acc = len;
+            } else {
+                piece.push_back(p[i]);
+                acc += seg;
+            }
+        }
+        Harness3DItem sl;
+        sl.mesh = tubeMesh(piece, radius, 10, true);
+        sl.color = QColor(36, 36, 40);
+        sl.what = QStringLiteral("sleeve");
+        sl.brick = brick;
+        scene.items.push_back(std::move(sl));
+    };
     for (const Entity& e : ents) {
+        // A SLEEVE OVER A WIRE'S END, as the harness wizard draws one (its outline round the wire): a tube round the wire.
+        if (e.type == EntityType::Polyline && e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("fanShrink") &&
+            e.points.size() >= 5) {
+            const size_t half = (e.points.size() - 1) / 2;
+            std::vector<V3> mid;
+            double across = 0.0;
+            for (size_t k = 0; k < half; ++k) {
+                const Vec2 l = e.points[k], r = e.points[2 * half - 1 - k];
+                mid.push_back(at3((l + r) * 0.5));
+                across = std::max(across, distance(l, r));
+            }
+            Harness3DItem sl;
+            sl.mesh = tubeMesh(mid, std::max(0.2, across / 2.0), 10, true);
+            sl.color = QColor(36, 36, 40);
+            sl.what = QStringLiteral("sleeve");
+            sl.brick = brickOf(e);
+            scene.items.push_back(std::move(sl));
+            continue;
+        }
         // A RUN OF ONE WIRE is drawn as a wire - a double line, not a bundle: one tube along it. A HEATSHRINK SLEEVE drawn
         // on the sheet is one too: a black tube as wide as it is drawn.
         if (e.type == EntityType::Polyline && e.meta.value(QStringLiteral("double")).toBool() && e.points.size() >= 2) {
@@ -202,19 +280,76 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
             const double across = sleeve ? e.meta.value(QStringLiteral("shrinkWidth")).toDouble(e.meta.value(QStringLiteral("gap")).toDouble(4.0))
                                          : e.meta.value(QStringLiteral("gap")).toDouble(1.0);
             Harness3DItem wi;
-            wi.mesh = tubeMesh(path, std::max(0.2, across) / 2.0, sleeve ? 18 : 8, true);
+            if (sleeve) {
+                // ITS ENDS SHRUNK DOWN onto what it grips: necked to its face over its taper at each end - or, over a
+                // cable's ends only, the cable whole and a sleeve at each end; a transition square at its body end.
+                const double R = std::max(0.2, across) / 2.0;
+                double L = 0.0;
+                for (size_t i = 1; i < path.size(); ++i) L += (path[i] - path[i - 1]).length();
+                const double faceS = e.meta.value(QStringLiteral("shrinkFaceStart")).toDouble(across * 0.82) / 2.0;
+                const double faceE = e.meta.value(QStringLiteral("shrinkFaceEnd")).toDouble(across * 0.82) / 2.0;
+                const double tapS = std::clamp(e.meta.value(QStringLiteral("shrinkTaperStart")).toDouble(4.0), 0.0, L * 0.45);
+                const double tapE = std::clamp(e.meta.value(QStringLiteral("shrinkTaperEnd")).toDouble(4.0), 0.0, L * 0.45);
+                auto ease = [](double from, double to, double u) {
+                    u = std::clamp(u, 0.0, 1.0);
+                    return from + (to - from) * u * u * (3.0 - 2.0 * u);
+                };
+                // Points enough along it for the tapers to be smooth.
+                std::vector<V3> fine;
+                const double step = std::max(0.2, std::min({tapS > 0 ? tapS / 6.0 : 1e9, tapE > 0 ? tapE / 6.0 : 1e9, L / 60.0}));
+                for (double s = 0.0;; s += step) {
+                    const double ss = std::min(s, L);
+                    double acc = 0.0;
+                    V3 p = path.back();
+                    for (size_t i = 1; i < path.size(); ++i) {
+                        const double seg = (path[i] - path[i - 1]).length();
+                        if (acc + seg >= ss) {
+                            p = path[i - 1] + (path[i] - path[i - 1]) * ((ss - acc) / std::max(1e-12, seg));
+                            break;
+                        }
+                        acc += seg;
+                    }
+                    fine.push_back(p);
+                    if (ss >= L) break;
+                }
+                if (e.meta.value(QStringLiteral("shrinkEndsOnly")).toBool()) {
+                    const double cable = e.meta.value(QStringLiteral("shrinkCableWidth")).toDouble(across * 0.82) / 2.0;
+                    const double coverS = e.meta.value(QStringLiteral("shrinkCoverStart")).toDouble(20.0);
+                    const double coverE = e.meta.value(QStringLiteral("shrinkCoverEnd")).toDouble(20.0);
+                    Harness3DItem cab;
+                    cab.mesh = tubeMesh(fine, cable, 16, true);
+                    cab.color = QColor(70, 74, 82);
+                    cab.what = QStringLiteral("run");
+                    cab.brick = brickOf(e);
+                    scene.items.push_back(std::move(cab));
+                    wi.mesh = tubeMeshVar(fine, [&](double s) {
+                        if (s > coverS && s < L - coverE) return 1e-4;   // no sleeve between the two ends
+                        return s <= coverS ? ease(faceS, R, s / std::max(1e-9, tapS)) : ease(faceE, R, (L - s) / std::max(1e-9, tapE));
+                    }, 18, true);
+                } else {
+                    const bool transition = e.meta.value(QStringLiteral("shrinkTransition")).toBool();
+                    wi.mesh = tubeMeshVar(fine, [&](double s) {
+                        if (!transition && tapS > 1e-9 && s < tapS) return ease(faceS, R, s / tapS);
+                        if (tapE > 1e-9 && s > L - tapE) return ease(faceE, R, (L - s) / tapE);
+                        return R;
+                    }, 18, true);
+                }
+            } else {
+                wi.mesh = tubeMesh(path, std::max(0.2, across) / 2.0, 8, true);
+            }
             wi.color = sleeve ? QColor(32, 32, 35) : colourOf(e, 0);
             wi.what = sleeve ? QStringLiteral("sleeve") : QStringLiteral("wire");
             wi.brick = brickOf(e);
             scene.items.push_back(std::move(wi));
             continue;
         }
-        if (e.type != EntityType::TwistedPair || e.points.size() < 2) continue;
+        if (e.type != EntityType::TwistedPair) continue;
+        const std::vector<Vec2> route = routeOf(e);
+        if (route.size() < 2 || distance(route.front(), route.back()) + (route.size() > 2 ? 1.0 : 0.0) < 1e-6) continue;
         isRun.insert(groupOf(e), true);
         ++scene.runs;
-        runEnds.push_back(e.points.front());
-        runEnds.push_back(e.points.back());
-        const std::vector<Vec2>& route = e.points;
+        runEnds.push_back(route.front());
+        runEnds.push_back(route.back());
         const double total = pathLength(route);
         const double ww = std::max(0.2, e.meta.value(QStringLiteral("twistWireWidth")).toDouble(1.0));
         const QString body = e.meta.value(QStringLiteral("twistBody")).toString();
@@ -304,6 +439,132 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
             }
             continue;
         }
+        // WHICH ENDS FAN: as the drawing says - both, unless one is.
+        const QString spreadSaid = e.meta.value(QStringLiteral("twistSpread")).toString();
+        const bool spreadStart = spreadSaid != QLatin1String("finish") && spreadSaid != QLatin1String("right");
+        const bool spreadFinish = spreadSaid != QLatin1String("start") && spreadSaid != QLatin1String("left");
+        const bool endShrink = e.meta.value(QStringLiteral("twistEndShrink")).toBool();
+        const double endShrinkLen = std::max(0.5, e.meta.value(QStringLiteral("twistEndShrinkLen")).toDouble(10.0));
+        // A FAN OF BARE WIRES: each wire where the drawing has it across the fan - the pitch it is drawn at - and gathered
+        // into a round bundle where the drawing converges them, every wire its own place in it (none on top of another).
+        if (!covered) {
+            const std::vector<std::vector<Vec2>> lanes = twistedPairStrands(e);
+            const int wires = std::max(1, e.meta.value(QStringLiteral("twistWires")).toInt(2));
+            // How far along the route a point is, and how far to one side of it.
+            auto project = [&](const Vec2& p, double& s, double& d) {
+                double best = 1e300, acc = 0.0;
+                for (size_t i = 1; i < route.size(); ++i) {
+                    const Vec2 a = route[i - 1], b = route[i];
+                    const double seg = distance(a, b);
+                    if (seg < 1e-12) continue;
+                    const Vec2 t = (b - a) / seg;
+                    const double u = std::clamp(dot(p - a, t), 0.0, seg);
+                    const Vec2 foot = a + t * u;
+                    const double dist = distance(p, foot);
+                    if (dist < best) {
+                        best = dist;
+                        s = acc + u;
+                        d = dot(p - foot, Vec2{-t.y, t.x});
+                    }
+                    acc += seg;
+                }
+            };
+            auto frameAt = [&](double s, V3& at, V3& across) {
+                double acc = 0.0;
+                for (size_t i = 1; i < route.size(); ++i) {
+                    const double seg = distance(route[i - 1], route[i]);
+                    if (seg < 1e-12) continue;
+                    if (acc + seg >= s || i + 1 == route.size()) {
+                        const double u = std::clamp((s - acc) / seg, 0.0, 1.0);
+                        const Vec2 t = (route[i] - route[i - 1]).normalized();
+                        at = at3(route[i - 1] + (route[i] - route[i - 1]) * u);
+                        across = V3{-t.y, t.x, 0.0};
+                        return;
+                    }
+                    acc += seg;
+                }
+                at = at3(route.back());
+                across = V3{0.0, 1.0, 0.0};
+            };
+            // Each wire's place in the bundle: rings round its middle, one wire across apart.
+            auto packed = [&](int k, double& py, double& pz) {
+                if (wires == 1 || k == 0) {
+                    py = pz = 0.0;
+                    if (wires == 2) py = (k == 0 ? -0.5 : 0.5) * ww;
+                    if (wires == 2 || k == 0) return;
+                }
+                int ring = 1, first = 1;
+                while (k >= first + 6 * ring) {
+                    first += 6 * ring;
+                    ++ring;
+                }
+                const int inRing = std::min(6 * ring, wires - first);
+                const double ang = 2.0 * M_PI * (k - first) / std::max(1, inRing);
+                py = ring * ww * std::cos(ang);
+                pz = ring * ww * std::sin(ang);
+                if (wires == 2) py = (k == 0 ? -0.5 : 0.5) * ww, pz = 0.0;
+            };
+            auto smooth = [](double u) {
+                u = std::clamp(u, 0.0, 1.0);
+                return u * u * (3.0 - 2.0 * u);
+            };
+            const double step = std::clamp(total / 300.0, 0.15, 1.0);
+            int k = 0;
+            for (size_t j = 0; j + 1 < lanes.size() && k < wires; j += 2, ++k) {
+                const auto& ea = lanes[j];
+                const auto& eb = lanes[j + 1];
+                if (ea.size() != eb.size() || ea.size() < 2) continue;
+                // Where the drawing has this wire across the run, along it.
+                std::vector<std::pair<double, double>> sd;
+                for (size_t q = 0; q < ea.size(); ++q) {
+                    double s = 0.0, d = 0.0;
+                    project((ea[q] + eb[q]) * 0.5, s, d);
+                    sd.push_back({s, d});
+                }
+                std::sort(sd.begin(), sd.end());
+                auto drawnAt = [&](double s, bool& known) {
+                    known = !sd.empty() && s >= sd.front().first - 0.5 && s <= sd.back().first + 0.5;
+                    if (sd.empty()) return 0.0;
+                    if (s <= sd.front().first) return sd.front().second;
+                    if (s >= sd.back().first) return sd.back().second;
+                    const auto it = std::lower_bound(sd.begin(), sd.end(), std::make_pair(s, -1e300));
+                    const auto& b = *it;
+                    const auto& a = *(it - 1);
+                    const double u = b.first - a.first > 1e-9 ? (s - a.first) / (b.first - a.first) : 0.0;
+                    return a.second + (b.second - a.second) * u;
+                };
+                double py = 0.0, pz = 0.0;
+                packed(k, py, pz);
+                std::vector<V3> path;
+                for (double s = 0.0;; s += step) {
+                    const double ss = std::min(s, total);
+                    bool known = false;
+                    const double d = drawnAt(ss, known);
+                    // Gathered: fully in the bundle between the fans, spread as drawn at a fanning end.
+                    double w = 1.0;
+                    if (known) {
+                        if (spreadStart && fanA > 1e-6) w = std::min(w, smooth(ss / fanA));
+                        if (spreadFinish && fanB > 1e-6) w = std::min(w, smooth((total - ss) / fanB));
+                    }
+                    V3 at, across;
+                    frameAt(ss, at, across);
+                    path.push_back(at + across * ((1.0 - w) * d + w * py) + V3{0.0, 0.0, 1.0} * (w * pz));
+                    if (ss >= total) break;
+                }
+                Harness3DItem wi;
+                wi.mesh = tubeMesh(path, ww / 2.0, 8, true);
+                wi.color = colourOf(e, k);
+                wi.what = QStringLiteral("wire");
+                wi.brick = brickOf(e);
+                scene.items.push_back(std::move(wi));
+                // HEATSHRINK OVER EACH WIRE'S END, where the drawing has it.
+                if (endShrink) {
+                    if (spreadStart) endSleeve(path, false, endShrinkLen, ww / 2.0 + 0.45, brickOf(e));
+                    if (spreadFinish) endSleeve(path, true, endShrinkLen, ww / 2.0 + 0.45, brickOf(e));
+                }
+            }
+            continue;
+        }
         // ITS WIRES: each one round, where it fans out (the whole way, with no body over them).
         const std::vector<std::vector<Vec2>> strands = twistedPairStrands(e);
         const int wires = std::max(1, e.meta.value(QStringLiteral("twistWires")).toInt(2));
@@ -325,11 +586,14 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
                 wi.brick = brickOf(e);
                 scene.items.push_back(std::move(wi));
             };
-            if (!covered) wire(0.0, len);
-            else {
-                // A little into the body, so the wires are seen to go into it.
-                wire(0.0, std::min(len, fanA + 1.0));
-                wire(std::max(0.0, len - fanB - 1.0), len);
+            // A little into the body, so the wires are seen to go into it.
+            wire(0.0, std::min(len, fanA + 1.0));
+            wire(std::max(0.0, len - fanB - 1.0), len);
+            if (endShrink) {
+                std::vector<V3> c3;
+                for (const Vec2& q : c) c3.push_back(at3(q));
+                if (spreadStart) endSleeve(c3, false, endShrinkLen, ww / 2.0 + 0.45, brickOf(e));
+                if (spreadFinish) endSleeve(c3, true, endShrinkLen, ww / 2.0 + 0.45, brickOf(e));
             }
         }
     }
@@ -426,8 +690,9 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
                                    .arg(it.what.isEmpty() ? QStringLiteral("a part") : it.what, how);
             // NONE: A SOLID FROM ITS 2D DRAWING, when that is asked for - its outline turned round the way it goes
             // in, or given its width in depth.
+            double faceR = width / 2.0;
             if (look != PartLook::Box && !p.outline.empty()) {
-                it.mesh = solidFromDrawing(p.outline, c, A, B, lo, hi, look == PartLook::Revolved, width);
+                it.mesh = solidFromDrawing(p.outline, c, A, B, lo, hi, look == PartLook::Revolved, width, &faceR);
                 it.color = QColor(150, 158, 170);
             }
             // OR A BOX as long and as wide as it is drawn, and as tall as it is wide.
@@ -438,6 +703,28 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
                 it.mesh = box;
                 it.color = QColor(92, 128, 176);
                 it.cube = true;
+                faceR = width / 2.0;
+            }
+            // ITS PINOUT on its front face - the end away from the harness: male pins standing out of it, or the
+            // female sockets in it - as many as it has, spread evenly over the face.
+            const PartPins pins = pinsOf && !p.lib.isEmpty() ? pinsOf(p.lib) : PartPins{};
+            if (pins.count > 0) {
+                const V3 face = centre + A * hi;
+                const double R = std::max(0.3, faceR * (look == PartLook::Revolved ? 0.78 : 0.7));
+                const double pinR = std::clamp(R * std::sqrt(1.0 / pins.count) * 0.42, 0.12, R * 0.3);
+                const double stand = pins.female ? 0.25 : std::max(0.8, length * 0.14);
+                Harness3DItem pinsItem;
+                for (int i = 0; i < pins.count; ++i) {
+                    // A sunflower's spiral: as even a spread over a round face as there is, for any number.
+                    const double rr = pins.count == 1 ? 0.0 : R * 0.82 * std::sqrt((i + 0.5) / pins.count);
+                    const double th = i * 2.399963229728653;
+                    const V3 at = face + B * (rr * std::cos(th)) + Z * (rr * std::sin(th));
+                    pinsItem.mesh.append(tubeMesh({at - A * 0.05, at + A * stand}, pins.female ? pinR * 1.15 : pinR, 10, true));
+                }
+                pinsItem.color = pins.female ? QColor(18, 18, 20) : QColor(212, 175, 80);
+                pinsItem.what = pins.female ? QStringLiteral("sockets") : QStringLiteral("pins");
+                pinsItem.brick = p.brick;
+                scene.items.push_back(std::move(pinsItem));
             }
         }
         scene.items.push_back(std::move(it));

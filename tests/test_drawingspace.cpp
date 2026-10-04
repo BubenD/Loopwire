@@ -1804,8 +1804,8 @@ int run_drawingspace_tests() {
                 std::printf("  converge: boxed with [%s], shown for wires %d, for a cable %d\n",
                             qPrintable(boxedWith.join(QStringLiteral(", "))), onWires ? 1 : 0,
                             onACover ? 1 : 0);
-                check(boxedWith.contains(QStringLiteral("Body")),
-                      "converge: it stands in the Body box, with the sort of body it belongs to");
+                check(boxedWith.contains(QStringLiteral("Fan out")),
+                      "converge: it stands in the Fan out box, with the wires it is a number of");
                 check(onWires && !onACover,
                       "converge: offered for hook-up wires, and not against a cover that hides them");
             }

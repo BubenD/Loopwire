@@ -83,6 +83,8 @@ void View3DPane::setModelLookup(std::function<QString(const QString&)> modelOf) 
 
 void View3DPane::setSourceChoice(bool shown) { source_->setVisible(shown); }
 
+void View3DPane::setPinsLookup(std::function<PartPins(const QString&)> pinsOf) { pinsOf_ = std::move(pinsOf); }
+
 void View3DPane::setPartLook(PartLook look) {
     partLook_ = look;
     look_->setCurrentIndex(look == PartLook::Box ? 0 : look == PartLook::Revolved ? 1 : 2);
@@ -110,7 +112,7 @@ void View3DPane::rebuild(bool fit) {
             fell = true;
         }
     }
-    scene_ = buildHarness3D(ents, modelOf_, partLook_);
+    scene_ = buildHarness3D(ents, modelOf_, partLook_, pinsOf_);
     canvas_->setScene(&scene_);
     if (fit) canvas_->fit();
     canvas_->update();

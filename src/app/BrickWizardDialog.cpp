@@ -1764,6 +1764,7 @@ void BrickWizardDialog::buildUi() {
         const QString stored = p ? p->value(QStringLiteral("model3d")) : QString();
         return stored.isEmpty() ? QString() : DatasheetStore::pathOf(stored);
     });
+    view3d_->setPinsLookup([this](const QString& libPart) { return partPinsOf(catalog_.byId(libPart)); });
     paneStack_->addWidget(view3d_);
     // THE NAVIGATION ON THE PANE: a round wheel in its top right corner - move up, turn, right, Symmetric, down, the tie,
     // left, turn back, clockwise from the top - the part Symmetric is about in the list under it. The buttons it works

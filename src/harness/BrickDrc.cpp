@@ -843,6 +843,10 @@ std::vector<BrickIssue> drawingConnectivity(const std::vector<Entity>& ents) {
             if (e.points.size() >= 2) {
                 ends.push_back(e.points.front());
                 ends.push_back(e.points.back());
+            } else {
+                // Drawn by its two ends alone.
+                ends.push_back(e.a);
+                ends.push_back(e.b);
             }
             parts[copy].run = true;
             continue;

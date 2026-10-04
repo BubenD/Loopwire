@@ -3,6 +3,7 @@
 #include <QString>
 
 #include <array>
+#include <functional>
 #include <cmath>
 #include <vector>
 
@@ -46,6 +47,9 @@ struct Mesh3D {
 Mesh3D boxMesh(const V3& lo, const V3& hi);
 // A TUBE along a path - a round section of so many sides swept along it, closed at its ends.
 Mesh3D tubeMesh(const std::vector<V3>& path, double radius, int sides = 12, bool caps = true);
+// A TUBE WHOSE RADIUS CHANGES along it - by how far along the path (its length so far) each point is.
+Mesh3D tubeMeshVar(const std::vector<V3>& path, const std::function<double(double along)>& radius, int sides = 12,
+                   bool caps = true);
 
 // ---- Reading a 3D model ------------------------------------------------------------------------
 //

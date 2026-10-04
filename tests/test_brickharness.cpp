@@ -5714,6 +5714,126 @@ void testRoundForty() {
           "3d pane: a choice of how a part with no 3D model is shown");
 }
 
+// ROUND FORTY-ONE: a twisted pair drawn by its two ends; a fanout's wires at its drawn pitch where they fan and in a
+// round bundle where they gather, shrink over their ends; a sleeve's shrunk ends; a connector's pinout; a lone mark at
+// a part's end no disc.
+void testRoundFortyOne() {
+    std::vector<Entity> ents;
+    Entity t;
+    t.type = EntityType::TwistedPair;
+    t.a = {0, 0};
+    t.b = {200, 0};
+    t.meta.insert(QStringLiteral("twistWidth"), 4.0);
+    ents.push_back(t);
+    Harness3DScene sc = buildHarness3D(ents, {});
+    int wires = 0;
+    for (const Harness3DItem& it : sc.items) wires += it.what == QLatin1String("wire") ? 1 : 0;
+    check(sc.runs == 1 && wires == 2, "3d: a twisted pair drawn by its two ends alone - shown");
+    // A FANOUT: seven wires, 4.5 apart where they fan, converged to two lines in the drawing.
+    ents.clear();
+    Entity f;
+    f.type = EntityType::TwistedPair;
+    f.points = {{0, 0}, {200, 0}};
+    f.meta.insert(QStringLiteral("twistStraight"), true);
+    f.meta.insert(QStringLiteral("twistWires"), 7);
+    f.meta.insert(QStringLiteral("twistTrunkWires"), 2);
+    f.meta.insert(QStringLiteral("twistEnds"), 15.0);
+    f.meta.insert(QStringLiteral("twistLane"), 4.5);
+    f.meta.insert(QStringLiteral("twistWireWidth"), 2.0);
+    f.meta.insert(QStringLiteral("twistEndShrink"), true);
+    f.meta.insert(QStringLiteral("twistEndShrinkLen"), 10.0);
+    ents.push_back(f);
+    sc = buildHarness3D(ents, {});
+    double endLo = 1e300, endHi = -1e300, midLo = 1e300, midHi = -1e300;
+    int sleeves = 0;
+    wires = 0;
+    for (const Harness3DItem& it : sc.items) {
+        if (it.what == QLatin1String("sleeve")) ++sleeves;
+        if (it.what != QLatin1String("wire")) continue;
+        ++wires;
+        for (const V3& v : it.mesh.v) {
+            if (v.x < 0.5) endLo = std::min(endLo, v.y), endHi = std::max(endHi, v.y);
+            if (std::abs(v.x - 100.0) < 1.0) midLo = std::min(midLo, v.y), midHi = std::max(midHi, v.y);
+        }
+    }
+    std::printf("  3d fanout: %d wire(s), %.1f across at its end, %.1f in the middle, %d sleeve(s)\n", wires, endHi - endLo,
+                midHi - midLo, sleeves);
+    check(wires == 7, "3d fanout: every wire, converged in the drawing or not");
+    // As far apart at its end as the drawing has them there.
+    double drawnLo = 1e300, drawnHi = -1e300;
+    {
+        const std::vector<std::vector<Vec2>> lanes = twistedPairStrands(f);
+        for (size_t j = 0; j + 1 < lanes.size() && j / 2 < 7; j += 2)
+            if (!lanes[j].empty() && !lanes[j + 1].empty()) {
+                const double yy = (lanes[j].front().y + lanes[j + 1].front().y) / 2.0;
+                drawnLo = std::min(drawnLo, yy);
+                drawnHi = std::max(drawnHi, yy);
+            }
+    }
+    std::printf("  3d fanout: the drawing has its wire ends %.1f apart end to end\n", drawnHi - drawnLo);
+    check(std::abs((endHi - endLo) - (drawnHi - drawnLo + 2.0)) < 0.6,
+          "3d fanout: at its end the wires as far apart as the drawing has them");
+    check(midHi - midLo < 6 * 4.5 * 0.6 && midHi - midLo > 2.0, "3d fanout: gathered into a round bundle between the fans");
+    check(sleeves == 14, "3d fanout: shrink over each wire's end, at both ends");
+    // A SLEEVE'S SHRUNK ENDS.
+    ents.clear();
+    Entity s;
+    s.type = EntityType::Polyline;
+    s.points = {{0, 0}, {100, 0}};
+    s.meta.insert(QStringLiteral("double"), true);
+    s.meta.insert(QStringLiteral("shrunkEnds"), true);
+    s.meta.insert(QStringLiteral("shrinkWidth"), 10.0);
+    s.meta.insert(QStringLiteral("shrinkFaceStart"), 4.0);
+    s.meta.insert(QStringLiteral("shrinkTaperStart"), 10.0);
+    ents.push_back(s);
+    sc = buildHarness3D(ents, {});
+    double atEnd = 0.0, atMid = 0.0;
+    for (const Harness3DItem& it : sc.items)
+        for (const V3& v : it.mesh.v) {
+            if (std::abs(v.x) < 0.01) atEnd = std::max(atEnd, std::abs(v.z));
+            if (std::abs(v.x - 50.0) < 1.0) atMid = std::max(atMid, std::abs(v.z));
+        }
+    std::printf("  3d sleeve: %.2f across at its end, %.2f in the middle\n", 2 * atEnd, 2 * atMid);
+    check(std::abs(atMid - 5.0) < 0.1 && std::abs(atEnd - 2.0) < 0.1, "3d sleeve: its end shrunk down to its face");
+    // A CONNECTOR'S PINOUT, and a lone mark at a part's end not a disc.
+    BrickDesign d;
+    const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+    const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+    const QString y = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+    d.connect(x, c);
+    d.connect(c, y);
+    std::vector<Entity> h = buildBrickHarness(d, nullptr).entities;
+    Bounds xb;
+    for (Entity& e : h)
+        if (e.meta.value(QStringLiteral("brickId")).toString() == x) {
+            e.meta.insert(QStringLiteral("libPart"), QStringLiteral("M7"));
+            if (e.type != EntityType::Text) xb.expand(e.bounds());
+        }
+    // A tall thin mark at the far end of X, as a ferrule's drawing might have.
+    Entity mark;
+    mark.type = EntityType::Line;
+    mark.a = {xb.min.x, (xb.min.y + xb.max.y) / 2.0 - 30.0};
+    mark.b = {xb.min.x, (xb.min.y + xb.max.y) / 2.0 + 30.0};
+    mark.meta.insert(QStringLiteral("brickId"), x);
+    h.push_back(mark);
+    sc = buildHarness3D(h, {}, PartLook::Revolved, [](const QString& lib) {
+        return lib == QLatin1String("M7") ? PartPins{7, false} : PartPins{};
+    });
+    int pins = 0;
+    double xR = 0.0;
+    for (const Harness3DItem& it : sc.items) {
+        if (it.what == QLatin1String("pins")) pins += static_cast<int>(it.mesh.f.size()) > 0 ? 1 : 0;
+        if (it.brick == x && it.what != QLatin1String("pins")) {
+            V3 lo, hi;
+            it.mesh.bounds(lo, hi);
+            xR = std::max(xR, hi.z);
+        }
+    }
+    std::printf("  3d part: turned to %.1f across (drawn %.1f), %d pinout(s)\n", 2 * xR, xb.max.y - xb.min.y, pins);
+    check(pins == 1, "3d part: a connector's pins on its front face");
+    check(xR < (xb.max.y - xb.min.y) * 0.75, "3d part: a lone mark at its end is not turned into a disc");
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -5768,6 +5888,7 @@ int run_brickharness_tests() {
     testRoundThirtyEight();
     testRoundThirtyNine();
     testRoundForty();
+    testRoundFortyOne();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

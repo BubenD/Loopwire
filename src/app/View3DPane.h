@@ -27,6 +27,8 @@ public:
     void setSources(std::function<std::vector<Entity>()> drawing, std::function<std::vector<Entity>()> wizard);
     // The 3D model file a library part has attached, or nothing.
     void setModelLookup(std::function<QString(const QString& libPart)> modelOf);
+    // A connector's pins and gender, for its pinout on its front face.
+    void setPinsLookup(std::function<PartPins(const QString& libPart)> pinsOf);
     // Built again from its source, and brought round to show the whole of it.
     void rebuild(bool fit = true);
     // The harness from one place only - the wizard's own view: no choice of where from.
@@ -41,6 +43,7 @@ public:
 private:
     std::function<std::vector<Entity>()> drawing_, wizard_;
     std::function<QString(const QString&)> modelOf_;
+    std::function<PartPins(const QString&)> pinsOf_;
     Harness3DScene scene_;
     View3DCanvas* canvas_ = nullptr;
     QComboBox* source_ = nullptr;

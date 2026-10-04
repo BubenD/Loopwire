@@ -408,7 +408,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                 };
                 QGridLayout* fg = nullptr;
                 QGridLayout* bg = nullptr;
-                QFrame* fanBox = boxed(&fg, QStringLiteral("Fan out"), 14);
+                QFrame* fanBox = boxed(&fg, QStringLiteral("Fan out"), 17);
                 QFrame* bodyBox = boxed(&bg, QStringLiteral("Body"), 14);
                 // ONE BOX, ONE GRID. The figures for the two ends were briefly boxed apart, and two
                 // frames inside a frame inside a ribbon group is three borders deep to read one
@@ -422,6 +422,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                 og->addWidget(fanBox, 0, 6, 2, 1);
                 og->addWidget(bodyBox, 0, 8, 2, 1);
                 for (int gap : {2, 5, 8, 11}) fg->setColumnMinimumWidth(gap, 10);
+                fg->setColumnMinimumWidth(14, 10);
                 for (int gap : {2, 5, 8, 11}) bg->setColumnMinimumWidth(gap, 10);
                 // THE SLACK GOES AT THE END, not into the first column. A grid with nothing told to
                 // take up the spare width hands it to whichever column will have it, which put a
@@ -532,8 +533,9 @@ void MainWindow::buildHarnessMechanicalTab() {
                 // covered by a cable or a length of tubing draws none of them. It shares its cell
                 // with the cover width, which is the same question asked of the other two sorts -
                 // one of the two is on show at a time, never both.
-                bg->addWidget(twistTrunkLabel_, 1, 3);
-                bg->addWidget(autoBeside(twistTrunkSpin_), 1, 4);
+                // IN THE FAN OUT GROUP, with the wires it is a number of: how many the fan converges to.
+                fg->addWidget(twistTrunkLabel_, 0, 15);
+                fg->addWidget(autoBeside(twistTrunkSpin_), 0, 16);
                 connect(twistTrunkSpin_, &QSpinBox::valueChanged, this, [this](int v) {
                     editor_->setTwistTrunk(v);
                     canvas_->update();   // a pinned run re-draws with the new bundle
