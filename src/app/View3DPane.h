@@ -21,6 +21,7 @@ class QDoubleSpinBox;
 class QLabel;
 class QListWidget;
 class QSlider;
+class QProgressBar;
 class QSpinBox;
 class QTableWidget;
 class QThread;
@@ -33,6 +34,7 @@ namespace Edraw_Desktop {
 
 class View3DCanvas;
 class View3DHelpDialog;
+class NavWheel;
 
 // WHAT A CLICK IN THE 3D VIEW DOES: picks (and selects a node or a bundle), puts a connector on a face, puts a branch
 // or a clip down (on a bundle, dividing it), lays a bundle from node to node through the points clicked, or takes a
@@ -108,6 +110,8 @@ public:
     static QString exampleResource() { return QStringLiteral(":/help3d/example.obj"); }
     // THE WHOLE SCREEN: the view, with every row and the side panel, filling it - and back.
     void setFullScreen(bool on);
+    // THE VIEW LOCKED (and the button and the wheel saying so).
+    void setViewLocked(bool on);
     // BUILT AGAIN A MOMENT AFTER the drawing last changed - what is put on the sheet shows in 3D without a Refresh.
     void scheduleRebuild();
     bool fullScreenView() const { return fullScreen_; }
@@ -173,6 +177,7 @@ private:
     QWidget* envRow_ = nullptr;
     QToolButton* envLoad_ = nullptr;
     QToolButton* envClear_ = nullptr;
+    QProgressBar* envProgress_ = nullptr;   // shown while a model is read
     QCheckBox* envShown_ = nullptr;
     QSlider* envOpacity_ = nullptr;
     QCheckBox* harnessShown_ = nullptr;
@@ -206,9 +211,20 @@ private:
     // The whole screen. Not saved.
     bool fullScreen_ = false;
     QTimer* rebuildSoon_ = nullptr;
+    QToolButton* lockBtn_ = nullptr;
+    // THE WHEEL, in the picture's corner, and how far a click on it turns the view. Not saved.
+    NavWheel* wheel_ = nullptr;
+    QCheckBox* wheelShown_ = nullptr;
+    int wheelStep_ = 15;
+    void wheelOptions(const QPoint& at);
+    void placeWheel();
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
+private:
     Qt::WindowFlags normalFlags_;
     QToolButton* fullBtn_ = nullptr;
     // The camera's three turns, in degrees, all the way round.
+    QWidget* viewBits_ = nullptr;   // the view's three turns, on the work plane's row
     QSpinBox* turn_ = nullptr;
     QSpinBox* tilt_ = nullptr;
     QSpinBox* roll_ = nullptr;
@@ -281,6 +297,15 @@ public:
     // THE WORK PLANE: a click lands on it rather than on the model - a plane across X, Y or Z (`axis` 0, 1, 2) at `at`
     // along it, drawn see-through so it is seen where it is; -1, none.
     void setWorkPlane(int axis, double at);
+    // THE VIEW LOCKED: the mouse no longer turns, moves or zooms it - a drag moves what is under it instead: a node, a
+    // corner of a bundle, or a bundle (a corner put where it was taken hold of), across the picture as far as the
+    // pointer goes, at the depth it is.
+    void setViewLocked(bool on);
+    bool viewLocked() const { return viewLocked_; }
+    // THE VIEW TURNED by so many degrees round the upright, up and over, and round the way it looks; brought nearer
+    // (under 1) or further (over 1).
+    void nudge(double turnDeg, double tiltDeg, double rollDeg);
+    void zoomBy(double factor);
     int workPlaneAxis() const { return planeAxis_; }
     double workPlaneAt() const { return planeAt_; }
 
@@ -348,12 +373,22 @@ private:
     struct Drawn {
         Mesh3D mesh;
         QColor color;
+        int texture = Texture3D::None;
     };
     mutable std::vector<Drawn> routeMeshes_;
     mutable bool routeDirty_ = true;
     Mesh3D layMesh_;
     // The release that ends a double-click is not another click.
     bool swallowRelease_ = false;
+    // Locked, and what a drag is moving. Not saved.
+    bool viewLocked_ = false;
+    int dragKind_ = 0;        // 0 nothing, 1 a node, 2 a corner of a bundle, 3 a bundle (a corner to be put in it)
+    QString dragId_;
+    int dragVia_ = -1;
+    RouteVia3D dragNew_;
+    double dragPerPixel_ = 0.0;
+    bool dragStarted_ = false;
+    bool beginItemDrag(const QPointF& at);
     // The work plane. Not saved.
     int planeAxis_ = -1;
     double planeAt_ = 0.0;

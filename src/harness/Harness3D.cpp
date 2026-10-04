@@ -2,11 +2,14 @@
 
 #include "harness/Harness.h"
 #include "harness/PartsLibrary.h"
+#include "render/Render3D.h"
+#include "geometry/PartModel3D.h"
 
 #include <QDateTime>
 #include <QFileInfo>
 #include <QHash>
 #include <QJsonArray>
+#include <QRegularExpression>
 
 #include <algorithm>
 #include <cmath>
@@ -58,6 +61,77 @@ QColor wireColour(int k) {
 
 } // namespace
 
+std::vector<PartPins::Pin> pinoutPositions(const QJsonArray& drawing) {
+    struct Circ {
+        Vec2 c;
+        double r;
+    };
+    struct Num {
+        int n;
+        Vec2 at;
+    };
+    std::vector<Circ> circles;
+    std::vector<Num> numbers;
+    static const QRegularExpression digits(QStringLiteral("^\\d{1,3}$"));
+    for (const Entity& e : partDrawingEntities(drawing)) {
+        if (e.type == EntityType::Circle && e.radius > 1e-9) circles.push_back({e.center, e.radius});
+        if (e.type == EntityType::Text) {
+            const QString t = e.meta.value(QStringLiteral("text")).toString().trimmed();
+            if (!digits.match(t).hasMatch()) continue;
+            double size = e.meta.value(QStringLiteral("size")).toDouble();
+            if (size <= 0.0) size = e.meta.value(QStringLiteral("height")).toDouble(1.0);
+            // The middle of the number, from where it is set: its bottom left, unless it says it is set otherwise.
+            const QString j = e.meta.value(QStringLiteral("justify")).toString().toUpper();
+            Vec2 mid = e.a + Vec2{0.3 * size * t.size(), 0.35 * size};
+            if (j.contains(QLatin1Char('C'))) mid.x = e.a.x;
+            if (j.startsWith(QLatin1Char('M'))) mid.y = e.a.y;
+            numbers.push_back({t.toInt(), mid});
+        }
+    }
+    if (circles.size() < 2 || numbers.empty()) return {};
+    // THE FACE: the biggest circle; the pins, the circles well inside it.
+    const auto face = std::max_element(circles.begin(), circles.end(), [](const Circ& a, const Circ& b) { return a.r < b.r; });
+    const Circ outer = *face;
+    std::vector<Circ> holes;
+    for (const Circ& c : circles)
+        if (c.r < outer.r * 0.5 && distance(c.c, outer.c) < outer.r) holes.push_back(c);
+    // EACH NUMBER TO ITS CIRCLE: the nearest pairs first, each circle and each number taken once - so a number set
+    // between two circles goes to the one no nearer number has.
+    struct Pair {
+        double d;
+        size_t n, h;
+    };
+    std::vector<Pair> pairs;
+    for (size_t n = 0; n < numbers.size(); ++n)
+        for (size_t h = 0; h < holes.size(); ++h) {
+            const double d = distance(numbers[n].at, holes[h].c);
+            if (d < holes[h].r * 4.0 + outer.r * 0.15) pairs.push_back({d, n, h});
+        }
+    std::sort(pairs.begin(), pairs.end(), [](const Pair& a, const Pair& b) { return a.d < b.d; });
+    std::vector<bool> numberUsed(numbers.size(), false), holeUsed(holes.size(), false);
+    // AND WHAT IS LEFT, each to the nearest circle left: a number set further off than most still has its circle,
+    // and every circle drawn is a pin.
+    for (size_t n = 0; n < numbers.size(); ++n)
+        for (size_t h = 0; h < holes.size(); ++h) {
+            const double d = distance(numbers[n].at, holes[h].c);
+            if (d >= holes[h].r * 4.0 + outer.r * 0.15) pairs.push_back({1e9 + d, n, h});
+        }
+    std::sort(pairs.begin(), pairs.end(), [](const Pair& a, const Pair& b) { return a.d < b.d; });
+    std::vector<PartPins::Pin> out;
+    for (const Pair& p : pairs) {
+        if (numberUsed[p.n] || holeUsed[p.h]) continue;
+        numberUsed[p.n] = holeUsed[p.h] = true;
+        PartPins::Pin pin;
+        pin.number = numbers[p.n].n;
+        pin.placed = true;
+        pin.u = (holes[p.h].c.x - outer.c.x) / outer.r;
+        pin.v = (holes[p.h].c.y - outer.c.y) / outer.r;
+        pin.r = holes[p.h].r / outer.r;
+        out.push_back(pin);
+    }
+    return out;
+}
+
 PartPins partPinsOf(const LibraryPart* p) {
     PartPins pins;
     if (!p || p->kind != PartKind::Connector) return pins;
@@ -65,6 +139,28 @@ PartPins partPinsOf(const LibraryPart* p) {
     const QString said = (p->value(QStringLiteral("gender")) + QLatin1Char(' ') + p->value(QStringLiteral("mounting"))).toLower();
     pins.female = said.contains(QLatin1String("female")) || said.contains(QLatin1String("receptacle")) ||
                   said.contains(QLatin1String("socket"));
+    // EACH PIN: a pin or a socket as its type says (as the connector says, where no type does), and where its pinout
+    // drawing puts it - the front, looking at the face; or the back turned round, where only the back is drawn.
+    const QStringList genders = partPinGenders(*p);
+    std::vector<PartPins::Pin> placed = pinoutPositions(p->fanout);
+    if (placed.empty()) {
+        placed = pinoutPositions(p->fanoutOpposite);
+        for (PartPins::Pin& q : placed) q.u = -q.u;
+    }
+    for (int n = 1; n <= pins.count; ++n) {
+        PartPins::Pin pin;
+        pin.number = n;
+        const QString g = n - 1 < genders.size() ? genders[n - 1] : QString();
+        pin.female = g.isEmpty() ? pins.female : g == QLatin1String("female");
+        for (const PartPins::Pin& q : placed)
+            if (q.number == n) {
+                pin.placed = true;
+                pin.u = q.u;
+                pin.v = q.v;
+                pin.r = q.r;
+            }
+        pins.each.push_back(pin);
+    }
     return pins;
 }
 
@@ -224,6 +320,71 @@ Mesh3D solidFromDrawing(const std::vector<Vec2>& pts, const Vec2& c, const V3& A
         m.addTri(e1, n * sides + k, n * sides + (k + 1) % sides);
     }
     return m;
+}
+} // namespace
+
+Mesh3D partDrawingSolid(const LibraryPart& part, bool revolve) {
+    std::vector<Vec2> outline;
+    Bounds box;
+    for (const Entity& e : partDrawingEntities(part.mechanical)) {
+        if (e.type == EntityType::Text || e.type == EntityType::Dimension) continue;
+        sampleInto(e, outline);
+        box.expand(e.bounds());
+    }
+    if (outline.empty() || !box.valid) return {};
+    const Vec2 c = box.center();
+    const double width = std::max(0.5, box.height());
+    Mesh3D m = solidFromDrawing(outline, c, {1, 0, 0}, {0, 1, 0}, box.min.x - c.x, box.max.x - c.x, revolve, width, nullptr);
+    for (V3& v : m.v) v = v - V3{c.x, c.y, 0.0};
+    return m;
+}
+
+void partPinMeshes(const LibraryPart& part, double faceDiameter, double depth, Mesh3D& pins, Mesh3D& sockets) {
+    pins = Mesh3D();
+    sockets = Mesh3D();
+    const PartPins pp = partPinsOf(&part);
+    if (pp.count <= 0) return;
+    const double R = std::max(0.3, faceDiameter / 2.0);
+    const double spread = R * 0.78;
+    const double fallbackR = std::clamp(spread * std::sqrt(1.0 / pp.count) * 0.42, 0.08, spread * 0.3);
+    for (int i = 0; i < pp.count; ++i) {
+        const PartPins::Pin* one = i < static_cast<int>(pp.each.size()) ? &pp.each[static_cast<size_t>(i)] : nullptr;
+        double y = 0.0, z = 0.0, r = fallbackR;
+        if (one && one->placed) {
+            y = one->u * R * 0.96;
+            z = one->v * R * 0.96;
+            r = std::max(0.06, one->r * R * 0.96 * 0.75);
+        } else {
+            const double rr = pp.count == 1 ? 0.0 : spread * 0.82 * std::sqrt((i + 0.5) / pp.count);
+            const double th = i * 2.399963229728653;
+            y = rr * std::cos(th);
+            z = rr * std::sin(th);
+        }
+        const bool female = one ? one->female : pp.female;
+        (female ? sockets : pins).append(tubeMesh({{-depth, y, z}, {0.02, y, z}}, female ? r * 1.15 : r, 12, true));
+    }
+}
+
+namespace {
+// A BUILT MODEL, read once and again only when its file changes.
+const std::vector<ModelItem3D>& cachedPartModel(const QString& path, QString* how) {
+    struct Built {
+        QDateTime when;
+        std::vector<ModelItem3D> items;
+        QString how;
+    };
+    static QHash<QString, Built> cache;
+    const QDateTime when = QFileInfo(path).lastModified();
+    auto it = cache.find(path);
+    if (it == cache.end() || it->when != when) {
+        Built b;
+        b.when = when;
+        PartModel3D model;
+        if (PartModel3D::load(path, model, &b.how)) b.items = modelItems(model, &b.how);
+        it = cache.insert(path, b);
+    }
+    if (how) *how = it->how;
+    return it->items;
 }
 } // namespace
 
@@ -792,9 +953,43 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
         // next across, its shortest standing up - scaled to the length it is drawn.
         const QString file = modelOf && !p.lib.isEmpty() ? modelOf(p.lib) : QString();
         QString how;
-        const Mesh3D* model = file.isEmpty() ? nullptr : &cachedMesh3D(file, &how);
+        // A MODEL BUILT IN EDRAW: each of its solids in its own colour and what it is made of, its X along the way the
+        // part goes in, its face towards the end away from the harness - scaled to the length it is drawn.
+        bool built = false;
+        if (!file.isEmpty() && isPartModelFile(file)) {
+            const std::vector<ModelItem3D>& made = cachedPartModel(file, &how);
+            V3 blo, bhi;
+            if (modelBounds(made, blo, bhi)) {
+                const V3 mid = (blo + bhi) * 0.5;
+                const double k = length / std::max(1e-9, bhi.x - blo.x);
+                bool first = true;
+                for (const ModelItem3D& mi : made) {
+                    if (mi.alpha < 0.99 || mi.mesh.empty()) continue;
+                    Harness3DItem one;
+                    one.mesh = mi.mesh;
+                    for (V3& v : one.mesh.v) v = centre + A * ((v.x - mid.x) * k) + B * ((v.y - mid.y) * k) + Z * ((v.z - mid.z) * k);
+                    one.color = mi.color;
+                    one.texture = mi.texture;
+                    one.ownLook = true;
+                    one.model = true;
+                    one.what = it.what;
+                    one.brick = it.brick;
+                    if (first) {
+                        it = std::move(one);
+                        first = false;
+                    } else {
+                        scene.items.push_back(std::move(one));
+                    }
+                }
+                built = !first;
+                if (built) ++scene.modelled;
+            }
+        }
+        const Mesh3D* model = built || file.isEmpty() ? nullptr : &cachedMesh3D(file, &how);
         V3 mlo, mhi;
-        if (model && !model->empty() && model->bounds(mlo, mhi)) {
+        if (built) {
+            // made above
+        } else if (model && !model->empty() && model->bounds(mlo, mhi)) {
             const V3 ext = mhi - mlo, mid = (mlo + mhi) * 0.5;
             const double e[3] = {ext.x, ext.y, ext.z};
             int ord[3] = {0, 1, 2};
@@ -851,7 +1046,9 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
                 const double pinR = std::clamp(R * std::sqrt(1.0 / pins.count) * 0.42, 0.12, R * 0.3);
                 // As long as two fifths of what a pin standing out of it would have been.
                 const double depth = 0.4 * std::max(0.8, length * 0.14);
-                Harness3DItem pinsItem;
+                Harness3DItem pinsItem, socketsItem;
+                // ON THE FACE AS THE PINOUT DRAWING HAS THEM, where it does: its circle to the face's.
+                const double faceHalf = block ? std::min(faceR, (block ? blockWidth : width) / 2.0) : faceR;
                 // On a block, in rows and columns over its face, as a rectangular connector's cavities are.
                 const double faceW = 2.0 * faceR * 0.8, faceH = (block ? blockWidth : width) * 0.8;
                 const int cols = std::max(1, static_cast<int>(std::ceil(std::sqrt(pins.count * faceW / std::max(1e-6, faceH)))));
@@ -859,8 +1056,12 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
                 const double cell = std::min(faceW / cols, faceH / rows);
                 const double blockPinR = std::max(0.08, cell * 0.22);
                 for (int i = 0; i < pins.count; ++i) {
+                    const PartPins::Pin* one = i < static_cast<int>(pins.each.size()) ? &pins.each[static_cast<size_t>(i)] : nullptr;
+                    const bool female = one ? one->female : pins.female;
                     V3 at;
-                    if (block) {
+                    if (one && one->placed) {
+                        at = face + B * (one->u * faceHalf * 0.96) + Z * (one->v * faceHalf * 0.96);
+                    } else if (block) {
                         const int row = i / cols, col = i % cols;
                         const int inRow = row + 1 == rows ? pins.count - row * cols : cols;
                         at = face + B * ((col - (inRow - 1) / 2.0) * cell) + Z * (((rows - 1) / 2.0 - row) * cell);
@@ -870,18 +1071,34 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
                         const double th = i * 2.399963229728653;
                         at = face + B * (rr * std::cos(th)) + Z * (rr * std::sin(th));
                     }
-                    const double r = block ? blockPinR : pinR;
+                    const double r = one && one->placed ? std::max(0.06, one->r * faceHalf * 0.96 * 0.75) : block ? blockPinR : pinR;
                     // Its tip a hair proud of the face, so it shows on it rather than flickering in it.
                     const double proud = std::min(0.02, depth * 0.05);
-                    pinsItem.mesh.append(tubeMesh({at - A * depth, at + A * proud}, pins.female ? r * 1.15 : r, 10, true));
+                    (female ? socketsItem : pinsItem).mesh.append(tubeMesh({at - A * depth, at + A * proud}, female ? r * 1.15 : r, 10, true));
                 }
-                pinsItem.color = pins.female ? QColor(18, 18, 20) : QColor(212, 175, 80);
-                pinsItem.what = pins.female ? QStringLiteral("sockets") : QStringLiteral("pins");
-                pinsItem.brick = p.brick;
-                scene.items.push_back(std::move(pinsItem));
+                // PINS AND SOCKETS, each as what it is: a connector with both shows both.
+                pinsItem.color = QColor(212, 175, 80);
+                pinsItem.what = QStringLiteral("pins");
+                socketsItem.color = QColor(18, 18, 20);
+                socketsItem.what = QStringLiteral("sockets");
+                for (Harness3DItem* x : {&pinsItem, &socketsItem}) {
+                    if (x->mesh.empty()) continue;
+                    x->brick = p.brick;
+                    scene.items.push_back(std::move(*x));
+                }
             }
         }
         scene.items.push_back(std::move(it));
+    }
+    // WHAT EACH LOOKS MADE OF: a part and its pins metal, a wire's insulation plastic, a jacket, a sleeve, a socket's
+    // insert matte.
+    for (Harness3DItem& it : scene.items) {
+        if (it.ownLook) continue;
+        if (it.what == QLatin1String("wire")) it.texture = Texture3D::Plastic;
+        else if (it.what == QLatin1String("run") || it.what == QLatin1String("sleeve") ||
+                 it.what == QLatin1String("transition") || it.what == QLatin1String("sockets"))
+            it.texture = Texture3D::Matte;
+        else it.texture = Texture3D::Metal;
     }
     return scene;
 }

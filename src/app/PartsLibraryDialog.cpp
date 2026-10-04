@@ -6,8 +6,9 @@
 #include "harness/PartDataFromWeb.h"
 #include <QTreeWidgetItem>
 #include "harness/MechModels.h"
-#include "app/PartWebDataDialog.h"
 #include "app/PartFromPdfDialog.h"
+#include "app/Part3DEditorDialog.h"
+#include "geometry/PartModel3D.h"
 #include "harness/PartFromPdf.h"
 #include "io/PdfText.h"
 #include "harness/MechanicalHarness.h"
@@ -36,6 +37,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFile>
+#include <QRegularExpression>
 #include <QFormLayout>
 #include <QInputDialog>
 #include <QGridLayout>
@@ -1050,14 +1052,6 @@ void PartsLibraryDialog::buildUi() {
         open->setToolTip(QStringLiteral("Open this part's page in the browser"));
         connect(open, &QPushButton::clicked, this, [this] { openPartLink(); });
         hl->addWidget(open);
-        auto* fetch = new QPushButton(QStringLiteral("Read data…"), host);
-        fetch->setToolTip(QStringLiteral(
-            "Read the page and offer what can be found on it — the gauge, the ratio, the way count, the "
-            "temperature range, whatever that kind of part is described by.\n"
-            "Nothing is written until it is ticked: a reading off a page is a suggestion, and it is shown "
-            "with the words it came from."));
-        connect(fetch, &QPushButton::clicked, this, [this] { fetchDataFromLink(); });
-        hl->addWidget(fetch);
         headRow(QStringLiteral("Web link"), host);
     }
     // What the part is issued in. A bill of materials totals quantities by it, so it decides what
@@ -1148,6 +1142,15 @@ void PartsLibraryDialog::buildUi() {
         model3dLabel_ = new QLabel(row);
         model3dLabel_->setObjectName(QStringLiteral("partModel3dLabel"));
         rl->addWidget(model3dLabel_, 1);
+        // BUILT HERE: its solids put together in a 3D window of their own - from its drawing, its pinout, and simple
+        // solids - when there is no CAD model of it to attach.
+        auto* build = new QPushButton(QStringLiteral("Build 3D…"), row);
+        build->setObjectName(QStringLiteral("partModel3dBuild"));
+        build->setToolTip(QStringLiteral("Build the part's 3D model: from its drawing (turned or extruded), its pins from its "
+                                         "pinout, and boxes, cylinders, tubes, cones, spheres, rings and hexagons - moved, "
+                                         "turned, scaled, mirrored, arrayed, coloured, or cut out as holes"));
+        connect(build, &QPushButton::clicked, this, [this] { buildModel3D(); });
+        rl->addWidget(build);
         model3dAttach_ = new QPushButton(QStringLiteral("Attach 3D…"), row);
         model3dAttach_->setObjectName(QStringLiteral("partModel3dAttach"));
         model3dAttach_->setToolTip(QStringLiteral("Attach a 3D model of the part (.stp, .step, .stl, .obj) - it is shown "
@@ -1237,7 +1240,7 @@ void PartsLibraryDialog::buildUi() {
     // is drawn, checked and placed all day, and the schematic symbol is the occasional one. The first pane is
     // the one the eye lands on.
     const Side sides[] = {{"Mechanical drawing", true}, {"Schematic symbol", false},
-                          {"Fanout front", false}};
+                          {"Pinout front", false}};
     // THE EYE, over all three drawings at once. The connection point is drawn ORANGE over the part - the line
     // the harness attaches to - and while the drawing itself is being checked that mark is in the way of seeing
     // it: an orange line reads as part of the part. So it goes, and comes back. One button for the three panes
@@ -1285,8 +1288,8 @@ void PartsLibraryDialog::buildUi() {
         struct Which { const char* text; LibraryPartDrawing kind; };
         const Which whichOnes[] = {{"Mechanical drawing", LibraryPartDrawing::Mechanical},
                                    {"Schematic symbol", LibraryPartDrawing::Schematic},
-                                   {"Fanout front", LibraryPartDrawing::Fanout},
-                                   {"Fanout back", LibraryPartDrawing::FanoutOpposite}};
+                                   {"Pinout front", LibraryPartDrawing::Fanout},
+                                   {"Pinout back", LibraryPartDrawing::FanoutOpposite}};
         for (const Which& w : whichOnes) {
             // Kept as ACTIONS, because that is what everything else already asks (see placeTicked), with a
             // tick box in the panel driving each one. One state, shown once.
@@ -1472,7 +1475,7 @@ void PartsLibraryDialog::buildUi() {
             // away. Each button asks the box which side that is.
             auto* cap = new QPushButton(QStringLiteral("Capture selection"), btns);
             cap->setToolTip(QStringLiteral(
-                "Take what is selected on the sheet as this part's fanout on the side showing"));
+                "Take what is selected on the sheet as this part's pinout drawing on the side showing"));
             connect(cap, &QPushButton::clicked, this, [this] { beginCaptureFanout(showingBackFanout()); });
             bl->addWidget(cap);
             auto* edt = new QPushButton(QStringLiteral("Edit"), btns);
@@ -2666,6 +2669,51 @@ void PartsLibraryDialog::attachModel3D() {
                                        : QStringLiteral("Attached %1 - %2").arg(QFileInfo(path).fileName(), how));
 }
 
+bool PartsLibraryDialog::saveBuiltModel3D(const PartModel3D& model) {
+    LibraryPart* p = current();
+    if (!p) return false;
+    // A FILE OF ITS OWN, kept with the part's other files, named for the part.
+    QString base = p->mfrPn.isEmpty() ? (p->internalPn.isEmpty() ? p->id : p->internalPn) : p->mfrPn;
+    base.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9._-]+")), QStringLiteral("_"));
+    const QString tmp = QDir(QDir::tempPath()).filePath(base + QStringLiteral(".") + partModelExtension());
+    QString error;
+    if (!model.save(tmp, &error)) {
+        QMessageBox::warning(this, QStringLiteral("3D model"), error);
+        return false;
+    }
+    const QString stored = DatasheetStore::attach(tmp, &error);
+    QFile::remove(tmp);
+    if (stored.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("3D model"), error);
+        return false;
+    }
+    p->params[QStringLiteral("model3d")] = stored;
+    touched();
+    refreshModel3DRow();
+    if (summary_)
+        summary_->setText(QStringLiteral("3D model built - %1 solid(s), kept as %2").arg(model.bodies.size()).arg(DatasheetStore::originalName(stored)));
+    return true;
+}
+
+void PartsLibraryDialog::buildModel3D() {
+    LibraryPart* p = current();
+    if (!p) return;
+    // THE ONE IT HAS, when it was built here; otherwise a new one, from its drawing.
+    PartModel3D start;
+    const QString stored = p->value(QStringLiteral("model3d"));
+    if (!stored.isEmpty() && isPartModelFile(DatasheetStore::pathOf(stored))) PartModel3D::load(DatasheetStore::pathOf(stored), start);
+    else if (!stored.isEmpty() &&
+             QMessageBox::question(this, QStringLiteral("Build 3D"),
+                                   QStringLiteral("The part has a 3D model attached. Build one here instead? Saving it puts it "
+                                                  "in place of the attached one.")) != QMessageBox::Yes)
+        return;
+    Part3DEditorDialog dlg(*p, start, this);
+    bool save = false;
+    connect(&dlg, &Part3DEditorDialog::saveRequested, this, [&save] { save = true; });
+    dlg.exec();
+    if (save) saveBuiltModel3D(dlg.model());
+}
+
 void PartsLibraryDialog::removeModel3D() {
     LibraryPart* p = current();
     if (!p) return;
@@ -3243,42 +3291,6 @@ void PartsLibraryDialog::openPartLink() {
         summary_->setText(QStringLiteral("That link could not be opened: %1").arg(link));
 }
 
-void PartsLibraryDialog::fetchDataFromLink() {
-    LibraryPart* p = current();
-    if (!p) return;
-    QString link = p->link.trimmed();
-    if (link.isEmpty()) {
-        QMessageBox::information(
-            this, QStringLiteral("Read data"),
-            QStringLiteral("Put the part's page in the Web link field first — the manufacturer's page for "
-                           "this part, or the distributor's listing of it."));
-        return;
-    }
-    if (!link.contains(QStringLiteral("://"))) link.prepend(QStringLiteral("https://"));
-    PartWebDataDialog dlg(*p, link, this);
-    if (dlg.exec() != QDialog::Accepted) return;
-    // Only what was ticked, and it is written into the part that is showing - which may have been changed
-    // while the page was being read, so it is fetched again rather than remembered.
-    LibraryPart* still = current();
-    if (!still) return;
-    const int changed = applyWebFinds(*still, dlg.chosen());
-    const QString sheet = dlg.datasheetLink();
-    if (!sheet.isEmpty()) still->params.insert(QStringLiteral("datasheetLink"), sheet);
-    if (changed > 0 || !sheet.isEmpty()) {
-        touched();
-        rebuildParamForm();   // the fields it filled in are on the form
-        reloadTree();
-        if (summary_)
-            summary_->setText(QStringLiteral("%1 field%2 filled in from the page%3")
-                                  .arg(changed)
-                                  .arg(changed == 1 ? QString() : QStringLiteral("s"))
-                                  .arg(sheet.isEmpty() ? QString()
-                                                       : QStringLiteral(", and the datasheet link kept")));
-    } else if (summary_) {
-        summary_->setText(QStringLiteral("Nothing was taken from the page"));
-    }
-}
-
 void PartsLibraryDialog::generateConnectorSymbol() {
     LibraryPart* p = current();
     if (!p) return;
@@ -3389,7 +3401,7 @@ void PartsLibraryDialog::beginCaptureFanout(bool opposite) {
     if (sel.empty()) {
         if (summary_)
             summary_->setText(QStringLiteral(
-                "Select the fanout on the sheet first — the wires as they leave the connector"));
+                "Select the pinout drawing on the sheet first — the connector's pins as seen on its face"));
         return;
     }
     const QJsonArray captured = partDrawingFromEntities(sel);
@@ -3403,7 +3415,7 @@ void PartsLibraryDialog::beginCaptureFanout(bool opposite) {
     touched();
     reloadTree();
     if (summary_)
-        summary_->setText(QStringLiteral("Captured %1 object(s) as the fanout %2 of this connector")
+        summary_->setText(QStringLiteral("Captured %1 object(s) as the pinout drawing %2 of this connector")
                               .arg(sel.size())
                               .arg(opposite ? QStringLiteral("back") : QStringLiteral("front")));
 }
@@ -3413,8 +3425,8 @@ void PartsLibraryDialog::insertFanout(bool mirrored) {
     if (!p || !editor_) return;
     if (!p->hasFanout()) {
         if (summary_)
-            summary_->setText(QStringLiteral("No fanout captured for this part yet — draw it on the sheet "
-                                             "and press Capture selection under Fanout"));
+            summary_->setText(QStringLiteral("No pinout drawing captured for this part yet — draw it on the sheet "
+                                             "and press Capture selection under Pinout"));
         return;
     }
     // Mirrored, and the opposite side has its own captured drawing: place THAT, as it was actually
@@ -3437,7 +3449,7 @@ void PartsLibraryDialog::insertFanout(bool mirrored) {
                               ? (mirrored ? QStringLiteral("back") : QStringLiteral("front"))
                               : (mirrored ? QStringLiteral("front") : QStringLiteral("back"));
     if (summary_)
-        summary_->setText(QStringLiteral("Click the sheet to place the fanout of %1 — the %2 of the "
+        summary_->setText(QStringLiteral("Click the sheet to place the pinout drawing of %1 — the %2 of the "
                                          "connector")
                               .arg(p->title(), shows));
     saveLibrary();
@@ -3742,8 +3754,8 @@ void PartsLibraryDialog::showFanoutSide() {
     if (fanoutPreview_) {
         // The caption says which side is on show, because two drawings in one pane with nothing to tell
         // them apart is worse than one drawing.
-        fanoutPreview_->setCaption(back ? QStringLiteral("Fanout back")
-                                        : QStringLiteral("Fanout front"));
+        fanoutPreview_->setCaption(back ? QStringLiteral("Pinout back")
+                                        : QStringLiteral("Pinout front"));
         fanoutPreview_->setEmptyText(back ? QStringLiteral("nothing drawn for the back yet")
                                           : QStringLiteral("nothing drawn for the front yet"));
         fanoutPreview_->setDrawing(mine);

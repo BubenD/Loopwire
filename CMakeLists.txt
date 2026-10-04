@@ -154,8 +154,6 @@ add_library(edraw_core STATIC
     src/model/EntityRefs.cpp
     src/harness/PartDataFromWeb.h
     src/harness/PartDataFromWeb.cpp
-    src/app/PartWebDataDialog.h
-    src/app/PartWebDataDialog.cpp
     src/app/MechanicalValidationDialog.h
     src/app/MechanicalValidationDialog.cpp
     src/app/RuleExplainer.h
@@ -163,8 +161,14 @@ add_library(edraw_core STATIC
     src/app/View3DPane.h
     src/app/View3DPane.cpp
     src/app/View3DHelpDialog.h
+    src/app/NavWheel.h
+    src/app/Part3DEditorDialog.h
+    src/app/Part3DEditorDialog.cpp
+    src/app/NavWheel.cpp
     src/app/View3DHelpDialog.cpp
     src/geometry/Mesh3D.h
+    src/geometry/PartModel3D.h
+    src/geometry/PartModel3D.cpp
     src/geometry/Mesh3D.cpp
     src/render/Render3D.h
     src/render/Render3D.cpp

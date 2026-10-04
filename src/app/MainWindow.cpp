@@ -3445,7 +3445,7 @@ void MainWindow::placeLibraryFanout(const QString& partId, bool mirrored) {
     }
     if (drawing.isEmpty()) {
         statusBar()->showMessage(
-            tr("%1 has no fanout, and none can be worked out from it - a fanout needs a way count")
+            tr("%1 has no pinout drawing, and none can be worked out from it - a pinout drawing needs a way count")
                 .arg(part->title()),
             5000);
         return;
@@ -3461,11 +3461,11 @@ void MainWindow::placeLibraryFanout(const QString& partId, bool mirrored) {
     const QString shows = wantBack ? tr("back") : tr("front");
     statusBar()->showMessage(
         generated
-            ? tr("Click the sheet to place a fanout worked out from %1 - %2 way(s) out of the back of the "
+            ? tr("Click the sheet to place a pinout drawing worked out from %1 - %2 way(s) out of the back of the "
                  "housing. Capture your own in the library to replace it")
                   .arg(part->title())
                   .arg(part->wayCount())
-            : tr("Click the sheet to place the fanout of %1 — the %2 of the connector")
+            : tr("Click the sheet to place the pinout drawing of %1 — the %2 of the connector")
                   .arg(part->title(), shows),
         6000);
     if (canvas_) canvas_->setFocus();
@@ -14787,8 +14787,8 @@ void MainWindow::openLibraryPartEditor(const QString& partId, LibraryPartDrawing
     LibraryPart part = *stored;
     const QString drawingKindName = kind == LibraryPartDrawing::Mechanical  ? QStringLiteral("mechanical")
                                     : kind == LibraryPartDrawing::Schematic ? QStringLiteral("schematic")
-                                    : kind == LibraryPartDrawing::Fanout    ? QStringLiteral("fanout front")
-                                                                            : QStringLiteral("fanout back");
+                                    : kind == LibraryPartDrawing::Fanout    ? QStringLiteral("pinout front")
+                                                                            : QStringLiteral("pinout back");
     // WHERE IT CONNECTS AND WHICH WAY IT RUNS, marked before anybody asks - the same reasoning
     // openMechModelEditor uses for a default model. Only the mechanical drawing has anywhere to mark:
     // a schematic symbol and a fanout are not placed by running a direction along a run.
@@ -15613,7 +15613,7 @@ void MainWindow::activateIndex(int index) {
 
 // The three drawings a part can have, named once so the columns, their tooltips and the menu all say the
 // same words.
-static const char* const kPartDrawingNames[3] = {"mechanical", "schematic", "fanout"};
+static const char* const kPartDrawingNames[3] = {"mechanical", "schematic", "pinout"};
 
 QDockWidget* MainWindow::makePartsPanel() {
     auto* dock = new AutoHideDock(QStringLiteral("PARTS"), this);
@@ -15666,11 +15666,11 @@ QDockWidget* MainWindow::makePartsPanel() {
 
     partsPanelTree_ = new QTreeWidget(body);
     partsPanelTree_->setColumnCount(4);
-    partsPanelTree_->setHeaderLabels({tr("Part"), tr("M"), tr("S"), tr("F")});
+    partsPanelTree_->setHeaderLabels({tr("Part"), tr("M"), tr("S"), tr("P")});
     // The three columns are what a part IS TO THE DRAWING, so they are named where they are read.
     partsPanelTree_->headerItem()->setToolTip(1, tr("Mechanical drawing"));
     partsPanelTree_->headerItem()->setToolTip(2, tr("Schematic symbol"));
-    partsPanelTree_->headerItem()->setToolTip(3, tr("Fanout drawing"));
+    partsPanelTree_->headerItem()->setToolTip(3, tr("Pinout drawing"));
     partsPanelTree_->setRootIsDecorated(true);   // a heading per kind, which opens and closes
     // THE SECTIONS CAN BE PUT IN THE ORDER SOMEBODY WORKS IN. The shelf is grouped by kind, and which kind
     // matters most is the shop's business, not the program's: a connector shop wants connectors at the top
@@ -15705,7 +15705,7 @@ QDockWidget* MainWindow::makePartsPanel() {
     }
     partsPanelTree_->setToolTip(QStringLiteral(
         "Every part of every library in view, and which drawings it has: M mechanical, S schematic, "
-        "F fanout. Double-click to put one on the sheet; a part with no drawing at all opens in the "
+        "P pinout drawing. Double-click to put one on the sheet; a part with no drawing at all opens in the "
         "library, where one can be made for it."));
     // WHAT A DOUBLE-CLICK PUTS DOWN is said once, here, rather than guessed at per part. On the NAME it
     // used to place "the mechanical drawing if it has one", which is right for an assembly sheet and wrong
@@ -15785,8 +15785,8 @@ QDockWidget* MainWindow::makePartsPanel() {
             // FRONT AND BACK, not "mirrored". Which side of the connector it is drawn from is what a fanout
             // IS - the same drawing seen from the face or from the wires - and "mirrored" says how the second
             // one was made rather than what it shows. Somebody placing one is choosing a side.
-            {"fanout front", "fan", "How the wires break out of it, seen from the face"},
-            {"fanout back", "fanOpp", "The same fanout seen from the wires"}};
+            {"pinout front", "fan", "Its pinout drawing, seen from the face"},
+            {"pinout back", "fanOpp", "Its pinout drawing, seen from the wires"}};
         QSettings s;
         for (const Which& w : whichOnes) {
             auto* box = new QCheckBox(tr(w.text), what);
@@ -15830,11 +15830,11 @@ QDockWidget* MainWindow::makePartsPanel() {
     //
     // A toggle, because it is not always wanted: a sheet of forty connectors would be a sheet of forty
     // fanouts. Remembered between sessions - it is a habit, not a decision to be made per part.
-    fanoutWithSchematicBox_ = new QCheckBox(tr("A schematic connector is placed with its fanout"), body);
+    fanoutWithSchematicBox_ = new QCheckBox(tr("A schematic connector is placed with its pinout drawing"), body);
     fanoutWithSchematicBox_->setToolTip(tr(
-        "The part's fanout - how the wires break out of it - goes down beside the schematic symbol, in "
+        "The part's pinout drawing - its pins as seen on its face - goes down beside the schematic symbol, in "
         "front of it and next to its designator, as one placement: the two land together and stay "
-        "together.\nOnly for a part that HAS a fanout drawn; anything else is placed as before."));
+        "together.\nOnly for a part that HAS a pinout drawing; anything else is placed as before."));
     {
         QSettings s;
         fanoutWithSchematicBox_->setChecked(
@@ -15942,18 +15942,18 @@ QMenu* MainWindow::buildPartsPanelMenu(const QString& id) {
         // Both sides, named for what each one shows rather than for what was done to it, with the part's own
         // side first - it is the one a plain "fanout" means.
         const bool frontFirst = part->fanoutSide() != QStringLiteral("back");
-        menu.addAction(tr("Place the fanout (%1 of the connector)").arg(frontFirst ? tr("front") : tr("back")),
+        menu.addAction(tr("Place the pinout drawing (%1 of the connector)").arg(frontFirst ? tr("front") : tr("back")),
                        this, [this, id] { placeLibraryFanout(id, false); });
         menu.addAction(
-            tr("Place the fanout (%1 of the connector)").arg(frontFirst ? tr("back") : tr("front")),
+            tr("Place the pinout drawing (%1 of the connector)").arg(frontFirst ? tr("back") : tr("front")),
             this, [this, id] { placeLibraryFanout(id, true); });
     } else if (canHaveFanout(*part)) {
         // None drawn - so one is worked out from the part's own data and placed. Being sent to the library
         // to draw one is not placing a fanout; the generated one can be drawn over, or replaced by capturing
         // a real one in the library.
-        menu.addAction(tr("Place the fanout — %1 way(s), from its own data").arg(part->wayCount()), this,
+        menu.addAction(tr("Place the pinout drawing — %1 way(s), from its own data").arg(part->wayCount()), this,
                        [this, id] { placeLibraryFanout(id, false); });
-        menu.addAction(tr("Place the fanout mirrored — %1 way(s), from its own data").arg(part->wayCount()),
+        menu.addAction(tr("Place the pinout drawing mirrored — %1 way(s), from its own data").arg(part->wayCount()),
                        this, [this, id] { placeLibraryFanout(id, true); });
     }
     if (!mech && !schem && !fan) {
@@ -16117,7 +16117,7 @@ void MainWindow::placeFromPartsPanel(const QString& partId, bool hasMech) {
         addOne(front.isEmpty() ? std::vector<Entity>{}
                                : partDrawingBlockInstance(*part, front, QStringLiteral("fanout"),
                                                           Vec2{0.0, 0.0}, part->fanout.isEmpty()),
-               tr("fanout front"));
+               tr("pinout front"));
     }
     if (ticked(3)) {
         const QJsonArray other = part->fanoutOpposite.isEmpty() ? part->fanout : part->fanoutOpposite;
@@ -16126,7 +16126,7 @@ void MainWindow::placeFromPartsPanel(const QString& partId, bool hasMech) {
                                                           QStringLiteral("fanout (opposite)"),
                                                           Vec2{0.0, 0.0},
                                                           part->fanoutOpposite.isEmpty()),
-               tr("fanout back"));
+               tr("pinout back"));
     }
     if (all.empty()) {
         statusBar()->showMessage(
@@ -16435,7 +16435,7 @@ void MainWindow::refreshPartsPanel() {
                                            .arg(kPartDrawingNames[c])
                                      : tr("No %1 drawing").arg(kPartDrawingNames[c]);
             if (c == 2 && !fan && canHaveFanout(part))
-                cellTip = tr("No fanout drawn - double-click to place one worked out from its %1 way(s)")
+                cellTip = tr("No pinout drawing - double-click to place one worked out from its %1 way(s)")
                               .arg(part.wayCount());
             item->setToolTip(c + 1, cellTip);
         }
@@ -16448,7 +16448,7 @@ void MainWindow::refreshPartsPanel() {
             QStringList sides;
             if (!part.fanout.isEmpty()) sides << tr("front");
             if (!part.fanoutOpposite.isEmpty()) sides << tr("back");
-            drawings << tr("fanout (%1)").arg(sides.join(tr(" and ")));
+            drawings << tr("pinout (%1)").arg(sides.join(tr(" and ")));
         }
         if (!drawings.isEmpty())
             item->setToolTip(0,

@@ -344,13 +344,13 @@ int run_partspanel_tests() {
         // A part is chosen off the shelf by what can be done with it, and that took opening it. There is a
         // column each now - M, S, F - ticked for the drawings the part has, so a shelf is read down its
         // columns rather than part by part.
-        check(list->columnCount() == 4, "columns: the part, and one column each for M, S and F");
+        check(list->columnCount() == 4, "columns: the part, and one column each for M, S and P");
         check(list->headerItem()->text(1) == QStringLiteral("M") &&
                   list->headerItem()->text(2) == QStringLiteral("S") &&
-                  list->headerItem()->text(3) == QStringLiteral("F"),
-              "columns: headed M, S and F");
+                  list->headerItem()->text(3) == QStringLiteral("P"),
+              "columns: headed M, S and P (pinout)");
         check(list->headerItem()->toolTip(1).contains(QStringLiteral("Mechanical")) &&
-                  list->headerItem()->toolTip(3).contains(QStringLiteral("Fanout")),
+                  list->headerItem()->toolTip(3).contains(QStringLiteral("Pinout")),
               "columns: and each says in words what its letter means");
 
         QTreeWidgetItem* drawn = rowFor(list, drawnId);
@@ -363,7 +363,7 @@ int run_partspanel_tests() {
                         qPrintable(drawn->text(3)));
             check(drawn->text(1) == tick && drawn->text(2) == tick && drawn->text(3) == tick,
                   "columns: all three ticked for a part that has all three");
-            check(drawn->toolTip(3).contains(QStringLiteral("fanout")),
+            check(drawn->toolTip(3).contains(QStringLiteral("pinout")),
                   "columns: and the cell says what it is about");
             check(drawn->data(0, Qt::UserRole + 3).toBool(), "columns: the fanout is flagged on the row");
         }
@@ -393,9 +393,9 @@ int run_partspanel_tests() {
                 // BY SIDE, not by transform. Each side of a connector has its own drawing now, so the two
                 // entries name what each one SHOWS - "mirrored" said how the second was made, which is not
                 // what somebody placing one is choosing between.
-                if (s.contains(QStringLiteral("fanout")) && s.contains(QStringLiteral("front")))
+                if (s.contains(QStringLiteral("pinout")) && s.contains(QStringLiteral("front")))
                     front = true;
-                if (s.contains(QStringLiteral("fanout")) && s.contains(QStringLiteral("back")))
+                if (s.contains(QStringLiteral("pinout")) && s.contains(QStringLiteral("back")))
                     back = true;
             }
             check(place, "menu: place the drawing");
@@ -696,7 +696,7 @@ int run_partspanel_tests() {
             for (QAction* a : menu->actions()) {
                 if (a->isSeparator()) continue;
                 items << a->text();
-                if (a->text().contains(QStringLiteral("fanout")) && a->isEnabled() &&
+                if (a->text().contains(QStringLiteral("pinout")) && a->isEnabled() &&
                     !a->text().contains(QStringLiteral("mirrored")))
                     canPlace = true;
                 if (a->text().contains(QStringLiteral("mirrored")) && a->isEnabled()) mirrored = true;
@@ -717,7 +717,7 @@ int run_partspanel_tests() {
         if (QMenu* menu = win.buildPartsPanelMenu(sleeveId)) {
             bool anyFanout = false;
             for (QAction* a : menu->actions())
-                if (a->text().contains(QStringLiteral("fanout"))) anyFanout = true;
+                if (a->text().contains(QStringLiteral("pinout"))) anyFanout = true;
             check(!anyFanout, "fanout: a sleeve is not offered one - a sleeve has no fanout");
             delete menu;
         }
@@ -1306,7 +1306,7 @@ int run_partspanel_tests() {
         check(ed != nullptr && ed->document() != nullptr, "fanout place: there is a drawing to place on");
         QCheckBox* toggle = nullptr;
         for (QCheckBox* b : win.findChildren<QCheckBox*>())
-            if (b->text().contains(QStringLiteral("placed with its fanout"))) toggle = b;
+            if (b->text().contains(QStringLiteral("placed with its pinout drawing"))) toggle = b;
         check(toggle != nullptr, "fanout place: there is a switch for it in the parts panel");
         if (ed && ed->document() && toggle) {
             // OFF: the symbol alone, as before.
@@ -1967,7 +1967,7 @@ int run_partspanel_tests() {
             // A fanout is asked for by the SIDE it shows now - front or back - rather than by how the second
             // one was made.
             if (b->text() == QStringLiteral("mechanical") || b->text() == QStringLiteral("schematic") ||
-                b->text() == QStringLiteral("fanout front") || b->text() == QStringLiteral("fanout back"))
+                b->text() == QStringLiteral("pinout front") || b->text() == QStringLiteral("pinout back"))
                 ticks.push_back(b);
         std::printf("  shelf: %lld tick(s) for what a double-click places\n",
                     static_cast<long long>(ticks.size()));
@@ -2290,13 +2290,13 @@ int run_partspanel_tests() {
         QApplication::processEvents();
         QStringList ticks;
         for (QCheckBox* b : win.findChildren<QCheckBox*>())
-            if (b->text().contains(QStringLiteral("fanout"))) ticks << b->text();
+            if (b->text().contains(QStringLiteral("pinout"))) ticks << b->text();
         ticks.sort();
         std::printf("  sides: the shelf offers %s\n", qPrintable(ticks.join(QStringLiteral(" | "))));
-        check(ticks.contains(QStringLiteral("fanout front")) &&
-                  ticks.contains(QStringLiteral("fanout back")),
+        check(ticks.contains(QStringLiteral("pinout front")) &&
+                  ticks.contains(QStringLiteral("pinout back")),
               "sides: a fanout is asked for by the side it shows, not by how it was made");
-        check(!ticks.contains(QStringLiteral("fanout mirrored")),
+        check(!ticks.contains(QStringLiteral("pinout mirrored")),
               "sides: and \"mirrored\" is not one of the words");
     }
 
@@ -3085,7 +3085,7 @@ int run_partspanel_tests() {
         if (pane && side) {
             std::printf("  sides: opens on %s with %d object(s)\n", qPrintable(pane->caption()),
                         static_cast<int>(pane->entities().size()));
-            check(pane->caption() == QStringLiteral("Fanout front"),
+            check(pane->caption() == QStringLiteral("Pinout front"),
                   "sides: it opens on the part's own side, and says which that is");
             check(pane->entities().size() == 1, "sides: showing the front's own drawing");
 
@@ -3093,7 +3093,7 @@ int run_partspanel_tests() {
             QApplication::processEvents();
             std::printf("  sides: switched to %s with %d object(s)\n", qPrintable(pane->caption()),
                         static_cast<int>(pane->entities().size()));
-            check(pane->caption() == QStringLiteral("Fanout back"),
+            check(pane->caption() == QStringLiteral("Pinout back"),
                   "sides: picking the back shows the back, and says so");
             check(pane->entities().size() == 3,
                   "sides: which is its OWN drawing, not the front mirrored");

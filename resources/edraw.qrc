@@ -22,6 +22,7 @@
     <file alias="connector.gif">help3d/connector.gif</file>
     <file alias="branch.gif">help3d/branch.gif</file>
     <file alias="clip.gif">help3d/clip.gif</file>
+    <file alias="lock.gif">help3d/lock.gif</file>
     <file alias="example.obj">help3d/example.obj</file>
   </qresource>
   <!--

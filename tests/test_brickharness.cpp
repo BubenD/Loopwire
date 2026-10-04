@@ -11,6 +11,11 @@
 #include "app/MechanicalValidationDialog.h"
 #include "app/RuleExplainer.h"
 #include "app/View3DPane.h"
+#include "app/NavWheel.h"
+#include "app/Part3DEditorDialog.h"
+#include "geometry/PartModel3D.h"
+#include "harness/Datasheet.h"
+#include "app/PartsLibraryDialog.h"
 #include "app/View3DHelpDialog.h"
 #include "io/GifWriter.h"
 #include "geometry/Environment3D.h"
@@ -45,6 +50,7 @@
 #include <QWheelEvent>
 #include <QElapsedTimer>
 #include <QSlider>
+#include <QProgressBar>
 #include <QVBoxLayout>
 #include <QImageReader>
 #include <QMovie>
@@ -6691,8 +6697,11 @@ void testRoundFortySix() {
         QKeyEvent esc(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
         QApplication::sendEvent(inside->canvas(), &esc);
         QApplication::processEvents();
+        check(inside->fullScreenView() && inside->isWindow(), "3d full screen: Esc is the view's own key - it does not leave the window");
+        full->click();
+        QApplication::processEvents();
         check(!inside->fullScreenView() && !inside->isWindow() && inside->parentWidget() == &host && !full->isChecked(),
-              "3d full screen: Esc puts it back where it was");
+              "3d full screen: Back puts it back where it was");
         if (full) full->click();
         QApplication::processEvents();
         inside->close();
@@ -6799,6 +6808,510 @@ void testRoundFortySeven() {
     }
 }
 
+// ROUND FORTY-EIGHT: A MIXED CONNECTOR - pins and sockets in one housing - each pin in 3D a pin or a socket, where its
+// pinout drawing has it; its schematic symbol marks which is which; gender one of three; textures on what is drawn.
+void testRoundFortyEight() {
+    // ---- WHERE THE PINOUT DRAWING PUTS ITS PINS ----
+    auto circle = [](double x, double y, double r) {
+        Entity e;
+        e.type = EntityType::Circle;
+        e.center = {x, y};
+        e.radius = r;
+        return e;
+    };
+    auto number = [](const QString& n, double x, double y) {
+        Entity e;
+        e.type = EntityType::Text;
+        e.a = {x, y};
+        e.meta.insert(QStringLiteral("text"), n);
+        e.meta.insert(QStringLiteral("size"), 0.6);
+        return e;
+    };
+    // The face 10 across, three pins: 1 to the right, 2 up, 3 down-left - each number set beside its circle.
+    const std::vector<Entity> drawn = {circle(0, 0, 5), circle(3, 0, 0.5), circle(0, 3, 0.5), circle(-2, -2, 0.5),
+                                       number(QStringLiteral("1"), 3.6, 0.2), number(QStringLiteral("2"), 0.6, 3.2),
+                                       number(QStringLiteral("3"), -3.0, -2.6), number(QStringLiteral("FRONT"), 0, -6)};
+    const QJsonArray pinout = partDrawingFromEntities(drawn);
+    const std::vector<PartPins::Pin> at = pinoutPositions(pinout);
+    auto find = [&](int n) -> const PartPins::Pin* {
+        for (const PartPins::Pin& p : at)
+            if (p.number == n) return &p;
+        return nullptr;
+    };
+    const PartPins::Pin *p1 = find(1), *p2 = find(2), *p3 = find(3);
+    check(at.size() == 3 && p1 && p2 && p3, "pinout: each numbered circle found, the face circle and the title not");
+    check(p1 && std::abs(p1->u - 0.6) < 1e-9 && std::abs(p1->v) < 1e-9 && p2 && std::abs(p2->v - 0.6) < 1e-9 && p3 &&
+              std::abs(p3->u + 0.4) < 1e-9 && std::abs(p3->r - 0.1) < 1e-9,
+          "pinout: each where it is drawn, as a share of the face");
+
+    // ---- A MIXED CONNECTOR'S PINS ----
+    LibraryPart part;
+    part.id = QStringLiteral("MIX");
+    part.kind = PartKind::Connector;
+    part.params.insert(QStringLiteral("pins"), QStringLiteral("4"));
+    part.params.insert(QStringLiteral("gender"), QStringLiteral("Mixed"));
+    PartPinType male, female;
+    male.gender = QStringLiteral("male");
+    male.pins = QStringLiteral("1,3");
+    male.gauge = QStringLiteral("24");
+    female.gender = QStringLiteral("female");
+    female.pins = QStringLiteral("2");
+    female.gauge = QStringLiteral("24");
+    setPartPinTypes(part, {male, female});
+    part.fanout = pinout;
+    check(partPinsMixed(part) && partPinGenders(part) == QStringList({QStringLiteral("male"), QStringLiteral("female"),
+                                                                      QStringLiteral("male"), QString()}),
+          "pins: each pin's gender from its type - pin 4, no type, says nothing");
+    const PartPins pins = partPinsOf(&part);
+    check(pins.each.size() == 4 && !pins.each[0].female && pins.each[1].female && !pins.each[2].female &&
+              pins.each[0].placed && pins.each[1].placed && pins.each[2].placed && !pins.each[3].placed,
+          "pins: pins and sockets told apart, each placed as the pinout drawing has it");
+
+    // ---- IN 3D: PINS AND SOCKETS, WHERE THEY ARE DRAWN ----
+    {
+        BrickDesign d;
+        const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString y = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        d.connect(x, c);
+        d.connect(c, y);
+        std::vector<Entity> h = buildBrickHarness(d, nullptr).entities;
+        for (Entity& e : h)
+            if (e.meta.value(QStringLiteral("brickId")).toString() == x) e.meta.insert(QStringLiteral("libPart"), QStringLiteral("MIX"));
+        const Harness3DScene sc = buildHarness3D(h, {}, PartLook::Revolved, [&](const QString& lib) {
+            return lib == QLatin1String("MIX") ? partPinsOf(&part) : PartPins{};
+        });
+        int pinTubes = 0, socketTubes = 0;
+        V3 plo, phi;
+        bool textured = true;
+        for (const Harness3DItem& it : sc.items) {
+            if (it.brick == x && it.what == QLatin1String("pins")) pinTubes = static_cast<int>(it.mesh.v.size());
+            if (it.brick == x && it.what == QLatin1String("sockets")) socketTubes = static_cast<int>(it.mesh.v.size());
+            if (it.brick == x && it.what == QLatin1String("pins")) it.mesh.bounds(plo, phi);
+            textured = textured && it.texture != Texture3D::None;
+        }
+        std::printf("  3d mixed: pins %d vertices, sockets %d\n", pinTubes, socketTubes);
+        check(pinTubes > 0 && socketTubes > 0, "3d mixed: a connector with both shows both - pins and sockets");
+        check(socketTubes * 2 < pinTubes * 1.5 && socketTubes * 2 > pinTubes / 2,
+              "3d mixed: three pins (two placed, one laid out) and one socket, by their genders");
+        check(textured, "3d: every part, pin, wire and jacket textured - metal, plastic or matte");
+    }
+
+    // ---- THE SYMBOL: A FULL CIRCLE A PIN, AN EMPTY ONE A SOCKET ----
+    {
+        const std::vector<Entity> ents = partDrawingEntities(connectorSymbolFromData(part));
+        const QStringList labels = ents.empty() ? QStringList() : connectorSpecFromMeta(ents.front().meta).pins;
+        const QString pin = QString(QChar(0x25CF)), socket = QString(QChar(0x25CB));
+        std::printf("  symbol: %s\n", qPrintable(labels.join(QStringLiteral(" | "))));
+        check(labels.size() == 4 && labels[0] == QStringLiteral("1 ") + pin && labels[1] == QStringLiteral("2 ") + socket &&
+                  labels[2] == QStringLiteral("3 ") + pin && labels[3] == QStringLiteral("4"),
+              "symbol: a mixed connector marks each pin after its number - full a pin, empty a socket");
+        setPartPinout(part, {{QStringLiteral("1"), QStringLiteral("GND")}, {QStringLiteral("2"), QStringLiteral("CAN_H")}});
+        const std::vector<Entity> named = partDrawingEntities(connectorSymbolFromData(part));
+        const QStringList withNames = named.empty() ? QStringList() : connectorSpecFromMeta(named.front().meta).pins;
+        check(withNames.size() == 4 && withNames[0] == QStringLiteral("1 ") + pin + QStringLiteral(" GND"),
+              "symbol: the mark after the number, the signal after it");
+        LibraryPart plain = part;
+        setPartPinTypes(plain, {male});
+        const std::vector<Entity> pe = partDrawingEntities(connectorSymbolFromData(plain));
+        const QStringList plainLabels = pe.empty() ? QStringList() : connectorSpecFromMeta(pe.front().meta).pins;
+        check(!plainLabels.join(QString()).contains(pin) && !plainLabels.join(QString()).contains(socket),
+              "symbol: a connector of one gender is not marked");
+    }
+
+    // ---- GENDER, ONE OF THREE ----
+    {
+        bool choice = false;
+        for (const PartField& f : partFields(PartKind::Connector))
+            if (f.key == QLatin1String("gender"))
+                choice = f.type == PartField::Type::Choice &&
+                         f.choices == QStringList({QStringLiteral("Male"), QStringLiteral("Female"), QStringLiteral("Mixed")});
+        check(choice, "parts: a connector's gender is a fall menu - Male, Female, Mixed");
+    }
+
+    // ---- TEXTURED: THE SAME PICTURE, NOT FLAT ----
+    {
+        const Mesh3D box = boxMesh({-10, -10, -10}, {10, 10, 10});
+        Camera3D cam;
+        cam.fit({-10, -10, -10}, {10, 10, 10}, 1.0);
+        QImage flat(160, 160, QImage::Format_RGB32), metal(160, 160, QImage::Format_RGB32);
+        renderScene3D(flat, {{&box, QColor(160, 160, 160)}}, cam, false, QColor(0, 0, 0));
+        renderScene3D(metal, {{&box, QColor(160, 160, 160), 1.0, false, Texture3D::Metal}}, cam, false, QColor(0, 0, 0));
+        QSet<QRgb> flatShades, metalShades;
+        for (int y = 0; y < 160; y += 2)
+            for (int x = 0; x < 160; x += 2) {
+                flatShades.insert(flat.pixel(x, y));
+                metalShades.insert(metal.pixel(x, y));
+            }
+        std::printf("  texture: %lld shades flat, %lld brushed metal\n", static_cast<long long>(flatShades.size()),
+                    static_cast<long long>(metalShades.size()));
+        check(metalShades.size() > flatShades.size() * 3, "texture: brushed metal shows its grain and shine, not three flat faces");
+    }
+
+    // ---- THE WEB PAGE'S READ DATA, GONE ----
+    {
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        PartsLibraryDialog dlg(&ed);
+        bool readPage = false;
+        for (QPushButton* b : dlg.findChildren<QPushButton*>())
+            if (b->text() == QStringLiteral("Read data…")) readPage = true;
+        check(!readPage, "parts: no Read data on the web link - the link is opened, the datasheet read");
+    }
+}
+
+// ROUND FORTY-NINE: THE 3D VIEW LOCKED - a cable, a corner, a connector dragged across the view; the navigation wheel;
+// a bar while a model is read; help for every command.
+void testRoundFortyNine() {
+    View3DPane pane;
+    pane.setEnvironmentChoice(true);
+    pane.resize(1100, 700);
+    pane.show();
+    QApplication::processEvents();
+    View3DCanvas* canvas = pane.canvas();
+    canvas->setUseGpu(false);
+    canvas->viewFrom(QStringLiteral("top"));
+    // Two connectors and a cable between them, by clicks, on the ground.
+    const QPointF a(canvas->width() * 0.3, canvas->height() * 0.5), b(canvas->width() * 0.7, canvas->height() * 0.5);
+    auto send = [&](QEvent::Type t, const QPointF& at, Qt::MouseButton btn, Qt::MouseButtons held) {
+        QMouseEvent e(t, at, canvas->mapToGlobal(at), btn, held, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &e);
+    };
+    auto click = [&](const QPointF& at) {
+        send(QEvent::MouseButtonPress, at, Qt::LeftButton, Qt::LeftButton);
+        send(QEvent::MouseButtonRelease, at, Qt::LeftButton, Qt::NoButton);
+        QApplication::processEvents();
+    };
+    auto drag = [&](const QPointF& from, const QPointF& by) {
+        send(QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
+        for (int i = 1; i <= 10; ++i) send(QEvent::MouseMove, from + by * (i / 10.0), Qt::NoButton, Qt::LeftButton);
+        send(QEvent::MouseButtonRelease, from + by, Qt::LeftButton, Qt::NoButton);
+        QApplication::processEvents();
+    };
+    auto shown = [&](const RouteNode3D& n) {
+        QPointF at;
+        canvas->toScreen(n.at + n.normal * (pane.route().lead * 0.5), at);
+        return at;
+    };
+    canvas->setRouteTool(RouteTool::Connector);
+    click(a);
+    click(b);
+    canvas->setRouteTool(RouteTool::Route);
+    click(shown(pane.route().nodes[0]));
+    click(shown(pane.route().nodes[1]));
+    canvas->setRouteTool(RouteTool::Select);
+    check(pane.route().segments.size() == 1 && pane.route().segments.front().via.empty(), "lock: a straight cable to move");
+
+    // ---- UNLOCKED, A DRAG TURNS THE VIEW; LOCKED, IT DOES NOT ----
+    const double yaw0 = canvas->camera().yawDeg;
+    drag(QPointF(canvas->width() * 0.5, canvas->height() * 0.2), QPointF(60, 0));
+    check(std::abs(canvas->camera().yawDeg - yaw0) > 1.0, "lock: unlocked, a drag on nothing turns the view");
+    canvas->viewFrom(QStringLiteral("top"));
+    auto* lock = pane.findChild<QToolButton*>(QStringLiteral("view3dLock"));
+    if (lock) lock->click();
+    check(lock && lock->isChecked() && canvas->viewLocked(), "lock: Lock view holds the view");
+    const Camera3D held = canvas->camera();
+    drag(QPointF(canvas->width() * 0.5, canvas->height() * 0.2), QPointF(60, 40));
+    QWheelEvent w(QPointF(50, 50), canvas->mapToGlobal(QPointF(50, 50)), QPoint(), QPoint(0, 120), Qt::NoButton, Qt::NoModifier,
+                  Qt::NoScrollPhase, false);
+    QApplication::sendEvent(canvas, &w);
+    check(std::abs(canvas->camera().yawDeg - held.yawDeg) < 1e-9 && std::abs(canvas->camera().distance - held.distance) < 1e-9 &&
+              (canvas->camera().target - held.target).length() < 1e-9,
+          "lock: locked, neither a drag nor the wheel moves the view");
+
+    // ---- A CABLE TAKEN HOLD OF: A CORNER PUT THERE, MOVED ACROSS THE VIEW ----
+    {
+        const RouteSegment3D seg = pane.route().segments.front();
+        const std::vector<V3> c = pane.route().centreline(seg);
+        QPointF mid;
+        canvas->toScreen((c.front() + c.back()) * 0.5, mid);
+        const double before = pane.route().length(seg);
+        drag(mid, QPointF(0, -80));
+        const RouteSegment3D& after = pane.route().segments.front();
+        std::printf("  lock: the cable dragged - %zu corner(s), %.1f -> %.1f mm\n", after.via.size(), before, pane.route().length(after));
+        check(after.via.size() == 1 && pane.route().length(after) > before + 0.3,
+              "lock: a cable dragged gets a corner where it was taken hold of, and bends round it");
+        // Seen from the top, a drag up the picture is along +Y, at the cable's own height.
+        const RouteVia3D v = after.via.front();
+        std::printf("  lock: the corner at %.2f %.2f %.2f\n", v.at.x, v.at.y, v.at.z);
+        check(v.at.y > 3.0, "lock: moved across the view - up the picture");
+        // That corner, taken again, moves - no second corner.
+        QPointF corner;
+        canvas->toScreen(v.at + v.normal * (pane.route().diameterOf(after) / 2.0), corner);
+        drag(corner, QPointF(30, 0));
+        check(pane.route().segments.front().via.size() == 1 && pane.route().segments.front().via.front().at.x > v.at.x + 1.5 &&
+                  std::abs(pane.route().segments.front().via.front().at.z - v.at.z) < 1e-9,
+              "lock: a corner taken hold of is moved, not another put");
+    }
+    // ---- A CONNECTOR DRAGGED; UNDO TAKES IT BACK ----
+    {
+        const RouteNode3D n = pane.route().nodes[1];
+        drag(shown(n), QPointF(0, 60));
+        const RouteNode3D moved = pane.route().nodes[1];
+        check(moved.at.y < n.at.y - 3.0, "lock: a connector dragged moves");
+        pane.undoRoute();
+        check((pane.route().nodes[1].at - n.at).length() < 1e-9, "lock: one drag, one undo");
+    }
+    if (lock) lock->click();
+    check(!canvas->viewLocked(), "lock: and unlocked again");
+
+    // ---- THE WHEEL ----
+    {
+        auto* wheel = pane.findChild<NavWheel*>(QStringLiteral("view3dWheel"));
+        check(wheel && wheel->isVisible() && wheel->count() == 12, "wheel: in the picture's corner, twelve segments");
+        auto clickWheel = [&](int i) {
+            const QPointF at = wheel->segmentCentre(i);
+            QMouseEvent down(QEvent::MouseButtonPress, at, wheel->mapToGlobal(at), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QMouseEvent up(QEvent::MouseButtonRelease, at, wheel->mapToGlobal(at), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(wheel, &down);
+            QApplication::sendEvent(wheel, &up);
+            QApplication::processEvents();
+        };
+        if (wheel) {
+            canvas->viewFrom(QStringLiteral("iso"));
+            const Camera3D c0 = canvas->camera();
+            clickWheel(3);   // turn right
+            check(std::abs(wrapDegrees(canvas->camera().yawDeg - c0.yawDeg) + 15.0) < 1e-9, "wheel: Turn turns the view a step");
+            clickWheel(0);   // tilt up
+            check(std::abs(wrapDegrees(canvas->camera().pitchDeg - c0.pitchDeg) - 15.0) < 1e-9, "wheel: Tilt tilts it");
+            clickWheel(2);   // roll
+            check(std::abs(canvas->camera().rollDeg - 15.0) < 1e-9, "wheel: Roll rolls it");
+            const double d0 = canvas->camera().distance;
+            clickWheel(1);   // zoom in
+            check(canvas->camera().distance < d0, "wheel: Zoom in brings it nearer");
+            clickWheel(5);   // lock
+            check(canvas->viewLocked() && lock && lock->isChecked(), "wheel: the padlock locks the view, and the button says so");
+            clickWheel(5);
+            check(!canvas->viewLocked(), "wheel: and unlocks it");
+            auto* shownBox = pane.findChild<QCheckBox*>(QStringLiteral("view3dWheelShown"));
+            if (shownBox) shownBox->setChecked(false);
+            check(shownBox && !wheel->isVisible(), "wheel: Wheel hides it");
+        }
+    }
+
+    // ---- THE BAR WHILE A MODEL IS READ ----
+    {
+        const QString obj = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_progress_test.obj"));
+        {
+            QFile f(obj);
+            f.open(QIODevice::WriteOnly);
+            QByteArray text;
+            // Enough of it to take a moment: a grid of quads.
+            for (int i = 0; i <= 120; ++i)
+                for (int j = 0; j <= 120; ++j) text += "v " + QByteArray::number(i) + " " + QByteArray::number(j) + " 0\n";
+            for (int i = 0; i < 120; ++i)
+                for (int j = 0; j < 120; ++j) {
+                    const int k = i * 121 + j + 1;
+                    text += "f " + QByteArray::number(k) + " " + QByteArray::number(k + 1) + " " + QByteArray::number(k + 122) + " " +
+                            QByteArray::number(k + 121) + "\n";
+                }
+            f.write(text);
+        }
+        auto* bar = pane.findChild<QProgressBar*>(QStringLiteral("view3dEnvProgress"));
+        check(bar && !bar->isVisible(), "progress: no bar while nothing is read");
+        const bool started = pane.loadEnvironment(obj);
+        const bool showing = bar && bar->isVisible();
+        QElapsedTimer clock;
+        clock.start();
+        while (pane.loadingEnvironment() && clock.elapsed() < 30000) QApplication::processEvents(QEventLoop::AllEvents, 20);
+        QApplication::processEvents();
+        check(started && showing, "progress: a bar while a model is read in the background");
+        check(!pane.loadingEnvironment() && !pane.environment().empty() && !bar->isVisible(), "progress: gone when it is read");
+        int last = -1;
+        bool rising = true;
+        const Environment3D env = loadEnvironment3D(obj, [&](int pct, const QString&) {
+            rising = rising && pct >= last;
+            last = pct;
+        });
+        check(!env.empty() && rising && last >= 2, "progress: the reading says how far it has got, never going back");
+        QFile::remove(obj);
+    }
+
+    // ---- HELP FOR EVERY COMMAND ----
+    {
+        View3DHelpDialog help;
+        int commands = -1, locking = -1;
+        auto* topics = help.findChild<QListWidget*>(QStringLiteral("help3dTopics"));
+        for (int i = 0; topics && i < topics->count(); ++i) {
+            if (topics->item(i)->text().contains(QStringLiteral("every command"))) commands = i;
+            if (topics->item(i)->text().contains(QStringLiteral("Lock view"))) locking = i;
+        }
+        check(commands >= 0 && locking >= 0, "help: a topic for what every command does, and one for locking the view");
+        help.showTopic(commands);
+        auto* steps = help.findChild<QLabel*>(QStringLiteral("help3dSteps"));
+        const QString said = steps ? steps->text() : QString();
+        bool all = true;
+        for (const char* name : {"Refresh", "Wireframe", "Turn, Tilt, Roll", "Full screen", "Lock view", "Load...", "Opacity",
+                                 "Section", "Connector", "Branch", "Clip", "Route", "Delete", "Bend R", "Lead", "Undo",
+                                 "Clicks land on", "Lengths to harness", "Backspace"})
+            all = all && said.contains(QString::fromLatin1(name));
+        check(all, "help: every command named, and what it is for");
+    }
+}
+
+// ROUND FIFTY: A PART'S 3D MODEL BUILT IN EDRAW - simple solids and what is made from the part's drawing and pinout,
+// moved, turned, scaled, mirrored, arrayed, cut; kept as the part's model, and shown so in the 3D view.
+void testRoundFifty() {
+    // ---- THE MODEL: KEPT AND READ BACK ----
+    PartModel3D model;
+    Body3D box;
+    box.id = QStringLiteral("b1");
+    box.name = QStringLiteral("Shell");
+    box.shape = BodyShape::Box;
+    box.a = 20;
+    box.b = 12;
+    box.c = 10;
+    box.color = QColor(200, 30, 30);
+    box.texture = Texture3D::Plastic;
+    model.bodies.push_back(box);
+    const PartModel3D back = PartModel3D::fromJson(model.toJson());
+    check(back.bodies.size() == 1 && back.bodies[0].shape == BodyShape::Box && back.bodies[0].color == QColor(200, 30, 30) &&
+              back.bodies[0].texture == Texture3D::Plastic && std::abs(back.bodies[0].b - 12.0) < 1e-9,
+          "model: its solids kept and read back, each with its shape, sizes, colour and what it is made of");
+    // ---- WHERE IT GOES: turned, scaled, put ----
+    {
+        Body3D b = box;
+        b.at = {100, 0, 0};
+        b.scale = {2, 1, 1};
+        b.turnDeg = {0, 0, 90};
+        V3 lo, hi;
+        bodyMesh(b).bounds(lo, hi);
+        std::printf("  model: placed %.1f..%.1f x %.1f..%.1f\n", lo.x, hi.x, lo.y, hi.y);
+        check(std::abs((hi.y - lo.y) - 40.0) < 1e-6 && std::abs((hi.x - lo.x) - 12.0) < 1e-6 && std::abs((lo.x + hi.x) / 2 - 100.0) < 1e-6,
+              "model: scaled, then turned a quarter round Z, then put where it goes");
+    }
+    // ---- A CUT: A HOLE THROUGH THE BOX ----
+    {
+        PartModel3D holed = model;
+        Body3D hole;
+        hole.id = QStringLiteral("b2");
+        hole.shape = BodyShape::Cylinder;
+        hole.a = 40;   // longer than the box is high
+        hole.b = 6;    // a hole 6 across
+        hole.turnDeg = {0, 90, 0};   // standing up through it
+        hole.cut = true;
+        holed.bodies.push_back(hole);
+        QString note;
+        const std::vector<ModelItem3D> items = modelItems(holed, &note);
+        size_t tris = 0;
+        bool inner = false;
+        for (const ModelItem3D& it : items) {
+            tris += it.mesh.f.size();
+            for (const V3& v : it.mesh.v)
+                if (std::abs(std::hypot(v.x, v.y) - 3.0) < 0.05 && std::abs(v.z) <= 5.01) inner = true;
+        }
+        std::printf("  model: a box with a hole cut - %zu item(s), %zu triangles%s\n", items.size(), tris,
+                    note.isEmpty() ? "" : qPrintable(QStringLiteral(" (") + note + QStringLiteral(")")));
+#ifdef EDRAW_HAVE_OCCT
+        check(items.size() == 1 && tris > 12 && inner, "model: a solid marked cut is a hole through the others - its wall inside them");
+#else
+        check(items.size() == 2 && !note.isEmpty(), "model: without Open CASCADE a cut is shown, not made, and says why");
+#endif
+    }
+    // ---- THE EDITOR ----
+    LibraryPart part;
+    part.id = QStringLiteral("B3D");
+    part.kind = PartKind::Connector;
+    part.mfrPn = QStringLiteral("BUILD-1");
+    part.params.insert(QStringLiteral("pins"), QStringLiteral("4"));
+    {
+        Entity r;
+        r.type = EntityType::Polygon;
+        r.points = {{0, -6}, {30, -6}, {30, 6}, {0, 6}};
+        part.mechanical = partDrawingFromEntities({r});
+    }
+    {
+        Part3DEditorDialog dlg(part, PartModel3D{});
+        dlg.show();
+        QApplication::processEvents();
+        check(dlg.model().bodies.size() == 1 && dlg.model().bodies[0].shape == BodyShape::Turned && !dlg.model().bodies[0].made.empty(),
+              "editor: a new model starts from the part's drawing, turned");
+        dlg.addBody(BodyShape::Box);
+        dlg.addBody(BodyShape::Pins);
+        check(dlg.model().bodies.size() == 3 && dlg.selected() == 2, "editor: solids added, the new one selected");
+        check(!dlg.model().bodies[2].made.empty(), "editor: the pins made from the part, on its face");
+        dlg.select(1);
+        dlg.duplicateSelected();
+        check(dlg.model().bodies.size() == 4, "editor: duplicated");
+        dlg.undo();
+        check(dlg.model().bodies.size() == 3, "editor: undone");
+        dlg.redo();
+        check(dlg.model().bodies.size() == 4, "editor: done again");
+        dlg.select(1);
+        dlg.moveSelected({0, 7, 0});
+        dlg.mirrorSelected(1);
+        check(std::abs(dlg.model().bodies[1].at.y + 7.0) < 1e-6 && dlg.model().bodies[1].scale.y < 0,
+              "editor: mirrored across the plane square to Y");
+        dlg.turnSelected(2, 90);
+        check(std::abs(dlg.model().bodies[1].turnDeg.z - 90.0) < 1e-6, "editor: a quarter turn round Z");
+        const size_t before = dlg.model().bodies.size();
+        dlg.arraySelected(4, {10, 0, 0}, -1, 0);
+        check(dlg.model().bodies.size() == before + 3 && std::abs(dlg.model().bodies.back().at.x - (dlg.model().bodies[1].at.x + 30.0)) < 1e-6,
+              "editor: an array - copies in a row, each a step on");
+        dlg.select(1);
+        const size_t shownBefore = dlg.items().size();
+        dlg.setSelectedCut(true);
+        check(dlg.items().size() < shownBefore, "editor: a solid made a cut is not drawn as a solid");
+        dlg.deleteSelected();
+        check(dlg.model().bodies.size() == before + 2, "editor: deleted");
+        // ---- KEPT AS THE PART'S MODEL, AND SHOWN SO ----
+        const QString file = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_built_test.e3d"));
+        check(dlg.model().save(file) && isPartModelFile(file), "editor: the model written as a file of its own");
+        // A harness with the part at its end: its model the built one, in its own colours.
+        std::vector<Entity> ents;
+        Entity run;
+        run.type = EntityType::TwistedPair;
+        run.points = {{-100, 0}, {0, 0}};
+        run.meta.insert(QStringLiteral("twistWidth"), 3.0);
+        ents.push_back(run);
+        for (Entity e : partDrawingEntities(part.mechanical)) {
+            e.meta.insert(QStringLiteral("brickId"), QStringLiteral("P"));
+            e.meta.insert(QStringLiteral("libPart"), part.id);
+            ents.push_back(e);
+        }
+        const Harness3DScene sc = buildHarness3D(ents, [&](const QString& id) { return id == part.id ? file : QString(); }, PartLook::Revolved, {});
+        int own = 0;
+        bool gold = false;
+        for (const Harness3DItem& it : sc.items)
+            if (it.brick == QLatin1String("P") && it.ownLook) {
+                ++own;
+                gold = gold || it.color == QColor(212, 175, 80);
+            }
+        std::printf("  editor: the built model in the 3D view - %d item(s) of its own\n", own);
+        check(sc.modelled == 1 && own >= 3 && gold, "3d: a built model shown solid by solid, each its own colour - its pins gold");
+        const QString stl = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_built_test.stl"));
+        check(exportModelStl(dlg.items(), stl), "editor: written out as STL");
+        QFile f(stl);
+        check(f.open(QIODevice::ReadOnly) && f.readAll().contains("facet normal"), "editor: an STL another program reads");
+        f.close();
+        QFile::remove(stl);
+        QFile::remove(file);
+    }
+    // ---- FROM THE PARTS LIBRARY ----
+    {
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_build3d_lib.json"));
+        QFile::remove(libFile);
+        {
+            PartsLibrary lib;
+            lib.parts.push_back(part);
+            lib.save(libFile);
+        }
+        Document doc;
+        Editor ed;
+        ed.setDocument(&doc);
+        PartsLibraryDialog lib(&ed);
+        lib.setLibraryPath(libFile);
+        lib.selectPart(part.id);
+        check(lib.findChild<QPushButton*>(QStringLiteral("partModel3dBuild")) != nullptr, "parts: Build 3D beside Attach 3D");
+        check(lib.saveBuiltModel3D(model), "parts: a built model kept as the part's 3D model");
+        const LibraryPart* kept = lib.catalog().byId(part.id);
+        const QString stored = kept ? kept->value(QStringLiteral("model3d")) : QString();
+        check(!stored.isEmpty() && isPartModelFile(DatasheetStore::pathOf(stored)), "parts: its model3d the built model's file");
+        QFile::remove(libFile);
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -6860,6 +7373,9 @@ int run_brickharness_tests() {
     testRoundFortyFive();
     testRoundFortySix();
     testRoundFortySeven();
+    testRoundFortyEight();
+    testRoundFortyNine();
+    testRoundFifty();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

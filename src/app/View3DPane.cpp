@@ -1,5 +1,9 @@
 #include "app/View3DPane.h"
 #include "app/View3DHelpDialog.h"
+#include "app/NavWheel.h"
+
+#include <QCursor>
+#include <QMenu>
 
 #include <QButtonGroup>
 #include <QCheckBox>
@@ -25,6 +29,10 @@
 #include <QSpinBox>
 #include <QTableWidget>
 #include <QThread>
+#include <QProgressBar>
+#include <QElapsedTimer>
+#include <atomic>
+#include <mutex>
 #include <QTimer>
 #include <QCloseEvent>
 #include <QToolButton>
@@ -100,8 +108,14 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     bar->addWidget(wire);
     // THE VIEW'S THREE TURNS, in degrees, each all the way round: round the upright, up and over, and round the way it
     // looks. The mouse does the same - a left drag turns and tilts, with Shift it rolls.
+    // On a row of their own words, "View:" - the top row has room for no more.
+    viewBits_ = new QWidget(this);
+    auto* viewRow = new QHBoxLayout(viewBits_);
+    viewRow->setContentsMargins(12, 0, 0, 0);
+    viewRow->setSpacing(3);
+    viewRow->addWidget(new QLabel(QStringLiteral("View:"), viewBits_));
     auto angle = [&](const char* name, const QString& label, const QString& tip) {
-        bar->addWidget(new QLabel(label, this));
+        viewRow->addWidget(new QLabel(label, viewBits_));
         auto* s = new AngleSpinBox(this);
         s->setObjectName(QLatin1String(name));
         s->setRange(-179, 180);   // -180 is 180: one stop for the one angle, so a step round wraps exactly
@@ -110,7 +124,7 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
         s->setSuffix(QStringLiteral("°"));
         s->setToolTip(tip);
         s->setKeyboardTracking(false);
-        bar->addWidget(s);
+        viewRow->addWidget(s);
         return s;
     };
     turn_ = angle("view3dTurn", QStringLiteral("Turn"), QStringLiteral("Round the upright (Z), all the way round - or drag left and right"));
@@ -129,9 +143,20 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     // THE WHOLE SCREEN, for routing with room to see: everything here goes with it. Esc, F11 or this again, back.
     fullBtn_ = button(bar, "view3dFullScreen", QStringLiteral("Full screen"),
                       QStringLiteral("The 3D view in a window of its own, filling the screen - drag it, size it, put it on "
-                                     "another screen; all its settings go with it (F11; Esc, or closing it, brings it back)"),
+                                     "another screen; all its settings go with it (F11, Back, or closing it, brings it back)"),
                       [this] { setFullScreen(!fullScreen_); });
     fullBtn_->setCheckable(true);
+    // LOCKED: the view held still, so a drag moves a cable, a corner or a connector across it.
+    lockBtn_ = button(bar, "view3dLock", QStringLiteral("Lock view"),
+                      QStringLiteral("Hold the view still: the mouse no longer turns, moves or zooms it - drag a cable, a "
+                                     "corner or a connector to move it across the view, at the depth it is"),
+                      [this] { setViewLocked(!canvas_->viewLocked()); });
+    lockBtn_->setCheckable(true);
+    wheelShown_ = new QCheckBox(QStringLiteral("Wheel"), this);
+    wheelShown_->setObjectName(QStringLiteral("view3dWheelShown"));
+    wheelShown_->setChecked(true);
+    wheelShown_->setToolTip(QStringLiteral("The navigation wheel in the corner of the picture: turn, tilt, roll, zoom, fit, lock"));
+    bar->addWidget(wheelShown_);
     auto* f11 = new QShortcut(QKeySequence(Qt::Key_F11), this);
     f11->setContext(Qt::WidgetWithChildrenShortcut);
     connect(f11, &QShortcut::activated, this, [this] { setFullScreen(!fullScreen_); });
@@ -156,6 +181,13 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
                       });
     envClear_ = button(env, "view3dEnvClear", QStringLiteral("Clear"), QStringLiteral("Take the environment away"),
                        [this] { clearEnvironment(); });
+    envProgress_ = new QProgressBar(envRow_);
+    envProgress_->setObjectName(QStringLiteral("view3dEnvProgress"));
+    envProgress_->setRange(0, 100);
+    envProgress_->setMinimumWidth(260);
+    envProgress_->setTextVisible(true);
+    envProgress_->hide();
+    env->addWidget(envProgress_);
     envShown_ = new QCheckBox(QStringLiteral("Show"), envRow_);
     envShown_->setObjectName(QStringLiteral("view3dEnvShown"));
     envShown_->setChecked(true);
@@ -316,6 +348,7 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
                }
                if (have) planeAt_->setValue(axis == 0 ? p.x : axis == 1 ? p.y : p.z);
            });
+    pr->addWidget(viewBits_);
     pr->addStretch(1);
     lay->addWidget(planeRow_);
     connect(plane_, &QComboBox::currentIndexChanged, this, [this](int i) {
@@ -443,6 +476,30 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     lay->addWidget(status_);
     canvas_->setScene(&scene_);
     canvas_->setRoute(&route_);
+    // THE WHEEL, over the picture's top right corner: each segment a turn, a zoom or a view; the middle, the options.
+    wheel_ = new NavWheel(canvas_);
+    wheel_->setObjectName(QStringLiteral("view3dWheel"));
+    auto step = [this] { return static_cast<double>(wheelStep_); };
+    wheel_->setItems({
+        {QStringLiteral("up"), QStringLiteral("Tilt up"), QStringLiteral("Tilt the view up and over"), [this, step] { canvas_->nudge(0, step(), 0); }, {}},
+        {QStringLiteral("plus"), QStringLiteral("Zoom in"), QStringLiteral("Nearer"), [this] { canvas_->zoomBy(0.8); }, {}},
+        {QStringLiteral("cw"), QStringLiteral("Roll"), QStringLiteral("Roll the view clockwise round the way it looks"), [this, step] { canvas_->nudge(0, 0, step()); }, {}},
+        {QStringLiteral("right"), QStringLiteral("Turn"), QStringLiteral("Turn the view to the right, round the upright"), [this, step] { canvas_->nudge(-step(), 0, 0); }, {}},
+        {QStringLiteral("fit"), QStringLiteral("Fit"), QStringLiteral("Everything in view"), [this] { canvas_->fit(); }, {}},
+        {QStringLiteral("lock"), QStringLiteral("Lock"), QStringLiteral("Hold the view still - a drag moves what is under it"),
+         [this] { setViewLocked(!canvas_->viewLocked()); }, [this] { return canvas_->viewLocked(); }},
+        {QStringLiteral("down"), QStringLiteral("Tilt down"), QStringLiteral("Tilt the view down and under"), [this, step] { canvas_->nudge(0, -step(), 0); }, {}},
+        {QStringLiteral("gear"), QStringLiteral("Options"), QStringLiteral("How far each click turns it, the views, the wheel itself"),
+         [this] { wheelOptions(QCursor::pos()); }, {}},
+        {QStringLiteral("iso"), QStringLiteral("Iso"), QStringLiteral("At an angle, the whole of it"), [this] { canvas_->viewFrom(QStringLiteral("iso")); }, {}},
+        {QStringLiteral("left"), QStringLiteral("Turn"), QStringLiteral("Turn the view to the left, round the upright"), [this, step] { canvas_->nudge(step(), 0, 0); }, {}},
+        {QStringLiteral("ccw"), QStringLiteral("Roll"), QStringLiteral("Roll the view counter-clockwise round the way it looks"), [this, step] { canvas_->nudge(0, 0, -step()); }, {}},
+        {QStringLiteral("minus"), QStringLiteral("Zoom out"), QStringLiteral("Further off"), [this] { canvas_->zoomBy(1.25); }, {}},
+    });
+    wheel_->setMiddle(QStringLiteral("View"), [this](const QPoint& at) { wheelOptions(at); });
+    canvas_->installEventFilter(this);
+    connect(wheelShown_, &QCheckBox::toggled, wheel_, &QWidget::setVisible);
+    placeWheel();
     connect(canvas_, &View3DCanvas::picked, this, [this](const Pick3D& pick) { showPick(pick); });
     connect(canvas_, &View3DCanvas::routeAboutToChange, this, [this] { beforeRouteChange(); });
     connect(canvas_, &View3DCanvas::routeChanged, this, [this] {
@@ -457,9 +514,6 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     });
     connect(canvas_, &View3DCanvas::undoRequested, this, [this] { undoRoute(); });
     connect(canvas_, &View3DCanvas::cameraChanged, this, [this] { syncCamera(); });
-    connect(canvas_, &View3DCanvas::escapePressed, this, [this] {
-        if (fullScreen_) setFullScreen(false);
-    });
     connect(canvas_, &View3DCanvas::routeChanged, this, [this] { syncConnector(); });
     connect(canvas_, &View3DCanvas::selectionChanged, this, [this] { syncConnector(); });
     connect(canvas_, &View3DCanvas::selectionChanged, this, [this](const QString& id) {
@@ -488,6 +542,50 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     applySection();
     refreshRoute();
     syncCamera();
+}
+
+void View3DPane::setViewLocked(bool on) {
+    canvas_->setViewLocked(on);
+    const QSignalBlocker hold(lockBtn_);
+    lockBtn_->setChecked(on);
+    lockBtn_->setText(on ? QStringLiteral("View locked") : QStringLiteral("Lock view"));
+    if (wheel_) wheel_->update();
+}
+
+void View3DPane::placeWheel() {
+    if (!wheel_) return;
+    wheel_->move(canvas_->width() - wheel_->width() - 8, 8);
+    wheel_->raise();
+}
+
+bool View3DPane::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == canvas_ && (event->type() == QEvent::Resize || event->type() == QEvent::Show)) placeWheel();
+    return QWidget::eventFilter(watched, event);
+}
+
+void View3DPane::wheelOptions(const QPoint& at) {
+    QMenu menu(this);
+    QMenu* stepMenu = menu.addMenu(QStringLiteral("Each click turns it"));
+    for (const int s : {5, 15, 45, 90}) {
+        QAction* a = stepMenu->addAction(QStringLiteral("%1°").arg(s), this, [this, s] { wheelStep_ = s; });
+        a->setCheckable(true);
+        a->setChecked(wheelStep_ == s);
+    }
+    QMenu* views = menu.addMenu(QStringLiteral("View from"));
+    for (const auto& [name, key] : {std::pair<const char*, const char*>{"Top", "top"}, {"Front", "front"}, {"Side", "side"}, {"Iso", "iso"}})
+        views->addAction(QString::fromLatin1(name), this, [this, k = QString::fromLatin1(key)] { canvas_->viewFrom(k); });
+    menu.addAction(QStringLiteral("Fit everything in"), this, [this] { canvas_->fit(); });
+    menu.addSeparator();
+    QAction* lock = menu.addAction(QStringLiteral("Lock the view"), this, [this](bool on) { setViewLocked(on); });
+    lock->setCheckable(true);
+    lock->setChecked(canvas_->viewLocked());
+    auto* wire = findChild<QCheckBox*>(QStringLiteral("view3dWireframe"));
+    QAction* wf = menu.addAction(QStringLiteral("Wireframe"), this, [wire](bool on) { if (wire) wire->setChecked(on); });
+    wf->setCheckable(true);
+    wf->setChecked(wire && wire->isChecked());
+    menu.addSeparator();
+    menu.addAction(QStringLiteral("Hide the wheel"), this, [this] { wheelShown_->setChecked(false); });
+    menu.exec(at);
 }
 
 void View3DPane::syncCamera() {
@@ -693,8 +791,24 @@ bool View3DPane::loadEnvironment(const QString& path, bool wait) {
     envRef_ = path;
     auto env = std::make_shared<Environment3D>();
     auto index = std::make_shared<RayIndex3D>();
-    auto work = [path, env, index] {
-        *env = loadEnvironment3D(path);
+    // HOW FAR IT HAS GOT, told by the reading thread and read off by the pane's own.
+    struct Progress {
+        std::atomic<int> pct{0};
+        std::mutex m;
+        QString stage;
+    };
+    auto prog = std::make_shared<Progress>();
+    auto work = [path, env, index, prog] {
+        *env = loadEnvironment3D(path, [prog](int pct, const QString& stage) {
+            prog->pct = pct;
+            const std::lock_guard<std::mutex> hold(prog->m);
+            prog->stage = stage;
+        });
+        prog->pct = 96;
+        {
+            const std::lock_guard<std::mutex> hold(prog->m);
+            prog->stage = QStringLiteral("Indexing it for clicking");
+        }
         std::vector<const Mesh3D*> meshes;
         for (const EnvPart3D& p : env->parts) meshes.push_back(&p.mesh);
         index->build(meshes);
@@ -708,7 +822,27 @@ bool View3DPane::loadEnvironment(const QString& path, bool wait) {
     loadingName_ = QFileInfo(path).fileName();
     envLoad_->setEnabled(false);
     loading_ = QThread::create(work);
-    connect(loading_, &QThread::finished, this, [this, env, index] {
+    // THE BAR: shown while it reads, moved on as it goes, the stage and the time beside it.
+    envProgress_->setValue(0);
+    envProgress_->setFormat(QStringLiteral("%1 - starting").arg(loadingName_));
+    envProgress_->show();
+    auto* tick = new QTimer(this);
+    auto started = std::make_shared<QElapsedTimer>();
+    started->start();
+    connect(tick, &QTimer::timeout, this, [this, prog, started] {
+        QString stage;
+        {
+            const std::lock_guard<std::mutex> hold(prog->m);
+            stage = prog->stage;
+        }
+        envProgress_->setValue(prog->pct);
+        envProgress_->setFormat(QStringLiteral("%1 - %2 (%3 s)").arg(loadingName_, stage).arg(started->elapsed() / 1000.0, 0, 'f', 1));
+    });
+    tick->start(100);
+    connect(loading_, &QThread::finished, this, [this, env, index, tick] {
+        tick->stop();
+        tick->deleteLater();
+        envProgress_->hide();
         loading_->deleteLater();
         loading_ = nullptr;
         envLoad_->setEnabled(true);
@@ -1298,7 +1432,8 @@ void View3DCanvas::buildRouteMeshes() const {
     for (const RouteSegment3D& s : route_->segments) {
         const std::vector<V3> c = route_->centreline(s);
         if (c.size() < 2) continue;
-        routeMeshes_.push_back({tubeMesh(c, route_->diameterOf(s) / 2.0, 14, true), s.id == selSegment_ ? lit : QColor(235, 140, 40)});
+        routeMeshes_.push_back({tubeMesh(c, route_->diameterOf(s) / 2.0, 14, true), s.id == selSegment_ ? lit : QColor(235, 140, 40),
+                                Texture3D::Plastic});
     }
     const double d = std::max(0.5, route_->diameter);
     for (const RouteNode3D& n : route_->nodes) {
@@ -1319,7 +1454,7 @@ void View3DCanvas::buildRouteMeshes() const {
             Mesh3D key = boxMesh({0, 0, 0}, {1, 1, 1});
             for (V3& q : key.v) q = n.at + ax * (q.x * len) + su * ((q.y - 0.5) * w * 0.3) + sv * (h * 0.5 + q.z * h * 0.25);
             body.append(key);
-            routeMeshes_.push_back({body, on ? lit : QColor(205, 208, 214)});
+            routeMeshes_.push_back({body, on ? lit : QColor(205, 208, 214), Texture3D::Metal});
         } else {
             const double h = n.kind == RouteNodeKind::Branch ? d * 0.6 : d * 0.5;
             const V3 c = nodeShown(n);
@@ -1337,7 +1472,7 @@ std::vector<DrawItem3D> View3DCanvas::drawItems() const {
             QColor c = it.color;
             if (!it.brick.isEmpty() && lit_.contains(it.brick))
                 c = QColor((c.red() + 2 * 43) / 3, (c.green() + 2 * 208) / 3, (c.blue() + 2 * 255) / 3);
-            items.push_back({&it.mesh, c});
+            items.push_back({&it.mesh, c, 1.0, false, it.texture});
         }
     if (env_ && envShown_)
         for (size_t i = 0; i < env_->parts.size(); ++i) {
@@ -1349,7 +1484,7 @@ std::vector<DrawItem3D> View3DCanvas::drawItems() const {
             items.push_back({&part.mesh, c, envAlpha_, true});
         }
     if (routeDirty_) buildRouteMeshes();
-    for (const Drawn& d : routeMeshes_) items.push_back({&d.mesh, d.color});
+    for (const Drawn& d : routeMeshes_) items.push_back({&d.mesh, d.color, 1.0, false, d.texture});
     if (!layMesh_.empty()) items.push_back({&layMesh_, QColor(255, 255, 255), 0.75});
     if (!marker_.empty()) items.push_back({&marker_, QColor(255, 196, 40)});
     // THE WORK PLANE, see-through: over the model and a margin round it, so it is seen where a click will land.
@@ -1636,11 +1771,88 @@ void View3DCanvas::paintEvent(QPaintEvent*) {
     }
 }
 
+void View3DCanvas::setViewLocked(bool on) {
+    viewLocked_ = on;
+    setCursor(on ? Qt::OpenHandCursor : tool_ == RouteTool::Select ? Qt::ArrowCursor : Qt::CrossCursor);
+    update();
+}
+
+void View3DCanvas::nudge(double turnDeg, double tiltDeg, double rollDeg) {
+    cam_.yawDeg = wrapDegrees(cam_.yawDeg + turnDeg);
+    cam_.pitchDeg = wrapDegrees(cam_.pitchDeg + tiltDeg);
+    cam_.rollDeg = wrapDegrees(cam_.rollDeg + rollDeg);
+    update();
+    emit cameraChanged();
+}
+
+void View3DCanvas::zoomBy(double factor) {
+    cam_.distance = std::clamp(cam_.distance * factor, 1.0, 1e7);
+    update();
+    emit cameraChanged();
+}
+
+bool View3DCanvas::beginItemDrag(const QPointF& at) {
+    dragKind_ = 0;
+    dragStarted_ = false;
+    if (!route_) return false;
+    V3 anchor;
+    const QString node = nodeAt(at);
+    if (!node.isEmpty()) {
+        dragKind_ = 1;
+        dragId_ = node;
+        anchor = nodeShown(*route_->node(node));
+        selNode_ = node;
+        selSegment_.clear();
+    } else {
+        V3 p, n;
+        int after = 0;
+        const QString seg = segmentAt(at, &p, &n, &after);
+        if (seg.isEmpty()) return false;
+        const RouteSegment3D* s = route_->segment(seg);
+        // A CORNER NEAR WHERE IT WAS TAKEN HOLD OF: that corner. Anywhere else on it: a corner put there.
+        const double r = route_->diameterOf(*s) / 2.0;
+        int best = -1;
+        double nearest = 12.0;
+        for (size_t i = 0; i < s->via.size(); ++i) {
+            QPointF q;
+            if (!toScreen(s->via[i].at + s->via[i].normal * r, q)) continue;
+            const double d = std::hypot(q.x() - at.x(), q.y() - at.y());
+            if (d < nearest) {
+                nearest = d;
+                best = static_cast<int>(i);
+            }
+        }
+        dragId_ = seg;
+        if (best >= 0) {
+            dragKind_ = 2;
+            dragVia_ = best;
+            anchor = s->via[static_cast<size_t>(best)].at;
+        } else {
+            dragKind_ = 3;
+            dragVia_ = after;
+            dragNew_ = {p, n};
+            anchor = p;
+        }
+        selSegment_ = seg;
+        selNode_.clear();
+    }
+    // AS FAR ACROSS THE MODEL AS THE POINTER GOES ACROSS THE PICTURE, at the depth it is taken hold of.
+    V3 right, up, forward;
+    cam_.axes(right, up, forward);
+    const double z = std::max(cam_.nearPlane(), dot3(anchor - cam_.eye(), forward));
+    dragPerPixel_ = 2.0 * z * std::tan(cam_.fovDeg * M_PI / 360.0) / std::max(1, height());
+    routeRedraw();
+    emit selectionChanged(selSegment_);
+    return true;
+}
+
 void View3DCanvas::mousePressEvent(QMouseEvent* e) {
     dragging_ = e->button();
     last_ = e->position().toPoint();
     pressedAt_ = last_;
     moved_ = false;
+    // LOCKED: a press on something takes hold of it.
+    if (viewLocked_ && e->button() == Qt::LeftButton && beginItemDrag(e->position())) setCursor(Qt::ClosedHandCursor);
 }
 
 void View3DCanvas::mouseMoveEvent(QMouseEvent* e) {
@@ -1664,6 +1876,38 @@ void View3DCanvas::mouseMoveEvent(QMouseEvent* e) {
     const QPoint now = e->position().toPoint();
     if ((now - pressedAt_).manhattanLength() > 3) moved_ = true;
     if (!moved_) return;
+    // SOMETHING HELD, MOVED: across the view, at its own depth. The first move is one change, to undo as one.
+    if (dragKind_ != 0 && route_) {
+        if (!dragStarted_) {
+            dragStarted_ = true;
+            emit routeAboutToChange();
+            if (dragKind_ == 3) {
+                if (RouteSegment3D* s = route_->segment(dragId_)) {
+                    const int at = std::clamp(dragVia_, 0, static_cast<int>(s->via.size()));
+                    s->via.insert(s->via.begin() + at, dragNew_);
+                    dragVia_ = at;
+                    dragKind_ = 2;
+                }
+            }
+        }
+        const QPoint dd = now - last_;
+        last_ = now;
+        V3 right, up, forward;
+        cam_.axes(right, up, forward);
+        const V3 by = right * (dd.x() * dragPerPixel_) - up * (dd.y() * dragPerPixel_);
+        if (dragKind_ == 1) {
+            if (RouteNode3D* n = route_->node(dragId_)) n->at = n->at + by;
+        } else if (dragKind_ == 2) {
+            if (RouteSegment3D* s = route_->segment(dragId_))
+                if (dragVia_ >= 0 && dragVia_ < static_cast<int>(s->via.size()))
+                    s->via[static_cast<size_t>(dragVia_)].at = s->via[static_cast<size_t>(dragVia_)].at + by;
+        }
+        routeDirty_ = true;
+        update();
+        return;
+    }
+    // Locked: the view stays as it is.
+    if (viewLocked_) return;
     const QPoint d = now - last_;
     last_ = now;
     if (dragging_ == Qt::LeftButton && (e->modifiers() & Qt::ShiftModifier)) {
@@ -1687,6 +1931,16 @@ void View3DCanvas::mouseMoveEvent(QMouseEvent* e) {
 }
 
 void View3DCanvas::mouseReleaseEvent(QMouseEvent* e) {
+    // SOMETHING HELD, LET GO: moved - one change made; not moved - it is selected, and that is all.
+    if (dragKind_ != 0) {
+        const bool changed = dragStarted_;
+        dragKind_ = 0;
+        dragStarted_ = false;
+        dragging_ = Qt::NoButton;
+        setCursor(Qt::OpenHandCursor);
+        if (changed) emit routeChanged();
+        return;
+    }
     const bool click = dragging_ == Qt::LeftButton && !moved_ && e->button() == Qt::LeftButton;
     dragging_ = Qt::NoButton;
     if (swallowRelease_) {
@@ -1745,6 +1999,7 @@ void View3DCanvas::mouseDoubleClickEvent(QMouseEvent* e) {
         swallowRelease_ = true;
         return;
     }
+    if (viewLocked_) return;
     fit();
 }
 
@@ -1798,6 +2053,7 @@ void View3DCanvas::keyPressEvent(QKeyEvent* e) {
 }
 
 void View3DCanvas::wheelEvent(QWheelEvent* e) {
+    if (viewLocked_) return;   // locked: the view stays as it is
     // ZOOMED: nearer or further, a step a notch.
     const double notches = e->angleDelta().y() / 120.0;
     cam_.distance = std::clamp(cam_.distance * std::pow(0.85, notches), 1.0, 1e7);

@@ -41,12 +41,35 @@ uniform vec3 light;
 uniform vec4 section;
 uniform float cut;
 uniform float unlit;
+uniform float tex;
+uniform vec3 eye;
 varying vec3 vN;
 varying vec3 vW;
+float hash3(vec3 p) { return fract(sin(p.x * 12.9898 + p.y * 78.233 + p.z * 45.164) * 43758.5453); }
 void main() {
     if (cut > 0.5 && dot(vW, section.xyz) > section.w) discard;
-    float lit = unlit > 0.5 ? 1.0 : 0.28 + 0.72 * abs(dot(normalize(vN), light));
-    gl_FragColor = vec4(color.rgb * lit, color.a);
+    vec3 n = normalize(vN);
+    float lit = unlit > 0.5 ? 1.0 : 0.28 + 0.72 * abs(dot(n, light));
+    vec3 rgb = color.rgb * lit;
+    if (unlit < 0.5 && tex > 0.5) {
+        vec3 toEye = normalize(eye - vW);
+        if (dot(n, toEye) < 0.0) n = -n;
+        vec3 r = n * (2.0 * dot(n, light)) - light;
+        float facing = max(0.0, dot(r, toEye));
+        float scale = 1.0;
+        float shine = 0.0;
+        if (tex < 1.5) {
+            scale = 0.93 + 0.05 * hash3(vec3(floor(vW.z * 2.5), floor((vW.x + vW.y) * 0.15), 0.0)) + 0.02 * hash3(floor(vW * 6.0));
+            shine = 0.5 * pow(facing, 24.0);
+        } else if (tex < 2.5) {
+            scale = 0.95 + 0.07 * hash3(floor(vW * 5.0));
+            shine = 0.18 * pow(facing, 10.0);
+        } else {
+            scale = 0.96 + 0.06 * hash3(floor(vW * 3.0));
+        }
+        rgb = clamp(rgb * scale + vec3(shine), 0.0, 1.0);
+    }
+    gl_FragColor = vec4(rgb, color.a);
 }
 )";
 
@@ -249,6 +272,7 @@ bool GlRenderer3D::render(QImage& image, const std::vector<DrawItem3D>& items, c
     p.setUniformValue("section", QVector4D(static_cast<float>(section.normal.x), static_cast<float>(section.normal.y),
                                            static_cast<float>(section.normal.z), static_cast<float>(section.offset)));
     p.setUniformValue("unlit", wireframe ? 1.0f : 0.0f);
+    p.setUniformValue("eye", QVector3D(static_cast<float>(eye.x), static_cast<float>(eye.y), static_cast<float>(eye.z)));
     if (wireframe) d_->polygonMode(GL_FRONT_AND_BACK, 0x1B01 /* GL_LINE */);
     p.enableAttributeArray(0);
     p.enableAttributeArray(1);
@@ -267,6 +291,7 @@ bool GlRenderer3D::render(QImage& image, const std::vector<DrawItem3D>& items, c
             const QColor c = wireframe ? it->color.lighter(130) : it->color;
             p.setUniformValue("color", QVector4D(c.redF(), c.greenF(), c.blueF(), static_cast<float>(it->alpha)));
             p.setUniformValue("cut", it->sectioned && section.on ? 1.0f : 0.0f);
+            p.setUniformValue("tex", static_cast<float>(it->texture));
             on->buffer.bind();
             p.setAttributeBuffer(0, GL_FLOAT, 0, 3, static_cast<int>(6 * sizeof(float)));
             p.setAttributeBuffer(1, GL_FLOAT, static_cast<int>(3 * sizeof(float)), 3, static_cast<int>(6 * sizeof(float)));

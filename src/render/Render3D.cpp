@@ -29,6 +29,36 @@ void Camera3D::axes(V3& right, V3& up, V3& forward) const {
     }
 }
 
+namespace {
+double hash3(double x, double y, double z) {
+    const double h = std::sin(x * 12.9898 + y * 78.233 + z * 45.164) * 43758.5453;
+    return h - std::floor(h);
+}
+} // namespace
+
+void textureAt(int texture, const V3& at, const V3& normal, const V3& light, const V3& toEye, double& scale, double& shine) {
+    scale = 1.0;
+    shine = 0.0;
+    if (texture == Texture3D::None) return;
+    V3 n = normal;
+    if (dot3(n, toEye) < 0.0) n = n * -1.0;
+    const V3 r = n * (2.0 * dot3(n, light)) - light;
+    const double facing = std::max(0.0, dot3(r, toEye));
+    if (texture == Texture3D::Metal) {
+        // BRUSHED: fine streaks one way, and a bright shine.
+        // Bands wide enough not to break up into noise from far off, and a faint grain over them.
+        const double streak = hash3(std::floor(at.z * 2.5), std::floor((at.x + at.y) * 0.15), 0.0);
+        const double grain = hash3(std::floor(at.x * 6.0), std::floor(at.y * 6.0), std::floor(at.z * 6.0));
+        scale = 0.93 + 0.05 * streak + 0.02 * grain;
+        shine = 0.5 * std::pow(facing, 24.0);
+    } else if (texture == Texture3D::Plastic) {
+        scale = 0.95 + 0.07 * hash3(std::floor(at.x * 5.0), std::floor(at.y * 5.0), std::floor(at.z * 5.0));
+        shine = 0.18 * std::pow(facing, 10.0);
+    } else {
+        scale = 0.96 + 0.06 * hash3(std::floor(at.x * 3.0), std::floor(at.y * 3.0), std::floor(at.z * 3.0));
+    }
+}
+
 double wrapDegrees(double deg) {
     double d = std::fmod(deg, 360.0);
     if (d <= -180.0) d += 360.0;
@@ -174,15 +204,24 @@ void renderScene3D(QImage& image, const std::vector<DrawItem3D>& items, const Ca
                         const V3 at = eye + (forward + right * ((px - w * 0.5) / focal) - up * ((py - h * 0.5) / focal)) * z;
                         if (section.cuts(at)) continue;
                     }
+                    QRgb shade = colour;
+                    if (it.texture != Texture3D::None) {
+                        const V3 at = eye + (forward + right * ((px - w * 0.5) / focal) - up * ((py - h * 0.5) / focal)) * z;
+                        double scale = 1.0, shine = 0.0;
+                        textureAt(it.texture, at, n, light, (eye - at).normalized(), scale, shine);
+                        shade = qRgb(std::clamp(static_cast<int>(qRed(colour) * scale + 255.0 * shine), 0, 255),
+                                     std::clamp(static_cast<int>(qGreen(colour) * scale + 255.0 * shine), 0, 255),
+                                     std::clamp(static_cast<int>(qBlue(colour) * scale + 255.0 * shine), 0, 255));
+                    }
                     if (blend) {
                         QRgb& under = bits[y * stride + x];
-                        under = qRgb(static_cast<int>(qRed(colour) * it.alpha + qRed(under) * keep),
-                                     static_cast<int>(qGreen(colour) * it.alpha + qGreen(under) * keep),
-                                     static_cast<int>(qBlue(colour) * it.alpha + qBlue(under) * keep));
+                        under = qRgb(static_cast<int>(qRed(shade) * it.alpha + qRed(under) * keep),
+                                     static_cast<int>(qGreen(shade) * it.alpha + qGreen(under) * keep),
+                                     static_cast<int>(qBlue(shade) * it.alpha + qBlue(under) * keep));
                         continue;
                     }
                     d = z;
-                    bits[y * stride + x] = colour;
+                    bits[y * stride + x] = shade;
                 }
             }
         }

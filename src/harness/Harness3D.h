@@ -20,6 +20,8 @@ struct Harness3DItem {
     QString what;          // a part's name or P/N, or the run's
     bool model = false;    // a part shown by its own 3D model
     bool cube = false;     // a part shown as a box, having none
+    int texture = 0;       // what it looks made of: a Texture3D
+    bool ownLook = false;  // its colour and texture its own model's, not set by what it is
     QString brick;         // the wizard brick it is (on the sheet: the brick it was placed from)
 };
 
@@ -28,6 +30,8 @@ struct Harness3DScene {
     int parts = 0, modelled = 0, runs = 0;
     QStringList notes;     // what could not be read, and why
 };
+
+struct LibraryPart;
 
 // HOW A PART WITH NO 3D MODEL IS SHOWN: a box as big as it is drawn, or a solid made from its 2D drawing - its outline
 // turned round the way it goes into the harness (a round connector), or given depth across (a square one).
@@ -40,7 +44,25 @@ enum class PartLook { Box, Revolved, Extruded };
 struct PartPins {
     int count = 0;
     bool female = false;
+    // EACH ONE, where it is known: its number, a socket or a pin, and where the pinout drawing has it on the face -
+    // across (u) and up (v) from the face's middle, and its radius, in the face's own radius. Unplaced: laid out
+    // evenly over the face, in its turn.
+    struct Pin {
+        int number = 0;
+        bool female = false;
+        bool placed = false;
+        double u = 0.0, v = 0.0, r = 0.0;
+    };
+    std::vector<Pin> each;
 };
+// WHERE A PINOUT DRAWING PUTS ITS PINS: each numbered circle, by the number written beside or in it, as a share of the
+// big circle round them all - the face. Empty when the drawing has no such circles.
+std::vector<PartPins::Pin> pinoutPositions(const QJsonArray& drawing);
+// FOR A PART'S 3D MODEL, BUILT: a solid from its 2D drawing - turned round X, or given its width in depth - centred on
+// the origin, going in along +X; and its pins and sockets on a face across X at the origin, so wide, so deep, pointing
+// +X - each where its pinout drawing has it, a pin or a socket as its type says.
+Mesh3D partDrawingSolid(const LibraryPart& part, bool revolve);
+void partPinMeshes(const LibraryPart& part, double faceDiameter, double depth, Mesh3D& pins, Mesh3D& sockets);
 
 // A connector part's pins as the 3D view shows them: its way count, female where it is a receptacle or a socket.
 struct LibraryPart;

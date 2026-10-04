@@ -853,7 +853,7 @@ std::vector<PartField> partFields(PartKind kind) {
             return {num("pins", "Pins"),
                     num("pitch", "Pitch", "mm"),
                     text("shellSize", "Shell size"),
-                    text("gender", "Gender"),
+                    choice("gender", "Gender", {QStringLiteral("Male"), QStringLiteral("Female"), QStringLiteral("Mixed")}),
                     // HOW IT IS MOUNTED: on the end of a cable or through a panel, and which half of the pair.
                     choice("mounting", "Mounting",
                            {QStringLiteral("Cable plug"), QStringLiteral("Cable receptacle"),
@@ -1148,6 +1148,24 @@ void appendCoil(std::vector<Entity>& out, int humps, double r, double leadTo) {
 
 } // namespace
 
+QStringList partPinGenders(const LibraryPart& part) {
+    const int ways = part.wayCount();
+    QStringList out;
+    for (int i = 0; i < ways; ++i) out << QString();
+    for (const PartPinType& t : partPinTypes(part)) {
+        const QString g = t.gender.trimmed().toLower();
+        if (g != QLatin1String("male") && g != QLatin1String("female")) continue;
+        for (const int pin : pinsNamedBy(t.pins, ways))
+            if (pin >= 1 && pin <= ways) out[pin - 1] = g;
+    }
+    return out;
+}
+
+bool partPinsMixed(const LibraryPart& part) {
+    const QStringList g = partPinGenders(part);
+    return g.contains(QStringLiteral("male")) && g.contains(QStringLiteral("female"));
+}
+
 QJsonArray connectorSymbolFromData(const LibraryPart& part) {
     if (part.kind != PartKind::Connector) return {};
     const int ways = part.wayCount();
@@ -1180,6 +1198,18 @@ QJsonArray connectorSymbolFromData(const LibraryPart& part) {
                     label = pinLabelFor(p);
                     break;
                 }
+    }
+    // A MIXED CONNECTOR - pins and sockets in one housing - says which each is, beside its number: a full circle a
+    // pin, an empty one a socket. Wired from without the datasheet, a pin cannot be taken for a socket.
+    if (partPinsMixed(part)) {
+        const QStringList genders = partPinGenders(part);
+        for (int i = 0; i < spec.pins.size() && i < genders.size(); ++i) {
+            if (genders[i].isEmpty()) continue;
+            const QString mark = genders[i] == QLatin1String("male") ? QString(QChar(0x25CF)) : QString(QChar(0x25CB));
+            QString& label = spec.pins[i];
+            const int cut = label.indexOf(QLatin1Char(' '));
+            label = cut < 0 ? label + QLatin1Char(' ') + mark : label.left(cut) + QLatin1Char(' ') + mark + label.mid(cut);
+        }
     }
     // AND WHAT EACH PIN TAKES, when the connector comes with its pins and they are not all the same. A
     // power connector is two heavy ways and six signal ways in one housing - that is the whole reason for

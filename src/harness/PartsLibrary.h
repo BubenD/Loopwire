@@ -454,6 +454,10 @@ bool partIncludesPins(const LibraryPart& part);
 void setPartIncludesPins(LibraryPart& part, bool on);
 // The pin types it has, in the order they were entered.
 std::vector<PartPinType> partPinTypes(const LibraryPart& part);
+// EACH PIN'S GENDER, 1..wayCount, from the types' pin lists: "male" (a pin), "female" (a socket), or empty where no
+// type says. A connector with both is a MIXED one.
+QStringList partPinGenders(const LibraryPart& part);
+bool partPinsMixed(const LibraryPart& part);
 void setPartPinTypes(LibraryPart& part, const std::vector<PartPinType>& types);
 // ---- A connector that comes WITH ITS WIRES: a lead, a pigtail, an overmoulded cable end ----
 // Each pin's wire as the part is bought: its colour, its size (in AWG or mm2), its insulation and how thick

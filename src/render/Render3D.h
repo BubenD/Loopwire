@@ -44,12 +44,22 @@ struct Section3D {
 };
 
 // One mesh to draw, in its colour; see-through below an alpha of one, and cut by the section or not.
+// WHAT A SURFACE LOOKS MADE OF: brushed metal (fine streaks and a shine), plastic (a fine grain and a soft shine), matte
+// (a grain and no shine) - laid on in the picture, from where each point is, so nothing has to be unwrapped.
+namespace Texture3D {
+enum : int { None = 0, Metal = 1, Plastic = 2, Matte = 3 };
+}
+
 struct DrawItem3D {
     const Mesh3D* mesh = nullptr;
     QColor color;
     double alpha = 1.0;
     bool sectioned = false;
+    int texture = Texture3D::None;
 };
+
+// The shade a texture gives a point: its colour scaled by this, and white added by shine.
+void textureAt(int texture, const V3& at, const V3& normal, const V3& light, const V3& toEye, double& scale, double& shine);
 
 // THE PICTURE: every triangle of every item, nearest in front (a depth buffer), each lit by how squarely it faces the
 // light - or, as wireframe, its edges alone. See-through items over the rest. Software throughout: the same picture

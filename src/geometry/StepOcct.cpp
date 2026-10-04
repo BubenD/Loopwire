@@ -2,6 +2,19 @@
 
 #include <BRepBndLib.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
+#include <BRepAlgoAPI_Cut.hxx>
+#include <BRepBuilderAPI_GTransform.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakePolygon.hxx>
+#include <BRepPrimAPI_MakeBox.hxx>
+#include <BRepPrimAPI_MakeCone.hxx>
+#include <BRepPrimAPI_MakeCylinder.hxx>
+#include <BRepPrimAPI_MakePrism.hxx>
+#include <BRepPrimAPI_MakeSphere.hxx>
+#include <BRepPrimAPI_MakeTorus.hxx>
+#include <gp_GTrsf.hxx>
+#include <TopoDS_Face.hxx>
+#include <TopoDS_Wire.hxx>
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
 #include <Message.hxx>
@@ -64,7 +77,90 @@ void appendTriangles(const TopoDS_Shape& shape, Mesh3D& m) {
 
 } // namespace
 
-bool readStepOcct(const QString& path, std::vector<EnvPart3D>& parts, QString* how) {
+namespace {
+TopoDS_Shape occtShapeOf(const OcctSolid& s) {
+    const double a = std::max(0.01, s.a), b = std::max(0.01, s.b), c = std::max(0.0, s.c);
+    const gp_Ax2 alongX(gp_Pnt(-a / 2.0, 0, 0), gp_Dir(1, 0, 0));
+    TopoDS_Shape shape;
+    switch (s.shape) {
+        case 0: shape = BRepPrimAPI_MakeBox(gp_Pnt(-a / 2, -b / 2, -std::max(0.01, c) / 2), a, b, std::max(0.01, c)).Shape(); break;
+        case 1: shape = BRepPrimAPI_MakeCylinder(alongX, b / 2, a).Shape(); break;
+        case 2: {
+            const TopoDS_Shape outer = BRepPrimAPI_MakeCylinder(alongX, b / 2, a).Shape();
+            const double ri = std::clamp(c / 2, 0.0, b / 2 * 0.98);
+            shape = ri > 1e-6 ? BRepAlgoAPI_Cut(outer, BRepPrimAPI_MakeCylinder(alongX, ri, a).Shape()).Shape() : outer;
+            break;
+        }
+        case 3:
+            shape = std::abs(b - c) < 1e-6 ? BRepPrimAPI_MakeCylinder(alongX, b / 2, a).Shape()
+                                           : BRepPrimAPI_MakeCone(alongX, b / 2, c / 2, a).Shape();
+            break;
+        case 4: shape = BRepPrimAPI_MakeSphere(gp_Pnt(0, 0, 0), a / 2).Shape(); break;
+        case 5: shape = BRepPrimAPI_MakeTorus(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(1, 0, 0)), a / 2, b / 2).Shape(); break;
+        case 6: {
+            // A hexagon across X, its flats b apart, drawn out along X.
+            const double r = b / 2 / std::cos(M_PI / 6);
+            BRepBuilderAPI_MakePolygon hex;
+            for (int k = 0; k < 6; ++k) hex.Add(gp_Pnt(-a / 2, r * std::cos(k * M_PI / 3), r * std::sin(k * M_PI / 3)));
+            hex.Close();
+            shape = BRepPrimAPI_MakePrism(BRepBuilderAPI_MakeFace(hex.Wire()).Face(), gp_Vec(a, 0, 0)).Shape();
+            break;
+        }
+        default: return {};
+    }
+    // WHERE IT GOES: turned, scaled - each axis its own - and put.
+    gp_GTrsf g;
+    g.SetValue(1, 1, s.m[0][0]);
+    g.SetValue(1, 2, s.m[0][1]);
+    g.SetValue(1, 3, s.m[0][2]);
+    g.SetValue(1, 4, s.m[0][3]);
+    g.SetValue(2, 1, s.m[1][0]);
+    g.SetValue(2, 2, s.m[1][1]);
+    g.SetValue(2, 3, s.m[1][2]);
+    g.SetValue(2, 4, s.m[1][3]);
+    g.SetValue(3, 1, s.m[2][0]);
+    g.SetValue(3, 2, s.m[2][1]);
+    g.SetValue(3, 3, s.m[2][2]);
+    g.SetValue(3, 4, s.m[2][3]);
+    return BRepBuilderAPI_GTransform(shape, g, true).Shape();
+}
+} // namespace
+
+bool occtCutSolid(const OcctSolid& solid, const std::vector<OcctSolid>& cuts, Mesh3D& out, QString* why) {
+    try {
+        TopoDS_Shape shape = occtShapeOf(solid);
+        if (shape.IsNull()) return false;
+        for (const OcctSolid& c : cuts) {
+            const TopoDS_Shape hole = occtShapeOf(c);
+            if (hole.IsNull()) continue;
+            BRepAlgoAPI_Cut cut(shape, hole);
+            if (cut.IsDone() && !cut.Shape().IsNull()) shape = cut.Shape();
+        }
+        Bnd_Box box;
+        BRepBndLib::Add(shape, box);
+        if (box.IsVoid()) {
+            out = Mesh3D();
+            return true;   // cut away whole
+        }
+        double x0, y0, z0, x1, y1, z1;
+        box.Get(x0, y0, z0, x1, y1, z1);
+        const double span = std::sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0) + (z1 - z0) * (z1 - z0));
+        BRepMesh_IncrementalMesh mesher(shape, std::clamp(span * 0.002, 0.002, 1.0), false, 0.3, true);
+        out = Mesh3D();
+        appendTriangles(shape, out);
+        return true;
+    } catch (const Standard_Failure& e) {
+        if (why) *why = QStringLiteral("a cut could not be made: %1").arg(QString::fromLatin1(e.what()));
+    } catch (...) {
+        if (why) *why = QStringLiteral("a cut could not be made");
+    }
+    return false;
+}
+
+bool readStepOcct(const QString& path, std::vector<EnvPart3D>& parts, QString* how, const Load3DProgress& progress) {
+    auto say = [&](int pct, const char* stage) {
+        if (progress) progress(pct, QString::fromLatin1(stage));
+    };
     // ONE AT A TIME: the document application is shared, and a part's model may be read while an environment loads.
     static std::mutex one;
     const std::lock_guard<std::mutex> hold(one);
@@ -82,11 +178,13 @@ bool readStepOcct(const QString& path, std::vector<EnvPart3D>& parts, QString* h
         STEPCAFControl_Reader reader;
         reader.SetColorMode(true);
         reader.SetNameMode(true);
+        say(5, "Reading the STEP file");
         if (reader.ReadFile(QFileInfo(path).absoluteFilePath().toLocal8Bit().constData()) != IFSelect_RetDone) {
             if (how) *how = QStringLiteral("%1 is not a STEP file Open CASCADE can read").arg(file);
             app->Close(doc);
             return false;
         }
+        say(30, "Building the solids");
         if (!reader.Transfer(doc)) {
             if (how) *how = QStringLiteral("nothing in %1 could be turned into solids").arg(file);
             app->Close(doc);
@@ -111,7 +209,10 @@ bool readStepOcct(const QString& path, std::vector<EnvPart3D>& parts, QString* h
         box.Get(x0, y0, z0, x1, y1, z1);
         const double span = std::sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0) + (z1 - z0) * (z1 - z0));
         const double deflection = std::clamp(span * 0.0008, 0.005, 5.0);
+        say(50, "Meshing the surfaces");
         BRepMesh_IncrementalMesh mesher(all, deflection, false, 0.35, true);
+        say(80, "Collecting the solids");
+        int seen = 0;
         // EVERY SOLID WHERE THE ASSEMBLY PUTS IT, with its name and colour.
         size_t tris = 0;
         for (XCAFPrs_DocumentExplorer ex(doc, XCAFPrs_DocumentExplorerFlags_OnlyLeafNodes); ex.More(); ex.Next()) {
@@ -132,6 +233,10 @@ bool readStepOcct(const QString& path, std::vector<EnvPart3D>& parts, QString* h
             }
             tris += part.mesh.f.size();
             parts.push_back(std::move(part));
+            // On towards 95 with each solid - how many there are is not known until the last.
+            ++seen;
+            if (progress) progress(80 + static_cast<int>(15.0 * (1.0 - 1.0 / (1.0 + seen / 20.0))),
+                                   QStringLiteral("Collecting the solids: %1").arg(seen));
         }
         app->Close(doc);
         if (parts.empty()) {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "geometry/Mesh3D.h"
+#include <functional>
 
 #include <QColor>
 #include <QString>
@@ -28,9 +29,12 @@ struct Environment3D {
     bool bounds(V3& lo, V3& hi) const;
 };
 
+// HOW FAR A READING HAS GOT, 0..100, and what it is doing: for a progress bar. Called from the thread that reads.
+using Load3DProgress = std::function<void(int percent, const QString& stage)>;
+
 // Read from a file by its extension. A STEP file through Open CASCADE where this build has it - every surface, the
 // assembly's solids with their names and colours - and through Edraw's own reader where it has not.
-Environment3D loadEnvironment3D(const QString& path);
+Environment3D loadEnvironment3D(const QString& path, const Load3DProgress& progress = {});
 QString environment3DFileFilter();
 // Whether STEP files are read whole, through Open CASCADE.
 bool fullStepReader();

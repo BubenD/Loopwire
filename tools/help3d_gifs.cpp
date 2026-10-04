@@ -9,6 +9,7 @@
 // Run on the screen (not the offscreen platform) with Qt's binaries on PATH. Recorded from the program itself, the
 // help cannot show the view doing something it does not do.
 #include "app/View3DPane.h"
+#include "app/NavWheel.h"
 #include "io/GifWriter.h"
 
 #include <QAbstractButton>
@@ -185,6 +186,17 @@ public:
             frame(5);
         }
         hold(6);
+    }
+    // A SEGMENT OF THE WHEEL, clicked: the pointer to it, and a press and a release on it.
+    void clickWheel(NavWheel* wheel, int segment) {
+        const QPointF local = wheel->segmentCentre(segment);
+        moveTo(QPointF(wheel->mapTo(pane_, local.toPoint())), 12);
+        QMouseEvent down(QEvent::MouseButtonPress, local, wheel->mapToGlobal(local), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent up(QEvent::MouseButtonRelease, local, wheel->mapToGlobal(local), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(wheel, &down);
+        QApplication::sendEvent(wheel, &up);
+        ripple_ = 6;
+        hold(8);
     }
     void choose(QComboBox* box, int index) {
         moveTo(centreOf(box), 12);
@@ -595,6 +607,34 @@ int main(int argc, char** argv) {
         r.moveTo(r.centreOf(s.child<QTableWidget>("view3dRoutes")), 14);
         r.hold(30);
         failed += !r.save(QDir(outDir).filePath(QStringLiteral("clip.gif")));
+    }
+
+    // ---- LOCK VIEW: THE WHEEL, AND MOVING A CABLE AND A CONNECTOR -----------------------------------------------
+    {
+        Scene s(model);
+        Recorder r(&s.pane, scale);
+        quickRoute(r, s, true);
+        auto* wheel = s.pane.findChild<NavWheel*>(QStringLiteral("view3dWheel"));
+        r.say(QStringLiteral("The wheel: each click turns, tilts or zooms the view"));
+        r.clickWheel(wheel, 3);
+        r.clickWheel(wheel, 3);
+        r.clickWheel(wheel, 0);
+        r.clickWheel(wheel, 4);
+        r.say(QStringLiteral("Lock: the view held still"));
+        r.clickWheel(wheel, 5);
+        r.say(QStringLiteral("Drag the cable: a corner is put there, and it bends"));
+        r.moveTo(r.at(cablePoint(s.pane, 0.62)), 14);
+        r.drag(Qt::LeftButton, QPointF(-70, -60), 26);
+        r.hold(6);
+        r.say(QStringLiteral("Drag a connector: its cable comes with it"));
+        r.moveTo(r.at(nodePoint(s.pane, QStringLiteral("X2"))), 14);
+        r.drag(Qt::LeftButton, QPointF(40, 30), 22);
+        r.hold(6);
+        r.say(QStringLiteral("Undo takes a move back; the padlock unlocks"));
+        r.press(s.child<QAbstractButton>("view3dRouteUndo"));
+        r.clickWheel(wheel, 5);
+        r.hold(16);
+        failed += !r.save(QDir(outDir).filePath(QStringLiteral("lock.gif")));
     }
 
     // THE EXAMPLE, for the help's "Open the example": the model all of the above were recorded on.

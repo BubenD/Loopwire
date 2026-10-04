@@ -36,7 +36,7 @@ const Topic kTopics[] = {
      "<li><b>The length.</b> It is in the table on the right. <i>Lengths to harness</i> gives it to the harness.</li>"
      "</ol>"
      "<p>The topics that follow take each step on its own. <i>Full screen</i> (or F11) gives the view the whole screen "
-     "while you work; Esc comes back.</p>"},
+     "while you work; F11 or <i>Back</i> comes back.</p>"},
     {"2. Turning the view, all the way round",
      ":/help3d/view.gif",
      "<p><b>With the mouse:</b> drag with the left button to turn (left and right) and tilt (up and down) - all the way "
@@ -45,7 +45,11 @@ const Topic kTopics[] = {
      "<p><b>By the numbers:</b> <i>Turn</i>, <i>Tilt</i> and <i>Roll</i> in the top row are the same three turns in "
      "degrees, each going all the way round (-180&deg; to 180&deg;, and on). Their arrows step by 15&deg;; type any "
      "figure.</p>"
-     "<p><b>Back to a known view:</b> <i>Iso</i>, <i>Top</i>, <i>Front</i>, <i>Side</i> and <i>Fit</i>.</p>"},
+     "<p><b>Back to a known view:</b> <i>Iso</i>, <i>Top</i>, <i>Front</i>, <i>Side</i> and <i>Fit</i>.</p>"
+     "<p><b>The wheel</b> in the picture's top right corner does it by clicks: <i>Turn</i> left and right, "
+     "<i>Tilt</i> up and down, <i>Roll</i> either way, <i>Zoom</i> in and out, <i>Fit</i>, <i>Iso</i>, and "
+     "<i>Lock</i>. Each click turns it by a step - 15&deg;, or what <i>Options</i> (the cog, or the wheel's middle) "
+     "says: 5&deg;, 15&deg;, 45&deg; or 90&deg;. <i>Wheel</i> in the top row shows or hides it.</p>"},
     {"3. Where a click lands - the faces, the ground, the section",
      ":/help3d/plane.gif",
      "<p>Every click lands on the face of the model under the pointer. That point, and the way the face looks, is what "
@@ -99,8 +103,8 @@ const Topic kTopics[] = {
      "or tighter. <b>&Oslash;</b> is the diameter (the table sets one cable's own). A corner with no room for its bend "
      "is counted under the table.</p>"
      "<p><b>Changing your mind:</b> while laying, <i>Backspace</i> takes back the last corner. Once laid, <i>Undo</i> "
-     "(Ctrl+Z) takes a change back. A laid cable's corners are not dragged: to take it another way, delete it "
-     "(<i>Delete</i> tool, or select it and press Delete) and lay it again.</p>"},
+     "(Ctrl+Z) takes a change back. To take a laid cable another way, <i>Lock view</i> and drag it: a corner is "
+     "put where you take hold of it, and moves with the pointer (topic 10). Or delete it and lay it again.</p>"},
     {"8. Branch - where a cable divides",
      ":/help3d/branch.gif",
      "<p>A <b>branch</b> is a point where a cable divides - one bundle coming in, two or more going out, as at a "
@@ -117,13 +121,78 @@ const Topic kTopics[] = {
      "<p><b>To put one:</b> choose <i>Clip</i> and click on a laid cable where it is held. The cable is divided there, "
      "so each piece's length - from the connector to the clip, from clip to clip - is known. A clip can also be put on "
      "a face first, and cables laid through it with <i>Route</i>.</p>"},
-    {"10. Full screen",
+    {"10. Lock view - moving cables and connectors",
+     ":/help3d/lock.gif",
+     "<p><b>Lock view</b> (top row, or the padlock on the wheel) holds the view still: the mouse no longer turns, "
+     "moves or zooms it. Instead a <b>drag moves what is under the pointer</b> - across the view and up and down it, "
+     "at the depth it is:</p>"
+     "<ul>"
+     "<li><b>a cable</b> - taken hold of anywhere along it, a corner is put there and moved: the cable bends round "
+     "it. Taken by a corner it has, that corner moves.</li>"
+     "<li><b>a connector, a branch or a clip</b> - it moves, and its cables with it.</li>"
+     "</ul>"
+     "<p>Each drag is one change: <i>Undo</i> takes it back. To move something the other way - nearer or further - "
+     "unlock, turn the view, lock again and drag. <i>View locked</i> again, or the padlock, unlocks.</p>"},
+    {"11. Full screen",
      "",
      "<p><i>Full screen</i> (top right of the view), or <b>F11</b>, opens the 3D view in a window of its own, filling "
      "the screen - with every row and the panel on the right, so nothing is lost. It is a window still: drag it by its "
-     "title bar, make it smaller, or put it on another screen. <b>Esc</b>, F11, <i>Back</i> or closing the window "
+     "title bar, make it smaller, or put it on another screen. <b>F11</b>, <i>Back</i> or closing the window "
      "returns it to where it was.</p>"},
-    {"11. Words used here",
+    {"12. What every command does",
+     "",
+     "<p><b>The top row - what is shown, and the view</b></p><dl>"
+     "<dt><i>The drawing / The harness wizard</i></dt><dd>Which harness to show: the one on the sheet, or the one open in "
+     "the wizard.</dd>"
+     "<dt><i>Parts as boxes / turned / extruded</i></dt><dd>How a part with no 3D model is made from its drawing.</dd>"
+     "<dt><i>Refresh</i></dt><dd>Build it again from the drawing now (it is built again by itself as the drawing "
+     "changes).</dd>"
+     "<dt><i>Fit, Iso, Top, Front, Side</i></dt><dd>Everything in view; seen at an angle, from above, from the front, "
+     "from the side.</dd>"
+     "<dt><i>Wireframe</i></dt><dd>Edges only - to see through to what is behind.</dd>"
+     "<dt><i>Turn, Tilt, Roll</i></dt><dd>The view's three turns in degrees, each all the way round.</dd>"
+     "<dt><i>Wheel</i></dt><dd>Show or hide the navigation wheel.</dd>"
+     "<dt><i>Full screen</i></dt><dd>The view in a window of its own, filling the screen.</dd>"
+     "<dt><i>Lock view</i></dt><dd>Hold the view still, so a drag moves a cable, a corner or a connector.</dd>"
+     "</dl><p><b>Environment - the model routed in</b></p><dl>"
+     "<dt><i>Load...</i></dt><dd>Read the model (STEP, STL, OBJ); a bar shows how far the reading has got.</dd>"
+     "<dt><i>Clear</i></dt><dd>Take the model away.</dd>"
+     "<dt><i>Show</i></dt><dd>Show or hide the model.</dd>"
+     "<dt><i>Opacity</i></dt><dd>How solid the model is drawn - to see through it.</dd>"
+     "<dt><i>Harness</i></dt><dd>Show or hide the harness from the drawing.</dd>"
+     "<dt><i>Section X / Y / Z</i> and its slider</dt><dd>Cut the model open across that axis; the slider moves the "
+     "cut.</dd>"
+     "</dl><p><b>Route - laying the cables</b></p><dl>"
+     "<dt><i>Select</i></dt><dd>Pick a point of the model, or select a node or a cable (to turn a connector, or "
+     "delete it with the Delete key).</dd>"
+     "<dt><i>Connector</i></dt><dd>Put a connector on the face clicked.</dd>"
+     "<dt><i>Branch</i></dt><dd>Divide a cable where it is clicked - where cables part or meet.</dd>"
+     "<dt><i>Clip</i></dt><dd>Put a clip on a cable where it is held to the structure.</dd>"
+     "<dt><i>Route</i></dt><dd>Lay a cable: the node it starts from, the corners, the node it ends at.</dd>"
+     "<dt><i>Delete</i></dt><dd>Take away the node or cable clicked.</dd>"
+     "<dt><i>&Oslash;</i></dt><dd>A cable's diameter (the table sets one cable's own).</dd>"
+     "<dt><i>Bend R</i></dt><dd>The tightest a cable may bend; Auto, six times its diameter.</dd>"
+     "<dt><i>Lead</i></dt><dd>How far a cable comes straight out of a connector before it may turn.</dd>"
+     "<dt><i>Undo</i></dt><dd>Take back the last change to the route (Ctrl+Z).</dd>"
+     "<dt><i>Help</i></dt><dd>This.</dd>"
+     "<dt><i>Clicks land on / at / Through the point picked</i></dt><dd>Where a click lands: the model's faces, or a "
+     "level or upright plane at the place given - to lay a cable through the air.</dd>"
+     "</dl><p><b>The panel on the right</b></p><dl>"
+     "<dt>The parts list</dt><dd>The harness's parts: choose one, and the Connector tool puts that part.</dd>"
+     "<dt><i>Link / Unlink</i></dt><dd>Make the node selected that part's, or no part's.</dd>"
+     "<dt><i>Lengths to harness</i></dt><dd>Give each cable of the harness its length along the route.</dd>"
+     "<dt><i>Connector: Points, Turned, Tilted, Spun</i></dt><dd>Which way the connector selected points, and how it "
+     "is turned round its own axis.</dd>"
+     "<dt>The table</dt><dd>Each cable, its length, and its diameter (type one in to set it).</dd>"
+     "</dl><p><b>Keys</b></p><dl>"
+     "<dt>Esc</dt><dd>Give up the cable being laid.</dd>"
+     "<dt>Backspace</dt><dd>Take back the last corner of the cable being laid.</dd>"
+     "<dt>Delete</dt><dd>Delete the node or cable selected.</dd>"
+     "<dt>R</dt><dd>Spin the connector selected a quarter turn.</dd>"
+     "<dt>Ctrl+Z</dt><dd>Undo.</dd>"
+     "<dt>F11</dt><dd>Full screen, and back.</dd>"
+     "</dl>"},
+    {"13. Words used here",
      "",
      "<dl>"
      "<dt><b>Environment</b></dt><dd>The CAD model the harness is routed in (STEP, STL or OBJ).</dd>"

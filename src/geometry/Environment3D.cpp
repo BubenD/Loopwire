@@ -49,13 +49,15 @@ QString environment3DFileFilter() {
     return QStringLiteral("CAD models (*.stp *.step *.stl *.obj);;STEP (*.stp *.step);;STL (*.stl);;OBJ (*.obj);;All files (*)");
 }
 
-Environment3D loadEnvironment3D(const QString& path) {
+Environment3D loadEnvironment3D(const QString& path, const Load3DProgress& progress) {
     Environment3D env;
     env.path = path;
     const QString ext = QFileInfo(path).suffix().toLower();
+    if (progress) progress(2, QStringLiteral("Reading the file"));
 #ifdef EDRAW_HAVE_OCCT
     if (ext == QLatin1String("stp") || ext == QLatin1String("step")) {
-        if (readStepOcct(path, env.parts, &env.how)) return env;
+        if (readStepOcct(path, env.parts, &env.how, progress)) return env;
+        if (progress) progress(60, QStringLiteral("Reading it with Edraw's own reader"));
         // Not a file Open CASCADE takes whole - Edraw's own reader may still find faces in it.
         const QString why = env.how;
         QElapsedTimer clock;
