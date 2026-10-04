@@ -7312,6 +7312,90 @@ void testRoundFifty() {
     }
 }
 
+// ROUND FIFTY-ONE: A MIXED CONNECTOR'S MALE PINS IN A POCKET - the frame its pinout drawing outlines round them, cut
+// into the face, the pins standing in it; the sockets in the face round it.
+void testRoundFiftyOne() {
+    auto circle = [](double x, double y, double r) {
+        Entity e;
+        e.type = EntityType::Circle;
+        e.center = {x, y};
+        e.radius = r;
+        return e;
+    };
+    auto number = [](const QString& n, double x, double y) {
+        Entity e;
+        e.type = EntityType::Text;
+        e.a = {x, y};
+        e.meta.insert(QStringLiteral("text"), n);
+        e.meta.insert(QStringLiteral("size"), 0.6);
+        return e;
+    };
+    auto line = [](double x0, double y0, double x1, double y1) {
+        Entity e;
+        e.type = EntityType::Line;
+        e.a = {x0, y0};
+        e.b = {x1, y1};
+        return e;
+    };
+    // The face 10 across. Pins 1 and 2 to the right, in a frame of four lines; sockets 3 and 4 to the left.
+    std::vector<Entity> drawn = {circle(0, 0, 5),         circle(2, 1, 0.5),   circle(2, -1, 0.5),
+                                 circle(-2, 1, 0.5),      circle(-2, -1, 0.5), number(QStringLiteral("1"), 2.6, 1.2),
+                                 number(QStringLiteral("2"), 2.6, -0.8), number(QStringLiteral("3"), -3.4, 1.2),
+                                 number(QStringLiteral("4"), -3.4, -0.8), line(0.8, 2.2, 3.6, 2.2), line(3.6, 2.2, 3.6, -2.2),
+                                 line(3.6, -2.2, 0.8, -2.2),  line(0.8, -2.2, 0.8, 2.2)};
+    LibraryPart part;
+    part.id = QStringLiteral("FRAME");
+    part.kind = PartKind::Connector;
+    part.params.insert(QStringLiteral("pins"), QStringLiteral("4"));
+    PartPinType male, female;
+    male.gender = QStringLiteral("male");
+    male.pins = QStringLiteral("1-2");
+    male.gauge = QStringLiteral("24");
+    female.gender = QStringLiteral("female");
+    female.pins = QStringLiteral("3-4");
+    female.gauge = QStringLiteral("24");
+    setPartPinTypes(part, {male, female});
+    part.fanout = partDrawingFromEntities(drawn);
+    const PartPins pins = partPinsOf(&part);
+    check(pins.frameN > 0, "frame: the outline round the male pins found");
+    check(pins.inFrame(0.44, 0.0) && pins.inFrame(0.4, 0.2) && !pins.inFrame(-0.4, 0.2) && !pins.inFrame(0.0, 0.0) &&
+              !pins.inFrame(0.4, 0.6),
+          "frame: inside its lines, round the pins - not the sockets' side, not past its lines");
+    // No frame drawn: none found - the fill runs out round the face.
+    {
+        LibraryPart plain = part;
+        drawn.resize(9);
+        plain.fanout = partDrawingFromEntities(drawn);
+        check(partPinsOf(&plain).frameN == 0, "frame: none where none is drawn");
+    }
+    // IN 3D: the pocket, the pins in it.
+    std::vector<Entity> ents;
+    Entity run;
+    run.type = EntityType::TwistedPair;
+    run.points = {{-100, 0}, {0, 0}};
+    run.meta.insert(QStringLiteral("twistWidth"), 3.0);
+    ents.push_back(run);
+    {
+        Entity body;
+        body.type = EntityType::Polygon;
+        // A round body, stepped down at its back so it is no rectangle.
+        body.points = {{0, -4}, {10, -4}, {10, -6}, {30, -6}, {30, 6}, {10, 6}, {10, 4}, {0, 4}};
+        body.meta.insert(QStringLiteral("brickId"), QStringLiteral("P"));
+        body.meta.insert(QStringLiteral("libPart"), part.id);
+        ents.push_back(body);
+    }
+    const Harness3DScene sc = buildHarness3D(ents, {}, PartLook::Revolved, [&](const QString& id) { return id == part.id ? pins : PartPins{}; });
+    bool insert = false, deep = false;
+    V3 lo, hi;
+    for (const Harness3DItem& it : sc.items) {
+        if (it.what == QLatin1String("insert") && it.mesh.bounds(lo, hi)) {
+            insert = true;
+            deep = hi.x - lo.x > 0.3;   // walls running in from the face
+        }
+    }
+    check(insert && deep, "3d frame: a pocket cut into the face where the frame is - its walls and its floor");
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -7376,6 +7460,7 @@ int run_brickharness_tests() {
     testRoundFortyEight();
     testRoundFortyNine();
     testRoundFifty();
+    testRoundFiftyOne();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

@@ -51,10 +51,20 @@ struct PartPins {
         int number = 0;
         bool female = false;
         bool placed = false;
+        bool said = false;   // its gender said by a type of pin, not taken from the connector
         double u = 0.0, v = 0.0, r = 0.0;
     };
     std::vector<Pin> each;
+    // THE MALE PINS' FRAME, where the pinout drawing outlines one round them: a pocket in the face the pins stand in.
+    // A grid of cells over the face's square (-1..1 across and up, frameN a side, row by row from the bottom), set
+    // where the pocket is. Empty: none.
+    int frameN = 0;
+    std::vector<unsigned char> frame;
+    bool inFrame(double u, double v) const;
 };
+// THE FRAME ROUND THE MALE PINS of a pinout drawing: the region its lines and arcs close round them, found by filling out
+// from each male pin to the lines - and none where that runs out to the face's edge or takes a socket in with it.
+void pinoutFrame(const QJsonArray& drawing, PartPins& pins);
 // WHERE A PINOUT DRAWING PUTS ITS PINS: each numbered circle, by the number written beside or in it, as a share of the
 // big circle round them all - the face. Empty when the drawing has no such circles.
 std::vector<PartPins::Pin> pinoutPositions(const QJsonArray& drawing);

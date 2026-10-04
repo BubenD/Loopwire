@@ -132,6 +132,175 @@ std::vector<PartPins::Pin> pinoutPositions(const QJsonArray& drawing) {
     return out;
 }
 
+bool PartPins::inFrame(double u, double v) const {
+    if (frameN <= 0 || std::abs(u) >= 1.0 || std::abs(v) >= 1.0) return false;
+    const int i = std::clamp(static_cast<int>((u + 1.0) / 2.0 * frameN), 0, frameN - 1);
+    const int j = std::clamp(static_cast<int>((v + 1.0) / 2.0 * frameN), 0, frameN - 1);
+    return frame[static_cast<size_t>(j) * frameN + i] != 0;
+}
+
+void pinoutFrame(const QJsonArray& drawing, PartPins& pins) {
+    pins.frameN = 0;
+    pins.frame.clear();
+    std::vector<Vec2> male, female;
+    // FROM THE PINS SAID TO BE PINS: one taken for a pin only because nothing says otherwise may be a socket's place.
+    for (const PartPins::Pin& p : pins.each) {
+        if (!p.placed) continue;
+        if (p.female) female.push_back({p.u, p.v});
+        else if (p.said) male.push_back({p.u, p.v});
+    }
+    if (male.empty()) return;
+    const std::vector<Entity> ents = partDrawingEntities(drawing);
+    // The face: the biggest circle.
+    const Entity* outer = nullptr;
+    for (const Entity& e : ents)
+        if (e.type == EntityType::Circle && (!outer || e.radius > outer->radius)) outer = &e;
+    if (!outer || outer->radius <= 1e-9) return;
+    const Vec2 o = outer->center;
+    const double R = outer->radius;
+    const int n = 200;
+    // THE LINES, as walls on the grid: everything drawn but the face's circle, the pins' own round outlines and fills,
+    // and the words. A wall a cell either side, so a fill cannot slip through between two cells of it.
+    std::vector<unsigned char> wall(static_cast<size_t>(n) * n, 0);
+    auto cellOf = [&](const Vec2& q, int& i, int& j) {
+        i = static_cast<int>(std::floor(((q.x - o.x) / R + 1.0) / 2.0 * n));
+        j = static_cast<int>(std::floor(((q.y - o.y) / R + 1.0) / 2.0 * n));
+    };
+    auto mark = [&](const Vec2& a, const Vec2& b) {
+        const double cells = distance(a, b) / R * n;
+        const int steps = std::max(1, static_cast<int>(std::ceil(cells * 2.0)));
+        for (int k = 0; k <= steps; ++k) {
+            int i = 0, j = 0;
+            cellOf(a + (b - a) * (static_cast<double>(k) / steps), i, j);
+            for (int dj = -1; dj <= 1; ++dj)
+                for (int di = -1; di <= 1; ++di) {
+                    const int ii = i + di, jj = j + dj;
+                    if (ii >= 0 && jj >= 0 && ii < n && jj < n) wall[static_cast<size_t>(jj) * n + ii] = 1;
+                }
+        }
+    };
+    // A closed shape round about one point, all its points near alike from its middle: a pin's outline.
+    auto roundish = [&](const std::vector<Vec2>& pts) {
+        if (pts.size() < 6) return false;
+        Vec2 mid{0, 0};
+        for (const Vec2& q : pts) mid = mid + q;
+        mid = mid / static_cast<double>(pts.size());
+        double lo = 1e300, hi = 0.0;
+        for (const Vec2& q : pts) {
+            const double d = distance(q, mid);
+            lo = std::min(lo, d);
+            hi = std::max(hi, d);
+        }
+        return hi < R * 0.4 && lo > hi * 0.8 && distance(pts.front(), pts.back()) < hi * 0.3;
+    };
+    for (const Entity& e : ents) {
+        switch (e.type) {
+            case EntityType::Line: mark(e.a, e.b); break;
+            case EntityType::Arc: {
+                double a0 = e.startAngle, a1 = e.endAngle;
+                while (a1 < a0) a1 += 2.0 * M_PI;
+                const int k = std::max(8, static_cast<int>((a1 - a0) * 24));
+                for (int s = 0; s < k; ++s) {
+                    const double t0 = a0 + (a1 - a0) * s / k, t1 = a0 + (a1 - a0) * (s + 1) / k;
+                    mark(e.center + Vec2{std::cos(t0), std::sin(t0)} * e.radius, e.center + Vec2{std::cos(t1), std::sin(t1)} * e.radius);
+                }
+                break;
+            }
+            case EntityType::Polyline:
+            case EntityType::Polygon:
+            case EntityType::Rect:
+                if (roundish(e.points)) break;
+                for (size_t k = 1; k < e.points.size(); ++k) mark(e.points[k - 1], e.points[k]);
+                if (e.type != EntityType::Polyline || e.meta.value(QStringLiteral("closed")).toBool())
+                    if (e.points.size() > 2) mark(e.points.back(), e.points.front());
+                break;
+            default: break;   // circles (the pins, the face), fills, words
+        }
+    }
+    // FILLED OUT FROM EACH MALE PIN to the walls - never past the face's edge. Each pin's region on its own, and kept
+    // only where it is a frame: not more than half the face, no socket in it. A pin outside the frame - its region
+    // the rest of the face - adds nothing.
+    auto inside = [&](int i, int j) {
+        const double u = (i + 0.5) / n * 2.0 - 1.0, v = (j + 0.5) / n * 2.0 - 1.0;
+        return u * u + v * v < 0.98;
+    };
+    size_t disc = 0;
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < n; ++i)
+            if (inside(i, j)) ++disc;
+    std::vector<unsigned char> fill(static_cast<size_t>(n) * n, 0);
+    std::vector<unsigned char> one(static_cast<size_t>(n) * n, 0);
+    std::vector<int> stack, region;
+    for (const Vec2& m : male) {
+        int i = static_cast<int>((m.x + 1.0) / 2.0 * n), j = static_cast<int>((m.y + 1.0) / 2.0 * n);
+        if (i < 0 || j < 0 || i >= n || j >= n) continue;
+        // A pin's middle on a wall (a line through it): the fill starts at its nearest cell clear of one.
+        if (wall[static_cast<size_t>(j) * n + i]) {
+            bool found = false;
+            for (int r = 1; r < 6 && !found; ++r)
+                for (int dj = -r; dj <= r && !found; ++dj)
+                    for (int di = -r; di <= r && !found; ++di) {
+                        const int ii = i + di, jj = j + dj;
+                        if (ii >= 0 && jj >= 0 && ii < n && jj < n && !wall[static_cast<size_t>(jj) * n + ii]) {
+                            i = ii;
+                            j = jj;
+                            found = true;
+                        }
+                    }
+            if (!found) continue;
+        }
+        if (fill[static_cast<size_t>(j) * n + i]) continue;   // in a region already kept
+        std::fill(one.begin(), one.end(), 0);
+        region.clear();
+        one[static_cast<size_t>(j) * n + i] = 1;
+        stack.push_back(j * n + i);
+        while (!stack.empty()) {
+            const int at = stack.back();
+            stack.pop_back();
+            region.push_back(at);
+            const int ci = at % n, cj = at / n;
+            const int ni[4] = {ci + 1, ci - 1, ci, ci}, nj[4] = {cj, cj, cj + 1, cj - 1};
+            for (int k = 0; k < 4; ++k) {
+                if (ni[k] < 0 || nj[k] < 0 || ni[k] >= n || nj[k] >= n) continue;
+                const size_t idx = static_cast<size_t>(nj[k]) * n + ni[k];
+                if (one[idx] || wall[idx] || !inside(ni[k], nj[k])) continue;
+                one[idx] = 1;
+                stack.push_back(nj[k] * n + ni[k]);
+            }
+        }
+        // A FRAME IS THE PINS' REGION: more of them in it than sockets, two to one - a drawing's numbers set between two
+        // circles can give a socket's number to a pin's circle, and one such is no reason to lose the frame.
+        auto count = [&](const std::vector<Vec2>& pts) {
+            int k = 0;
+            for (const Vec2& q : pts) {
+                const int qi = static_cast<int>((q.x + 1.0) / 2.0 * n), qj = static_cast<int>((q.y + 1.0) / 2.0 * n);
+                if (qi >= 0 && qj >= 0 && qi < n && qj < n && one[static_cast<size_t>(qj) * n + qi]) ++k;
+            }
+            return k;
+        };
+        const int pinsIn = count(male), socketsIn = count(female);
+        if (pinsIn < 2 || pinsIn <= 2 * socketsIn || region.size() * 2 > disc) continue;
+        for (const int at : region) fill[static_cast<size_t>(at)] = 1;
+    }
+    size_t filled = 0;
+    for (unsigned char f : fill) filled += f;
+    if (filled == 0) return;
+    // The frame's own lines are its edge: the walls next to the fill taken in with it.
+    std::vector<unsigned char> frame = fill;
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < n; ++i) {
+            const size_t idx = static_cast<size_t>(j) * n + i;
+            if (!wall[idx]) continue;
+            for (int dj = -1; dj <= 1; ++dj)
+                for (int di = -1; di <= 1; ++di) {
+                    const int ii = i + di, jj = j + dj;
+                    if (ii >= 0 && jj >= 0 && ii < n && jj < n && fill[static_cast<size_t>(jj) * n + ii]) frame[idx] = 1;
+                }
+        }
+    pins.frameN = n;
+    pins.frame = std::move(frame);
+}
+
 PartPins partPinsOf(const LibraryPart* p) {
     PartPins pins;
     if (!p || p->kind != PartKind::Connector) return pins;
@@ -143,7 +312,8 @@ PartPins partPinsOf(const LibraryPart* p) {
     // drawing puts it - the front, looking at the face; or the back turned round, where only the back is drawn.
     const QStringList genders = partPinGenders(*p);
     std::vector<PartPins::Pin> placed = pinoutPositions(p->fanout);
-    if (placed.empty()) {
+    const bool fromBack = placed.empty();
+    if (fromBack) {
         placed = pinoutPositions(p->fanoutOpposite);
         for (PartPins::Pin& q : placed) q.u = -q.u;
     }
@@ -152,6 +322,7 @@ PartPins partPinsOf(const LibraryPart* p) {
         pin.number = n;
         const QString g = n - 1 < genders.size() ? genders[n - 1] : QString();
         pin.female = g.isEmpty() ? pins.female : g == QLatin1String("female");
+        pin.said = !g.isEmpty();
         for (const PartPins::Pin& q : placed)
             if (q.number == n) {
                 pin.placed = true;
@@ -160,6 +331,20 @@ PartPins partPinsOf(const LibraryPart* p) {
                 pin.r = q.r;
             }
         pins.each.push_back(pin);
+    }
+    // THE MALE PINS' FRAME, where the drawing outlines one - seen from the face, as the pins are.
+    if (!fromBack) pinoutFrame(p->fanout, pins);
+    else {
+        PartPins seenFromBack = pins;
+        for (PartPins::Pin& q : seenFromBack.each) q.u = -q.u;
+        pinoutFrame(p->fanoutOpposite, seenFromBack);
+        if (seenFromBack.frameN > 0) {
+            const int n = seenFromBack.frameN;
+            pins.frameN = n;
+            pins.frame.assign(static_cast<size_t>(n) * n, 0);
+            for (int j = 0; j < n; ++j)
+                for (int i = 0; i < n; ++i) pins.frame[static_cast<size_t>(j) * n + i] = seenFromBack.frame[static_cast<size_t>(j) * n + (n - 1 - i)];
+        }
     }
     return pins;
 }
@@ -282,7 +467,7 @@ bool rectangularProfile(const std::vector<Vec2>& pts, const Vec2& c, const V3& A
 // A SOLID FROM A PART'S 2D DRAWING: its profile turned round A (a round part), or given `depth` up and down (a
 // square one).
 Mesh3D solidFromDrawing(const std::vector<Vec2>& pts, const Vec2& c, const V3& A, const V3& B, double lo, double hi,
-                        bool revolve, double depth, double* faceRadius) {
+                        bool revolve, double depth, double* faceRadius, bool farCap = true) {
     const int n = 40;
     std::vector<double> top, bot;
     if (!profileOf(pts, c, A, B, lo, hi, n, top, bot)) return {};
@@ -317,7 +502,7 @@ Mesh3D solidFromDrawing(const std::vector<Vec2>& pts, const Vec2& c, const V3& A
     const int e0 = m.addVertex(centre + A * lo), e1 = m.addVertex(centre + A * hi);
     for (int k = 0; k < sides; ++k) {
         m.addTri(e0, (k + 1) % sides, k);
-        m.addTri(e1, n * sides + k, n * sides + (k + 1) % sides);
+        if (farCap) m.addTri(e1, n * sides + k, n * sides + (k + 1) % sides);
     }
     return m;
 }
@@ -1022,9 +1207,11 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
             double blockWidth = width;
             const bool block = look == PartLook::Revolved && pins.count > 0 && !p.outline.empty() &&
                                rectangularProfile(p.outline, c, A, B, lo, hi, &blockWidth);
+            // A ROUND CONNECTOR WITH A FRAME ROUND ITS MALE PINS: its face left open, to be made again with the pocket in.
+            const bool pocket = look == PartLook::Revolved && !block && pins.frameN > 0;
             if (look != PartLook::Box && !p.outline.empty()) {
                 it.mesh = solidFromDrawing(p.outline, c, A, B, lo, hi, look == PartLook::Revolved && !block,
-                                           block ? blockWidth : width, &faceR);
+                                           block ? blockWidth : width, &faceR, !pocket || p.outline.empty());
                 it.color = QColor(150, 158, 170);
             }
             // OR A BOX as long and as wide as it is drawn, and as tall as it is wide.
@@ -1076,6 +1263,75 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
                     const double proud = std::min(0.02, depth * 0.05);
                     (female ? socketsItem : pinsItem).mesh.append(tubeMesh({at - A * depth, at + A * proud}, female ? r * 1.15 : r, 10, true));
                 }
+                // THE POCKET round the male pins: the face again with the frame cut out of it, and the frame drawn into
+                // the connector - its walls and its floor - with the pins standing in it.
+                if (pocket && !it.cube) {
+                    const double s = faceHalf * 0.96;
+                    const double Rn = faceR / s;   // the face's edge, in the drawing's share
+                    const double sink = std::min(depth * 0.8, faceR * 0.3);
+                    const int n = pins.frameN;
+                    const double h = 2.0 / n;
+                    auto P = [&](double u, double v, double d) { return face + B * (u * s) + Z * (v * s) - A * d; };
+                    auto quad = [](Mesh3D& m, const V3& a, const V3& b, const V3& cc, const V3& d) {
+                        const int i = m.addVertex(a), j = m.addVertex(b), k = m.addVertex(cc), l = m.addVertex(d);
+                        m.addTri(i, j, k);
+                        m.addTri(i, k, l);
+                    };
+                    Mesh3D cap, pit;
+                    const int below = static_cast<int>(std::ceil((Rn - 1.0) / h));
+                    for (int row = -below; row < n + below; ++row) {
+                        const double v0 = -1.0 + row * h, v1 = v0 + h;
+                        if (v1 <= -Rn || v0 >= Rn) continue;
+                        const double c0 = std::max(v0, -Rn), c1 = std::min(v1, Rn);
+                        const double w0 = std::sqrt(std::max(0.0, Rn * Rn - c0 * c0)), w1 = std::sqrt(std::max(0.0, Rn * Rn - c1 * c1));
+                        // Along the row, the runs of face and of frame.
+                        double runStart = -1e9;
+                        bool runFrame = false;
+                        auto close = [&](double uEnd) {
+                            if (runStart < -1e8) return;
+                            if (runFrame) {
+                                quad(pit, P(runStart, c0, sink), P(uEnd, c0, sink), P(uEnd, c1, sink), P(runStart, c1, sink));
+                            } else {
+                                const double a0 = std::max(runStart, -w0), b0 = std::min(uEnd, w0);
+                                const double a1 = std::max(runStart, -w1), b1 = std::min(uEnd, w1);
+                                if (b0 > a0 || b1 > a1)
+                                    quad(cap, P(a0, c0, 0), P(std::max(a0, b0), c0, 0), P(std::max(a1, b1), c1, 0), P(a1, c1, 0));
+                            }
+                        };
+                        const double from = -std::max(w0, w1);
+                        const int colsHere = static_cast<int>(std::ceil((2.0 * std::max(w0, w1)) / h)) + 2;
+                        for (int k = 0; k <= colsHere; ++k) {
+                            const double u0 = std::floor(from / h) * h + k * h;
+                            const bool f = pins.inFrame(u0 + h / 2, (c0 + c1) / 2);
+                            if (runStart < -1e8 || f != runFrame) {
+                                close(u0);
+                                runStart = u0;
+                                runFrame = f;
+                            }
+                        }
+                        close(std::floor(from / h) * h + (colsHere + 1) * h);
+                    }
+                    // THE WALLS: each edge of the frame, from the face down to the floor.
+                    for (int j = 0; j < n; ++j)
+                        for (int i = 0; i < n; ++i) {
+                            if (!pins.frame[static_cast<size_t>(j) * n + i]) continue;
+                            const double u0 = -1.0 + i * h, u1 = u0 + h, v0 = -1.0 + j * h, v1 = v0 + h;
+                            auto out = [&](int ii, int jj) {
+                                return ii < 0 || jj < 0 || ii >= n || jj >= n || !pins.frame[static_cast<size_t>(jj) * n + ii];
+                            };
+                            if (out(i - 1, j)) quad(pit, P(u0, v0, 0), P(u0, v1, 0), P(u0, v1, sink), P(u0, v0, sink));
+                            if (out(i + 1, j)) quad(pit, P(u1, v0, 0), P(u1, v0, sink), P(u1, v1, sink), P(u1, v1, 0));
+                            if (out(i, j - 1)) quad(pit, P(u0, v0, 0), P(u0, v0, sink), P(u1, v0, sink), P(u1, v0, 0));
+                            if (out(i, j + 1)) quad(pit, P(u0, v1, 0), P(u1, v1, 0), P(u1, v1, sink), P(u0, v1, sink));
+                        }
+                    it.mesh.append(cap);
+                    Harness3DItem insert;
+                    insert.mesh = std::move(pit);
+                    insert.color = QColor(46, 50, 58);
+                    insert.what = QStringLiteral("insert");
+                    insert.brick = p.brick;
+                    scene.items.push_back(std::move(insert));
+                }
                 // PINS AND SOCKETS, each as what it is: a connector with both shows both.
                 pinsItem.color = QColor(212, 175, 80);
                 pinsItem.what = QStringLiteral("pins");
@@ -1096,7 +1352,7 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
         if (it.ownLook) continue;
         if (it.what == QLatin1String("wire")) it.texture = Texture3D::Plastic;
         else if (it.what == QLatin1String("run") || it.what == QLatin1String("sleeve") ||
-                 it.what == QLatin1String("transition") || it.what == QLatin1String("sockets"))
+                 it.what == QLatin1String("transition") || it.what == QLatin1String("sockets") || it.what == QLatin1String("insert"))
             it.texture = Texture3D::Matte;
         else it.texture = Texture3D::Metal;
     }
