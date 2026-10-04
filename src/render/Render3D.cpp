@@ -48,8 +48,16 @@ void Camera3D::fit(const V3& lo, const V3& hi, double aspect) {
     }
 }
 
+void Camera3D::rayAt(double px, double py, int w, int h, V3& origin, V3& dir) const {
+    V3 right, up, forward;
+    axes(right, up, forward);
+    const double focal = 0.5 * std::max(1, h) / std::tan(fovDeg * M_PI / 360.0);
+    origin = eye();
+    dir = (forward + right * ((px - w * 0.5) / focal) - up * ((py - h * 0.5) / focal)).normalized();
+}
+
 void renderScene3D(QImage& image, const std::vector<DrawItem3D>& items, const Camera3D& cam, bool wireframe,
-                   const QColor& background) {
+                   const QColor& background, const Section3D& section) {
     image.fill(background);
     const int w = image.width(), h = image.height();
     if (w <= 0 || h <= 0) return;
@@ -57,7 +65,7 @@ void renderScene3D(QImage& image, const std::vector<DrawItem3D>& items, const Ca
     cam.axes(right, up, forward);
     const V3 eye = cam.eye();
     const double focal = 0.5 * h / std::tan(cam.fovDeg * M_PI / 360.0);
-    const double nearZ = std::max(0.01, cam.distance * 0.001);
+    const double nearZ = cam.nearPlane();
     // THE LIGHT: from over the viewer's shoulder, up and to the left, with some all round so nothing is black.
     const V3 light = (forward * -1.0 + up * 0.6 + right * -0.35).normalized();
     struct P {
@@ -75,24 +83,41 @@ void renderScene3D(QImage& image, const std::vector<DrawItem3D>& items, const Ca
         p.setRenderHint(QPainter::Antialiasing, true);
         for (const DrawItem3D& it : items) {
             if (!it.mesh) continue;
-            p.setPen(QPen(it.color.lighter(130), 1.0));
+            QColor pen = it.color.lighter(130);
+            pen.setAlphaF(static_cast<float>(std::clamp(it.alpha, 0.0, 1.0)));
+            p.setPen(QPen(pen, 1.0));
             std::vector<P> pts;
             pts.reserve(it.mesh->v.size());
             for (const V3& v : it.mesh->v) pts.push_back(project(v));
-            for (const auto& t : it.mesh->f)
+            for (const auto& t : it.mesh->f) {
+                if (it.sectioned && section.on) {
+                    const V3 mid = (it.mesh->v[static_cast<size_t>(t[0])] + it.mesh->v[static_cast<size_t>(t[1])] +
+                                    it.mesh->v[static_cast<size_t>(t[2])]) / 3.0;
+                    if (section.cuts(mid)) continue;
+                }
                 for (int k = 0; k < 3; ++k) {
                     const P& a = pts[static_cast<size_t>(t[static_cast<size_t>(k)])];
                     const P& b = pts[static_cast<size_t>(t[static_cast<size_t>((k + 1) % 3)])];
                     if (a.ok && b.ok) p.drawLine(QPointF(a.x, a.y), QPointF(b.x, b.y));
                 }
+            }
         }
         return;
     }
     std::vector<float> depth(static_cast<size_t>(w) * static_cast<size_t>(h), std::numeric_limits<float>::max());
     auto* bits = reinterpret_cast<QRgb*>(image.bits());
     const int stride = image.bytesPerLine() / 4;
-    for (const DrawItem3D& it : items) {
-        if (!it.mesh) continue;
+    // SOLID FIRST, THEN SEE-THROUGH over it: a see-through item blends with what is behind it, and hides nothing.
+    std::vector<const DrawItem3D*> order;
+    for (const DrawItem3D& it : items)
+        if (it.mesh && it.alpha >= 0.999) order.push_back(&it);
+    for (const DrawItem3D& it : items)
+        if (it.mesh && it.alpha < 0.999 && it.alpha > 0.001) order.push_back(&it);
+    for (const DrawItem3D* item : order) {
+        const DrawItem3D& it = *item;
+        const bool blend = it.alpha < 0.999;
+        const double keep = 1.0 - it.alpha;
+        const bool cut = it.sectioned && section.on;
         std::vector<P> pts;
         pts.reserve(it.mesh->v.size());
         for (const V3& v : it.mesh->v) pts.push_back(project(v));
@@ -129,6 +154,18 @@ void renderScene3D(QImage& image, const std::vector<DrawItem3D>& items, const Ca
                     const float z = static_cast<float>(1.0 / (wa * ia + wb * ib + wc * ic));
                     float& d = depth[static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)];
                     if (z >= d) continue;
+                    // CUT AWAY beyond the section: the point this pixel shows, back from its depth along its ray.
+                    if (cut) {
+                        const V3 at = eye + (forward + right * ((px - w * 0.5) / focal) - up * ((py - h * 0.5) / focal)) * z;
+                        if (section.cuts(at)) continue;
+                    }
+                    if (blend) {
+                        QRgb& under = bits[y * stride + x];
+                        under = qRgb(static_cast<int>(qRed(colour) * it.alpha + qRed(under) * keep),
+                                     static_cast<int>(qGreen(colour) * it.alpha + qGreen(under) * keep),
+                                     static_cast<int>(qBlue(colour) * it.alpha + qBlue(under) * keep));
+                        continue;
+                    }
                     d = z;
                     bits[y * stride + x] = colour;
                 }

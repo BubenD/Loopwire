@@ -47,7 +47,7 @@ under "About Edraw" -> "Third-party licences".
   The following Qt modules are distributed with Edraw, as dynamically linked libraries placed
   beside the program, together with the Qt plugins they require:
 
-      Qt Core, Qt GUI, Qt Widgets, Qt Network, Qt PrintSupport, Qt SVG
+      Qt Core, Qt GUI, Qt Widgets, Qt Network, Qt PrintSupport, Qt SVG, Qt OpenGL
 
   HOW TO OBTAIN THE SOURCE CODE FOR QT
 
@@ -86,7 +86,55 @@ under "About Edraw" -> "Third-party licences".
 
 
 --------------------------------------------------------------------------------------------------
-3. DEFLATE DECOMPRESSION - zlib LICENCE
+3. OPEN CASCADE TECHNOLOGY - GNU LGPL VERSION 2.1, WITH THE OPEN CASCADE EXCEPTION
+--------------------------------------------------------------------------------------------------
+
+  This program makes use of facilities provided by the Open CASCADE Technology software,
+  version 8.0.1, to read STEP (ISO 10303) CAD models for its 3D view.
+
+  Open CASCADE Technology is Copyright (C) Open CASCADE SAS and other contributors.
+
+  The Open CASCADE Technology libraries distributed with Edraw, and their use by Edraw, are
+  covered by the GNU Lesser General Public License, version 2.1 (LGPL-2.1-only), with the
+  Open CASCADE exception, version 1.0. Both texts are supplied with this program:
+
+      licenses/LGPL-2.1.txt                    GNU Lesser General Public License, version 2.1
+      licenses/OCCT-LGPL-EXCEPTION-1.0.txt     Open CASCADE exception, version 1.0
+
+  The exception permits object code that incorporates material from Open CASCADE Technology's
+  header files to be distributed under terms of the distributor's choice, provided that notice
+  is given that it makes use of Open CASCADE Technology. This section, and the notice in
+  "About Edraw", are that notice.
+
+  The Open CASCADE Technology libraries are distributed with Edraw as dynamically linked
+  libraries placed beside the program - the files whose names begin "TK" (TKernel.dll,
+  TKMath.dll, TKBRep.dll, TKDESTEP.dll, TKXCAF.dll, TKMesh.dll and the others they need). No
+  other third-party library comes with them: they were built without any of Open CASCADE's
+  optional third-party components (FreeType, FreeImage, FFmpeg, TBB, OpenVR and the rest).
+
+  HOW TO OBTAIN THE SOURCE CODE FOR OPEN CASCADE TECHNOLOGY
+
+  The libraries are built from the unmodified source code of the official release, which is
+  published by Open CASCADE SAS and may be obtained from:
+
+      https://github.com/Open-Cascade-SAS/OCCT/releases/tag/V8.0.1
+
+  They were built with the configuration options set out in the CMakeLists.txt file of Edraw's
+  build, and with no change to the source. Should that address become unavailable, contact ETS
+  quoting the Edraw version shown in "About Edraw", and the corresponding source for the Open
+  CASCADE Technology version distributed with this copy will be made available.
+
+  YOUR RIGHT TO REPLACE THE OPEN CASCADE TECHNOLOGY LIBRARIES
+
+  The LGPL entitles you to modify the Open CASCADE Technology libraries and to run Edraw against
+  your modified version. Edraw links to them dynamically and loads them from ordinary files in
+  the program's own folder. To use a build of your own, replace those files with your own
+  binaries of the same version, built for the same compiler. Edraw performs no integrity check
+  on them and will not prevent their replacement.
+
+
+--------------------------------------------------------------------------------------------------
+4. DEFLATE DECOMPRESSION - zlib LICENCE
 --------------------------------------------------------------------------------------------------
 
   Edraw reads compressed data streams out of PDF files using its own implementation of the
@@ -111,7 +159,7 @@ under "About Edraw" -> "Third-party licences".
 
 
 --------------------------------------------------------------------------------------------------
-4. TRADEMARKS AND REFERENCED STANDARDS
+5. TRADEMARKS AND REFERENCED STANDARDS
 --------------------------------------------------------------------------------------------------
 
   The Edraw parts library identifies real components by manufacturer and part number so that

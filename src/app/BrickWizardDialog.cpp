@@ -1756,6 +1756,7 @@ void BrickWizardDialog::buildUi() {
     view3d_ = new View3DPane(paneStack_);
     view3d_->setObjectName(QStringLiteral("brickView3d"));
     view3d_->setSourceChoice(false);
+    view3d_->setEnvironmentChoice(false);
     // No say in how big the panes are: the bricks and the preview keep the room they always had.
     view3d_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
     view3d_->setSources([this] { return buildBrickHarness(design_, &catalog_).entities; }, {});

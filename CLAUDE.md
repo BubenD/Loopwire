@@ -35,6 +35,12 @@ current. Put the story of a fix in the commit message, not here.
          -DCMAKE_PREFIX_PATH=C:/Qt/6.8.3/msvc2022_64 -DEWIRE_BUILD_TESTS=ON
    ```
 
+Open CASCADE 8.0.1 is optional (`EDRAW_WITH_OCCT`, `EDRAW_OCCT_DIR`, default `C:/Software/occt-8.0.1/lean`).
+It is a lean build from source with every third-party option off, so only its own `TK*.dll` ship; the
+configure line is in `CMakeLists.txt`. Don't point the build at the prebuilt package: it brings FFmpeg,
+FreeImage, FreeType, TBB, jemalloc and OpenVR, which the notices don't cover, and the configure step
+refuses a non-`TK` DLL.
+
 `_build_edraw.bat` in the repo is stale. It calls a 2022 vcvars and builds a different checkout.
 Don't use it.
 
@@ -77,7 +83,8 @@ which one wasn't and why.
 | `src/app/` | Dialogs and the main window. The brick wizard is `BrickWizardDialog.*`. |
 | `src/harness/` | Harness domain: `BrickHarness.*` (brick design → drawing), `Harness.cpp` (twisted-pair / cable rendering and its cache key), `Bom.*`, `PartsLibrary.*` |
 | `src/harness/BrickDrc.*` | The harness DRC: `brickCompatibility()` (the brick dots) and `brickDrc()`, the logical and compatibility rules, each finding with a rule id and a bypass key. The DRC window is `src/app/MechanicalValidationDialog.*`; its rule switches and bypasses live in `Editor` (`drc*`), apart from the schematic's. |
-| 3D preview | `src/geometry/Mesh3D.*` (shapes; STL, OBJ and a STEP B-rep reader - planes, cylinders, cones), `src/render/Render3D.*` (software z-buffer renderer, orbit camera), `src/harness/Harness3D.*` (a harness drawing in 3D: tubes for runs, each part's model fitted to it or a box), `src/app/View3DPane.*` (the "3D view" dock, View tab). A part's model is its library param `model3d`, a file kept in the datasheet store. |
+| 3D preview | `src/geometry/Mesh3D.*` (shapes; STL, OBJ and a STEP B-rep reader - planes, cylinders, cones), `src/render/Render3D.*` (software z-buffer renderer, orbit camera, section, see-through), `src/render/GlRender3D.*` (the same picture on the graphics card, off screen; software where there is no OpenGL, always under the tests' offscreen platform), `src/harness/Harness3D.*` (a harness drawing in 3D: tubes for runs, each part's model fitted to it or a box), `src/app/View3DPane.*` (the "3D view" dock, View tab; the environment row). A part's model is its library param `model3d`, a file kept in the datasheet store. |
+| 3D environment | `src/geometry/Environment3D.*` (the CAD model a harness is routed in, solid by solid; `RayIndex3D` picking), `src/geometry/StepOcct.*` (STEP read whole through Open CASCADE; only with `EDRAW_HAVE_OCCT`, and with `tests/test_occt_fixture.cpp` the only place OCCT headers are included). Not saved with the drawing. |
 | `src/model/` | `Document`, `Entity` (`EntityType` enum), layers, blocks |
 | `src/render/` | Canvas and entity renderer |
 | `src/geometry/` | `Vec2`, `Bounds`, offsets, snapping |

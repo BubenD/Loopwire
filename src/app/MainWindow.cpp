@@ -8610,6 +8610,21 @@ void MainWindow::showAbout() {
         &dlg);
     qtNotice->setWordWrap(true);
     qtNotice->setStyleSheet(QStringLiteral("color:#9aa7b8;font-size:11px;"));
+    // OPEN CASCADE, WHERE THIS BUILD SHIPS IT: the same three things under LGPL-2.1 §6 - that it is used and under
+    // which licence, its copyright among the ones shown, and where the licence copies are - and the notice its
+    // exception asks for, that Edraw "makes use of facilities provided by" it.
+    QLabel* occtNotice = nullptr;
+    if (fullStepReader()) {
+        occtNotice = new QLabel(
+            QStringLiteral("This program makes use of facilities provided by the Open CASCADE Technology software "
+                           "version 8.0.1 — Copyright © Open CASCADE SAS and other contributors — used under the GNU "
+                           "Lesser General Public License v2.1 with the Open CASCADE exception. The licence texts and "
+                           "how to obtain its source code are under “Third-party licences” below, and in the "
+                           "“licenses” folder beside this program."),
+            &dlg);
+        occtNotice->setWordWrap(true);
+        occtNotice->setStyleSheet(QStringLiteral("color:#9aa7b8;font-size:11px;"));
+    }
 
     col->addWidget(name);
     col->addWidget(ver);
@@ -8617,6 +8632,10 @@ void MainWindow::showAbout() {
     col->addWidget(desc);
     col->addSpacing(10);
     col->addWidget(qtNotice);
+    if (occtNotice) {
+        col->addSpacing(4);
+        col->addWidget(occtNotice);
+    }
 
     auto* bb = new QDialogButtonBox(QDialogButtonBox::Ok, &dlg);
     // Not an "extra" button in the Ok/Cancel sense - the licences have to be reachable, so the button
@@ -8654,6 +8673,9 @@ void MainWindow::showLicenses(const QString& document) {
         {QStringLiteral("Third-party notices"), QStringLiteral(":/licenses/THIRD-PARTY-NOTICES.txt")},
         {QStringLiteral("GNU LGPL v3"),         QStringLiteral(":/licenses/LGPL-3.0.txt")},
         {QStringLiteral("GNU GPL v3"),          QStringLiteral(":/licenses/GPL-3.0.txt")},
+        // Open CASCADE's licence and the exception to it, which together are the terms it is used under.
+        {QStringLiteral("GNU LGPL v2.1"),       QStringLiteral(":/licenses/LGPL-2.1.txt")},
+        {QStringLiteral("Open CASCADE exception"), QStringLiteral(":/licenses/OCCT-LGPL-EXCEPTION-1.0.txt")},
     };
 
     QDialog dlg(this);

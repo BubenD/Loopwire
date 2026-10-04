@@ -11,6 +11,7 @@
 // So it is said here. These are not tests of clever code - they are tests that the obligation is still
 // being met, written so that failing to meet it looks like a broken build.
 #include "app/MainWindow.h"
+#include "geometry/Environment3D.h"
 
 #include <QAction>
 #include <QApplication>
@@ -141,6 +142,15 @@ void testNoticesSayWhatIsOwed() {
 
     // Components that belong to Qt modules Edraw does not ship. Crediting them is not harmless
     // generosity - it tells the reader that code is inside a binary they were never given.
+    // OPEN CASCADE: named, its licence and its exception named, and the place for its source given.
+    check(n.contains(QStringLiteral("Open CASCADE Technology")), "the notices name Open CASCADE Technology");
+    check(n.contains(QStringLiteral("version 2.1")) && n.contains(QStringLiteral("Open CASCADE exception")),
+          "the notices name the LGPL 2.1 and the Open CASCADE exception as the terms it is used under");
+    check(n.contains(QStringLiteral("github.com/Open-Cascade-SAS/OCCT/releases/tag/V8.0.1")),
+          "the notices give the place to obtain Open CASCADE's source, for the version shipped");
+    check(n.contains(QStringLiteral("Qt OpenGL")), "Qt OpenGL is among the Qt modules named (the 3D view uses it)");
+    check(n.contains(QStringLiteral("built without any of Open CASCADE's")),
+          "the notices say Open CASCADE comes with none of its optional third-party libraries");
     check(!n.contains(QStringLiteral("Catch2")), "Qt Test's Catch2 is not falsely credited");
     check(!n.contains(QStringLiteral("litehtml")), "Qt Tools' litehtml is not falsely credited");
 }
@@ -155,6 +165,7 @@ void testAboutGivesTheNotice() {
 
     bool sawNotice = false;
     bool sawLicenceButton = false;
+    bool sawOcct = false;
 
     // About is modal, so it is inspected from a timer that fires once it is up and then closes it.
     QTimer::singleShot(0, &w, [&] {
@@ -176,6 +187,12 @@ void testAboutGivesTheNotice() {
                 && t.contains(QStringLiteral("licenses"))) {
                 sawNotice = true;
             }
+            // Open CASCADE's: used, under the LGPL 2.1 and its exception, its copyright, where the texts are.
+            if (t.contains(QStringLiteral("Open CASCADE Technology")) && t.contains(QStringLiteral("Open CASCADE SAS"))
+                && t.contains(QStringLiteral("v2.1")) && t.contains(QStringLiteral("exception"))
+                && t.contains(QStringLiteral("licenses"))) {
+                sawOcct = true;
+            }
         }
         for (const QPushButton* b : dlg->findChildren<QPushButton*>()) {
             if (b->text().contains(QStringLiteral("licence"), Qt::CaseInsensitive)
@@ -191,6 +208,7 @@ void testAboutGivesTheNotice() {
     check(sawNotice, "About gives the full §4 notice: Qt, its version, the LGPL, Qt's "
           "copyright, and where the licence copies are");
     check(sawLicenceButton, "About offers a way through to the licence texts");
+    check(sawOcct == fullStepReader(), "About gives Open CASCADE's notice exactly where this build ships it");
 }
 
 // ---- The licence viewer shows all three documents -------------------------------------------------
@@ -215,7 +233,9 @@ void testLicenceViewerShowsEverything() {
             tabCount = tabs->count();
             for (int i = 0; i < tabs->count(); ++i) {
                 auto* view = qobject_cast<QPlainTextEdit*>(tabs->widget(i));
-                if (!view || view->toPlainText().size() < 1000) allNonEmpty = false;
+                // The Open CASCADE exception is one paragraph; every other document runs to pages.
+                const int least = tabs->tabText(i).contains(QStringLiteral("exception")) ? 400 : 1000;
+                if (!view || view->toPlainText().size() < least) allNonEmpty = false;
                 // The dialog says so loudly when a resource is missing rather than showing a blank
                 // box. If that message is on screen, the notice is NOT being given.
                 if (view && view->toPlainText().contains(QStringLiteral("incomplete"))) {
@@ -228,7 +248,7 @@ void testLicenceViewerShowsEverything() {
 
     w.showLicenses();
 
-    check(tabCount == 3, "the viewer shows the notices, the LGPL and the GPL");
+    check(tabCount == 5, "the viewer shows the notices, the LGPL and the GPL, and Open CASCADE's LGPL 2.1 and its exception");
     check(allNonEmpty, "every licence tab has its text");
     check(!sawIncompleteWarning, "no licence document is missing from the binary");
 }

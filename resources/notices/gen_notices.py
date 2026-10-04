@@ -41,7 +41,7 @@ WIDTH = 98
 # The Qt modules Edraw actually links and deploys. Everything credited below is credited because it is
 # inside one of these, or inside a plugin windeployqt copies for them.
 SHIPPED_QT_MODULES = [
-    "Qt Core", "Qt GUI", "Qt Widgets", "Qt Network", "Qt PrintSupport", "Qt SVG",
+    "Qt Core", "Qt GUI", "Qt Widgets", "Qt Network", "Qt PrintSupport", "Qt SVG", "Qt OpenGL",
 ]
 
 # The Qt REPOSITORIES those modules come from, and therefore the only SBOMs worth reading. A Qt install

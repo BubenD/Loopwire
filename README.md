@@ -167,7 +167,7 @@ which permits building proprietary software with them. That holds because they a
 
 Edraw's own DEFLATE decoder in `src/io/PdfText.cpp` follows the approach of zlib's reference `puff.c`; the
 attribution the zlib licence asks for is in that file and in the notices. Manufacturer names in the parts
-library are used for identification only — see section 4 of `THIRD-PARTY-NOTICES.txt`.
+library are used for identification only — see section 5 of `THIRD-PARTY-NOTICES.txt`.
 
 ### The source-code obligation, and the duty it leaves behind
 

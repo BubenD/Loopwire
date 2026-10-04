@@ -99,6 +99,17 @@ if(WIN32)
     endif()
 endif()
 
+# Open CASCADE's DLLs beside the test binary too, where the build reads STEP through it - and the fixture that writes
+# a STEP assembly with it for the tests.
+if(EDRAW_OCCT_DLLS)
+    target_sources(edraw_tests PRIVATE test_occt_fixture.cpp)
+    target_include_directories(edraw_tests PRIVATE "${OpenCASCADE_INCLUDE_DIR}")
+    target_link_libraries(edraw_tests PRIVATE ${OpenCASCADE_LIBRARIES})
+    add_custom_command(TARGET edraw_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${EDRAW_OCCT_DLLS} "$<TARGET_FILE_DIR:edraw_tests>"
+        COMMENT "Copying the Open CASCADE DLLs beside edraw_tests.exe")
+endif()
+
 add_test(NAME edraw_tests COMMAND edraw_tests)
 
 # THE STAND-IN FOR THE ODA FILE CONVERTER.

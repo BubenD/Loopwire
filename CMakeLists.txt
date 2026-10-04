@@ -22,7 +22,9 @@ else()
     add_compile_options(-Wall -Wextra)
 endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Gui Core PrintSupport Network)
+# OpenGL: the 3D view draws a CAD model of a million triangles on the graphics card (QOpenGLContext drawing off
+# screen - no QOpenGLWidget, no Qt Quick). LGPL like the rest of qtbase.
+find_package(Qt6 REQUIRED COMPONENTS Widgets Gui Core PrintSupport Network OpenGL)
 
 # --- Core library (everything except main, so tests can link it) -------------
 add_library(edraw_core STATIC
@@ -158,6 +160,10 @@ add_library(edraw_core STATIC
     src/geometry/Mesh3D.cpp
     src/render/Render3D.h
     src/render/Render3D.cpp
+    src/render/GlRender3D.h
+    src/render/GlRender3D.cpp
+    src/geometry/Environment3D.h
+    src/geometry/Environment3D.cpp
     src/harness/Harness3D.h
     src/harness/Harness3D.cpp
     src/app/BlockDialog.h
@@ -183,7 +189,56 @@ add_library(edraw_core STATIC
 
 target_include_directories(edraw_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(edraw_core PUBLIC Qt6::Widgets Qt6::Gui Qt6::Core Qt6::PrintSupport
-                                       Qt6::Network)
+                                       Qt6::Network Qt6::OpenGL)
+
+# --- Open CASCADE Technology: STEP models read whole (optional) --------------
+#
+# Edraw's own STEP reader takes planes, cylinders and cones; a real CAD export is mostly B-spline surfaces, and an
+# assembly besides. Open CASCADE reads all of it. It is optional - without it the build still works, reading STEP
+# files with Edraw's own reader - and it is used through its DLLs only, never linked statically: Open CASCADE is
+# LGPL-2.1 with the Open CASCADE exception, and replaceable DLLs are what the LGPL asks for (see
+# THIRD-PARTY-NOTICES.txt).
+#
+# THE BUILD OF IT MATTERS FOR THE LICENCE PAPERWORK. The prebuilt Windows package links FFmpeg, FreeImage, FreeType,
+# TBB, jemalloc and OpenVR - none of which Edraw uses, all of which would then ship and need notices of their own.
+# Build it instead from the release source with only what reading STEP needs:
+#
+#   cmake -S OCCT-8.0.1 -B occt-build -G Ninja -DCMAKE_BUILD_TYPE=Release -DINSTALL_DIR=<EDRAW_OCCT_DIR>
+#         -DBUILD_MODULE_FoundationClasses=OFF -DBUILD_MODULE_ModelingData=OFF -DBUILD_MODULE_ModelingAlgorithms=OFF
+#         -DBUILD_MODULE_Visualization=OFF -DBUILD_MODULE_ApplicationFramework=OFF -DBUILD_MODULE_DataExchange=OFF
+#         -DBUILD_MODULE_Draw=OFF -DBUILD_ADDITIONAL_TOOLKITS="TKDESTEP TKMesh TKXCAF"
+#         -DUSE_TK=OFF -DUSE_FREETYPE=OFF -DUSE_FREEIMAGE=OFF -DUSE_FFMPEG=OFF -DUSE_OPENVR=OFF -DUSE_TBB=OFF
+#         -DUSE_RAPIDJSON=OFF -DUSE_DRACO=OFF -DUSE_VTK=OFF -DUSE_OPENGL=OFF -DUSE_GLES2=OFF -DUSE_D3D=OFF
+#   cmake --build occt-build && cmake --install occt-build
+#
+# Every DLL in its bin folder is then Open CASCADE's own, and they are all copied beside Edraw.exe.
+option(EDRAW_WITH_OCCT "Read STEP models through Open CASCADE Technology" ON)
+set(EDRAW_OCCT_DIR "C:/Software/occt-8.0.1/lean" CACHE PATH "Where Open CASCADE is installed")
+set(EDRAW_OCCT_DLLS "")
+if(EDRAW_WITH_OCCT)
+    find_package(OpenCASCADE CONFIG QUIET HINTS "${EDRAW_OCCT_DIR}" "${EDRAW_OCCT_DIR}/cmake")
+    if(OpenCASCADE_FOUND)
+        message(STATUS "Open CASCADE ${OpenCASCADE_VERSION}: STEP models read whole (${OpenCASCADE_BINARY_DIR})")
+        target_sources(edraw_core PRIVATE src/geometry/StepOcct.h src/geometry/StepOcct.cpp)
+        target_compile_definitions(edraw_core PUBLIC EDRAW_HAVE_OCCT)
+        target_include_directories(edraw_core PRIVATE "${OpenCASCADE_INCLUDE_DIR}")
+        target_link_libraries(edraw_core PRIVATE ${OpenCASCADE_LIBRARIES})
+        file(GLOB EDRAW_OCCT_DLLS "${OpenCASCADE_BINARY_DIR}/*.dll")
+        # A DLL beside it that is not Open CASCADE's own is one the notices do not cover.
+        foreach(_dll IN LISTS EDRAW_OCCT_DLLS)
+            get_filename_component(_name "${_dll}" NAME)
+            if(NOT _name MATCHES "^TK")
+                message(FATAL_ERROR
+                    "${_name} in ${OpenCASCADE_BINARY_DIR} is not an Open CASCADE toolkit. It would ship beside "
+                    "Edraw with no notice for it. Build Open CASCADE with its third-party options off (see above).")
+            endif()
+        endforeach()
+    else()
+        message(WARNING
+            "Open CASCADE was not found in ${EDRAW_OCCT_DIR}. STEP models will be read by Edraw's own reader, "
+            "which takes planes, cylinders and cones only. Set EDRAW_OCCT_DIR, or EDRAW_WITH_OCCT=OFF to silence this.")
+    endif()
+endif()
 
 # --- Application executable --------------------------------------------------
 # The .rc (compiled by the MSVC resource compiler) embeds the Explorer/taskbar
@@ -240,17 +295,19 @@ if(WIN32)
         #   d3dcompiler_47.dll              Microsoft. Not open source; redistributable only on
         #   dxcompiler.dll, dxil.dll        Microsoft's own terms, which would have to be read and met.
         #
-        # Edraw uses none of them. The canvas draws through QPainter, and there is no QOpenGL, QRhi,
-        # QSurfaceFormat or Qt Quick anywhere in the source. Not shipping them is simpler than being
-        # entitled to ship them.
+        # Edraw uses none of them. The canvas draws through QPainter. The 3D view draws through OpenGL
+        # (src/render/GlRender3D.cpp), but through the graphics driver's own opengl32.dll; where a machine
+        # has no usable OpenGL it falls back to its software renderer, so Mesa's opengl32sw.dll is still not
+        # needed - and there is no QRhi or Qt Quick anywhere in the source. Not shipping them is simpler than
+        # being entitled to ship them.
         #
         # All three flags are needed, and this is the trap: --no-system-d3d-compiler drops only
         # d3dcompiler_47.dll. dxcompiler.dll and dxil.dll are the newer DirectX Shader Compiler and have
         # their own flag, --no-system-dxc-compiler. Dropping one and assuming the other followed is how
         # two undeclared Microsoft binaries end up in a release.
         #
-        # If Edraw ever does take up Qt Quick or an OpenGL canvas, these flags come off and the notices
-        # file has to grow to match.
+        # If Edraw ever does take up Qt Quick, or comes to need OpenGL where the driver has none, these flags
+        # come off and the notices file has to grow to match.
         add_custom_command(TARGET Edraw POST_BUILD
             COMMAND "${EDRAW_WINDEPLOYQT}"
                     "--$<IF:$<CONFIG:Debug>,debug,release>"
@@ -297,7 +354,7 @@ foreach(_f IN LISTS EDRAW_LICENSE_FILES)
             "    python resources/notices/gen_notices.py")
     endif()
 endforeach()
-foreach(_f "LGPL-3.0.txt" "GPL-3.0.txt")
+foreach(_f "LGPL-3.0.txt" "GPL-3.0.txt" "LGPL-2.1.txt" "OCCT-LGPL-EXCEPTION-1.0.txt")
     if(NOT EXISTS "${EDRAW_LICENSE_DIR}/${_f}")
         message(FATAL_ERROR
             "Missing licence text: ${EDRAW_LICENSE_DIR}/${_f}\n"
@@ -305,6 +362,12 @@ foreach(_f "LGPL-3.0.txt" "GPL-3.0.txt")
             "https://www.gnu.org/licenses/ .")
     endif()
 endforeach()
+
+if(EDRAW_OCCT_DLLS)
+    add_custom_command(TARGET Edraw POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${EDRAW_OCCT_DLLS} "$<TARGET_FILE_DIR:Edraw>"
+        COMMENT "Copying the Open CASCADE DLLs beside Edraw.exe")
+endif()
 
 add_custom_command(TARGET Edraw POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different

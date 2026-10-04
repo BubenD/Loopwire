@@ -1,5 +1,9 @@
 #include "geometry/Mesh3D.h"
 
+#ifdef EDRAW_HAVE_OCCT
+#include "geometry/StepOcct.h"
+#endif
+
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
@@ -638,6 +642,20 @@ Mesh3D loadMesh3D(const QString& path, QString* how) {
     const QString ext = QFileInfo(path).suffix().toLower();
     if (ext == QLatin1String("stl")) return loadStl(path, how);
     if (ext == QLatin1String("obj")) return loadObj(path, how);
+#ifdef EDRAW_HAVE_OCCT
+    // A STEP MODEL WHOLE, every surface, through Open CASCADE - its solids as one mesh; Edraw's own reader where Open
+    // CASCADE cannot take the file.
+    if (ext == QLatin1String("stp") || ext == QLatin1String("step")) {
+        std::vector<EnvPart3D> parts;
+        QString said;
+        if (readStepOcct(path, parts, &said)) {
+            Mesh3D all;
+            for (const EnvPart3D& p : parts) all.append(p.mesh);
+            if (how) *how = said;
+            return all;
+        }
+    }
+#endif
     if (ext == QLatin1String("stp") || ext == QLatin1String("step")) return loadStep(path, how);
     if (how) *how = QStringLiteral("a .%1 file is not a model this reads (STEP, STL, OBJ)").arg(ext);
     return {};

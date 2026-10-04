@@ -11,6 +11,7 @@
 #include "app/MechanicalValidationDialog.h"
 #include "app/RuleExplainer.h"
 #include "app/View3DPane.h"
+#include "geometry/Environment3D.h"
 #include "geometry/Mesh3D.h"
 #include "harness/Harness3D.h"
 #include "render/Render3D.h"
@@ -38,6 +39,13 @@
 #include <QToolButton>
 #include <QMenu>
 #include <QWheelEvent>
+#include <QElapsedTimer>
+#include <QSlider>
+
+#ifdef EDRAW_HAVE_OCCT
+// tests/test_occt_fixture.cpp
+bool writeTestStepAssembly(const QString& path);
+#endif
 #include "harness/Bom.h"
 #include "io/Dwx.h"
 #include <QDir>
@@ -5834,6 +5842,178 @@ void testRoundFortyOne() {
     check(xR < (xb.max.y - xb.min.y) * 0.75, "3d part: a lone mark at its end is not turned into a disc");
 }
 
+// ROUND FORTY-TWO: THE ENVIRONMENT - the CAD model a harness is routed in. Read from a STEP assembly through Open
+// CASCADE (solids, names, colours, curved surfaces), picked by a ray, cut open by a section, seen through; loaded into
+// the 3D view at once and in the background.
+void testRoundFortyTwo() {
+    // ---- PICKING: a ray finds the first face it meets, and says which mesh and which way the face looks ----
+    {
+        const Mesh3D a = boxMesh({0, 0, 0}, {10, 10, 10});
+        const Mesh3D b = boxMesh({20, 0, 0}, {40, 10, 5});
+        RayIndex3D index;
+        index.build({&a, &b});
+        Pick3D p = index.cast({5, 5, 100}, {0, 0, -1});
+        check(p.hit && p.part == 0 && std::abs(p.point.z - 10.0) < 1e-9 && std::abs(p.normal.z - 1.0) < 1e-9,
+              "3d pick: straight down onto the first box - its top, facing up");
+        p = index.cast({-50, 5, 2}, {1, 0, 0});
+        check(p.hit && p.part == 0 && std::abs(p.point.x) < 1e-9 && std::abs(p.normal.x + 1.0) < 1e-9,
+              "3d pick: from the side - the nearer box, its face turned back towards the ray");
+        p = index.cast({30, 5, 100}, {0, 0, -1});
+        check(p.hit && p.part == 1 && std::abs(p.point.z - 5.0) < 1e-9, "3d pick: the second box, where it is lower");
+        check(!index.cast({15, 5, 100}, {0, 0, -1}).hit, "3d pick: between them - nothing");
+        // Down the diagonal the top's two triangles share, and on a corner: still the top.
+        p = index.cast({5, 5, 100}, {0, 0, -1});
+        const Pick3D corner = index.cast({10, 10, 100}, {0, 0, -1});
+        check(p.hit && std::abs(p.point.z - 10.0) < 1e-9 && corner.hit && std::abs(corner.point.z - 10.0) < 1e-9,
+              "3d pick: down the edge two triangles share, or on a corner - the face, not through it");
+        // Many triangles: the tree still finds the right one.
+        Mesh3D many;
+        for (int i = 0; i < 400; ++i) many.append(boxMesh({i * 3.0, 0, 0}, {i * 3.0 + 2.0, 2, 1.0 + i * 0.01}));
+        RayIndex3D big;
+        big.build({&many});
+        p = big.cast({300.5, 1, 50}, {0, 0, -1});
+        check(p.hit && std::abs(p.point.z - (1.0 + 100 * 0.01)) < 1e-9, "3d pick: among 4800 triangles, the one under the ray");
+    }
+    // ---- THE CAMERA'S RAY through a pixel goes through what is drawn at that pixel ----
+    {
+        Camera3D cam;
+        cam.fit({0, 0, 0}, {100, 50, 20}, 1.5);
+        const int w = 600, h = 400;
+        V3 right, up, forward;
+        cam.axes(right, up, forward);
+        const V3 eye = cam.eye();
+        const double focal = 0.5 * h / std::tan(cam.fovDeg * 3.14159265358979323846 / 360.0);
+        const V3 c{100, 50, 20};
+        const V3 d = c - eye;
+        const double z = dot3(d, forward);
+        const double px = w * 0.5 + focal * dot3(d, right) / z, py = h * 0.5 - focal * dot3(d, up) / z;
+        V3 o, dir;
+        cam.rayAt(px, py, w, h, o, dir);
+        const V3 off = (c - o) - dir * dot3(c - o, dir);
+        check(off.length() < 1e-6, "3d: the ray through a pixel passes through the point drawn there");
+    }
+    // ---- THE SECTION AND SEE-THROUGH, in the software picture ----
+    {
+        const Mesh3D box = boxMesh({-50, -10, -20}, {50, 10, 20});
+        Camera3D cam;
+        cam.yawDeg = -90.0;
+        cam.pitchDeg = 0.0;
+        cam.fit({-50, -10, -20}, {50, 10, 20}, 1.5);
+        const QColor bg(30, 36, 44);
+        QImage img(300, 200, QImage::Format_RGB32);
+        Section3D s;
+        s.on = true;
+        s.normal = {1, 0, 0};
+        s.offset = 0.0;
+        renderScene3D(img, {{&box, QColor(200, 200, 200), 1.0, true}}, cam, false, bg, s);
+        const bool leftShown = img.pixel(90, 100) != bg.rgb(), rightCut = img.pixel(210, 100) == bg.rgb();
+        check(leftShown && rightCut, "3d section: the model beyond the plane is cut away, the rest shown");
+        renderScene3D(img, {{&box, QColor(200, 200, 200), 1.0, false}}, cam, false, bg, s);
+        check(img.pixel(210, 100) != bg.rgb(), "3d section: what is not to be cut (the harness) stays whole");
+        // See-through: a red box behind a half see-through blue one shows through it.
+        const Mesh3D back = boxMesh({-50, 30, -20}, {50, 40, 20});
+        renderScene3D(img, {{&box, QColor(0, 0, 255), 0.5, true}, {&back, QColor(255, 0, 0), 1.0, true}}, cam, false, bg);
+        const QRgb mixed = img.pixel(150, 100);
+        check(qRed(mixed) > 40 && qBlue(mixed) > 40, "3d: a see-through model shows what is behind it, blended with its own colour");
+    }
+    // ---- A STEP ASSEMBLY, READ WHOLE ----
+    const QString dir = QDir::tempPath() + QStringLiteral("/edraw3d");
+    QDir().mkpath(dir);
+    QString stepPath;
+#ifdef EDRAW_HAVE_OCCT
+    stepPath = dir + QStringLiteral("/assembly.step");
+    check(writeTestStepAssembly(stepPath), "3d env: a STEP assembly written for the test");
+    const Environment3D env = loadEnvironment3D(stepPath);
+    std::printf("  3d env: %s\n", qPrintable(env.how));
+    check(env.parts.size() == 3, "3d env: every solid of the assembly, each a part of its own");
+    const EnvPart3D* bracket = nullptr;
+    const EnvPart3D* ball = nullptr;
+    for (const EnvPart3D& p : env.parts) {
+        if (p.name == QLatin1String("Bracket")) bracket = &p;
+        if (p.name == QLatin1String("Ball")) ball = &p;
+    }
+    check(bracket && ball, "3d env: the solids by the names the model gives them");
+    check(bracket && bracket->color.isValid() && bracket->color.red() > 200 && bracket->color.green() < 40,
+          "3d env: and in the colours it gives them");
+    V3 lo, hi;
+    check(ball && ball->mesh.bounds(lo, hi) && std::abs(hi.x - 20.0) < 0.3 && std::abs(lo.z + 20.0) < 0.3 &&
+              std::abs((lo.y + hi.y) / 2.0 - 40.0) < 0.3,
+          "3d env: a sphere - a surface Edraw's own reader cannot take - read whole, as big as it is and where it is");
+    check(fullStepReader(), "3d env: this build reads STEP whole");
+    QString how;
+    check(loadMesh3D(stepPath, &how).f.size() == env.triangles(), "3d: a part's STEP model read whole too");
+    // A hand-written STEP Open CASCADE will not take still reads, by Edraw's own reader.
+    check(!loadMesh3D(dir + QStringLiteral("/cyl.stp"), &how).empty(), "3d: a STEP file Open CASCADE refuses - Edraw's own reader");
+#else
+    std::printf("  3d env: built without Open CASCADE - STEP read by Edraw's own reader\n");
+    stepPath = dir + QStringLiteral("/envquad.obj");
+    {
+        QFile o(stepPath);
+        o.open(QIODevice::WriteOnly);
+        o.write("v 0 0 10\nv 10 0 10\nv 10 10 10\nv 0 10 10\nf 1 2 3 4\n");
+    }
+#endif
+    // ---- IN THE 3D VIEW ----
+    View3DPane pane;
+    pane.resize(900, 640);
+    pane.show();
+    QApplication::processEvents();
+    check(pane.loadEnvironment(stepPath, true) && !pane.environment().empty(), "3d view: an environment loaded");
+    View3DCanvas* canvas = pane.canvas();
+    canvas->setUseGpu(false);
+    canvas->viewFrom(QStringLiteral("top"));
+    // The bracket from above: picked at its middle, where it is drawn.
+    V3 right, up, forward;
+    canvas->camera().axes(right, up, forward);
+    const V3 eye = canvas->camera().eye();
+    const V3 aim{5, 5, 10};
+    const double focal = 0.5 * canvas->height() / std::tan(canvas->camera().fovDeg * 3.14159265358979323846 / 360.0);
+    const double z = dot3(aim - eye, forward);
+    const QPointF at(canvas->width() * 0.5 + focal * dot3(aim - eye, right) / z,
+                     canvas->height() * 0.5 - focal * dot3(aim - eye, up) / z);
+    QMouseEvent press(QEvent::MouseButtonPress, at, canvas->mapToGlobal(at), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent release(QEvent::MouseButtonRelease, at, canvas->mapToGlobal(at), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(canvas, &press);
+    QApplication::sendEvent(canvas, &release);
+    const Pick3D& picked = canvas->lastPick();
+    const QString said = pane.findChild<QLabel*>(QStringLiteral("view3dStatus"))->text();
+    std::printf("  3d view: %s\n", qPrintable(said.section(QLatin1Char('\n'), -1)));
+    check(picked.hit && std::abs(picked.point.z - 10.0) < 0.05 && picked.normal.z > 0.99,
+          "3d view: a click on the environment picks the point under it, and its face's normal");
+#ifdef EDRAW_HAVE_OCCT
+    check(said.contains(QStringLiteral("Picked Bracket")), "3d view: and says which solid it is, by its name");
+#endif
+    // A SECTION across Z below the bracket's top: the click goes on to the first face left standing.
+    auto* section = pane.findChild<QComboBox*>(QStringLiteral("view3dSection"));
+    auto* sectionAt = pane.findChild<QSlider*>(QStringLiteral("view3dSectionAt"));
+    section->setCurrentIndex(3);
+    emit section->activated(3);
+    pane.environment().bounds(lo, hi);
+    sectionAt->setValue(static_cast<int>(std::lround((7.0 - lo.z) / (hi.z - lo.z) * 1000.0)));
+    check(canvas->section().on && std::abs(canvas->section().offset - 7.0) < 0.1, "3d view: a section across Z, where it was set");
+    const Pick3D cut = canvas->pickAt(at);
+    check(cut.hit && cut.point.z < 7.01, "3d view: a pick through a section - past what is cut away");
+    // Opacity, the harness hidden: the picture still drawn.
+    pane.findChild<QSlider*>(QStringLiteral("view3dEnvOpacity"))->setValue(40);
+    pane.findChild<QCheckBox*>(QStringLiteral("view3dHarnessShown"))->setChecked(false);
+    const QImage pic = canvas->render(QSize(320, 240));
+    check(!pic.isNull() && canvas->rendererSaid().startsWith(QStringLiteral("software")), "3d view: drawn in software where asked");
+    pane.clearEnvironment();
+    check(pane.environment().empty() && !canvas->lastPick().hit, "3d view: the environment cleared, and the pick with it");
+    // IN THE BACKGROUND: asked for, refused a second time while it reads, and there when it is done.
+    check(pane.loadEnvironment(stepPath), "3d view: an environment read in the background");
+    check(!pane.loadEnvironment(stepPath), "3d view: a second read while one is going - refused");
+    QElapsedTimer clock;
+    clock.start();
+    while (pane.loadingEnvironment() && clock.elapsed() < 60000) QApplication::processEvents(QEventLoop::AllEvents, 50);
+    check(!pane.loadingEnvironment() && !pane.environment().empty(), "3d view: read in the background, and shown when done");
+    // The wizard's own 3D view has no environment controls.
+    View3DPane wizardView;
+    wizardView.setEnvironmentChoice(false);
+    check(!wizardView.findChild<QToolButton*>(QStringLiteral("view3dEnvLoad"))->isVisibleTo(&wizardView),
+          "3d view: the wizard's view - no environment row");
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -5889,6 +6069,7 @@ int run_brickharness_tests() {
     testRoundThirtyNine();
     testRoundForty();
     testRoundFortyOne();
+    testRoundFortyTwo();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }
