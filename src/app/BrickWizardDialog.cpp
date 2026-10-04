@@ -3803,6 +3803,11 @@ void BrickWizardDialog::refreshDimensionWizard() {
     }
 }
 
+void BrickWizardDialog::designEditedOutside() {
+    recordHistory();
+    designChanged();
+}
+
 void BrickWizardDialog::designChanged() {
     refreshSymRef();
     if (navWheel_) navWheel_->update();

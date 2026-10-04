@@ -301,6 +301,9 @@ public:
     bool deleteFromDrawing(const QString& name);
     QStringList savedNames() const;
     QString currentName() const { return currentName_; }
+    // THE DESIGN CHANGED FROM OUTSIDE THE WIZARD - lengths from the 3D route: a step Ctrl+Z takes back, and the pane,
+    // the panel and the preview brought up to it.
+    void designEditedOutside();
 
     // The nets on the schematic wires landing on the pins of the connectors so designated.
     QStringList schematicNets(const QStringList& designators) const;

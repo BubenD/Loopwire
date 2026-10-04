@@ -3,6 +3,7 @@
 #include "geometry/Environment3D.h"
 #include "harness/Harness3D.h"
 #include "harness/Route3D.h"
+#include "harness/RouteLink.h"
 #include "render/GlRender3D.h"
 #include "render/Render3D.h"
 
@@ -17,6 +18,7 @@ class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
 class QLabel;
+class QListWidget;
 class QSlider;
 class QTableWidget;
 class QThread;
@@ -31,6 +33,14 @@ class View3DCanvas;
 // or a clip down (on a bundle, dividing it), lays a bundle from node to node through the points clicked, or takes a
 // node or a bundle away.
 enum class RouteTool { Select, Connector, Branch, Clip, Route, Delete };
+
+// THE HARNESS THE ROUTE IS FOR: its name and the wizard's design of it - the one open in the wizard, or the one this
+// drawing has placed (or keeps, where it keeps one only). `ok` false: none.
+struct RouteHarness {
+    QString name;
+    BrickDesign design;
+    bool ok = false;
+};
 
 // THE 3D VIEW OF THE HARNESS: the harness drawn on the sheet - or the one open in the harness wizard - in 3D, its runs
 // as tubes and its parts as their 3D models (a box where a part has none). Turned with the left button, moved with the
@@ -89,6 +99,18 @@ public:
     // The file of the environment the drawing names, found or not.
     const QString& environmentFile() const { return envRef_; }
 
+    // THE HARNESS THE ROUTE IS PUT FOR - its parts to put in 3D - and where the lengths the route gives it go.
+    void setHarnessLink(std::function<RouteHarness()> harness, std::function<void(const QString& name, const BrickDesign&)> apply);
+    // The parts of that harness again, each put in 3D or not.
+    void refreshParts();
+    // THE PART THE NEXT CONNECTOR CLICKED IS PUT FOR, by its brick id - empty: a node of the route's own.
+    void setPartToPlace(const QString& brick);
+    // The node selected in the picture put for a part (empty: for none).
+    bool linkSelectedNode(const QString& brick);
+    // WHAT THE ROUTE WOULD MAKE THE HARNESS'S LENGTHS, and made so - asked first where `ask`. False when nothing changed.
+    RouteLengths proposedLengths() const;
+    bool applyLengths(bool ask = true);
+
 signals:
     // An environment read, or cleared.
     void environmentChanged();
@@ -145,6 +167,14 @@ private:
     QTableWidget* table_ = nullptr;
     QLabel* totals_ = nullptr;
     QWidget* side_ = nullptr;
+    // The harness the route is for.
+    std::function<RouteHarness()> harness_;
+    std::function<void(const QString&, const BrickDesign&)> applyHarness_;
+    QLabel* harnessSaid_ = nullptr;
+    QListWidget* parts_ = nullptr;
+    QToolButton* link_ = nullptr;
+    QToolButton* unlink_ = nullptr;
+    QToolButton* lengths_ = nullptr;
     bool filling_ = false;
 };
 
@@ -192,6 +222,9 @@ public:
     QString selectedSegment() const { return selSegment_; }
     QString selectedNode() const { return selNode_; }
     void selectSegment(const QString& id);
+    // THE PART THE NEXT CONNECTOR CLICKED IS PUT FOR: its brick id, its designator, and the kind of node it makes.
+    void setPartToPlace(const QString& brick, const QString& designator, RouteNodeKind kind);
+    QString partToPlace() const { return placeBrick_; }
     // A bundle being laid: the node it starts from, and the points clicked so far.
     bool layingRoute() const { return !layFrom_.isEmpty(); }
     // WHERE A POINT OF THE PICTURE LANDS: on the environment, or - where there is none there - on the ground (Z = 0).
@@ -251,6 +284,8 @@ private:
     RouteTool tool_ = RouteTool::Select;
     QString selSegment_, selNode_;
     QString layFrom_;
+    QString placeBrick_, placePart_;
+    RouteNodeKind placeKind_ = RouteNodeKind::Connector;
     std::vector<RouteVia3D> layVia_;
     bool hoverOk_ = false;
     V3 hover_, hoverNormal_;

@@ -16612,6 +16612,50 @@ QDockWidget* MainWindow::makeView3DPanel() {
                                      const QString path = i >= 0 && i < docPaths_.size() ? docPaths_.at(i) : QString();
                                      return path.isEmpty() ? QString() : QFileInfo(path).absolutePath();
                                  });
+    // THE HARNESS THE ROUTE IS FOR: the one open in the wizard; else the one this drawing has placed, or keeps where it
+    // keeps one only. Its lengths from the route go back to the wizard (a step it can undo, saved again in the drawing
+    // where it was saved there) or to the copy the drawing keeps.
+    view3dPane_->setHarnessLink(
+        [this] {
+            RouteHarness h;
+            if (brickWizard_ && brickWizard_->isVisible()) {
+                h.name = brickWizard_->currentName().isEmpty() ? brickWizard_->harnessName() : brickWizard_->currentName();
+                h.design = brickWizard_->design();
+                h.ok = true;
+                return h;
+            }
+            if (!doc_) return h;
+            const QJsonObject kept = doc_->wizards().value(QStringLiteral("harnesses")).toObject();
+            QString name;
+            for (const Entity& e : doc_->entities()) {
+                const QString n = e.meta.value(QStringLiteral("harness")).toString();
+                if (!n.isEmpty() && kept.contains(n)) {
+                    name = n;
+                    break;
+                }
+            }
+            if (name.isEmpty() && kept.size() == 1) name = kept.keys().first();
+            if (name.isEmpty()) return h;
+            h.name = name;
+            h.design = BrickDesign::fromJson(kept.value(name).toObject());
+            h.ok = true;
+            return h;
+        },
+        [this](const QString& name, const BrickDesign& design) {
+            if (brickWizard_ && brickWizard_->isVisible()) {
+                brickWizard_->design() = design;
+                brickWizard_->designEditedOutside();
+                if (!brickWizard_->currentName().isEmpty()) brickWizard_->saveToDrawing(brickWizard_->currentName());
+                return;
+            }
+            if (!doc_ || name.isEmpty()) return;
+            QJsonObject all = doc_->wizards();
+            QJsonObject kept = all.value(QStringLiteral("harnesses")).toObject();
+            kept.insert(name, design.toJson());
+            all.insert(QStringLiteral("harnesses"), kept);
+            doc_->wizards() = all;
+            doc_->setDirty(true);
+        });
     connect(dock, &QDockWidget::visibilityChanged, this, [this, catalog](bool on) {
         if (!on || !view3dPane_) return;
         *catalog = PartsCatalog();

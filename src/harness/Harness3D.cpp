@@ -705,21 +705,25 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
                 it.cube = true;
                 faceR = width / 2.0;
             }
-            // ITS PINOUT on its front face - the end away from the harness: male pins standing out of it, or the
-            // female sockets in it - as many as it has, spread evenly over the face.
+            // ITS PINOUT at its front face - the end away from the harness: male pins, or female sockets, as many as
+            // it has, spread evenly over the face. Inside the connector, each run in from the face and ending on it -
+            // its tip at the connector's far point, nothing standing out past it.
             const PartPins pins = pinsOf && !p.lib.isEmpty() ? pinsOf(p.lib) : PartPins{};
             if (pins.count > 0) {
                 const V3 face = centre + A * hi;
                 const double R = std::max(0.3, faceR * (look == PartLook::Revolved ? 0.78 : 0.7));
                 const double pinR = std::clamp(R * std::sqrt(1.0 / pins.count) * 0.42, 0.12, R * 0.3);
-                const double stand = pins.female ? 0.25 : std::max(0.8, length * 0.14);
+                // As long as two fifths of what a pin standing out of it would have been.
+                const double depth = 0.4 * std::max(0.8, length * 0.14);
                 Harness3DItem pinsItem;
                 for (int i = 0; i < pins.count; ++i) {
                     // A sunflower's spiral: as even a spread over a round face as there is, for any number.
                     const double rr = pins.count == 1 ? 0.0 : R * 0.82 * std::sqrt((i + 0.5) / pins.count);
                     const double th = i * 2.399963229728653;
                     const V3 at = face + B * (rr * std::cos(th)) + Z * (rr * std::sin(th));
-                    pinsItem.mesh.append(tubeMesh({at - A * 0.05, at + A * stand}, pins.female ? pinR * 1.15 : pinR, 10, true));
+                    // Its tip a hair proud of the face, so it shows on it rather than flickering in it.
+                    const double proud = std::min(0.02, depth * 0.05);
+                    pinsItem.mesh.append(tubeMesh({at - A * depth, at + A * proud}, pins.female ? pinR * 1.15 : pinR, 10, true));
                 }
                 pinsItem.color = pins.female ? QColor(18, 18, 20) : QColor(212, 175, 80);
                 pinsItem.what = pins.female ? QStringLiteral("sockets") : QStringLiteral("pins");

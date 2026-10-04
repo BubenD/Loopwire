@@ -231,6 +231,10 @@ QJsonObject Route3D::toJson() const {
         j[QStringLiteral("label")] = n.label;
         j[QStringLiteral("at")] = v3Json(n.at);
         j[QStringLiteral("normal")] = v3Json(n.normal);
+        if (!n.brick.isEmpty()) {
+            j[QStringLiteral("brick")] = n.brick;
+            j[QStringLiteral("part")] = n.part;
+        }
         ns.append(j);
     }
     o[QStringLiteral("nodes")] = ns;
@@ -263,6 +267,8 @@ Route3D Route3D::fromJson(const QJsonObject& o) {
         n.label = j.value(QStringLiteral("label")).toString();
         n.at = v3From(j.value(QStringLiteral("at")));
         n.normal = unitOr(v3From(j.value(QStringLiteral("normal")), {0, 0, 1}), {0, 0, 1});
+        n.brick = j.value(QStringLiteral("brick")).toString();
+        n.part = j.value(QStringLiteral("part")).toString();
         if (!n.id.isEmpty()) r.nodes.push_back(n);
     }
     for (const QJsonValue& v : o.value(QStringLiteral("segments")).toArray()) {

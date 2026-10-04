@@ -11,6 +11,8 @@
 #include <QHeaderView>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QListWidget>
+#include <QMessageBox>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QSettings>
@@ -220,6 +222,30 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     auto* sl = new QVBoxLayout(side_);
     sl->setContentsMargins(0, 0, 0, 0);
     sl->setSpacing(2);
+    // THE HARNESS'S PARTS: each put in 3D or not - the one chosen is put where the Connector tool clicks next.
+    harnessSaid_ = new QLabel(side_);
+    harnessSaid_->setObjectName(QStringLiteral("view3dHarness"));
+    harnessSaid_->setWordWrap(true);
+    sl->addWidget(harnessSaid_);
+    parts_ = new QListWidget(side_);
+    parts_->setObjectName(QStringLiteral("view3dParts"));
+    parts_->setToolTip(QStringLiteral("The harness's parts. Choose one and click a face with the Connector tool to put it "
+                                      "there (again, to move it); the next part not yet put is chosen for you"));
+    parts_->setMaximumHeight(140);
+    sl->addWidget(parts_);
+    auto* linkRow = new QHBoxLayout;
+    linkRow->setSpacing(2);
+    link_ = button(linkRow, "view3dLinkPart", QStringLiteral("Link"),
+                   QStringLiteral("Put the part chosen at the node selected in the picture"), [this] {
+                       if (QListWidgetItem* it = parts_->currentItem()) linkSelectedNode(it->data(Qt::UserRole).toString());
+                   });
+    unlink_ = button(linkRow, "view3dUnlinkPart", QStringLiteral("Unlink"),
+                     QStringLiteral("The node selected in the picture put for no part"), [this] { linkSelectedNode(QString()); });
+    lengths_ = button(linkRow, "view3dLengthsToHarness", QStringLiteral("Lengths to harness"),
+                      QStringLiteral("Give each cable of the harness its length along the route, between the parts it joins"),
+                      [this] { applyLengths(true); });
+    linkRow->addStretch(1);
+    sl->addLayout(linkRow);
     table_ = new QTableWidget(0, 3, side_);
     table_->setObjectName(QStringLiteral("view3dRoutes"));
     table_->setHorizontalHeaderLabels({QStringLiteral("Bundle"), QStringLiteral("Length"), QStringLiteral("Ø")});
@@ -252,7 +278,12 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     connect(canvas_, &View3DCanvas::routeChanged, this, [this] {
         saveRouting();
         refreshRoute();
+        refreshParts();
         emit routeChanged();
+    });
+    connect(parts_, &QListWidget::currentItemChanged, this, [this](QListWidgetItem* it) {
+        if (filling_) return;
+        setPartToPlace(it ? it->data(Qt::UserRole).toString() : QString());
     });
     connect(canvas_, &View3DCanvas::undoRequested, this, [this] { undoRoute(); });
     connect(canvas_, &View3DCanvas::selectionChanged, this, [this](const QString& id) {
@@ -349,6 +380,7 @@ void View3DPane::rebuild(bool fit) {
     if (!scene_.notes.isEmpty()) said += QLatin1Char('\n') + scene_.notes.join(QLatin1Char('\n'));
     sceneSaid_ = said;
     sayStatus();
+    refreshParts();
 }
 
 void View3DPane::sayStatus() {
@@ -511,6 +543,7 @@ void View3DPane::reloadRouting(bool wait) {
         filling_ = false;
     }
     refreshRoute();
+    refreshParts();
     sayStatus();
 }
 
@@ -542,7 +575,136 @@ void View3DPane::undoRoute() {
     }
     saveRouting();
     refreshRoute();
+    refreshParts();
     emit routeChanged();
+}
+
+// ---- The harness the route is for -----------------------------------------------------------------
+
+void View3DPane::setHarnessLink(std::function<RouteHarness()> harness,
+                                std::function<void(const QString&, const BrickDesign&)> apply) {
+    harness_ = std::move(harness);
+    applyHarness_ = std::move(apply);
+    refreshParts();
+}
+
+void View3DPane::refreshParts() {
+    const RouteHarness h = harness_ ? harness_() : RouteHarness();
+    const QString was = parts_->currentItem() ? parts_->currentItem()->data(Qt::UserRole).toString() : QString();
+    filling_ = true;
+    parts_->clear();
+    int put = 0, all = 0;
+    int wasRow = -1;
+    if (h.ok)
+        for (const Brick& b : h.design.bricks) {
+            if (b.type != BrickType::End) continue;
+            const QString name = b.name.isEmpty() ? partKindName(b.kind) : b.name;
+            const QString node = routeNodeOfPart(route_, b.id);
+            const RouteNode3D* n = route_.node(node);
+            auto* item = new QListWidgetItem(n ? QStringLiteral("%1  %2 - at %3").arg(name, partKindName(b.kind), n->label)
+                                               : QStringLiteral("%1  %2 - not put in 3D").arg(name, partKindName(b.kind)),
+                                             parts_);
+            item->setData(Qt::UserRole, b.id);
+            item->setForeground(n ? QColor(60, 150, 80) : palette().color(QPalette::Text));
+            ++all;
+            put += n ? 1 : 0;
+            if (b.id == was) wasRow = parts_->count() - 1;
+        }
+    harnessSaid_->setText(!h.ok ? QStringLiteral("No harness to put in 3D - open one in the harness wizard, or place one.")
+                                : QStringLiteral("Harness %1: %2 of %3 part(s) put in 3D.")
+                                      .arg(h.name.isEmpty() ? QStringLiteral("(unnamed)") : QStringLiteral("\"%1\"").arg(h.name))
+                                      .arg(put)
+                                      .arg(all));
+    // THE PART JUST PUT: on to the next one not put yet - the one being put is kept while it is not put.
+    int row = wasRow;
+    const QString placing = canvas_->partToPlace();
+    if (!placing.isEmpty() && !routeNodeOfPart(route_, placing).isEmpty()) {
+        row = -1;
+        for (int i = 0; i < parts_->count(); ++i)
+            if (routeNodeOfPart(route_, parts_->item(i)->data(Qt::UserRole).toString()).isEmpty()) {
+                row = i;
+                break;
+            }
+    }
+    if (row >= 0) parts_->setCurrentRow(row);
+    filling_ = false;
+    if (!placing.isEmpty() && !routeNodeOfPart(route_, placing).isEmpty())
+        setPartToPlace(row >= 0 ? parts_->item(row)->data(Qt::UserRole).toString() : QString());
+    link_->setEnabled(h.ok);
+    unlink_->setEnabled(h.ok);
+    lengths_->setEnabled(h.ok && !route_.segments.empty());
+}
+
+void View3DPane::setPartToPlace(const QString& brick) {
+    const RouteHarness h = harness_ ? harness_() : RouteHarness();
+    const Brick* b = h.ok ? h.design.brick(brick) : nullptr;
+    if (!b) {
+        canvas_->setPartToPlace(QString(), QString(), RouteNodeKind::Connector);
+        return;
+    }
+    canvas_->setPartToPlace(b->id, b->name.isEmpty() ? partKindName(b->kind) : b->name,
+                            b->kind == PartKind::Connector ? RouteNodeKind::Connector : RouteNodeKind::Branch);
+}
+
+bool View3DPane::linkSelectedNode(const QString& brick) {
+    RouteNode3D* n = route_.node(canvas_->selectedNode());
+    if (!n) return false;
+    const RouteHarness h = harness_ ? harness_() : RouteHarness();
+    const Brick* b = h.ok && !brick.isEmpty() ? h.design.brick(brick) : nullptr;
+    if (!brick.isEmpty() && !b) return false;
+    beforeRouteChange();
+    // One node a part: it leaves any other it was put at.
+    if (b)
+        for (RouteNode3D& o : route_.nodes)
+            if (o.brick == b->id) {
+                o.brick.clear();
+                o.part.clear();
+            }
+    n = route_.node(canvas_->selectedNode());
+    n->brick = b ? b->id : QString();
+    n->part = b ? (b->name.isEmpty() ? partKindName(b->kind) : b->name) : QString();
+    if (b) n->label = n->part;
+    saveRouting();
+    refreshRoute();
+    refreshParts();
+    emit routeChanged();
+    return true;
+}
+
+RouteLengths View3DPane::proposedLengths() const {
+    const RouteHarness h = harness_ ? harness_() : RouteHarness();
+    return h.ok ? routeLengthsFor(h.design, route_) : RouteLengths();
+}
+
+bool View3DPane::applyLengths(bool ask) {
+    RouteHarness h = harness_ ? harness_() : RouteHarness();
+    if (!h.ok) return false;
+    const RouteLengths lengths = routeLengthsFor(h.design, route_);
+    QStringList lines;
+    for (const RouteLengthChange& c : lengths.changes)
+        lines << (c.now > 0.0 ? QStringLiteral("%1: %2 mm to %3 mm").arg(c.what).arg(c.was, 0, 'f', 0).arg(c.now, 0, 'f', 0)
+                              : QStringLiteral("%1: with the cable's length again").arg(c.what));
+    const QString notes = lengths.notes.isEmpty() ? QString() : QStringLiteral("\n\nLeft as they are:\n") + lengths.notes.join(QLatin1Char('\n'));
+    if (lengths.changes.empty()) {
+        if (ask)
+            QMessageBox::information(this, QStringLiteral("Lengths to harness"),
+                                     QStringLiteral("The harness's lengths are already as the route has them (%1 cable(s) measured).%2")
+                                         .arg(lengths.measured)
+                                         .arg(notes));
+        return false;
+    }
+    if (ask && QMessageBox::question(this, QStringLiteral("Lengths to harness"),
+                                     QStringLiteral("Give harness %1 its lengths along the route?\n\n%2%3\n\nA harness already "
+                                                    "placed on the sheet keeps its old lengths until it is placed again from the "
+                                                    "wizard.")
+                                         .arg(h.name.isEmpty() ? QStringLiteral("(unnamed)") : QStringLiteral("\"%1\"").arg(h.name),
+                                              lines.join(QLatin1Char('\n')), notes)) != QMessageBox::Yes)
+        return false;
+    applyRouteLengths(h.design, lengths);
+    if (applyHarness_) applyHarness_(h.name, h.design);
+    pickSaid_ = QStringLiteral("%1 length(s) given to the harness from the route.").arg(lengths.changes.size());
+    sayStatus();
+    return true;
 }
 
 void View3DPane::setRouteTool(RouteTool tool) {
@@ -797,6 +959,12 @@ void View3DCanvas::routeRedraw() {
     update();
 }
 
+void View3DCanvas::setPartToPlace(const QString& brick, const QString& designator, RouteNodeKind kind) {
+    placeBrick_ = brick;
+    placePart_ = designator;
+    placeKind_ = kind;
+}
+
 void View3DCanvas::selectSegment(const QString& id) {
     selSegment_ = id;
     selNode_.clear();
@@ -949,7 +1117,23 @@ void View3DCanvas::routeClick(const QPointF& at) {
             routeRedraw();
         } else if (surfaceAt(at, p, n)) {
             emit routeAboutToChange();
-            selNode_ = route_->addNode(RouteNodeKind::Connector, p, n);
+            // A HARNESS PART BEING PUT: there, or moved there where it was put already.
+            RouteNode3D* put = nullptr;
+            for (RouteNode3D& o : route_->nodes)
+                if (!placeBrick_.isEmpty() && o.brick == placeBrick_) put = &o;
+            if (put) {
+                put->at = p;
+                put->normal = n.normalized();
+                selNode_ = put->id;
+            } else {
+                selNode_ = route_->addNode(placeBrick_.isEmpty() ? RouteNodeKind::Connector : placeKind_, p, n);
+                if (!placeBrick_.isEmpty()) {
+                    RouteNode3D* made = route_->node(selNode_);
+                    made->brick = placeBrick_;
+                    made->part = placePart_;
+                    made->label = placePart_;
+                }
+            }
             selSegment_.clear();
             routeDirty_ = true;
             emit routeChanged();

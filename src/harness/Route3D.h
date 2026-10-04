@@ -32,6 +32,10 @@ struct RouteNode3D {
     QString label;
     V3 at;
     V3 normal{0.0, 0.0, 1.0};
+    // THE HARNESS PART IT IS PUT FOR: the wizard's End brick, by its id, and that part's designator as it was then.
+    // Empty: a node of the route's own.
+    QString brick;
+    QString part;
 };
 
 // A BUNDLE between two nodes, through the points it was laid along. Its diameter, or the route's where it has none.

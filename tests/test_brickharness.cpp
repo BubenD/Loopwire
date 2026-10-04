@@ -15,6 +15,7 @@
 #include "geometry/Mesh3D.h"
 #include "harness/Harness3D.h"
 #include "harness/Route3D.h"
+#include "harness/RouteLink.h"
 #include "render/Render3D.h"
 #include "harness/BrickHarness.h"
 #include "harness/PartsLibrary.h"
@@ -5840,6 +5841,22 @@ void testRoundFortyOne() {
     }
     std::printf("  3d part: turned to %.1f across (drawn %.1f), %d pinout(s)\n", 2 * xR, xb.max.y - xb.min.y, pins);
     check(pins == 1, "3d part: a connector's pins on its front face");
+    // INSIDE IT: every pin within the connector's own length, its tip at the far face, nothing standing out.
+    {
+        V3 plo, phi, blo{1e300, 1e300, 1e300}, bhi{-1e300, -1e300, -1e300};
+        bool inside = false;
+        for (const Harness3DItem& it : sc.items)
+            if (it.brick == x && it.what != QLatin1String("pins")) {
+                V3 a, b;
+                it.mesh.bounds(a, b);
+                blo = {std::min(blo.x, a.x), std::min(blo.y, a.y), std::min(blo.z, a.z)};
+                bhi = {std::max(bhi.x, b.x), std::max(bhi.y, b.y), std::max(bhi.z, b.z)};
+            }
+        for (const Harness3DItem& it : sc.items)
+            if (it.what == QLatin1String("pins") && it.mesh.bounds(plo, phi))
+                inside = plo.x >= blo.x - 0.05 && phi.x <= bhi.x + 0.05 && (std::abs(plo.x - blo.x) < 0.05 || std::abs(phi.x - bhi.x) < 0.05);
+        check(inside, "3d part: its pins inside the connector, ending at its far face - none standing out of it");
+    }
     check(xR < (xb.max.y - xb.min.y) * 0.75, "3d part: a lone mark at its end is not turned into a disc");
 }
 
@@ -6160,6 +6177,148 @@ void testRoundFortyThree() {
 #endif
 }
 
+// ROUND FORTY-FOUR: THE 3D ROUTE AND THE HARNESS - each harness part put at a node of the route, from the list of its
+// parts, and each cable given its length along the route between the parts it joins: the longest where it goes to
+// several at one end, the shorter ones their own.
+void testRoundFortyFour() {
+    // ---- THE LENGTHS, from the route to the design ----
+    BrickDesign d;
+    const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+    const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+    const QString y1 = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+    const QString y2 = d.addBrick(BrickType::End, PartKind::Connector, 2, 1);
+    d.brick(x)->name = QStringLiteral("X1");
+    d.brick(y1)->name = QStringLiteral("X2");
+    d.brick(y2)->name = QStringLiteral("X3");
+    d.brick(c)->name = QStringLiteral("W1");
+    d.connect(x, c);
+    d.connect(c, y1);
+    check(d.finishesOf(c).size() == 1, "route link: a cable from X1 to X2");
+    Route3D r;
+    r.diameter = 6.0;
+    r.lead = 10.0;
+    auto put = [&](const QString& brick, const V3& at) {
+        const QString id = r.addNode(RouteNodeKind::Connector, at, {0, 0, 1});
+        r.node(id)->brick = brick;
+        r.node(id)->part = d.brick(brick)->name;
+        return id;
+    };
+    const QString nx = put(x, {0, 0, 0});
+    const QString ny1 = put(y1, {400, 0, 0});
+    const QString b = r.addNode(RouteNodeKind::Branch, {300, 0, 0}, {0, 0, 1});
+    r.addSegment(nx, b, {{{100, 0, 0}, {0, 0, 1}}});
+    r.addSegment(b, ny1, {});
+    const double whole = routeDistance(r, nx, ny1);
+    check(std::abs(whole - (r.length(r.segments[0]) + r.length(r.segments[1]))) < 1e-9, "route link: X1 to X2 along the bundles, through the branch");
+    RouteLengths lengths = routeLengthsFor(d, r);
+    check(lengths.measured == 1 && lengths.changes.size() == 1 && lengths.changes[0].part.isEmpty() &&
+              std::abs(lengths.changes[0].now - std::round(whole)) < 1e-9,
+          "route link: the cable's length is its way along the route, to the millimetre");
+    applyRouteLengths(d, lengths);
+    check(std::abs(d.brick(c)->run.lengthMm - std::round(whole)) < 1e-9 && routeLengthsFor(d, r).changes.empty(),
+          "route link: given to the design - and asked again, nothing more to change");
+    // TO TWO PARTS AT ONE END: the longer is the cable's length, the shorter that branch's own.
+    d.connect(c, y2);
+    const QString ny2 = put(y2, {300, 120, 0});
+    r.addSegment(b, ny2, {});
+    lengths = routeLengthsFor(d, r);
+    applyRouteLengths(d, lengths);
+    const double toX3 = routeDistance(r, nx, ny2);
+    std::printf("  route link: W1 %.0f mm; own lengths X2 %.0f, X3 %.0f (route %.1f / %.1f)\n", d.brick(c)->run.lengthMm,
+                d.link(c, y1)->lengthMm, d.link(c, y2)->lengthMm, whole, toX3);
+    // Which is the longer is as the route has it - the connectors' leads count too.
+    const QString longer = toX3 > whole ? y2 : y1, shorter = toX3 > whole ? y1 : y2;
+    check(std::abs(d.brick(c)->run.lengthMm - std::round(std::max(whole, toX3))) < 1e-9 &&
+              std::abs(d.link(c, shorter)->lengthMm - std::round(std::min(whole, toX3))) < 1e-9 && d.link(c, longer)->lengthMm == 0.0,
+          "route link: to two parts at an end - the longer the cable's length, the shorter its own branch length");
+    check(std::abs(runLengthTo(d, *d.brick(c), shorter) - std::round(std::min(whole, toX3))) < 1e-9 &&
+              std::abs(runLengthTo(d, *d.brick(c), longer) - std::round(std::max(whole, toX3))) < 1e-9,
+          "route link: and the drawing reads each branch's length");
+    // A part not put in 3D: the cable left alone, and said why.
+    r.removeNode(ny2);
+    lengths = routeLengthsFor(d, r);
+    check(lengths.changes.empty() && lengths.notes.join(QLatin1Char(' ')).contains(QStringLiteral("X3 not put in 3D")),
+          "route link: a cable with a part not put in 3D - left as it is, and why");
+    check(Route3D::fromJson(r.toJson()).node(nx)->brick == x, "route link: a node's part saved with the route");
+
+    // ---- IN THE 3D VIEW: the parts put from the list, the bundle laid, the lengths given ----
+    BrickDesign design;
+    const QString px = design.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+    const QString pc = design.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+    const QString py = design.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+    design.brick(px)->name = QStringLiteral("P1");
+    design.brick(py)->name = QStringLiteral("P2");
+    design.connect(px, pc);
+    design.connect(pc, py);
+    BrickDesign given;
+    QString givenName;
+    QJsonObject stored;
+    View3DPane pane;
+    pane.setRoutingStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    pane.setHarnessLink(
+        [&] {
+            RouteHarness h;
+            h.name = QStringLiteral("Main");
+            h.design = design;
+            h.ok = true;
+            return h;
+        },
+        [&](const QString& name, const BrickDesign& out) {
+            givenName = name;
+            given = out;
+            design = out;
+        });
+    pane.resize(1000, 700);
+    pane.show();
+    QApplication::processEvents();
+    View3DCanvas* canvas = pane.canvas();
+    canvas->setUseGpu(false);
+    canvas->viewFrom(QStringLiteral("top"));
+    auto click = [&](const V3& p) {
+        QPointF at;
+        canvas->toScreen(p, at);
+        QMouseEvent press(QEvent::MouseButtonPress, at, canvas->mapToGlobal(at), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent release(QEvent::MouseButtonRelease, at, canvas->mapToGlobal(at), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &press);
+        QApplication::sendEvent(canvas, &release);
+    };
+    auto* parts = pane.findChild<QListWidget*>(QStringLiteral("view3dParts"));
+    check(parts && parts->count() == 2 && parts->item(0)->text().contains(QStringLiteral("not put in 3D")),
+          "3d link: the harness's parts listed, none put in 3D yet");
+    parts->setCurrentRow(0);
+    pane.setRouteTool(RouteTool::Connector);
+    click({-30, 0, 0});
+    const Route3D& route = pane.route();
+    check(route.nodes.size() == 1 && route.nodes[0].brick == px && route.nodes[0].label == QLatin1String("P1"),
+          "3d link: the part chosen put where the Connector tool clicked, by its designator");
+    check(parts->currentRow() == 1, "3d link: and the next part not put yet chosen for the next click");
+    click({30, 0, 0});
+    check(route.nodes.size() == 2 && route.nodes[1].brick == py, "3d link: P2 put");
+    // Put again: moved, not doubled.
+    parts->setCurrentRow(1);
+    click({35, 0, 0});
+    check(route.nodes.size() == 2 && std::abs(route.nodes[1].at.x - 35.0) < 0.5, "3d link: a part put again is moved there, not put twice");
+    pane.setRouteTool(RouteTool::Route);
+    click(route.nodes[0].at + route.nodes[0].normal * (route.lead * 0.5));
+    click({0, 25, 0});
+    click(route.nodes[1].at + route.nodes[1].normal * (route.lead * 0.5));
+    check(route.segments.size() == 1, "3d link: a bundle laid from P1 to P2");
+    const double along = route.length(route.segments[0]);
+    const RouteLengths proposed = pane.proposedLengths();
+    check(proposed.changes.size() == 1 && std::abs(proposed.changes[0].now - std::round(along)) < 1e-9,
+          "3d link: the length the route would give the cable");
+    check(pane.applyLengths(false) && givenName == QLatin1String("Main") &&
+              std::abs(given.brick(pc)->run.lengthMm - std::round(along)) < 1e-9,
+          "3d link: given to the harness - its cable now as long as the route");
+    check(!pane.applyLengths(false), "3d link: given again - nothing left to change");
+    // Unlinked: the node put for no part.
+    pane.setRouteTool(RouteTool::Select);
+    click(route.nodes[1].at + route.nodes[1].normal * (route.lead * 0.5));
+    check(canvas->selectedNode() == route.nodes[1].id && pane.linkSelectedNode(QString()) && route.nodes[1].brick.isEmpty() &&
+              parts->item(1)->text().contains(QStringLiteral("not put in 3D")),
+          "3d link: a node unlinked - its part listed as not put in 3D again");
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -6217,6 +6376,7 @@ int run_brickharness_tests() {
     testRoundFortyOne();
     testRoundFortyTwo();
     testRoundFortyThree();
+    testRoundFortyFour();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }
