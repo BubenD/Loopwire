@@ -34,6 +34,10 @@ namespace Edraw_Desktop {
 // One schematic design-rule discrepancy. `key` is a stable identity used to match
 // user "bypass" (accept) decisions across re-validations; `entityId` + `at` let the
 // UI jump to and highlight the offending object.
+// A NOTE OR A REVISION BOX made big enough for its words at its text height - wider for its longest word, taller for
+// every line - its top left corner kept. Never made smaller. True when it grew.
+bool fitAnnotationBox(Entity& e);
+
 struct ValidationIssue {
     QString key;
     QString message;
@@ -628,6 +632,8 @@ public:
     //  - a wire with an open (dangling) end
     // Each issue carries a stable key + the offending object's id/location.
     std::vector<ValidationIssue> validateSchematic() const;
+    // A note's or a revision box's words, set - its frame grown to hold them.
+    void setSelectionAnnotationText(const QString& text);
 
     // "Bypass" registry: discrepancy keys the user has reviewed and accepted. They are
     // filtered out of the active issue list and listed in the bypass table instead.

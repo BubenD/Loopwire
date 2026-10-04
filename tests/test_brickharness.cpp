@@ -5593,6 +5593,63 @@ void testRoundThirtyEight() {
     check(rises, "3d twist: each wire a helix round the run - over and under, not flat on the sheet");
 }
 
+// ROUND THIRTY-NINE: a note or a revision box - its text height set, the frame grows to hold the words.
+void testRoundThirtyNine() {
+    Document doc;
+    Editor ed;
+    ed.setDocument(&doc);
+    auto box = [&](const QString& id, bool rev, const QString& text) {
+        Entity e;
+        e.id = id;
+        e.type = EntityType::Rect;
+        e.points = {{0, 0}, {40, 0}, {40, 20}, {0, 20}};
+        e.a = {0, 20};
+        e.meta.insert(QStringLiteral("textSize"), 4.0);
+        e.meta.insert(rev ? QStringLiteral("revision") : QStringLiteral("note"), true);
+        e.meta.insert(QStringLiteral("text"), text);
+        if (rev) e.meta.insert(QStringLiteral("rev"), QStringLiteral("A"));
+        doc.entities().push_back(e);
+    };
+    auto boundsOfId = [&](const QString& id) {
+        for (const Entity& e : doc.entities())
+            if (e.id == id) return e.bounds();
+        return Bounds{};
+    };
+    box(QStringLiteral("n1"), false, QStringLiteral("qwe"));
+    box(QStringLiteral("r1"), true, QStringLiteral("Revision description"));
+    // THE HEIGHT MADE BIGGER: the note grows to hold its word, its top left corner kept.
+    ed.selectById(QStringLiteral("n1"));
+    ed.setSelectionMetaNumber(QStringLiteral("textSize"), 12.0);
+    Bounds b = boundsOfId(QStringLiteral("n1"));
+    std::printf("  note at 12: %.1f x %.1f, top left %.1f,%.1f\n", b.max.x - b.min.x, b.max.y - b.min.y, b.min.x, b.max.y);
+    check(b.max.y - b.min.y > 20.0 && std::abs(b.max.y - 20.0) < 1e-9 && std::abs(b.min.x) < 1e-9,
+          "note: its text made bigger, the frame grows downward to hold it - its top left kept");
+    // A LONG WORD: wider.
+    ed.setSelectionAnnotationText(QStringLiteral("Supercalifragilisticexpialidocious"));
+    b = boundsOfId(QStringLiteral("n1"));
+    check(b.max.x - b.min.x > 40.0, "note: a word too long for it - the frame widens to hold it");
+    // MORE WORDS: taller.
+    const double tall = b.max.y - b.min.y;
+    ed.setSelectionAnnotationText(QStringLiteral("one two three four five six seven eight nine ten eleven twelve thirteen "
+                                                 "fourteen fifteen sixteen seventeen eighteen nineteen twenty"));
+    b = boundsOfId(QStringLiteral("n1"));
+    check(b.max.y - b.min.y > tall, "note: more words than it holds - the frame grows to hold every line");
+    // NEVER SMALLER.
+    const Bounds before = b;
+    ed.setSelectionMetaNumber(QStringLiteral("textSize"), 2.0);
+    b = boundsOfId(QStringLiteral("n1"));
+    check(std::abs((b.max.x - b.min.x) - (before.max.x - before.min.x)) < 1e-9 &&
+              std::abs((b.max.y - b.min.y) - (before.max.y - before.min.y)) < 1e-9,
+          "note: made smaller, the frame stays as it is");
+    // A REVISION BOX: its title strip and its words.
+    ed.selectById(QStringLiteral("r1"));
+    ed.setSelectionMetaNumber(QStringLiteral("textSize"), 10.0);
+    b = boundsOfId(QStringLiteral("r1"));
+    std::printf("  revision at 10: %.1f x %.1f\n", b.max.x - b.min.x, b.max.y - b.min.y);
+    check(b.max.y - b.min.y >= 10.0 * 1.8 + 2.0 * 10.0 && b.max.x - b.min.x > 40.0,
+          "revision: its text made bigger - the frame grows for the strip and the words");
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -5645,6 +5702,7 @@ int run_brickharness_tests() {
     testRoundThirtySix();
     testRoundThirtySeven();
     testRoundThirtyEight();
+    testRoundThirtyNine();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

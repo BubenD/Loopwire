@@ -11185,6 +11185,21 @@ void MainWindow::refreshProperties() {
                });
     }
 
+    // --- A NOTE OR A REVISION BOX: its words and their height - the frame grows to hold them. ---
+    if (e && e->type == EntityType::Rect && (e->meta.value(QStringLiteral("note")).toBool() ||
+                                             e->meta.value(QStringLiteral("revision")).toBool())) {
+        const bool rev = e->meta.value(QStringLiteral("revision")).toBool();
+        addHeader(rev ? QStringLiteral("Revision") : QStringLiteral("Note"));
+        if (rev)
+            addText(QStringLiteral("Revision"), mv(QStringLiteral("rev")).toString(),
+                    [this](const QString& t) { editor_->setSelectionMeta(QStringLiteral("rev"), t.trimmed()); },
+                    QStringLiteral("A, B, C..."));
+        addText(QStringLiteral("Text"), mv(QStringLiteral("text")).toString(),
+                [this](const QString& t) { editor_->setSelectionAnnotationText(t); }, QStringLiteral("its words"));
+        addNum(QStringLiteral("Text height"), mv(QStringLiteral("textSize")).toDouble(4.0),
+               [this](double v) { editor_->setSelectionMetaNumber(QStringLiteral("textSize"), std::max(0.5, v)); });
+    }
+
     // --- Leader section: the words it carries, and the sizes it is drawn at. ---
     if (e && e->type == EntityType::Leader) {
         const QString id = e->id;

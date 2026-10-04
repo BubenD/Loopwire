@@ -12671,6 +12671,11 @@ void Editor::applyTextEdit(const QString& id, const QString& text, const TextSty
                 if (s.size > 0.0) e->meta.insert("size", s.size);
                 if (!s.font.isEmpty()) e->meta.insert("font", s.font);
             }
+            // A NOTE OR A REVISION BOX: the height typed there is its text's, and the frame grows to hold the words.
+            if (e->meta.value("note").toBool() || e->meta.value("revision").toBool()) {
+                if (s.size > 0.0) e->meta.insert("textSize", s.size);
+                fitAnnotationBox(*e);
+            }
             doc_->setDirty(true);
             emit changed();
         }
@@ -18145,9 +18150,78 @@ void Editor::setSelectionMetaNumber(const QString& key, double value) {
     auto sel = selectedEntities();
     if (sel.empty()) return;
     pushUndo();
-    for (Entity* e : sel) e->meta[key] = value;
+    for (Entity* e : sel) {
+        e->meta[key] = value;
+        // A note's or a revision box's text made bigger: its frame grows to hold the words.
+        if (key == QLatin1String("textSize") && (e->meta.value("note").toBool() || e->meta.value("revision").toBool()))
+            fitAnnotationBox(*e);
+    }
     doc_->setDirty(true);
     emit changed();
+}
+
+void Editor::setSelectionAnnotationText(const QString& text) {
+    auto sel = selectedEntities();
+    if (sel.empty()) return;
+    pushUndo();
+    for (Entity* e : sel)
+        if (e->meta.value("note").toBool() || e->meta.value("revision").toBool()) {
+            e->meta.insert("text", text);
+            fitAnnotationBox(*e);
+        }
+    doc_->setDirty(true);
+    emit changed();
+}
+
+bool fitAnnotationBox(Entity& e) {
+    // As the box draws its words (EntityRenderer): wrapped to its width less a pad each side, a line a text height,
+    // under a title strip on a revision box - measured at a fixed scale, so the answer is the same at any zoom.
+    if (e.type != EntityType::Rect || e.points.size() < 4) return false;
+    const bool rev = e.meta.value("revision").toBool();
+    const double th = std::max(0.1, e.meta.value("textSize").toDouble(4.0));
+    const QString body = e.meta.value("text").toString();
+    const Bounds b = boundsOf(e.points);
+    if (!b.valid) return false;
+    constexpr double k = 20.0;   // pixels to the drawing unit, for measuring
+    QFont f;
+    f.setPixelSize(std::max(1, static_cast<int>(th * k)));
+    const QFontMetricsF fm(f);
+    const double pad = th * 0.4;
+    // WIDE ENOUGH FOR ITS LONGEST WORD (and, on a revision box, its title).
+    double width = b.width();
+    double widest = 0.0;
+    for (const QString& para : body.split(QLatin1Char('\n')))
+        for (const QString& word : para.split(QLatin1Char(' ')))
+            widest = std::max(widest, fm.horizontalAdvance(word) / k);
+    if (rev) widest = std::max(widest, fm.horizontalAdvance(QStringLiteral("REV %1").arg(e.meta.value("rev").toString())) / k);
+    width = std::max(width, widest + 2.0 * pad + th * 0.2);
+    // TALL ENOUGH FOR EVERY LINE the words wrap to at that width.
+    const double maxW = (width - 2.0 * pad) * k;
+    int lines = 0;
+    for (const QString& para : body.split(QLatin1Char('\n'))) {
+        QString cur;
+        int n = 1;
+        for (const QString& word : para.split(QLatin1Char(' '))) {
+            const QString trial = cur.isEmpty() ? word : cur + QLatin1Char(' ') + word;
+            if (fm.horizontalAdvance(trial) > maxW && !cur.isEmpty()) {
+                ++n;
+                cur = word;
+            } else {
+                cur = trial;
+            }
+        }
+        lines += n;
+    }
+    const double strip = rev ? th * 1.8 : 0.0;
+    double height = std::max(b.height(), strip + pad + lines * th + pad * 1.2);
+    // A revision box's title strip is at most two-fifths of it: tall enough that it is the full strip.
+    if (rev) height = std::max(height, strip / 0.4);
+    if (width <= b.width() + 1e-9 && height <= b.height() + 1e-9) return false;
+    // ENLARGED, its top left corner where it was: wider to the right, taller downward.
+    const double minX = b.min.x, maxY = b.max.y, maxX = minX + width, minY = maxY - height;
+    e.points = {{minX, minY}, {maxX, minY}, {maxX, maxY}, {minX, maxY}};
+    e.a = {minX, maxY};
+    return true;
 }
 
 void Editor::setSelectionSleeveAcross(double across) {
