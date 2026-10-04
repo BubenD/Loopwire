@@ -496,6 +496,37 @@ std::vector<V3> ringAt(const std::vector<V3>& loop, const Placement& pl, double 
 
 } // namespace
 
+Mesh3D prismMesh(const std::vector<std::pair<double, double>>& profile, double depth) {
+    Mesh3D m;
+    std::vector<QPointF> flat;
+    for (const auto& [u, v] : profile)
+        if (flat.empty() || std::hypot(flat.back().x() - u, flat.back().y() - v) > 1e-9) flat.emplace_back(u, v);
+    if (flat.size() > 2 && std::hypot(flat.front().x() - flat.back().x(), flat.front().y() - flat.back().y()) < 1e-9) flat.pop_back();
+    if (flat.size() < 3) return m;
+    // Turned the one way round, so its walls face out.
+    double area = 0.0;
+    for (size_t i = 0; i < flat.size(); ++i) {
+        const QPointF& p = flat[i];
+        const QPointF& q = flat[(i + 1) % flat.size()];
+        area += p.x() * q.y() - q.x() * p.y();
+    }
+    if (area < 0.0) std::reverse(flat.begin(), flat.end());
+    const int n = static_cast<int>(flat.size());
+    for (int end = 0; end < 2; ++end)
+        for (const QPointF& p : flat) m.addVertex({p.x(), p.y(), end == 0 ? 0.0 : depth});
+    const auto tris = earClip(flat);
+    for (const auto& t : tris) {
+        m.addTri(t[0], t[2], t[1]);               // the bottom, looking down
+        m.addTri(n + t[0], n + t[1], n + t[2]);   // the top, looking up
+    }
+    for (int i = 0; i < n; ++i) {
+        const int j = (i + 1) % n;
+        m.addTri(i, j, n + j);
+        m.addTri(i, n + j, n + i);
+    }
+    return m;
+}
+
 Mesh3D loadStepText(const QByteArray& raw, QString* how) {
     Mesh3D m;
     // Without its comments, and from the DATA section on.

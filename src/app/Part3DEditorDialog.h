@@ -8,6 +8,7 @@
 #include <QDialog>
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 class QCheckBox;
@@ -17,6 +18,8 @@ class QLabel;
 class QLineEdit;
 class QListWidget;
 class QPushButton;
+class QSpinBox;
+class QToolButton;
 
 namespace Edraw_Desktop {
 
@@ -49,6 +52,18 @@ public:
     void setSelectedCut(bool on);
     void undo();
     void redo();
+    // A SKETCH: an outline drawn on a plane (0 top, 1 front, 2 side) - its points as clicked, in the plane's two
+    // directions (a rectangle by two corners, a circle by its middle and its edge, as the bar says) - given depth.
+    void startSketch(int plane);
+    void sketchClick(double u, double v);
+    bool finishSketch(double depth);
+    void cancelSketch();
+    bool sketching() const { return sketchPlane_ >= 0; }
+    // PINS PUT BY HAND: the next clicks on a face put pins (1) or sockets (2) there - 0 off. Numbered in turn.
+    void setPinTool(int tool);
+    bool placePinAt(const V3& point, const V3& normal, bool female);
+    // The pins and sockets numbered 1, 2, 3... in the order they are listed.
+    void renumberPins();
     // The model as shown: its items, and the note on cuts where there is one.
     const std::vector<ModelItem3D>& items() const { return items_; }
     View3DCanvas* canvas() const { return canvas_; }
@@ -94,6 +109,27 @@ private:
     QComboBox* material_ = nullptr;
     QCheckBox* cut_ = nullptr;
     QCheckBox* shown_ = nullptr;
+    QDoubleSpinBox* fillet_ = nullptr;
+    QDoubleSpinBox* chamfer_ = nullptr;
+    QLabel* filletLabel_ = nullptr;
+    QLabel* chamferLabel_ = nullptr;
+    QCheckBox* female_ = nullptr;
+    QSpinBox* number_ = nullptr;
+    QLabel* numberLabel_ = nullptr;
+    // The sketch being drawn (not saved): its plane (-1 none), where the plane is, its points, a rectangle's or a
+    // circle's first click; the bar it is drawn with.
+    int sketchPlane_ = -1;
+    double sketchAt_ = 0.0;
+    std::vector<std::pair<double, double>> sketch_;
+    std::optional<std::pair<double, double>> sketchFirst_;
+    QWidget* sketchBar_ = nullptr;
+    QComboBox* sketchPlaneBox_ = nullptr;
+    QDoubleSpinBox* sketchAtBox_ = nullptr;
+    QComboBox* sketchShape_ = nullptr;
+    QDoubleSpinBox* sketchDepth_ = nullptr;
+    // Pins put by hand: the tool (0 off, 1 pins, 2 sockets) and its two buttons.
+    int pinTool_ = 0;
+    QToolButton* pinButtons_[2] = {};
     QWidget* panel_ = nullptr;
     // A body dragged across the view, Ctrl held. Not saved.
     bool dragging_ = false;

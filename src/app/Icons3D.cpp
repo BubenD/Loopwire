@@ -441,6 +441,32 @@ void draw(QPainter& p, const QString& k, const QColor& ink, const QColor& acc) {
         p.drawPolygon(QPolygonF{{20, 4}, {27, 11}, {24, 13}, {17, 6}});
         return;
     }
+    if (k == QLatin1String("pin") || k == QLatin1String("socket")) {
+        // A face, and a pin standing on it - or a socket in it.
+        p.setBrush(soft);
+        p.drawPolygon(QPolygonF{{3, 24}, {13, 17}, {29, 17}, {19, 24}});
+        if (k == QLatin1String("pin")) {
+            cylinder(p, 16, 6, 20, 3.2, ink, QColor(212, 175, 80));
+        } else {
+            p.setBrush(QColor(20, 20, 24));
+            p.drawEllipse(QRectF(11.5, 18.5, 9, 4));
+            p.setPen(QPen(acc, 2.0, Qt::SolidLine, Qt::RoundCap));
+            arrow(p, QPointF(16, 3), QPointF(16, 15), 4.5);
+        }
+        return;
+    }
+    if (k == QLatin1String("renumber")) {
+        QFont f = p.font();
+        f.setBold(true);
+        f.setPixelSize(11);
+        p.setFont(f);
+        p.setPen(ink);
+        p.drawText(QRectF(1, 2, 12, 12), Qt::AlignCenter, QStringLiteral("1"));
+        p.drawText(QRectF(10, 10, 12, 12), Qt::AlignCenter, QStringLiteral("2"));
+        p.setPen(acc);
+        p.drawText(QRectF(19, 18, 12, 12), Qt::AlignCenter, QStringLiteral("3"));
+        return;
+    }
     if (k == QLatin1String("cut")) {
         cube(p, 14, 18, 10, ink, acc, 0);
         p.setPen(QPen(QColor(220, 70, 60), 1.8));

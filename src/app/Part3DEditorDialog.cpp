@@ -23,6 +23,7 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSpinBox>
+#include <QSignalBlocker>
 #include <QSplitter>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -71,6 +72,25 @@ Part3DEditorDialog::Part3DEditorDialog(const LibraryPart& part, const PartModel3
     addButton(BodyShape::Turned, "part3dAddTurned");
     addButton(BodyShape::Extruded, "part3dAddExtruded");
     addButton(BodyShape::Pins, "part3dAddPins");
+    addRow->addSpacing(12);
+    // DRAWN IN THE VIEW: an outline sketched on a plane and given depth; pins and sockets put on a face where clicked.
+    {
+        QToolButton* sk = cadButton(QStringLiteral("Sketch"));
+        sk->setObjectName(QStringLiteral("part3dSketch"));
+        sk->setToolTip(QStringLiteral("Draw an outline on a plane in the view - lines, a rectangle, a circle - and give it depth"));
+        connect(sk, &QToolButton::clicked, this, [this] { startSketch(sketchPlane_ >= 0 ? sketchPlane_ : 0); });
+        addRow->addWidget(sk);
+        for (int kind = 1; kind <= 2; ++kind) {
+            QToolButton* b = cadButton(kind == 1 ? QStringLiteral("Pin") : QStringLiteral("Socket"));
+            b->setObjectName(kind == 1 ? QStringLiteral("part3dPinTool") : QStringLiteral("part3dSocketTool"));
+            b->setCheckable(true);
+            b->setToolTip(kind == 1 ? QStringLiteral("Click a face to put a pin on it, numbered in turn (click again to stop)")
+                                    : QStringLiteral("Click a face to put a socket in it - a hole, numbered in turn (click again to stop)"));
+            connect(b, &QToolButton::toggled, this, [this, kind](bool on) { setPinTool(on ? kind : (pinTool_ == kind ? 0 : pinTool_)); });
+            addRow->addWidget(b);
+            pinButtons_[kind - 1] = b;
+        }
+    }
     addRow->addStretch(1);
     lay->addLayout(addRow);
 
@@ -131,6 +151,8 @@ Part3DEditorDialog::Part3DEditorDialog(const LibraryPart& part, const PartModel3
                       turnStep->value());
     });
     modButton("part3dCentre", QStringLiteral("To the middle"), QStringLiteral("Put it at the model's origin"), [this] { centreSelected(); });
+    modButton("part3dRenumber", QStringLiteral("Number pins"), QStringLiteral("The pins and sockets numbered 1, 2, 3... in the order they are listed"),
+              [this] { renumberPins(); });
     modRow->addSpacing(12);
     modButton("part3dUndo", QStringLiteral("Undo"), QStringLiteral("Take back the last change (Ctrl+Z)"), [this] { undo(); });
     modButton("part3dRedo", QStringLiteral("Redo"), QStringLiteral("Do it again (Ctrl+Y)"), [this] { redo(); });
@@ -157,10 +179,71 @@ Part3DEditorDialog::Part3DEditorDialog(const LibraryPart& part, const PartModel3
             {"part3dArray", "array"},      {"part3dCentre", "middle"},        {"part3dUndo", "undo"},
             {"part3dRedo", "redo"},        {"part3dViewIso", "iso"},          {"part3dViewFront", "front"},
             {"part3dViewTop", "top"},      {"part3dViewSide", "side"},        {"part3dFit", "fit"},
+            {"part3dSketch", "sketch"},    {"part3dPinTool", "pin"},          {"part3dSocketTool", "socket"},
+            {"part3dRenumber", "renumber"},
         };
         for (const auto& i : icons)
             if (auto* b = findChild<QToolButton*>(QLatin1String(i.name))) b->setIcon(icon3D(QLatin1String(i.icon), ink));
     }
+    // ---- THE SKETCH: its plane, what is drawn, how deep - shown while one is being drawn ----
+    sketchBar_ = new QWidget(this);
+    sketchBar_->setObjectName(QStringLiteral("part3dSketchBar"));
+    {
+        auto* sb = new QHBoxLayout(sketchBar_);
+        sb->setContentsMargins(0, 0, 0, 0);
+        sb->addWidget(new QLabel(QStringLiteral("<b>Sketch</b> on"), sketchBar_));
+        sketchPlaneBox_ = new QComboBox(sketchBar_);
+        sketchPlaneBox_->setObjectName(QStringLiteral("part3dSketchPlane"));
+        sketchPlaneBox_->addItems({QStringLiteral("Top (X, Y)"), QStringLiteral("Front (X, Z)"), QStringLiteral("Side (Y, Z)")});
+        connect(sketchPlaneBox_, &QComboBox::activated, this, [this](int i) { startSketch(i); });
+        sb->addWidget(sketchPlaneBox_);
+        sb->addWidget(new QLabel(QStringLiteral("at"), sketchBar_));
+        sketchAtBox_ = new QDoubleSpinBox(sketchBar_);
+        sketchAtBox_->setObjectName(QStringLiteral("part3dSketchAt"));
+        sketchAtBox_->setRange(-10000, 10000);
+        sketchAtBox_->setSuffix(QStringLiteral(" mm"));
+        sketchAtBox_->setToolTip(QStringLiteral("Where the plane is, along the way the outline is given depth"));
+        connect(sketchAtBox_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
+            sketchAt_ = v;
+            rebuild(false);
+        });
+        sb->addWidget(sketchAtBox_);
+        sketchShape_ = new QComboBox(sketchBar_);
+        sketchShape_->setObjectName(QStringLiteral("part3dSketchShape"));
+        sketchShape_->addItems({QStringLiteral("Lines - click each corner"), QStringLiteral("Rectangle - two corners"),
+                                QStringLiteral("Circle - its middle, then its edge")});
+        connect(sketchShape_, &QComboBox::activated, this, [this](int) {
+            sketch_.clear();
+            sketchFirst_.reset();
+            rebuild(false);
+        });
+        sb->addWidget(sketchShape_);
+        sb->addWidget(new QLabel(QStringLiteral("Depth"), sketchBar_));
+        sketchDepth_ = new QDoubleSpinBox(sketchBar_);
+        sketchDepth_->setObjectName(QStringLiteral("part3dSketchDepth"));
+        sketchDepth_->setRange(-10000, 10000);
+        sketchDepth_->setValue(5.0);
+        sketchDepth_->setSuffix(QStringLiteral(" mm"));
+        sketchDepth_->setToolTip(QStringLiteral("How deep: toward you as you look at the plane - or away from you, below nothing"));
+        sb->addWidget(sketchDepth_);
+        auto* back = new QPushButton(QStringLiteral("Point back"), sketchBar_);
+        connect(back, &QPushButton::clicked, this, [this] {
+            if (!sketch_.empty()) sketch_.pop_back();
+            rebuild(false);
+        });
+        sb->addWidget(back);
+        auto* extrude = new QPushButton(QStringLiteral("Extrude"), sketchBar_);
+        extrude->setObjectName(QStringLiteral("part3dSketchExtrude"));
+        extrude->setIcon(icon3D(QStringLiteral("extrude"), palette().color(QPalette::WindowText)));
+        connect(extrude, &QPushButton::clicked, this, [this] { finishSketch(sketchDepth_->value()); });
+        sb->addWidget(extrude);
+        auto* cancel = new QPushButton(QStringLiteral("Cancel"), sketchBar_);
+        connect(cancel, &QPushButton::clicked, this, [this] { cancelSketch(); });
+        sb->addWidget(cancel);
+        sb->addStretch(1);
+    }
+    sketchBar_->hide();
+    lay->addWidget(sketchBar_);
 
     // ---- THE BODIES, THE VIEW, THE ONE SELECTED ----
     auto* split = new QSplitter(Qt::Horizontal, this);
@@ -246,6 +329,30 @@ Part3DEditorDialog::Part3DEditorDialog(const LibraryPart& part, const PartModel3
     form->addRow(QString(), cut_);
     shown_ = new QCheckBox(QStringLiteral("Shown"), panel_);
     form->addRow(QString(), shown_);
+    // ITS EDGES: rounded, or cut off at 45 degrees - every edge of it.
+    fillet_ = spin(0.0, 1000.0, QStringLiteral(" mm"));
+    fillet_->setObjectName(QStringLiteral("part3dFillet"));
+    fillet_->setToolTip(QStringLiteral("Every edge rounded to this radius - 0 sharp (an edge it is too big for is left sharp)"));
+    filletLabel_ = new QLabel(QStringLiteral("Fillet"), panel_);
+    form->addRow(filletLabel_, fillet_);
+    chamfer_ = spin(0.0, 1000.0, QStringLiteral(" mm"));
+    chamfer_->setObjectName(QStringLiteral("part3dChamfer"));
+    chamfer_->setToolTip(QStringLiteral("Every edge cut off at 45 degrees, this far back - 0 sharp (a fillet goes first)"));
+    chamferLabel_ = new QLabel(QStringLiteral("Chamfer"), panel_);
+    form->addRow(chamferLabel_, chamfer_);
+    // A PIN: a socket or not, and its number in the pinout.
+    female_ = new QCheckBox(QStringLiteral("A socket (female) - a hole in what it is on"), panel_);
+    female_->setObjectName(QStringLiteral("part3dFemale"));
+    form->addRow(QString(), female_);
+    number_ = new QSpinBox(panel_);
+    number_->setObjectName(QStringLiteral("part3dPinNumber"));
+    number_->setRange(0, 999);
+    numberLabel_ = new QLabel(QStringLiteral("Pin number"), panel_);
+    form->addRow(numberLabel_, number_);
+    connect(fillet_, &QDoubleSpinBox::valueChanged, this, [this] { fromPanel(); });
+    connect(chamfer_, &QDoubleSpinBox::valueChanged, this, [this] { fromPanel(); });
+    connect(female_, &QCheckBox::toggled, this, [this] { fromPanel(); });
+    connect(number_, &QSpinBox::valueChanged, this, [this] { fromPanel(); });
     pf->addLayout(form);
     pf->addWidget(new QLabel(QStringLiteral("<i>Ctrl + drag in the view moves the one selected across it; a click "
                                             "selects.</i>"),
@@ -521,6 +628,22 @@ void Part3DEditorDialog::rebuild(bool fit) {
         pickBody_.push_back(body);
     }
     pickIndex_.build(pickMeshes_);
+    // THE SKETCH BEING DRAWN: its outline and its points, on its plane.
+    if (sketchPlane_ >= 0 && !sketch_.empty()) {
+        V3 u, v, w;
+        sketchAxes(sketchPlane_, u, v, w);
+        V3 lo, hi;
+        const double size = modelBounds(items_, lo, hi) ? std::max(1.0, (hi - lo).length()) : 20.0;
+        std::vector<V3> path;
+        for (const auto& [pu, pv] : sketch_) path.push_back(u * pu + v * pv + w * sketchAt_);
+        if (path.size() >= 3) path.push_back(path.front());
+        Harness3DItem line;
+        if (path.size() >= 2) line.mesh = tubeMesh(path, size * 0.004, 8, false);
+        for (const V3& p : path) line.mesh.append(boxMesh(p - V3{1, 1, 1} * (size * 0.008), p + V3{1, 1, 1} * (size * 0.008)));
+        line.color = QColor(80, 220, 255);
+        line.what = QStringLiteral("sketch");
+        scene_.items.push_back(std::move(line));
+    }
     canvas_->setScene(&scene_);
     if (fit) canvas_->fit();
     canvas_->update();
@@ -558,6 +681,8 @@ void Part3DEditorDialog::fillPanel() {
         name_->setText(b.name);
         const QStringList labels = bodySizeLabels(b.shape);
         const double sizes[3] = {b.a, b.b, b.c};
+        // A SKETCH'S DEPTH may go either way from its plane; every other size is more than nothing.
+        size_[0]->setMinimum(b.shape == BodyShape::Sketch ? -10000.0 : 0.0);
         for (int i = 0; i < 3; ++i) {
             sizeLabel_[i]->setText(labels.value(i));
             sizeLabel_[i]->setVisible(!labels.value(i).isEmpty());
@@ -576,8 +701,18 @@ void Part3DEditorDialog::fillPanel() {
                                   .arg(b.color.name(), b.color.lightness() > 128 ? QStringLiteral("#000") : QStringLiteral("#fff")));
         material_->setCurrentIndex(std::max(0, material_->findData(b.texture)));
         cut_->setChecked(b.cut);
-        cut_->setEnabled(bodyIsPrimitive(b.shape));
+        cut_->setEnabled(bodyIsPrimitive(b.shape) && b.shape != BodyShape::Pin);
         shown_->setChecked(b.shown);
+        const bool edges = bodyIsPrimitive(b.shape) && b.shape != BodyShape::Pin;
+        for (QWidget* w : {static_cast<QWidget*>(fillet_), static_cast<QWidget*>(filletLabel_), static_cast<QWidget*>(chamfer_),
+                           static_cast<QWidget*>(chamferLabel_)})
+            w->setVisible(edges);
+        fillet_->setValue(b.fillet);
+        chamfer_->setValue(b.chamfer);
+        const bool pin = b.shape == BodyShape::Pin;
+        for (QWidget* w : {static_cast<QWidget*>(female_), static_cast<QWidget*>(number_), static_cast<QWidget*>(numberLabel_)}) w->setVisible(pin);
+        female_->setChecked(b.female);
+        number_->setValue(b.number);
     } else {
         shapeSaid_->setText(QStringLiteral("<i>Nothing selected - click a solid, or choose one in the list.</i>"));
     }
@@ -600,6 +735,16 @@ void Part3DEditorDialog::fromPanel() {
     b.texture = material_->currentData().toInt();
     b.cut = cut_->isChecked() && bodyIsPrimitive(b.shape);
     b.shown = shown_->isChecked();
+    b.fillet = fillet_->value();
+    b.chamfer = chamfer_->value();
+    if (b.shape == BodyShape::Pin) {
+        // A SOCKET IS A HOLE: cut out of what it is on, dark; a pin gold, standing out.
+        if (b.female != female_->isChecked()) b.color = female_->isChecked() ? QColor(30, 30, 34) : QColor(212, 175, 80);
+        b.female = female_->isChecked();
+        b.cut = b.female;
+        b.number = number_->value();
+        b.name = QStringLiteral("%1 %2").arg(b.female ? QStringLiteral("Socket") : QStringLiteral("Pin")).arg(b.number);
+    }
     changed();
 }
 
@@ -623,6 +768,29 @@ bool Part3DEditorDialog::eventFilter(QObject* watched, QEvent* event) {
     }
     auto* m = dynamic_cast<QMouseEvent*>(event);
     if (!m) return false;
+    // SKETCHING, OR PUTTING PINS: a click (not a drag) is a point of the outline, or where a pin goes.
+    if ((sketchPlane_ >= 0 || pinTool_ > 0) && m->button() == Qt::LeftButton && !(m->modifiers() & Qt::ControlModifier)) {
+        if (event->type() == QEvent::MouseButtonPress) dragLast_ = m->position().toPoint();
+        if (event->type() == QEvent::MouseButtonRelease && (m->position().toPoint() - dragLast_).manhattanLength() <= 3) {
+            V3 origin, dir;
+            canvas_->camera().rayAt(m->position().x(), m->position().y(), canvas_->width(), canvas_->height(), origin, dir);
+            if (sketchPlane_ >= 0) {
+                V3 u, v, w;
+                sketchAxes(sketchPlane_, u, v, w);
+                const double along = dot3(dir, w);
+                if (std::abs(along) > 1e-9) {
+                    const double t = (sketchAt_ - dot3(origin, w)) / along;
+                    const V3 p = origin + dir * t;
+                    // On a half-millimetre grid.
+                    sketchClick(std::round(dot3(p, u) * 2.0) / 2.0, std::round(dot3(p, v) * 2.0) / 2.0);
+                }
+            } else {
+                const Pick3D pick = pickIndex_.cast(origin, dir);
+                if (pick.hit) placePinAt(pick.point, pick.normal, pinTool_ == 2);
+            }
+            return true;
+        }
+    }
     // CTRL AND A DRAG: the one selected moved across the view, at its own depth.
     if (event->type() == QEvent::MouseButtonPress && m->button() == Qt::LeftButton && (m->modifiers() & Qt::ControlModifier) &&
         selected_ >= 0) {
@@ -661,6 +829,134 @@ bool Part3DEditorDialog::eventFilter(QObject* watched, QEvent* event) {
         select(pick.hit && pick.part >= 0 && pick.part < static_cast<int>(pickBody_.size()) ? pickBody_[static_cast<size_t>(pick.part)] : -1);
     }
     return false;
+}
+
+// ---- Sketching ----------------------------------------------------------------------------------------------
+
+void Part3DEditorDialog::startSketch(int plane) {
+    plane = std::clamp(plane, 0, 2);
+    setPinTool(0);
+    sketchPlane_ = plane;
+    sketch_.clear();
+    sketchFirst_.reset();
+    {
+        const QSignalBlocker hold(sketchPlaneBox_);
+        sketchPlaneBox_->setCurrentIndex(plane);
+    }
+    sketchBar_->show();
+    // LOOKED AT SQUARE ON, the plane facing the one drawing.
+    canvas_->viewFrom(plane == 0 ? QStringLiteral("top") : plane == 1 ? QStringLiteral("front") : QStringLiteral("side"));
+    said_->setText(QStringLiteral("Sketching: click the outline's points on the plane (half-millimetre grid), then Extrude."));
+    rebuild(false);
+}
+
+void Part3DEditorDialog::sketchClick(double u, double v) {
+    if (sketchPlane_ < 0) return;
+    const int shape = sketchShape_->currentIndex();
+    if (shape == 0) {
+        sketch_.emplace_back(u, v);
+    } else if (!sketchFirst_) {
+        sketchFirst_ = std::make_pair(u, v);
+        sketch_ = {{u, v}};
+    } else {
+        const auto [u0, v0] = *sketchFirst_;
+        sketch_.clear();
+        if (shape == 1) {
+            sketch_ = {{u0, v0}, {u, v0}, {u, v}, {u0, v}};
+        } else {
+            // A CIRCLE through the point clicked, round the first.
+            const double r = std::hypot(u - u0, v - v0);
+            for (int k = 0; k < 48; ++k) sketch_.emplace_back(u0 + r * std::cos(k * M_PI / 24.0), v0 + r * std::sin(k * M_PI / 24.0));
+        }
+        sketchFirst_.reset();
+    }
+    rebuild(false);
+}
+
+bool Part3DEditorDialog::finishSketch(double depth) {
+    if (sketchPlane_ < 0 || sketch_.size() < 3) {
+        said_->setText(QStringLiteral("An outline needs three points at least."));
+        return false;
+    }
+    Body3D b;
+    b.id = model_.freshId();
+    b.shape = BodyShape::Sketch;
+    b.name = QStringLiteral("Sketch, extruded");
+    b.a = std::abs(depth) < 0.05 ? 0.05 : depth;
+    b.plane = sketchPlane_;
+    b.profile = sketch_;
+    V3 u, v, w;
+    sketchAxes(sketchPlane_, u, v, w);
+    b.at = w * sketchAt_;
+    remember();
+    model_.bodies.push_back(b);
+    selected_ = static_cast<int>(model_.bodies.size()) - 1;
+    sketchPlane_ = -1;
+    sketch_.clear();
+    sketchBar_->hide();
+    changed();
+    return true;
+}
+
+void Part3DEditorDialog::cancelSketch() {
+    sketchPlane_ = -1;
+    sketch_.clear();
+    sketchFirst_.reset();
+    sketchBar_->hide();
+    rebuild(false);
+}
+
+// ---- Pins put by hand ---------------------------------------------------------------------------------------
+
+void Part3DEditorDialog::setPinTool(int tool) {
+    pinTool_ = tool;
+    if (tool > 0 && sketchPlane_ >= 0) cancelSketch();
+    for (int i = 0; i < 2; ++i)
+        if (pinButtons_[i]) {
+            const QSignalBlocker hold(pinButtons_[i]);
+            pinButtons_[i]->setChecked(tool == i + 1);
+        }
+    canvas_->setCursor(tool > 0 ? Qt::CrossCursor : Qt::ArrowCursor);
+    if (tool > 0) said_->setText(tool == 1 ? QStringLiteral("Click a face to put a pin on it.") : QStringLiteral("Click a face to put a socket in it."));
+}
+
+bool Part3DEditorDialog::placePinAt(const V3& point, const V3& normal, bool female) {
+    if (normal.length() < 0.5) return false;
+    // AS BIG AS THE MODEL WANTS: a fifteenth of its size across, four times that long - or 1 by 4.
+    double dia = 1.0;
+    V3 lo, hi;
+    if (modelBounds(items_, lo, hi)) dia = std::clamp((hi - lo).length() / 25.0, 0.3, 3.0);
+    int most = 0;
+    for (const Body3D& o : model_.bodies)
+        if (o.shape == BodyShape::Pin) most = std::max(most, o.number);
+    Body3D b;
+    b.id = model_.freshId();
+    b.shape = BodyShape::Pin;
+    b.a = dia;
+    b.b = dia * 4.0;
+    b.female = female;
+    b.cut = female;
+    b.number = most + 1;
+    b.name = QStringLiteral("%1 %2").arg(female ? QStringLiteral("Socket") : QStringLiteral("Pin")).arg(b.number);
+    b.color = female ? QColor(30, 30, 34) : QColor(212, 175, 80);
+    b.at = point;
+    b.turnDeg = turnAlong(normal);
+    remember();
+    model_.bodies.push_back(b);
+    selected_ = static_cast<int>(model_.bodies.size()) - 1;
+    changed();
+    return true;
+}
+
+void Part3DEditorDialog::renumberPins() {
+    remember();
+    int n = 0;
+    for (Body3D& b : model_.bodies)
+        if (b.shape == BodyShape::Pin) {
+            b.number = ++n;
+            b.name = QStringLiteral("%1 %2").arg(b.female ? QStringLiteral("Socket") : QStringLiteral("Pin")).arg(b.number);
+        }
+    changed();
 }
 
 void Part3DEditorDialog::exportModel() {

@@ -12,6 +12,12 @@
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepPrimAPI_MakeSphere.hxx>
 #include <BRepPrimAPI_MakeTorus.hxx>
+#include <BRepFilletAPI_MakeChamfer.hxx>
+#include <BRepFilletAPI_MakeFillet.hxx>
+#include <TopExp.hxx>
+#include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
+#include <TopTools_ListOfShape.hxx>
+#include <TopoDS_Edge.hxx>
 #include <gp_GTrsf.hxx>
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Wire.hxx>
@@ -106,7 +112,60 @@ TopoDS_Shape occtShapeOf(const OcctSolid& s) {
             shape = BRepPrimAPI_MakePrism(BRepBuilderAPI_MakeFace(hex.Wire()).Face(), gp_Vec(a, 0, 0)).Shape();
             break;
         }
+        case 10: {
+            // A SKETCH: its outline in its plane, given depth toward the one who drew it.
+            BRepBuilderAPI_MakePolygon outline;
+            int corners = 0;
+            for (const auto& [pu, pv] : s.profile) {
+                const V3 p = s.u * pu + s.v * pv;
+                outline.Add(gp_Pnt(p.x, p.y, p.z));
+                ++corners;
+            }
+            if (corners < 3) return {};
+            outline.Close();
+            if (!outline.IsDone()) return {};
+            const BRepBuilderAPI_MakeFace face(outline.Wire(), true);
+            if (!face.IsDone()) return {};
+            const V3 d = s.w * s.a;
+            shape = BRepPrimAPI_MakePrism(face.Face(), gp_Vec(d.x, d.y, d.z)).Shape();
+            break;
+        }
+        case 11:
+            // A PIN standing out of its face along X, or a socket going into it.
+            shape = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(s.female ? -b : 0.0, 0, 0), gp_Dir(1, 0, 0)), a / 2, b).Shape();
+            break;
         default: return {};
+    }
+    // ITS EDGES ROUNDED OR CUT OFF: every one that is a true edge between two faces - not a seam round a cylinder, not
+    // the point of a cone. Too big for an edge, and it is left sharp rather than not made at all.
+    if (s.fillet > 1e-6 || s.chamfer > 1e-6) {
+        TopTools_IndexedDataMapOfShapeListOfShape faces;
+        TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, faces);
+        auto real = [&](const TopoDS_Edge& e) {
+            if (BRep_Tool::Degenerated(e)) return false;
+            const TopTools_ListOfShape& on = faces.FindFromKey(e);
+            if (on.Extent() < 2) return false;
+            for (TopTools_ListOfShape::Iterator it(on); it.More(); it.Next())
+                if (BRep_Tool::IsClosed(e, TopoDS::Face(it.Value()))) return false;
+            return true;
+        };
+        try {
+            if (s.fillet > 1e-6) {
+                BRepFilletAPI_MakeFillet round(shape);
+                for (int i = 1; i <= faces.Extent(); ++i)
+                    if (real(TopoDS::Edge(faces.FindKey(i)))) round.Add(s.fillet, TopoDS::Edge(faces.FindKey(i)));
+                round.Build();
+                if (round.IsDone() && !round.Shape().IsNull()) shape = round.Shape();
+            } else {
+                BRepFilletAPI_MakeChamfer bevel(shape);
+                for (int i = 1; i <= faces.Extent(); ++i)
+                    if (real(TopoDS::Edge(faces.FindKey(i)))) bevel.Add(s.chamfer, TopoDS::Edge(faces.FindKey(i)));
+                bevel.Build();
+                if (bevel.IsDone() && !bevel.Shape().IsNull()) shape = bevel.Shape();
+            }
+        } catch (const Standard_Failure&) {
+            // Left sharp.
+        }
     }
     // WHERE IT GOES: turned, scaled - each axis its own - and put.
     gp_GTrsf g;

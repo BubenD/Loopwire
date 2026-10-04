@@ -38,6 +38,8 @@ const ShapeInfo kShapes[] = {
     {BodyShape::Turned, "turned", "Turned from the drawing", "", "", "", 0, 0, 0},
     {BodyShape::Extruded, "extruded", "Extruded from the drawing", "", "", "", 0, 0, 0},
     {BodyShape::Pins, "pins", "Pins from the pinout", "", "", "", 0, 0, 0},
+    {BodyShape::Sketch, "sketch", "Sketch, extruded", "Depth", "", "", 5, 0, 0},
+    {BodyShape::Pin, "pin", "Pin", "Diameter", "Length", "", 1, 4, 0},
 };
 
 const ShapeInfo& info(BodyShape s) {
@@ -196,6 +198,30 @@ bool bodyIsPrimitive(BodyShape shape) {
     return shape != BodyShape::Turned && shape != BodyShape::Extruded && shape != BodyShape::Pins;
 }
 
+void sketchAxes(int plane, V3& u, V3& v, V3& w) {
+    // Each as the view from there sees it - the outline's right and up, and toward the one looking at it.
+    if (plane == 1) {
+        u = {1, 0, 0};
+        v = {0, 0, 1};
+        w = {0, -1, 0};
+    } else if (plane == 2) {
+        u = {0, 1, 0};
+        v = {0, 0, 1};
+        w = {1, 0, 0};
+    } else {
+        u = {1, 0, 0};
+        v = {0, 1, 0};
+        w = {0, 0, 1};
+    }
+}
+
+V3 turnAlong(const V3& normal) {
+    const V3 n = normal.normalized();
+    if (n.length() < 0.5) return {0, 0, 0};
+    // Round Y first, then Z: (1,0,0) to (cos b cos g, cos b sin g, -sin b).
+    return {0.0, -std::asin(std::clamp(n.z, -1.0, 1.0)) * 180.0 / M_PI, std::atan2(n.y, n.x) * 180.0 / M_PI};
+}
+
 QJsonObject PartModel3D::toJson() const {
     QJsonArray bs;
     for (const Body3D& b : bodies) {
@@ -212,6 +238,18 @@ QJsonObject PartModel3D::toJson() const {
                       {QStringLiteral("texture"), b.texture},
                       {QStringLiteral("cut"), b.cut},
                       {QStringLiteral("shown"), b.shown}};
+        if (b.fillet > 0.0) o.insert(QStringLiteral("fillet"), b.fillet);
+        if (b.chamfer > 0.0) o.insert(QStringLiteral("chamfer"), b.chamfer);
+        if (b.shape == BodyShape::Sketch) {
+            o.insert(QStringLiteral("plane"), b.plane);
+            QJsonArray pts;
+            for (const auto& [u, v] : b.profile) pts.append(QJsonArray{u, v});
+            o.insert(QStringLiteral("profile"), pts);
+        }
+        if (b.shape == BodyShape::Pin) {
+            o.insert(QStringLiteral("female"), b.female);
+            o.insert(QStringLiteral("number"), b.number);
+        }
         if (!b.made.empty()) o.insert(QStringLiteral("made"), meshJson(b.made));
         if (!b.madeSockets.empty()) o.insert(QStringLiteral("madeSockets"), meshJson(b.madeSockets));
         bs.append(o);
@@ -240,6 +278,15 @@ PartModel3D PartModel3D::fromJson(const QJsonObject& o) {
         b.shown = j.value(QStringLiteral("shown")).toBool(true);
         b.made = meshFrom(j.value(QStringLiteral("made")).toObject());
         b.madeSockets = meshFrom(j.value(QStringLiteral("madeSockets")).toObject());
+        b.fillet = j.value(QStringLiteral("fillet")).toDouble(0.0);
+        b.chamfer = j.value(QStringLiteral("chamfer")).toDouble(0.0);
+        b.plane = std::clamp(j.value(QStringLiteral("plane")).toInt(0), 0, 2);
+        for (const QJsonValue& p : j.value(QStringLiteral("profile")).toArray()) {
+            const QJsonArray uv = p.toArray();
+            if (uv.size() == 2) b.profile.emplace_back(uv.at(0).toDouble(), uv.at(1).toDouble());
+        }
+        b.female = j.value(QStringLiteral("female")).toBool(false);
+        b.number = j.value(QStringLiteral("number")).toInt(0);
         if (b.id.isEmpty()) b.id = m.freshId();
         m.bodies.push_back(std::move(b));
     }
@@ -306,6 +353,23 @@ Mesh3D bodyLocalMesh(const Body3D& b) {
             m.append(b.madeSockets);
             return m;
         }
+        case BodyShape::Sketch: {
+            // The outline given depth - toward the one who drew it, or away (a negative depth) - then laid in its plane.
+            const double depth = std::max(0.01, std::abs(b.a));
+            Mesh3D m = prismMesh(b.profile, depth);
+            if (b.a < 0.0)
+                for (V3& p : m.v) p.z -= depth;
+            V3 u, v, w;
+            sketchAxes(b.plane, u, v, w);
+            for (V3& p : m.v) p = u * p.x + v * p.y + w * p.z;
+            return m;
+        }
+        case BodyShape::Pin: {
+            // A pin stands out of the face; a socket goes in.
+            Mesh3D m = roundAlongX(bb, a / 2, a / 2, 16);
+            for (V3& p : m.v) p.x += b.female ? -bb / 2 : bb / 2;
+            return m;
+        }
     }
     return {};
 }
@@ -320,14 +384,23 @@ std::vector<ModelItem3D> modelItems(const PartModel3D& model, QString* note) {
     std::vector<ModelItem3D> out;
     bool anyCut = false;
     for (const Body3D& b : model.bodies) anyCut = anyCut || (b.cut && b.shown && bodyIsPrimitive(b.shape));
+    // MADE BY OPEN CASCADE: one with cuts to take out of it, edges to round or cut off, or an outline sketched.
+    auto byOcct = [&](const Body3D& b) {
+        return bodyIsPrimitive(b.shape) && (anyCut || b.fillet > 1e-6 || b.chamfer > 1e-6 || b.shape == BodyShape::Sketch);
+    };
 #ifdef EDRAW_HAVE_OCCT
     std::vector<OcctSolid> cuts;
     auto solidOf = [](const Body3D& b) {
         OcctSolid s;
         s.shape = static_cast<int>(b.shape);
-        s.a = b.a;
+        s.a = b.shape == BodyShape::Sketch ? (b.a < 0.0 ? std::min(-0.01, b.a) : std::max(0.01, b.a)) : b.a;
         s.b = b.b;
         s.c = b.c;
+        s.fillet = b.fillet;
+        s.chamfer = b.chamfer;
+        s.profile = b.profile;
+        sketchAxes(b.plane, s.u, s.v, s.w);
+        s.female = b.female;
         // The turn and the scale as a matrix (each column where an axis goes), and where it is put.
         const V3 ex = turn({b.scale.x, 0, 0}, b.turnDeg), ey = turn({0, b.scale.y, 0}, b.turnDeg), ez = turn({0, 0, b.scale.z}, b.turnDeg);
         const double m[3][4] = {{ex.x, ey.x, ez.x, b.at.x}, {ex.y, ey.y, ez.y, b.at.y}, {ex.z, ey.z, ez.z, b.at.z}};
@@ -357,7 +430,7 @@ std::vector<ModelItem3D> modelItems(const PartModel3D& model, QString* note) {
         }
         Mesh3D mesh;
 #ifdef EDRAW_HAVE_OCCT
-        if (anyCut && bodyIsPrimitive(b.shape)) {
+        if (byOcct(b)) {
             QString why;
             if (!occtCutSolid(solidOf(b), cuts, mesh, &why)) {
                 mesh = bodyMesh(b);

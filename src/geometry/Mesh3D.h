@@ -45,6 +45,9 @@ struct Mesh3D {
 
 // A box from one corner to the other.
 Mesh3D boxMesh(const V3& lo, const V3& hi);
+// A PROFILE GIVEN DEPTH: a closed outline in X and Y (either way round, not crossing itself), drawn up Z from 0 to
+// `depth` - its two ends filled.
+Mesh3D prismMesh(const std::vector<std::pair<double, double>>& profile, double depth);
 // A TUBE along a path - a round section of so many sides swept along it, closed at its ends.
 Mesh3D tubeMesh(const std::vector<V3>& path, double radius, int sides = 12, bool caps = true);
 // A TUBE WHOSE RADIUS CHANGES along it - by how far along the path (its length so far) each point is.

@@ -7022,6 +7022,8 @@ void testRoundFortyNine() {
               (canvas->camera().target - held.target).length() < 1e-9,
           "lock: locked, neither a drag nor the wheel moves the view");
 
+    // These drags bend the cable longer: Grow length on (off, a cable keeps its length - round fifty-three).
+    canvas->setGrowLength(true);
     // ---- A CABLE TAKEN HOLD OF: A CORNER PUT THERE, MOVED ACROSS THE VIEW ----
     {
         const RouteSegment3D seg = pane.route().segments.front();
@@ -7441,6 +7443,8 @@ void testRoundFiftyTwo() {
         const RouteNode3D* n = route.node(id);
         return screen(n->at + n->normal * (n->kind == RouteNodeKind::Connector ? route.lead * 0.5 : route.diameter * 0.5));
     };
+    // Stretched longer: Grow length on (off, the cable keeps its length - round fifty-three).
+    pane.findChild<QCheckBox*>(QStringLiteral("view3dGrowLength"))->setChecked(true);
     const double before = route.length(*route.segment(s2));
     // STRETCHED: X2 pulled out along the ground from 60 to 90.
     pane.setRouteTool(RouteTool::Stretch);
@@ -7509,6 +7513,174 @@ void testRoundFiftyTwo() {
     check(dock && dock->widget() == view3d && host && !host->isVisible(), "3d preview: another tab - the drawing back, the 3D view in its panel");
 }
 
+// ROUND FIFTY-THREE: PULLED, A CABLE KEEPS ITS LENGTH (Grow length off) - the rest of it pulled along behind the point,
+// no further than it reaches; grown where asked. THE PART'S 3D MODEL: every edge filleted or chamfered, an outline
+// sketched on a plane and extruded, a sketch cut out of a solid, pins and sockets put on a face and numbered.
+void testRoundFiftyThree() {
+    // ---- PULLED, ITS LENGTH KEPT ----
+    Route3D r;
+    r.diameter = 4.0;
+    r.lead = 6.0;
+    const QString x1 = r.addNode(RouteNodeKind::Connector, {-60, 0, 0}, {0, 0, 1});
+    const QString x2 = r.addNode(RouteNodeKind::Connector, {60, 0, 0}, {0, 0, 1});
+    const QString s = r.addSegment(x1, x2, {{{0, 0, 0}, {0, 0, 1}}});
+    QJsonObject stored = r.toJson();
+    View3DPane pane;
+    pane.setRoutingStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    pane.resize(1000, 700);
+    pane.show();
+    QApplication::processEvents();
+    pane.reloadRouting(true);
+    View3DCanvas* canvas = pane.canvas();
+    canvas->setUseGpu(false);
+    canvas->viewFrom(QStringLiteral("top"));
+    const Route3D& route = pane.route();
+    auto laid = [&] {
+        // Along the points it was laid through, node to node.
+        const RouteSegment3D* g = route.segment(s);
+        std::vector<V3> pts{route.node(g->a)->at};
+        for (const RouteVia3D& v : g->via) pts.push_back(v.at);
+        pts.push_back(route.node(g->b)->at);
+        double l = 0.0;
+        for (size_t i = 1; i < pts.size(); ++i) l += (pts[i] - pts[i - 1]).length();
+        return l;
+    };
+    auto screen = [&](const V3& p) {
+        QPointF at;
+        canvas->toScreen(p, at);
+        return at;
+    };
+    auto drag = [&](const QPointF& from, const QPointF& to) {
+        QMouseEvent press(QEvent::MouseButtonPress, from, canvas->mapToGlobal(from), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &press);
+        for (int i = 1; i <= 10; ++i) {
+            const QPointF at = from + (to - from) * (i / 10.0);
+            QMouseEvent move(QEvent::MouseMove, at, canvas->mapToGlobal(at), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(canvas, &move);
+        }
+        QMouseEvent release(QEvent::MouseButtonRelease, to, canvas->mapToGlobal(to), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &release);
+    };
+    auto grip = [&](const QString& id) {
+        const RouteNode3D* n = route.node(id);
+        return screen(n->at + n->normal * (route.lead * 0.5));
+    };
+    check(!pane.findChild<QCheckBox*>(QStringLiteral("view3dGrowLength"))->isChecked() && !canvas->growLength(),
+          "pull: Grow length off as it starts - a cable keeps its length");
+    const double before = laid();
+    pane.setRouteTool(RouteTool::Move);
+    // Out past its reach: it goes no further than the cable does.
+    drag(grip(x2), grip(x2) + (screen({100, 0, 0}) - screen({60, 0, 0})));
+    std::printf("  pull: X2 pulled out to %.1f (laid %.1f, was %.1f)\n", route.node(x2)->at.x, laid(), before);
+    check(route.node(x2)->at.x < 60.5 && std::abs(laid() - before) < 0.5, "pull: pulled past its reach - no further than the cable goes, its length the same");
+    // In and across: it bends, its length the same.
+    drag(grip(x2), grip(x2) + (screen({20, 40, 0}) - screen({60, 0, 0})));
+    std::printf("  pull: X2 moved to %.1f, %.1f - laid %.1f through %d point(s)\n", route.node(x2)->at.x, route.node(x2)->at.y, laid(),
+                static_cast<int>(route.segment(s)->via.size()));
+    check(route.node(x2)->at.y > 20.0 && std::abs(laid() - before) < before * 0.01 && route.node(x1)->at.x == -60.0,
+          "pull: moved in and across - the cable bent round, as long as it was, its other end held");
+    // GROW LENGTH: the cable longer for being pulled.
+    pane.findChild<QCheckBox*>(QStringLiteral("view3dGrowLength"))->setChecked(true);
+    const double grown = laid();
+    drag(grip(x2), grip(x2) + (screen({120, 40, 0}) - screen({20, 40, 0})));
+    check(canvas->growLength() && laid() > grown + 30.0, "pull: Grow length on - pulled out, the cable longer");
+
+    // ---- THE PART'S 3D MODEL ----
+#ifdef EDRAW_HAVE_OCCT
+    LibraryPart part;
+    part.kind = PartKind::Connector;
+    Part3DEditorDialog dlg(part, PartModel3D{});
+    dlg.addBody(BodyShape::Box);
+    auto trisOf = [&](const QString& body) {
+        size_t n = 0;
+        for (const ModelItem3D& it : dlg.items()) n += it.body == body ? it.mesh.f.size() : 0;
+        return n;
+    };
+    auto boundsOf = [&](const QString& body, V3& lo, V3& hi) {
+        bool any = false;
+        for (const ModelItem3D& it : dlg.items()) {
+            V3 a, b;
+            if (it.body != body || !it.mesh.bounds(a, b)) continue;
+            lo = any ? V3{std::min(lo.x, a.x), std::min(lo.y, a.y), std::min(lo.z, a.z)} : a;
+            hi = any ? V3{std::max(hi.x, b.x), std::max(hi.y, b.y), std::max(hi.z, b.z)} : b;
+            any = true;
+        }
+        return any;
+    };
+    const QString box = dlg.model().bodies.front().id;
+    const size_t plain = trisOf(box);
+    dlg.findChild<QDoubleSpinBox*>(QStringLiteral("part3dFillet"))->setValue(2.0);
+    const size_t rounded = trisOf(box);
+    V3 lo, hi;
+    boundsOf(box, lo, hi);
+    std::printf("  part 3d: a box %zu triangles, filleted %zu, %.1f x %.1f x %.1f\n", plain, rounded, hi.x - lo.x, hi.y - lo.y, hi.z - lo.z);
+    check(dlg.model().bodies.front().fillet == 2.0 && rounded > plain * 4 && std::abs(hi.x - lo.x - 20.0) < 0.05,
+          "part 3d: every edge filleted - rounded, as big as it was");
+    dlg.findChild<QDoubleSpinBox*>(QStringLiteral("part3dFillet"))->setValue(0.0);
+    dlg.findChild<QDoubleSpinBox*>(QStringLiteral("part3dChamfer"))->setValue(1.5);
+    const size_t bevelled = trisOf(box);
+    check(dlg.model().bodies.front().chamfer == 1.5 && bevelled > plain && bevelled < rounded, "part 3d: every edge chamfered");
+    // A RECTANGLE SKETCHED on top, extruded.
+    dlg.startSketch(0);
+    check(dlg.sketching() && dlg.findChild<QWidget*>(QStringLiteral("part3dSketchBar"))->isVisibleTo(&dlg), "part 3d: sketching - its bar shown");
+    dlg.findChild<QComboBox*>(QStringLiteral("part3dSketchShape"))->setCurrentIndex(1);
+    dlg.sketchClick(-4, -3);
+    dlg.sketchClick(4, 3);
+    check(dlg.finishSketch(7.0) && !dlg.sketching(), "part 3d: a rectangle by two corners, extruded");
+    const Body3D& rect = dlg.model().bodies.back();
+    boundsOf(rect.id, lo, hi);
+    check(rect.shape == BodyShape::Sketch && rect.profile.size() == 4 && std::abs(lo.x + 4) < 0.05 && std::abs(hi.y - 3) < 0.05 &&
+              std::abs(lo.z) < 0.05 && std::abs(hi.z - 7) < 0.05,
+          "part 3d: the rectangle where it was drawn, as deep as asked, up from its plane");
+    // A CIRCLE SKETCHED on the front, cut out of the box.
+    dlg.startSketch(1);
+    dlg.findChild<QComboBox*>(QStringLiteral("part3dSketchShape"))->setCurrentIndex(2);
+    dlg.sketchClick(0, 0);
+    dlg.sketchClick(2, 0);
+    // Its plane behind the box (the front plane's "at" is toward the one looking, so -8 is 8 behind), drawn through it.
+    dlg.findChild<QDoubleSpinBox*>(QStringLiteral("part3dSketchAt"))->setValue(-8.0);
+    dlg.finishSketch(20.0);
+    const QString circle = dlg.model().bodies.back().id;
+    boundsOf(circle, lo, hi);
+    check(std::abs(hi.x - 2) < 0.05 && std::abs(hi.z - 2) < 0.05 && std::abs(hi.y - 8) < 0.05 && std::abs(lo.y + 12) < 0.05,
+          "part 3d: a circle on the front, extruded toward the one who drew it from where its plane is");
+    // AWAY FROM THEM: a negative depth.
+    {
+        Body3D away = dlg.model().bodies.back();
+        away.a = -5.0;
+        PartModel3D one;
+        one.bodies.push_back(away);
+        V3 alo, ahi;
+        const std::vector<ModelItem3D> its = modelItems(one);
+        check(!its.empty() && its.front().mesh.bounds(alo, ahi) && std::abs(alo.y - 8.0) < 0.05 && std::abs(ahi.y - 13.0) < 0.05,
+              "part 3d: a negative depth - drawn away from the one who drew it");
+    }
+    const size_t uncut = trisOf(box);
+    dlg.select(static_cast<int>(dlg.model().bodies.size()) - 1);
+    dlg.setSelectedCut(true);
+    check(trisOf(circle) == 0 && trisOf(box) > uncut, "part 3d: the circle made a hole - cut out of the box it goes through");
+    // PINS AND SOCKETS on the box's far face, numbered in turn.
+    check(dlg.placePinAt({10, -3, 0}, {1, 0, 0}, false) && dlg.placePinAt({10, 3, 0}, {1, 0, 0}, true), "part 3d: a pin and a socket put on a face");
+    const Body3D& pin = dlg.model().bodies[dlg.model().bodies.size() - 2];
+    const Body3D& socket = dlg.model().bodies.back();
+    boundsOf(pin.id, lo, hi);
+    check(pin.shape == BodyShape::Pin && pin.number == 1 && !pin.female && std::abs(lo.x - 10.0) < 0.05 && hi.x > 10.5,
+          "part 3d: the pin numbered 1, standing out of the face");
+    check(socket.number == 2 && socket.female && socket.cut && trisOf(socket.id) == 0, "part 3d: the socket numbered 2, a hole in the face");
+    // Off a slanted face: stood up along its normal.
+    dlg.placePinAt({0, 0, 5}, V3{0, 1, 1}.normalized(), false);
+    boundsOf(dlg.model().bodies.back().id, lo, hi);
+    check(hi.y > 1.0 && hi.z > 6.0, "part 3d: a pin on a slanted face stands up along it");
+    dlg.renumberPins();
+    int expect = 0;
+    bool inTurn = true;
+    for (const Body3D& b : dlg.model().bodies)
+        if (b.shape == BodyShape::Pin) inTurn = inTurn && b.number == ++expect;
+    check(inTurn && expect == 3, "part 3d: numbered 1, 2, 3 in the order listed");
+    check(PartModel3D::fromJson(dlg.model().toJson()).toJson() == dlg.model().toJson(), "part 3d: fillets, sketches and pins saved and read back the same");
+#endif
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -7575,6 +7747,7 @@ int run_brickharness_tests() {
     testRoundFifty();
     testRoundFiftyOne();
     testRoundFiftyTwo();
+    testRoundFiftyThree();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

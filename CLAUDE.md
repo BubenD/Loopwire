@@ -36,7 +36,7 @@ current. Put the story of a fix in the commit message, not here.
    ```
 
 Open CASCADE 8.0.1 is optional (`EDRAW_WITH_OCCT`, `EDRAW_OCCT_DIR`, default `C:/Software/occt-8.0.1/lean`).
-It is a lean build from source with every third-party option off, so only its own `TK*.dll` ship; the
+It is a lean build from source (TKDESTEP, TKMesh, TKXCAF, TKFillet and what they need) with every third-party option off, so only its own `TK*.dll` ship; the
 configure line is in `CMakeLists.txt`. Don't point the build at the prebuilt package: it brings FFmpeg,
 FreeImage, FreeType, TBB, jemalloc and OpenVR, which the notices don't cover, and the configure step
 refuses a non-`TK` DLL.

@@ -200,6 +200,7 @@ private:
     std::function<QString()> drawingDir_;
     QWidget* routeRow_ = nullptr;
     QWidget* bundleRow_ = nullptr;
+    QCheckBox* grow_ = nullptr;
     QButtonGroup* tools_ = nullptr;
     QDoubleSpinBox* diameter_ = nullptr;
     QDoubleSpinBox* bend_ = nullptr;
@@ -405,6 +406,26 @@ private:
         std::vector<double> share;
     };
     std::vector<Stretched> stretched_;
+    // PULLED, ITS LENGTH KEPT: from the point taken hold of out to the node at each bundle's far end, the points in
+    // between (by their places in the bundle's laid points), the far node where it holds, and each step's length -
+    // the cable laid as a cable is, pulled along behind the point and no longer than it was.
+    struct Kept {
+        QString segment;
+        std::vector<int> via;   // outward from the point held
+        V3 anchor;
+        std::vector<double> step;   // from the point held to via[0], ..., to the anchor
+    };
+    std::vector<Kept> kept_;
+    bool keepLength() const;
+    void beginKeepLength();
+    void pullKept(V3 target);
+    bool grow_ = false;
+public:
+    // PULLING GROWS THE CABLE: on, a point dragged lengthens or shortens the bundles it is in; off (as it starts), the
+    // bundles keep their lengths and are pulled along behind it.
+    void setGrowLength(bool on) { grow_ = on; }
+    bool growLength() const { return grow_; }
+private:
     V3 dragFrom_;
     int dragKind_ = 0;        // 0 nothing, 1 a node, 2 a corner of a bundle, 3 a bundle (a corner to be put in it),
                               // 4 a node stretched, 5 a node moved over the model
