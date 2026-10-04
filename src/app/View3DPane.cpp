@@ -1,4 +1,5 @@
 #include "app/View3DPane.h"
+#include "app/View3DHelpDialog.h"
 
 #include <QButtonGroup>
 #include <QCheckBox>
@@ -210,6 +211,11 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     for (QDoubleSpinBox* s : {diameter_, bend_, lead_}) connect(s, &QDoubleSpinBox::valueChanged, this, settings);
     undo_ = button(rr, "view3dRouteUndo", QStringLiteral("Undo"), QStringLiteral("Take back the last change to the route (Ctrl+Z)"),
                    [this] { undoRoute(); });
+    // HOW IT IS DONE, SHOWN: the view itself recorded being used - the plane a click lands on, a cable routed from
+    // one connector to the next, and how it bends - beside the same steps in words.
+    button(rr, "view3dHelp", QStringLiteral("Help"),
+           QStringLiteral("How to work in the 3D view: the plane, routing a cable from connector to connector, bending it"),
+           [this] { showHelp(); });
     rr->addStretch(1);
     lay->addWidget(routeRow_);
 
@@ -332,6 +338,14 @@ void View3DPane::setEnvironmentChoice(bool shown) {
     routeRow_->setVisible(shown);
     side_->setVisible(shown);
     canvas_->setRoute(shown ? &route_ : nullptr);
+}
+
+void View3DPane::showHelp() {
+    // One window, kept: asked for again, it comes to the front where it was.
+    if (!help_) help_ = new View3DHelpDialog(this);
+    help_->show();
+    help_->raise();
+    help_->activateWindow();
 }
 
 void View3DPane::setPinsLookup(std::function<PartPins(const QString&)> pinsOf) { pinsOf_ = std::move(pinsOf); }

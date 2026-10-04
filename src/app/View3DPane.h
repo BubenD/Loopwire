@@ -8,6 +8,7 @@
 #include "render/Render3D.h"
 
 #include <QJsonObject>
+#include <QPointer>
 #include <QWidget>
 
 #include <functional>
@@ -28,6 +29,7 @@ class QWidget;
 namespace Edraw_Desktop {
 
 class View3DCanvas;
+class View3DHelpDialog;
 
 // WHAT A CLICK IN THE 3D VIEW DOES: picks (and selects a node or a bundle), puts a connector on a face, puts a branch
 // or a clip down (on a bundle, dividing it), lays a bundle from node to node through the points clicked, or takes a
@@ -96,6 +98,8 @@ public:
     void setRouteTool(RouteTool tool);
     // The last change to the route taken back.
     void undoRoute();
+    // HOW TO WORK IN IT: the help window, its recordings and its steps.
+    void showHelp();
     // The file of the environment the drawing names, found or not.
     const QString& environmentFile() const { return envRef_; }
 
@@ -176,6 +180,7 @@ private:
     QToolButton* unlink_ = nullptr;
     QToolButton* lengths_ = nullptr;
     bool filling_ = false;
+    QPointer<View3DHelpDialog> help_;
 };
 
 // The picture itself, and the mouse on it.

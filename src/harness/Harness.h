@@ -275,6 +275,8 @@ struct TwistFigures {
     bool ok = false;
     double lane = 0.0;        // between the wires where they are spread
     double fanLen = 0.0;      // and how long the fan is
+    double fanLenFinish = 0.0; // ...at the finish end
+    double turn = 0.0;        // laid up: one whole turn of the weave, as drawn (a whole number of them between the fans)
     double wireWidth = 0.0;   // one wire across
     double kneeRadius = 0.0;  // the tightest radius in the bundle where the run bends
     double fanKnee = 0.0;     // the radius the fan's own corners turn on

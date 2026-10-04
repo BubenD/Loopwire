@@ -54,6 +54,8 @@ add_library(edraw_core STATIC
     src/io/PdfText.cpp
     src/io/PdfImport.h
     src/io/PdfImport.cpp
+    src/io/GifWriter.h
+    src/io/GifWriter.cpp
     src/io/Dwx.h
     src/io/Dwx.cpp
     src/io/Dxf.h
@@ -160,6 +162,8 @@ add_library(edraw_core STATIC
     src/app/RuleExplainer.cpp
     src/app/View3DPane.h
     src/app/View3DPane.cpp
+    src/app/View3DHelpDialog.h
+    src/app/View3DHelpDialog.cpp
     src/geometry/Mesh3D.h
     src/geometry/Mesh3D.cpp
     src/render/Render3D.h
@@ -443,6 +447,11 @@ if(EDRAW_SMOKE_SRC)
     qt_add_executable(hb_smoke ${EDRAW_SMOKE_SRC} resources/edraw.qrc)
     target_link_libraries(hb_smoke PRIVATE edraw_core)
 endif()
+
+# --- The 3D view's help, recorded (built only when asked for: see tools/help3d_gifs.cpp) ---
+qt_add_executable(edraw_help3d_gifs tools/help3d_gifs.cpp)
+set_target_properties(edraw_help3d_gifs PROPERTIES EXCLUDE_FROM_ALL TRUE)
+target_link_libraries(edraw_help3d_gifs PRIVATE edraw_core)
 
 # --- Tests (optional) --------------------------------------------------------
 option(EWIRE_BUILD_TESTS "Build Edraw unit tests" OFF)

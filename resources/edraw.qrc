@@ -9,6 +9,15 @@
     <file>caret-up.svg</file>
   </qresource>
   <!--
+    THE 3D VIEW'S HELP: recordings of the view being used, made by tools/help3d_gifs.cpp. Recorded again
+    whenever what they show changes - they are pictures of the program, not of how it once was.
+  -->
+  <qresource prefix="/help3d">
+    <file alias="plane.gif">help3d/plane.gif</file>
+    <file alias="route.gif">help3d/route.gif</file>
+    <file alias="bend.gif">help3d/bend.gif</file>
+  </qresource>
+  <!--
     THE LICENCE PAPERWORK, COMPILED INTO THE EXECUTABLE.
 
     The LGPL requires that these texts accompany the program, and the build also copies them as plain

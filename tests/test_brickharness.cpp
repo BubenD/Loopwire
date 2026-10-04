@@ -11,6 +11,8 @@
 #include "app/MechanicalValidationDialog.h"
 #include "app/RuleExplainer.h"
 #include "app/View3DPane.h"
+#include "app/View3DHelpDialog.h"
+#include "io/GifWriter.h"
 #include "geometry/Environment3D.h"
 #include "geometry/Mesh3D.h"
 #include "harness/Harness3D.h"
@@ -43,6 +45,10 @@
 #include <QWheelEvent>
 #include <QElapsedTimer>
 #include <QSlider>
+#include <QImageReader>
+#include <QMovie>
+#include <QPainter>
+#include <QSet>
 
 #ifdef EDRAW_HAVE_OCCT
 // tests/test_occt_fixture.cpp
@@ -6322,6 +6328,200 @@ void testRoundFortyFour() {
           "3d link: a node unlinked - its part listed as not put in 3D again");
 }
 
+// ROUND FORTY-FIVE: a twisted pair twisted in 3D where the drawing twists it - fanned out at its ends as drawn, not
+// laid flat; a rectangular connector a block, its pins in rows; the 3D view's help, its recordings animated GIFs.
+void testRoundFortyFive() {
+    // ---- THE TWIST, WHERE THE DRAWING HAS IT ----
+    auto twistedRun = [](double fan) {
+        BrickDesign d;
+        const QString a = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString tp = d.addBrick(BrickType::TwistedPair, PartKind::Wire, 1, 0);
+        const QString b = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        d.connect(a, tp);
+        d.connect(tp, b);
+        if (fan >= 0.0) d.brick(tp)->run.fanStartMm = fan;
+        return buildBrickHarness(d, nullptr).entities;
+    };
+    // Each wire's height and offset across the run, in twenty steps along it; how often its height changes side.
+    struct Along {
+        std::vector<double> z, y;
+        int crossings = 0;
+    };
+    auto along = [](const Harness3DItem& it) {
+        Along out;
+        V3 lo, hi;
+        it.mesh.bounds(lo, hi);
+        std::vector<double> zs(20, 0.0), ys(20, 0.0);
+        std::vector<int> n(20, 0);
+        for (const V3& v : it.mesh.v) {
+            const int bin = std::clamp(static_cast<int>((v.x - lo.x) / std::max(1e-9, hi.x - lo.x) * 20), 0, 19);
+            zs[static_cast<size_t>(bin)] += v.z;
+            ys[static_cast<size_t>(bin)] += v.y;
+            ++n[static_cast<size_t>(bin)];
+        }
+        for (int i = 0; i < 20; ++i) {
+            out.z.push_back(n[static_cast<size_t>(i)] ? zs[static_cast<size_t>(i)] / n[static_cast<size_t>(i)] : 0.0);
+            out.y.push_back(n[static_cast<size_t>(i)] ? ys[static_cast<size_t>(i)] / n[static_cast<size_t>(i)] : 0.0);
+        }
+        for (int i = 1; i < 20; ++i)
+            if ((out.z[static_cast<size_t>(i)] > 0.15) != (out.z[static_cast<size_t>(i - 1)] > 0.15) &&
+                std::abs(out.z[static_cast<size_t>(i)] - out.z[static_cast<size_t>(i - 1)]) > 0.2)
+                ++out.crossings;
+        return out;
+    };
+    {
+        const Harness3DScene sc = buildHarness3D(twistedRun(-1.0), {});
+        int wires = 0, twisted = 0;
+        for (const Harness3DItem& it : sc.items) {
+            if (it.what != QLatin1String("wire")) continue;
+            ++wires;
+            if (along(it).crossings >= 6) ++twisted;
+        }
+        std::printf("  3d twist: %d of %d wire(s) twisted the length of the run\n", twisted, wires);
+        check(wires == 2 && twisted == 2, "3d twist: a twisted pair twisted all along it - over and under, again and again");
+    }
+    {
+        // LONG FANS: 60 at each end of a run 150 long. Twisted between them, as the sheet draws it - and in the fans
+        // spread out the way the drawing spreads them, not two wires lying flat against each other.
+        const std::vector<Entity> ents = twistedRun(60.0);
+        const Harness3DScene sc = buildHarness3D(ents, {});
+        std::vector<Along> got;
+        for (const Harness3DItem& it : sc.items)
+            if (it.what == QLatin1String("wire")) got.push_back(along(it));
+        TwistFigures figs;
+        for (const Entity& e : ents)
+            if (e.type == EntityType::TwistedPair) figs = twistedPairFigures(e);
+        bool flatInFans = got.size() == 2, twistedBetween = got.size() == 2;
+        for (const Along& a : got) {
+            flatInFans = flatInFans && std::abs(a.z[1]) < 0.05 && std::abs(a.z[18]) < 0.05;
+            double most = 0.0;
+            for (int i = 8; i <= 11; ++i) most = std::max(most, std::abs(a.z[static_cast<size_t>(i)]));
+            twistedBetween = twistedBetween && most > 0.4;
+        }
+        const double apartAtEnd = got.size() == 2 ? std::abs(got[0].y[0] - got[1].y[0]) : 0.0;
+        std::printf("  3d twist, long fans: fan %.1f / %.1f, wires %.2f apart at the end\n", figs.fanLen, figs.fanLenFinish,
+                    apartAtEnd);
+        check(figs.ok && figs.fanLen > 30.0 && figs.turn > 0.0, "3d twist: the drawing's fans and turn, as the sheet works them out");
+        check(twistedBetween, "3d twist: twisted between the fans");
+        check(flatInFans && apartAtEnd > 2.5, "3d twist: in a fan the wires spread out as drawn, not lying against each other");
+    }
+
+    // ---- A RECTANGULAR CONNECTOR, A BLOCK ----
+    {
+        std::vector<Entity> ents;
+        Entity run;
+        run.type = EntityType::TwistedPair;
+        run.points = {{30, 0}, {200, 0}};
+        run.meta.insert(QStringLiteral("twistWidth"), 4.0);
+        run.meta.insert(QStringLiteral("brickId"), QStringLiteral("R1"));
+        ents.push_back(run);
+        auto part = [&](const QString& brick, const QString& lib, const std::vector<Vec2>& pts) {
+            Entity e;
+            e.type = EntityType::Polygon;
+            e.points = pts;
+            e.meta.insert(QStringLiteral("brickId"), brick);
+            e.meta.insert(QStringLiteral("libPart"), lib);
+            ents.push_back(e);
+        };
+        // A housing drawn as a rectangle, 30 long and 16 across - a connector, with six ways.
+        part(QStringLiteral("P1"), QStringLiteral("CONN"), {{0, -8}, {30, -8}, {30, 8}, {0, 8}});
+        // A ferrule drawn as a rectangle too - but no pins: still turned round.
+        part(QStringLiteral("P2"), QStringLiteral("FERRULE"), {{200, -3}, {215, -3}, {215, 3}, {200, 3}});
+        // A connector whose drawing steps down: not a rectangle, still turned.
+        part(QStringLiteral("P3"), QStringLiteral("ROUND"), {{-60, -8}, {-45, -8}, {-45, -4}, {-30, -4}, {-30, 4}, {-45, 4}, {-45, 8}, {-60, 8}});
+        auto pinsOf = [](const QString& lib) {
+            PartPins p;
+            if (lib == QLatin1String("CONN") || lib == QLatin1String("ROUND")) p.count = 6;
+            return p;
+        };
+        const Harness3DScene sc = buildHarness3D(ents, {}, PartLook::Revolved, pinsOf);
+        // A block has its corners: vertices out at both its width and its depth at once. A cylinder has none there.
+        auto cornered = [&](const QString& brick) {
+            for (const Harness3DItem& it : sc.items) {
+                if (it.brick != brick || it.what == QLatin1String("pins") || it.what == QLatin1String("sockets")) continue;
+                V3 lo, hi;
+                if (!it.mesh.bounds(lo, hi)) continue;
+                int corners = 0;
+                for (const V3& v : it.mesh.v)
+                    if (std::abs(std::abs(v.y - (lo.y + hi.y) / 2) - (hi.y - lo.y) / 2) < 1e-6 &&
+                        std::abs(std::abs(v.z - (lo.z + hi.z) / 2) - (hi.z - lo.z) / 2) < 1e-6)
+                        ++corners;
+                return corners;
+            }
+            return -1;
+        };
+        const int block = cornered(QStringLiteral("P1")), ferrule = cornered(QStringLiteral("P2")),
+                  stepped = cornered(QStringLiteral("P3"));
+        std::printf("  3d part corners: rectangular connector %d, ferrule %d, stepped connector %d\n", block, ferrule, stepped);
+        check(block >= 8, "3d part: a connector drawn as a rectangle is a block, not a cylinder");
+        check(ferrule == 0, "3d part: a ferrule drawn as a rectangle is still turned round - a cylinder looks the same from the side");
+        check(stepped == 0, "3d part: a connector whose drawing is not a rectangle is still turned round");
+        // Its pins in rows and columns on its face: as many different heights as rows, and more than one.
+        QSet<long long> heights;
+        for (const Harness3DItem& it : sc.items)
+            if (it.brick == QLatin1String("P1") && it.what == QLatin1String("pins"))
+                for (const V3& v : it.mesh.v) heights.insert(std::llround(v.z * 10.0));
+        check(!heights.isEmpty(), "3d part: the block has its pins on its face");
+    }
+
+    // ---- THE HELP: ANIMATED, LOOPING, READ BACK ----
+    {
+        std::vector<gif::Frame> frames;
+        for (int i = 0; i < 4; ++i) {
+            QImage img(40, 30, QImage::Format_RGB32);
+            img.fill(QColor(30, 34, 40));
+            QPainter p(&img);
+            p.fillRect(QRect(5 + i * 6, 8, 8, 8), QColor(220, 60, 50));
+            p.end();
+            frames.push_back({img, 10});
+        }
+        frames.push_back({frames.back().image, 10});   // the same again: lengthens the one before
+        const QString path = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_gif_test.gif"));
+        check(gif::write(path, frames), "gif: written");
+        QImageReader reader(path);
+        int count = 0;
+        bool movedRight = true;
+        int lastX = -1;
+        QImage im;
+        while (reader.read(&im)) {
+            ++count;
+            int x = -1;
+            for (int xx = 0; xx < im.width() && x < 0; ++xx)
+                if (qRed(im.pixel(xx, 12)) > 150) x = xx;
+            movedRight = movedRight && x > lastX;
+            lastX = x;
+        }
+        std::printf("  gif: %d picture(s) read back\n", count);
+        check(count == 4, "gif: every picture read back, the one that changed nothing folded into the one before");
+        check(movedRight, "gif: each picture as it was drawn - the square moved on in each");
+        QFile::remove(path);
+    }
+    {
+        View3DPane pane;
+        pane.setEnvironmentChoice(true);
+        auto* help = pane.findChild<QToolButton*>(QStringLiteral("view3dHelp"));
+        check(help != nullptr, "3d help: a Help button on the route's row");
+        if (help) help->click();
+        QApplication::processEvents();
+        auto* dlg = pane.findChild<View3DHelpDialog*>();
+        check(dlg && dlg->isVisible() && dlg->topicCount() == 3, "3d help: it opens, three topics");
+        for (const QString& rec : View3DHelpDialog::recordings()) {
+            QImageReader r(rec);
+            std::printf("  3d help: %s - %d picture(s)\n", qPrintable(rec), r.imageCount());
+            check(QFile::exists(rec) && r.canRead() && r.imageCount() > 20,
+                  "3d help: each topic's recording is in the program, and animated");
+        }
+        if (dlg) {
+            dlg->showTopic(2);
+            QApplication::processEvents();
+            check(dlg->currentTopic() == 2 && dlg->movie()->isValid() &&
+                      dlg->movie()->fileName() == View3DHelpDialog::recordings().at(2),
+                  "3d help: a topic chosen plays its own recording");
+            dlg->close();
+        }
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -6380,6 +6580,7 @@ int run_brickharness_tests() {
     testRoundFortyTwo();
     testRoundFortyThree();
     testRoundFortyFour();
+    testRoundFortyFive();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

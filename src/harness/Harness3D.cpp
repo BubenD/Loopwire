@@ -114,12 +114,12 @@ void sampleInto(const Entity& e, std::vector<Vec2>& pts) {
     }
 }
 
-// A SOLID FROM A PART'S 2D DRAWING. Along the way it goes in (`A`, from `lo` to `hi` about `c`), how far its outline
-// reaches either side (`B`) at each step - turned round A (a round part), or given `depth` up and down (a square one).
-Mesh3D solidFromDrawing(const std::vector<Vec2>& pts, const Vec2& c, const V3& A, const V3& B, double lo, double hi,
-                        bool revolve, double depth, double* faceRadius) {
-    const int n = 40;
-    std::vector<double> top(n + 1, -1e300), bot(n + 1, 1e300);
+// A PART'S PROFILE from its 2D drawing: along the way it goes in (`A`, from `lo` to `hi` about `c`, in `n` steps), how
+// far its outline reaches either side (`B`) at each step. False when nothing is drawn across it at all.
+bool profileOf(const std::vector<Vec2>& pts, const Vec2& c, const V3& A, const V3& B, double lo, double hi, int n,
+               std::vector<double>& top, std::vector<double>& bot) {
+    top.assign(static_cast<size_t>(n + 1), -1e300);
+    bot.assign(static_cast<size_t>(n + 1), 1e300);
     const Vec2 a2{A.x, A.y}, b2{B.x, B.y};
     for (const Vec2& p : pts) {
         const double t = dot(p - c, a2), d = dot(p - c, b2);
@@ -133,7 +133,7 @@ Mesh3D solidFromDrawing(const std::vector<Vec2>& pts, const Vec2& c, const V3& A
         int l = i - 1, r = i + 1;
         while (l >= 0 && top[static_cast<size_t>(l)] < -1e299) --l;
         while (r <= n && top[static_cast<size_t>(r)] < -1e299) ++r;
-        if (l < 0 && r > n) return {};
+        if (l < 0 && r > n) return false;
         const int from = l >= 0 ? l : r, to = r <= n ? r : l;
         const double u = to == from ? 0.0 : static_cast<double>(i - from) / (to - from);
         top[static_cast<size_t>(i)] = top[static_cast<size_t>(from)] + (top[static_cast<size_t>(to)] - top[static_cast<size_t>(from)]) * u;
@@ -159,6 +159,37 @@ Mesh3D solidFromDrawing(const std::vector<Vec2>& pts, const Vec2& c, const V3& A
     };
     median3(top);
     median3(bot);
+    return true;
+}
+
+// A RECTANGLE ALONG ITS LENGTH: as wide, and in the same place, at every step from end to end - a box seen from the
+// side, as a rectangular connector's housing is drawn. A step may be a little off (a latch, a rib); not more than one
+// in ten of them, nor by more than a tenth of its width.
+// `across`: how wide it is, from its profile - a lone mark standing out of the drawing does not widen it.
+bool rectangularProfile(const std::vector<Vec2>& pts, const Vec2& c, const V3& A, const V3& B, double lo, double hi,
+                        double* across = nullptr) {
+    const int n = 40;
+    std::vector<double> top, bot;
+    if (!profileOf(pts, c, A, B, lo, hi, n, top, bot)) return false;
+    std::vector<double> ts = top, bs = bot;
+    std::nth_element(ts.begin(), ts.begin() + n / 2, ts.end());
+    std::nth_element(bs.begin(), bs.begin() + n / 2, bs.end());
+    const double t = ts[static_cast<size_t>(n / 2)], b = bs[static_cast<size_t>(n / 2)];
+    const double tol = std::max(0.05, 0.1 * (t - b));
+    int off = 0;
+    for (int i = 0; i <= n; ++i)
+        if (std::abs(top[static_cast<size_t>(i)] - t) > tol || std::abs(bot[static_cast<size_t>(i)] - b) > tol) ++off;
+    if (across) *across = t - b;
+    return t - b > 1e-6 && off * 10 <= n + 1;
+}
+
+// A SOLID FROM A PART'S 2D DRAWING: its profile turned round A (a round part), or given `depth` up and down (a
+// square one).
+Mesh3D solidFromDrawing(const std::vector<Vec2>& pts, const Vec2& c, const V3& A, const V3& B, double lo, double hi,
+                        bool revolve, double depth, double* faceRadius) {
+    const int n = 40;
+    std::vector<double> top, bot;
+    if (!profileOf(pts, c, A, B, lo, hi, n, top, bot)) return {};
     if (faceRadius) *faceRadius = std::max(0.2, std::max(std::abs(top[static_cast<size_t>(n)]), std::abs(bot[static_cast<size_t>(n)])));
     const V3 centre{c.x, c.y, 0.0}, Z{0.0, 0.0, 1.0};
     Mesh3D m;
@@ -397,9 +428,81 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
             if (!e.meta.contains(QStringLiteral("twistWireWidth")) && e.meta.value(QStringLiteral("twistWidth")).toDouble() > 0.0)
                 wire = e.meta.value(QStringLiteral("twistWidth")).toDouble() / (1.0 / std::sin(M_PI / n) + 1.0);
             const double rad = wire / (2.0 * std::sin(M_PI / n));
-            // STRAIGHT AT ITS ENDS for as long as the drawing has them straight, twisted between.
-            const double ends = std::clamp(e.meta.value(QStringLiteral("twistEnds")).toDouble(0.0), 0.0, total * 0.45);
-            const double step = std::min(pitch / 18.0, std::max(0.2, total / 400.0));
+            // WHERE IT IS TWISTED, AS THE DRAWING HAS IT: a fan at each end - each its own length - and between them a
+            // whole number of turns. The drawing works those out (shortening the fans where the run is too short for
+            // them and a turn); taken from it, the 3D twist is where the sheet's is, and the wires come out of it the
+            // way they went in.
+            const TwistFigures figs = twistedPairFigures(e);
+            double leadA = figs.ok ? figs.fanLen : std::clamp(e.meta.value(QStringLiteral("twistEnds")).toDouble(0.0), 0.0, total * 0.45);
+            double leadB = figs.ok ? figs.fanLenFinish : leadA;
+            if (leadA + leadB > total) {
+                const double k = total / std::max(1e-9, leadA + leadB);
+                leadA *= k;
+                leadB *= k;
+            }
+            const double woven = std::max(0.0, total - leadA - leadB);
+            const double turn = woven > 1e-9 ? woven / std::max(1.0, std::round(woven / (figs.ok && figs.turn > 1e-9 ? figs.turn : pitch)))
+                                             : pitch;
+            const double step = std::min(turn / 18.0, std::max(0.2, total / 400.0));
+            // EACH WIRE'S PLACE IN ITS FAN, across the run, as the drawing spreads it - so a fan opens out to the face it
+            // goes into rather than the wires lying side by side, touching, all the way to it.
+            const std::vector<std::vector<Vec2>> drawnStrands = twistedPairStrands(e);
+            auto across2 = [&](const Vec2& p, double& s, double& d) {
+                double best = 1e300, acc = 0.0;
+                for (size_t i = 1; i < route.size(); ++i) {
+                    const Vec2 a = route[i - 1], b = route[i];
+                    const double seg = distance(a, b);
+                    if (seg < 1e-12) continue;
+                    const Vec2 t = (b - a) / seg;
+                    const double u = std::clamp(dot(p - a, t), 0.0, seg);
+                    const Vec2 foot = a + t * u;
+                    if (distance(p, foot) < best) {
+                        best = distance(p, foot);
+                        s = acc + u;
+                        d = dot(p - foot, Vec2{-t.y, t.x});
+                    }
+                    acc += seg;
+                }
+            };
+            // For wire k: its offset across the run at each point of its two fans, by how far along the run.
+            std::vector<std::vector<std::pair<double, double>>> fanStart(static_cast<size_t>(n)), fanEnd(static_cast<size_t>(n));
+            for (int k = 0; k < n && static_cast<size_t>(2 * k + 1) < drawnStrands.size(); ++k) {
+                const auto& ea = drawnStrands[static_cast<size_t>(2 * k)];
+                const auto& eb = drawnStrands[static_cast<size_t>(2 * k + 1)];
+                if (ea.size() != eb.size()) continue;
+                for (size_t q = 0; q < ea.size(); ++q) {
+                    double s = 0.0, d = 0.0;
+                    across2((ea[q] + eb[q]) * 0.5, s, d);
+                    if (s <= leadA + 1e-6) fanStart[static_cast<size_t>(k)].push_back({s, d});
+                    if (s >= total - leadB - 1e-6) fanEnd[static_cast<size_t>(k)].push_back({s, d});
+                }
+                std::sort(fanStart[static_cast<size_t>(k)].begin(), fanStart[static_cast<size_t>(k)].end());
+                std::sort(fanEnd[static_cast<size_t>(k)].begin(), fanEnd[static_cast<size_t>(k)].end());
+            }
+            auto fanAt = [&](int k, double s, bool& known) {
+                const auto& sd = (s <= leadA ? fanStart : fanEnd)[static_cast<size_t>(k)];
+                known = !sd.empty();
+                if (sd.empty()) return 0.0;
+                if (s <= sd.front().first) return sd.front().second;
+                if (s >= sd.back().first) return sd.back().second;
+                const auto it = std::lower_bound(sd.begin(), sd.end(), std::make_pair(s, -1e300));
+                const auto& a = *(it - 1);
+                const auto& b = *it;
+                const double u = b.first - a.first > 1e-9 ? (s - a.first) / (b.first - a.first) : 0.0;
+                return a.second + (b.second - a.second) * u;
+            };
+            // WHICH WAY ROUND THE WIRES START: the first wire on the side of the run its fan leaves it on, so a fan and
+            // the twist meet without the wires crossing over where they do.
+            double phase = 0.0;
+            if (leadA > 1e-6) {
+                bool known = false;
+                const double d0 = fanAt(0, leadA * 0.9, known);
+                if (known && d0 < 0.0) phase = M_PI;
+            }
+            auto smooth = [](double u) {
+                u = std::clamp(u, 0.0, 1.0);
+                return u * u * (3.0 - 2.0 * u);
+            };
             // The run's middle, square across it in the sheet, and up out of it.
             auto frameAt = [&](double s, V3& at, V3& across) {
                 double acc = 0.0;
@@ -425,9 +528,20 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
                     const double ss = std::min(s, total);
                     V3 at, across;
                     frameAt(ss, at, across);
-                    const double twisted = std::clamp(ss - ends, 0.0, std::max(0.0, total - 2.0 * ends));
-                    const double th = 2.0 * M_PI * (twisted / pitch + static_cast<double>(k) / n);
-                    helix.push_back(at + across * (rad * std::cos(th)) + V3{0.0, 0.0, 1.0} * (rad * std::sin(th)));
+                    const double twisted = std::clamp(ss - leadA, 0.0, woven);
+                    const double th = 2.0 * M_PI * (twisted / turn + static_cast<double>(k) / n) + phase;
+                    double py = rad * std::cos(th), pz = rad * std::sin(th);
+                    // In a fan: from where the drawing spreads it, into its place in the twist.
+                    if (ss < leadA || ss > total - leadB) {
+                        bool known = false;
+                        const double d = fanAt(k, ss, known);
+                        if (known) {
+                            const double w = ss < leadA ? smooth(ss / leadA) : smooth((total - ss) / leadB);
+                            py = (1.0 - w) * d + w * py;
+                            pz = w * pz;
+                        }
+                    }
+                    helix.push_back(at + across * py + V3{0.0, 0.0, 1.0} * pz);
                     if (ss >= total) break;
                 }
                 Harness3DItem wi;
@@ -691,8 +805,17 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
             // NONE: A SOLID FROM ITS 2D DRAWING, when that is asked for - its outline turned round the way it goes
             // in, or given its width in depth.
             double faceR = width / 2.0;
+            const PartPins pins = pinsOf && !p.lib.isEmpty() ? pinsOf(p.lib) : PartPins{};
+            // A RECTANGULAR CONNECTOR IS A BLOCK, not a cylinder. Its side view is a rectangle - but so is a round
+            // part's, so only a connector is taken to be square: a ferrule, a ring, a sleeve drawn as a rectangle are
+            // still turned. Its depth is its width, as an extruded part's is - the width its outline has, not a
+            // mark standing out past it.
+            double blockWidth = width;
+            const bool block = look == PartLook::Revolved && pins.count > 0 && !p.outline.empty() &&
+                               rectangularProfile(p.outline, c, A, B, lo, hi, &blockWidth);
             if (look != PartLook::Box && !p.outline.empty()) {
-                it.mesh = solidFromDrawing(p.outline, c, A, B, lo, hi, look == PartLook::Revolved, width, &faceR);
+                it.mesh = solidFromDrawing(p.outline, c, A, B, lo, hi, look == PartLook::Revolved && !block,
+                                           block ? blockWidth : width, &faceR);
                 it.color = QColor(150, 158, 170);
             }
             // OR A BOX as long and as wide as it is drawn, and as tall as it is wide.
@@ -708,7 +831,6 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
             // ITS PINOUT at its front face - the end away from the harness: male pins, or female sockets, as many as
             // it has, spread evenly over the face. Inside the connector, each run in from the face and ending on it -
             // its tip at the connector's far point, nothing standing out past it.
-            const PartPins pins = pinsOf && !p.lib.isEmpty() ? pinsOf(p.lib) : PartPins{};
             if (pins.count > 0) {
                 const V3 face = centre + A * hi;
                 const double R = std::max(0.3, faceR * (look == PartLook::Revolved ? 0.78 : 0.7));
@@ -716,14 +838,28 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
                 // As long as two fifths of what a pin standing out of it would have been.
                 const double depth = 0.4 * std::max(0.8, length * 0.14);
                 Harness3DItem pinsItem;
+                // On a block, in rows and columns over its face, as a rectangular connector's cavities are.
+                const double faceW = 2.0 * faceR * 0.8, faceH = (block ? blockWidth : width) * 0.8;
+                const int cols = std::max(1, static_cast<int>(std::ceil(std::sqrt(pins.count * faceW / std::max(1e-6, faceH)))));
+                const int rows = (pins.count + cols - 1) / cols;
+                const double cell = std::min(faceW / cols, faceH / rows);
+                const double blockPinR = std::max(0.08, cell * 0.22);
                 for (int i = 0; i < pins.count; ++i) {
-                    // A sunflower's spiral: as even a spread over a round face as there is, for any number.
-                    const double rr = pins.count == 1 ? 0.0 : R * 0.82 * std::sqrt((i + 0.5) / pins.count);
-                    const double th = i * 2.399963229728653;
-                    const V3 at = face + B * (rr * std::cos(th)) + Z * (rr * std::sin(th));
+                    V3 at;
+                    if (block) {
+                        const int row = i / cols, col = i % cols;
+                        const int inRow = row + 1 == rows ? pins.count - row * cols : cols;
+                        at = face + B * ((col - (inRow - 1) / 2.0) * cell) + Z * (((rows - 1) / 2.0 - row) * cell);
+                    } else {
+                        // A sunflower's spiral: as even a spread over a round face as there is, for any number.
+                        const double rr = pins.count == 1 ? 0.0 : R * 0.82 * std::sqrt((i + 0.5) / pins.count);
+                        const double th = i * 2.399963229728653;
+                        at = face + B * (rr * std::cos(th)) + Z * (rr * std::sin(th));
+                    }
+                    const double r = block ? blockPinR : pinR;
                     // Its tip a hair proud of the face, so it shows on it rather than flickering in it.
                     const double proud = std::min(0.02, depth * 0.05);
-                    pinsItem.mesh.append(tubeMesh({at - A * depth, at + A * proud}, pins.female ? pinR * 1.15 : pinR, 10, true));
+                    pinsItem.mesh.append(tubeMesh({at - A * depth, at + A * proud}, pins.female ? r * 1.15 : r, 10, true));
                 }
                 pinsItem.color = pins.female ? QColor(18, 18, 20) : QColor(212, 175, 80);
                 pinsItem.what = pins.female ? QStringLiteral("sockets") : QStringLiteral("pins");

@@ -1739,6 +1739,8 @@ TwistFigures twistedPairFigures(const Entity& pair) {
     out.ok = true;
     out.lane = f.lane;
     out.fanLen = f.lead;
+    out.fanLenFinish = f.leadB;
+    out.turn = f.turn;
     out.wireWidth = f.thick * 2.0;
     out.kneeRadius = f.kneeUsed;
     out.fanKnee = f.fanKneeUsed;
