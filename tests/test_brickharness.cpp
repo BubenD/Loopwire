@@ -6685,13 +6685,20 @@ void testRoundFortySix() {
         auto* full = inside->findChild<QToolButton*>(QStringLiteral("view3dFullScreen"));
         if (full) full->click();
         QApplication::processEvents();
-        check(full && inside->fullScreenView() && inside->isWindow() && full->isChecked(),
-              "3d full screen: the view on a window of its own, the whole screen");
+        check(full && inside->fullScreenView() && inside->isWindow() && full->isChecked() &&
+                  (inside->windowState() & Qt::WindowMaximized) && !(inside->windowState() & Qt::WindowFullScreen),
+              "3d full screen: the view in a window of its own, filling the screen - a window still, to drag and size");
         QKeyEvent esc(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
         QApplication::sendEvent(inside->canvas(), &esc);
         QApplication::processEvents();
         check(!inside->fullScreenView() && !inside->isWindow() && inside->parentWidget() == &host && !full->isChecked(),
               "3d full screen: Esc puts it back where it was");
+        if (full) full->click();
+        QApplication::processEvents();
+        inside->close();
+        QApplication::processEvents();
+        check(!inside->fullScreenView() && !inside->isWindow() && inside->parentWidget() == &host,
+              "3d full screen: its window closed, it goes back where it was - not away");
     }
 
     // ---- THE HELP ----
@@ -6710,6 +6717,85 @@ void testRoundFortySix() {
         if (auto* ex = help.findChild<QPushButton*>(QStringLiteral("help3dExample"))) ex->click();
         check(asked, "3d help: Open the example asks for it");
         check(pane.loadExample() && pane.environment().parts.size() >= 1, "3d help: the example is a model the view loads");
+    }
+}
+
+// ROUND FORTY-SEVEN: WHAT IS PUT ON THE SHEET SHOWS IN 3D - a connector drawn with the Connector tool, a library part
+// inserted by hand - each a part of its own, with its pins; built again as the sheet changes; and the wizard's harness
+// not shown in their place.
+void testRoundFortySeven() {
+    std::vector<Entity> sheet;
+    // A CONNECTOR from the Connector tool: six ways, X7.
+    {
+        Entity c;
+        c.id = QStringLiteral("c1");
+        c.type = EntityType::Connector;
+        c.a = {0, 0};
+        ConnectorSpec spec = defaultConnectorSpec(6);
+        spec.designator = QStringLiteral("X7");
+        writeConnectorSpec(c.meta, spec);
+        sheet.push_back(c);
+    }
+    Harness3DScene sc = buildHarness3D(sheet, {}, PartLook::Revolved, {});
+    int pinsShown = 0;
+    bool named = false;
+    for (const Harness3DItem& it : sc.items) {
+        if (it.what == QLatin1String("pins")) ++pinsShown;
+        if (it.what == QLatin1String("X7")) named = true;
+    }
+    std::printf("  3d sheet: a drawn connector - %d part(s), named %d, %d pinout(s)\n", sc.parts, named ? 1 : 0, pinsShown);
+    check(sc.parts == 1 && named, "3d sheet: a connector drawn with the Connector tool is shown, by its designator");
+    check(pinsShown == 1, "3d sheet: with its pins, as many as it has ways");
+    // A LIBRARY PART inserted by hand: its pieces, one insertion - one part, not one per line.
+    {
+        for (int i = 0; i < 4; ++i) {
+            Entity l;
+            l.id = QStringLiteral("lp%1").arg(i);
+            l.type = EntityType::Line;
+            l.a = {100.0 + (i % 2) * 30.0, 0.0 + (i / 2) * 12.0};
+            l.b = {100.0 + (i % 2) * 30.0 + 30.0, 0.0 + (i / 2) * 12.0};
+            l.meta.insert(QStringLiteral("blockInst"), QStringLiteral("ins-1"));
+            l.meta.insert(QStringLiteral("libPart"), QStringLiteral("LIB-1"));
+            sheet.push_back(l);
+        }
+    }
+    sc = buildHarness3D(sheet, {}, PartLook::Revolved, [](const QString& lib) {
+        return lib == QLatin1String("LIB-1") ? PartPins{3, true} : PartPins{};
+    });
+    int sockets = 0;
+    for (const Harness3DItem& it : sc.items) sockets += it.what == QLatin1String("sockets") ? 1 : 0;
+    check(sc.parts == 2 && sockets == 1, "3d sheet: a library part put on the sheet is one part, its library pins on it");
+    // Loose lines of no part are still no part.
+    {
+        Entity stray;
+        stray.type = EntityType::Line;
+        stray.a = {0, 100};
+        stray.b = {50, 100};
+        sheet.push_back(stray);
+    }
+    check(buildHarness3D(sheet, {}, PartLook::Revolved, {}).parts == 2, "3d sheet: a line that is no part's is not made one");
+
+    // THE PANE: built again a moment after the sheet changes; the sheet's own parts shown, not the wizard's harness.
+    {
+        std::vector<Entity> live;
+        View3DPane pane;
+        bool askedWizard = false;
+        pane.setSources([&] { return live; }, [&] {
+            askedWizard = true;
+            return std::vector<Entity>{};
+        });
+        pane.rebuild(true);
+        check(pane.scene().parts == 0, "3d sheet: nothing on the sheet, nothing shown");
+        live.push_back(sheet.front());   // the connector put down
+        askedWizard = false;
+        pane.scheduleRebuild();
+        QElapsedTimer clock;
+        clock.start();
+        while (pane.scene().parts == 0 && clock.elapsed() < 3000) QApplication::processEvents(QEventLoop::AllEvents, 20);
+        std::printf("  3d sheet: rebuilt by itself after %lld ms - %d part(s)\n", static_cast<long long>(clock.elapsed()),
+                    pane.scene().parts);
+        check(pane.scene().parts == 1, "3d sheet: a connector put on the sheet shows in 3D without a Refresh");
+        check(!askedWizard, "3d sheet: and the sheet's connector is shown - not the wizard's harness in its place");
     }
 }
 
@@ -6773,6 +6859,7 @@ int run_brickharness_tests() {
     testRoundFortyFour();
     testRoundFortyFive();
     testRoundFortySix();
+    testRoundFortySeven();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

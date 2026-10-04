@@ -119,8 +119,10 @@ const Topic kTopics[] = {
      "a face first, and cables laid through it with <i>Route</i>.</p>"},
     {"10. Full screen",
      "",
-     "<p><i>Full screen</i> (top right of the view), or <b>F11</b>, gives the 3D view the whole screen - with every row "
-     "and the panel on the right, so nothing is lost. <b>Esc</b>, F11 or <i>Back</i> returns it to where it was.</p>"},
+     "<p><i>Full screen</i> (top right of the view), or <b>F11</b>, opens the 3D view in a window of its own, filling "
+     "the screen - with every row and the panel on the right, so nothing is lost. It is a window still: drag it by its "
+     "title bar, make it smaller, or put it on another screen. <b>Esc</b>, F11, <i>Back</i> or closing the window "
+     "returns it to where it was.</p>"},
     {"11. Words used here",
      "",
      "<dl>"

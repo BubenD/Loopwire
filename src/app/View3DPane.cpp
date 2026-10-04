@@ -25,6 +25,8 @@
 #include <QSpinBox>
 #include <QTableWidget>
 #include <QThread>
+#include <QTimer>
+#include <QCloseEvent>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QWheelEvent>
@@ -126,7 +128,8 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     bar->addStretch(1);
     // THE WHOLE SCREEN, for routing with room to see: everything here goes with it. Esc, F11 or this again, back.
     fullBtn_ = button(bar, "view3dFullScreen", QStringLiteral("Full screen"),
-                      QStringLiteral("The 3D view on the whole screen, with all its settings (F11; Esc to come back)"),
+                      QStringLiteral("The 3D view in a window of its own, filling the screen - drag it, size it, put it on "
+                                     "another screen; all its settings go with it (F11; Esc, or closing it, brings it back)"),
                       [this] { setFullScreen(!fullScreen_); });
     fullBtn_->setCheckable(true);
     auto* f11 = new QShortcut(QKeySequence(Qt::Key_F11), this);
@@ -526,16 +529,38 @@ void View3DPane::applyAim(const V3& dir, double spinDeg) {
     emit routeChanged();
 }
 
+void View3DPane::scheduleRebuild() {
+    // A burst of changes - a drag, a paste of many objects - is one rebuild, a moment after the last of them.
+    if (!rebuildSoon_) {
+        rebuildSoon_ = new QTimer(this);
+        rebuildSoon_->setSingleShot(true);
+        rebuildSoon_->setInterval(350);
+        connect(rebuildSoon_, &QTimer::timeout, this, [this] { rebuild(false); });
+    }
+    rebuildSoon_->start();
+}
+
+void View3DPane::closeEvent(QCloseEvent* e) {
+    // ITS OWN WINDOW CLOSED: back where it came from, not gone.
+    if (fullScreen_) {
+        e->ignore();
+        setFullScreen(false);
+        return;
+    }
+    QWidget::closeEvent(e);
+}
+
 void View3DPane::setFullScreen(bool on) {
     if (on == fullScreen_) return;
     fullScreen_ = on;
     if (on) {
-        // OUT OF WHEREVER IT IS - the dock, the wizard - as a window of its own on the whole screen; back where it was
-        // when it comes back.
+        // OUT OF WHEREVER IT IS - the dock, the wizard - as a window of its own, opened to fill the screen: a window
+        // still, with its title bar, so it can be dragged, made smaller, or put on another screen. Back where it was
+        // when it comes back, or when it is closed.
         normalFlags_ = windowFlags();
         setWindowFlags(Qt::Window);
         setWindowTitle(QStringLiteral("3D view"));
-        showFullScreen();
+        showMaximized();
     } else {
         setWindowFlags(normalFlags_);
         showNormal();
@@ -620,17 +645,18 @@ void View3DPane::rebuild(bool fit) {
     const bool fromWizard = source_->currentIndex() == 1;
     std::vector<Entity> ents = fromWizard ? (wizard_ ? wizard_() : std::vector<Entity>{})
                                           : (drawing_ ? drawing_() : std::vector<Entity>{});
-    // NOTHING PLACED ON THE SHEET YET: the wizard's harness, if one is open.
-    bool fell = false;
-    if (!fromWizard && wizard_) {
-        bool any = false;
-        for (const Entity& e : ents) any = any || e.type == EntityType::TwistedPair;
-        if (!any) {
-            ents = wizard_();
-            fell = true;
-        }
-    }
+    const bool wasEmpty = scene_.runs == 0 && scene_.parts == 0;
     scene_ = buildHarness3D(ents, modelOf_, partLook_, pinsOf_);
+    // NOTHING ON THE SHEET TO SHOW - no run, no part: the wizard's harness, if one is open. A connector put on the
+    // sheet by itself is something to show, and is shown.
+    bool fell = false;
+    if (!fromWizard && wizard_ && scene_.runs == 0 && scene_.parts == 0) {
+        ents = wizard_();
+        scene_ = buildHarness3D(ents, modelOf_, partLook_, pinsOf_);
+        fell = true;
+    }
+    // The first thing there is to see, brought into view.
+    if (wasEmpty && (scene_.runs > 0 || scene_.parts > 0)) fit = true;
     canvas_->setScene(&scene_);
     if (fit) canvas_->fit();
     canvas_->update();

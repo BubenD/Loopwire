@@ -15507,7 +15507,10 @@ void MainWindow::activateIndex(int index) {
     canvas_->setDocument(doc_);
     editor_->setDocument(doc_); // resets selection/undo for this drawing
     // The 3D routing of this drawing, and the environment it is routed in.
-    if (view3dPane_) view3dPane_->reloadRouting();
+    if (view3dPane_) {
+        view3dPane_->reloadRouting();
+        view3dPane_->scheduleRebuild();
+    }
     // PARTS PUT DOWN BEFORE THEIR ENTRY FACES WERE CARRIED get them now, from the library - so Alt
     // shows them and Shift lands a run on them on an old drawing as on a new one.
     {
@@ -16663,6 +16666,10 @@ QDockWidget* MainWindow::makeView3DPanel() {
         view3dPane_->rebuild(true);
     });
     view3dPane_->reloadRouting();
+    // WHAT IS PUT ON THE SHEET SHOWS IN 3D: built again a moment after the drawing changes, while the view is open.
+    connect(editor_, &Editor::changed, this, [this, dock] {
+        if (view3dPane_ && (dock->isVisible() || view3dPane_->fullScreenView())) view3dPane_->scheduleRebuild();
+    });
     // Off to begin with, and wide when it is opened: a picture wants room.
     addDockWidget(Qt::BottomDockWidgetArea, dock);
     dock->hide();

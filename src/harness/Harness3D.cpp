@@ -233,9 +233,16 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
     // ---- THE RUNS ----------------------------------------------------------------------------------
     std::vector<Vec2> runEnds;
     QHash<QString, bool> isRun;   // a group (copy mark or brick) with a run in it is a run, not a part
+    // WHICH PART AN OBJECT IS OF: a harness placed from the wizard says so (its copy, or its brick); a library part
+    // put on the sheet by hand is one by the insertion it came in; a connector drawn with the Connector tool is a part
+    // of its own. Anything else is no part.
     auto groupOf = [](const Entity& e) {
-        const QString copy = e.meta.value(QStringLiteral("partCopy")).toString();
-        return !copy.isEmpty() ? copy : e.meta.value(QStringLiteral("brickId")).toString();
+        for (const char* key : {"partCopy", "brickId", "blockInst"}) {
+            const QString g = e.meta.value(QLatin1String(key)).toString();
+            if (!g.isEmpty()) return g;
+        }
+        if (e.type == EntityType::Connector && !e.id.isEmpty()) return QStringLiteral("connector:") + e.id;
+        return QString();
     };
     auto brickOf = [](const Entity& e) {
         const QString id = e.meta.value(QStringLiteral("brickId")).toString();
@@ -715,6 +722,7 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
     struct Part {
         Bounds box;
         QString lib, name, brick;
+        int ways = 0;                // a connector drawn on the sheet: its pin count, for its pinout
         std::vector<Vec2> outline;   // the points of its drawing, for a solid made from it
     };
     QHash<QString, Part> parts;
@@ -738,6 +746,11 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
         if (look != PartLook::Box) sampleInto(e, p.outline);
         if (p.lib.isEmpty()) p.lib = e.meta.value(QStringLiteral("libPart")).toString();
         if (p.name.isEmpty()) p.name = e.meta.value(QStringLiteral("partName")).toString();
+        if (e.type == EntityType::Connector) {
+            const ConnectorSpec spec = connectorSpecFromMeta(e.meta);
+            p.ways = spec.pinCount;
+            if (p.name.isEmpty()) p.name = !spec.designator.isEmpty() ? spec.designator : spec.partNumber;
+        }
         if (p.brick.isEmpty()) p.brick = brickOf(e);
     }
     for (const QString& g : order) {
@@ -805,7 +818,8 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
             // NONE: A SOLID FROM ITS 2D DRAWING, when that is asked for - its outline turned round the way it goes
             // in, or given its width in depth.
             double faceR = width / 2.0;
-            const PartPins pins = pinsOf && !p.lib.isEmpty() ? pinsOf(p.lib) : PartPins{};
+            PartPins pins = pinsOf && !p.lib.isEmpty() ? pinsOf(p.lib) : PartPins{};
+            if (pins.count <= 0 && p.ways > 0) pins.count = p.ways;   // a connector drawn on the sheet: its own pins
             // A RECTANGULAR CONNECTOR IS A BLOCK, not a cylinder. Its side view is a rectangle - but so is a round
             // part's, so only a connector is taken to be square: a ferrule, a ring, a sleeve drawn as a rectangle are
             // still turned. Its depth is its width, as an extruded part's is - the width its outline has, not a

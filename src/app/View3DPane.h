@@ -24,6 +24,8 @@ class QSlider;
 class QSpinBox;
 class QTableWidget;
 class QThread;
+class QTimer;
+class QCloseEvent;
 class QToolButton;
 class QWidget;
 
@@ -106,6 +108,8 @@ public:
     static QString exampleResource() { return QStringLiteral(":/help3d/example.obj"); }
     // THE WHOLE SCREEN: the view, with every row and the side panel, filling it - and back.
     void setFullScreen(bool on);
+    // BUILT AGAIN A MOMENT AFTER the drawing last changed - what is put on the sheet shows in 3D without a Refresh.
+    void scheduleRebuild();
     bool fullScreenView() const { return fullScreen_; }
     // THE WORK PLANE a click lands on: -1 the model's faces (the ground where there is none), 0/1/2 a plane across X,
     // Y or Z, at `at` along that axis.
@@ -124,6 +128,9 @@ public:
     // WHAT THE ROUTE WOULD MAKE THE HARNESS'S LENGTHS, and made so - asked first where `ask`. False when nothing changed.
     RouteLengths proposedLengths() const;
     bool applyLengths(bool ask = true);
+
+protected:
+    void closeEvent(QCloseEvent* e) override;
 
 signals:
     // An environment read, or cleared.
@@ -198,6 +205,7 @@ private:
     QPointer<View3DHelpDialog> help_;
     // The whole screen. Not saved.
     bool fullScreen_ = false;
+    QTimer* rebuildSoon_ = nullptr;
     Qt::WindowFlags normalFlags_;
     QToolButton* fullBtn_ = nullptr;
     // The camera's three turns, in degrees, all the way round.
