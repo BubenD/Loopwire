@@ -115,6 +115,10 @@ public:
     const QJsonObject& wizards() const { return wizards_; }
     QJsonObject& bom() { return bom_; }
     const QJsonObject& bom() const { return bom_; }
+    // THE HARNESS ROUTED IN 3D: the CAD model it is routed in (by its file) and the route through it - its
+    // connectors, branches, clips and bundles (Route3D). With the drawing, so the routing opens with it.
+    QJsonObject& routing3d() { return routing3d_; }
+    const QJsonObject& routing3d() const { return routing3d_; }
 
     bool dirty() const { return dirty_; }
     void setDirty(bool d) { dirty_ = d; }
@@ -136,6 +140,7 @@ private:
     int polygonSides_ = 5;
     QJsonObject bom_;
     QJsonObject wizards_;
+    QJsonObject routing3d_;
     QJsonObject harnessPresets_;
     QJsonObject bundlePresets_;
     std::vector<DrawingLayout> layouts_;

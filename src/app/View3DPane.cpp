@@ -1,15 +1,22 @@
 #include "app/View3DPane.h"
 
+#include <QButtonGroup>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDir>
+#include <QDoubleSpinBox>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
+#include <QHeaderView>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QSettings>
 #include <QSlider>
+#include <QSplitter>
+#include <QTableWidget>
 #include <QThread>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -75,8 +82,7 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     auto* env = new QHBoxLayout(envRow_);
     env->setContentsMargins(0, 0, 0, 0);
     env->setSpacing(3);
-    auto* envLabel = new QLabel(QStringLiteral("Environment:"), envRow_);
-    env->addWidget(envLabel);
+    env->addWidget(new QLabel(QStringLiteral("Environment:"), envRow_));
     envLoad_ = button(env, "view3dEnvLoad", QStringLiteral("Load..."),
                       QStringLiteral("Load the CAD model the harness is routed in - a chassis, a panel, an enclosure - from "
                                      "a STEP, STL or OBJ file"),
@@ -96,8 +102,7 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     envShown_->setToolTip(QStringLiteral("Show the environment round the harness"));
     connect(envShown_, &QCheckBox::toggled, this, [this](bool on) { canvas_->setEnvironmentShown(on); });
     env->addWidget(envShown_);
-    auto* opacityLabel = new QLabel(QStringLiteral("Opacity"), envRow_);
-    env->addWidget(opacityLabel);
+    env->addWidget(new QLabel(QStringLiteral("Opacity"), envRow_));
     envOpacity_ = new QSlider(Qt::Horizontal, envRow_);
     envOpacity_->setObjectName(QStringLiteral("view3dEnvOpacity"));
     envOpacity_->setRange(10, 100);
@@ -109,7 +114,8 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     harnessShown_ = new QCheckBox(QStringLiteral("Harness"), envRow_);
     harnessShown_->setObjectName(QStringLiteral("view3dHarnessShown"));
     harnessShown_->setChecked(true);
-    harnessShown_->setToolTip(QStringLiteral("Show the harness - off, to look at the environment alone"));
+    harnessShown_->setToolTip(QStringLiteral("Show the harness drawn on the sheet - off, to look at the environment and the "
+                                             "route alone"));
     connect(harnessShown_, &QCheckBox::toggled, this, [this](bool on) { canvas_->setHarnessShown(on); });
     env->addWidget(harnessShown_);
     section_ = new QComboBox(envRow_);
@@ -130,17 +136,150 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     env->addStretch(1);
     lay->addWidget(envRow_);
 
-    canvas_ = new View3DCanvas(this);
+    // THE ROUTE'S ROW: what a click does, and the bundles' diameter, bend radius and lead out of a connector.
+    routeRow_ = new QWidget(this);
+    auto* rr = new QHBoxLayout(routeRow_);
+    rr->setContentsMargins(0, 0, 0, 0);
+    rr->setSpacing(3);
+    rr->addWidget(new QLabel(QStringLiteral("Route:"), routeRow_));
+    tools_ = new QButtonGroup(this);
+    tools_->setExclusive(true);
+    const struct {
+        RouteTool tool;
+        const char* name;
+        const char* text;
+        const char* tip;
+    } tools[] = {
+        {RouteTool::Select, "view3dToolSelect", "Select", "Pick a point on the environment, or select a node or a bundle"},
+        {RouteTool::Connector, "view3dToolConnector", "Connector", "Put a connector on the face clicked - its bundle leaves it "
+                                                                   "along the face's normal"},
+        {RouteTool::Branch, "view3dToolBranch", "Branch", "Put a branch point down - on a bundle, dividing it, or on a face"},
+        {RouteTool::Clip, "view3dToolClip", "Clip", "Put a clip down - on a bundle, holding it there, or on a face"},
+        {RouteTool::Route, "view3dToolRoute", "Route", "Lay a bundle: click the node it starts from (or a face, for a new "
+                                                       "branch), the faces it runs over, and the node it ends at - or "
+                                                       "double-click to end at a new branch. Esc: give up; Backspace: the "
+                                                       "last point back"},
+        {RouteTool::Delete, "view3dToolDelete", "Delete", "Take away the node or bundle clicked (a node takes its bundles "
+                                                          "with it)"},
+    };
+    for (const auto& t : tools) {
+        auto* b = new QToolButton(routeRow_);
+        b->setObjectName(QLatin1String(t.name));
+        b->setText(QString::fromLatin1(t.text));
+        b->setToolTip(QString::fromLatin1(t.tip));
+        b->setCheckable(true);
+        b->setAutoRaise(true);
+        tools_->addButton(b, static_cast<int>(t.tool));
+        rr->addWidget(b);
+    }
+    tools_->button(static_cast<int>(RouteTool::Select))->setChecked(true);
+    connect(tools_, &QButtonGroup::idClicked, this, [this](int id) { canvas_->setRouteTool(static_cast<RouteTool>(id)); });
+    auto spin = [&](const char* name, const QString& label, double lo, double hi, double value, const QString& tip) {
+        auto* text = new QLabel(label, routeRow_);
+        rr->addWidget(text);
+        auto* s = new QDoubleSpinBox(routeRow_);
+        s->setObjectName(QLatin1String(name));
+        s->setRange(lo, hi);
+        s->setDecimals(1);
+        s->setValue(value);
+        s->setSuffix(QStringLiteral(" mm"));
+        s->setToolTip(tip);
+        s->setKeyboardTracking(false);
+        rr->addWidget(s);
+        return s;
+    };
+    diameter_ = spin("view3dRouteDiameter", QStringLiteral("Ø"), 0.5, 200.0, route_.diameter,
+                     QStringLiteral("A bundle's diameter, where it is given none of its own (the table sets one bundle's)"));
+    bend_ = spin("view3dRouteBend", QStringLiteral("Bend R"), 0.0, 2000.0, route_.bendRadius,
+                 QStringLiteral("The tightest a bundle may be bent - Auto: six times its diameter"));
+    bend_->setSpecialValueText(QStringLiteral("Auto"));
+    lead_ = spin("view3dRouteLead", QStringLiteral("Lead"), 0.0, 500.0, route_.lead,
+                 QStringLiteral("How far a bundle comes straight out of a connector before it may turn"));
+    auto settings = [this] {
+        if (filling_) return;
+        beforeRouteChange();
+        route_.diameter = diameter_->value();
+        route_.bendRadius = bend_->value();
+        route_.lead = lead_->value();
+        saveRouting();
+        refreshRoute();
+        emit routeChanged();
+    };
+    for (QDoubleSpinBox* s : {diameter_, bend_, lead_}) connect(s, &QDoubleSpinBox::valueChanged, this, settings);
+    undo_ = button(rr, "view3dRouteUndo", QStringLiteral("Undo"), QStringLiteral("Take back the last change to the route (Ctrl+Z)"),
+                   [this] { undoRoute(); });
+    rr->addStretch(1);
+    lay->addWidget(routeRow_);
+
+    // THE PICTURE, and beside it the bundles with their lengths.
+    auto* split = new QSplitter(Qt::Horizontal, this);
+    canvas_ = new View3DCanvas(split);
     canvas_->setObjectName(QStringLiteral("view3dCanvas"));
-    lay->addWidget(canvas_, 1);
+    split->addWidget(canvas_);
+    side_ = new QWidget(split);
+    auto* sl = new QVBoxLayout(side_);
+    sl->setContentsMargins(0, 0, 0, 0);
+    sl->setSpacing(2);
+    table_ = new QTableWidget(0, 3, side_);
+    table_->setObjectName(QStringLiteral("view3dRoutes"));
+    table_->setHorizontalHeaderLabels({QStringLiteral("Bundle"), QStringLiteral("Length"), QStringLiteral("Ø")});
+    table_->verticalHeader()->setVisible(false);
+    table_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    table_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    table_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    table_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    table_->setSelectionMode(QAbstractItemView::SingleSelection);
+    table_->setToolTip(QStringLiteral("Each bundle routed, its length along its path - the Ø column sets one bundle's diameter"));
+    sl->addWidget(table_, 1);
+    totals_ = new QLabel(side_);
+    totals_->setObjectName(QStringLiteral("view3dRouteTotals"));
+    totals_->setWordWrap(true);
+    sl->addWidget(totals_);
+    split->addWidget(side_);
+    split->setStretchFactor(0, 1);
+    split->setStretchFactor(1, 0);
+    split->setSizes({800, 230});
+    lay->addWidget(split, 1);
     status_ = new QLabel(this);
     status_->setObjectName(QStringLiteral("view3dStatus"));
     status_->setWordWrap(true);
     status_->setTextInteractionFlags(Qt::TextSelectableByMouse);
     lay->addWidget(status_);
     canvas_->setScene(&scene_);
+    canvas_->setRoute(&route_);
     connect(canvas_, &View3DCanvas::picked, this, [this](const Pick3D& pick) { showPick(pick); });
+    connect(canvas_, &View3DCanvas::routeAboutToChange, this, [this] { beforeRouteChange(); });
+    connect(canvas_, &View3DCanvas::routeChanged, this, [this] {
+        saveRouting();
+        refreshRoute();
+        emit routeChanged();
+    });
+    connect(canvas_, &View3DCanvas::undoRequested, this, [this] { undoRoute(); });
+    connect(canvas_, &View3DCanvas::selectionChanged, this, [this](const QString& id) {
+        const QSignalBlocker hold(table_);
+        table_->clearSelection();
+        for (int r = 0; r < table_->rowCount(); ++r)
+            if (table_->item(r, 0) && table_->item(r, 0)->data(Qt::UserRole).toString() == id) table_->selectRow(r);
+    });
+    connect(table_, &QTableWidget::itemSelectionChanged, this, [this] {
+        const QList<QTableWidgetItem*> sel = table_->selectedItems();
+        if (!sel.isEmpty()) canvas_->selectSegment(table_->item(sel.first()->row(), 0)->data(Qt::UserRole).toString());
+    });
+    // ONE BUNDLE'S DIAMETER, from the table.
+    connect(table_, &QTableWidget::itemChanged, this, [this](QTableWidgetItem* item) {
+        if (filling_ || item->column() != 2) return;
+        const QString id = table_->item(item->row(), 0)->data(Qt::UserRole).toString();
+        if (!route_.segment(id)) return;
+        bool ok = false;
+        const double d = item->text().trimmed().remove(QStringLiteral("mm")).trimmed().toDouble(&ok);
+        beforeRouteChange();
+        route_.segment(id)->diameter = ok && d > 0.0 ? d : 0.0;
+        saveRouting();
+        refreshRoute();
+        emit routeChanged();
+    });
     applySection();
+    refreshRoute();
 }
 
 View3DPane::~View3DPane() {
@@ -157,7 +296,12 @@ void View3DPane::setModelLookup(std::function<QString(const QString&)> modelOf) 
 
 void View3DPane::setSourceChoice(bool shown) { source_->setVisible(shown); }
 
-void View3DPane::setEnvironmentChoice(bool shown) { envRow_->setVisible(shown); }
+void View3DPane::setEnvironmentChoice(bool shown) {
+    envRow_->setVisible(shown);
+    routeRow_->setVisible(shown);
+    side_->setVisible(shown);
+    canvas_->setRoute(shown ? &route_ : nullptr);
+}
 
 void View3DPane::setPinsLookup(std::function<PartPins(const QString&)> pinsOf) { pinsOf_ = std::move(pinsOf); }
 
@@ -221,6 +365,7 @@ void View3DPane::sayStatus() {
 
 bool View3DPane::loadEnvironment(const QString& path, bool wait) {
     if (loading_) return false;
+    envRef_ = path;
     auto env = std::make_shared<Environment3D>();
     auto index = std::make_shared<RayIndex3D>();
     auto work = [path, env, index] {
@@ -258,6 +403,12 @@ void View3DPane::takeEnvironment(Environment3D env, std::shared_ptr<RayIndex3D> 
     applySection();
     V3 lo, hi;
     if (env_.bounds(lo, hi)) canvas_->fitBox(lo, hi);
+    // Asked for and not read: the drawing is not to name it. Named by the drawing and not read: it still names it.
+    if (!quietLoad_) {
+        if (env_.empty()) envRef_.clear();
+        saveRouting();
+    }
+    quietLoad_ = false;
     sayStatus();
     emit environmentChanged();
 }
@@ -266,10 +417,12 @@ void View3DPane::clearEnvironment() {
     if (loading_) return;
     env_ = Environment3D();
     envIndex_.reset();
+    envRef_.clear();
     pickSaid_.clear();
     canvas_->clearPick();
     canvas_->setEnvironment(nullptr, nullptr);
     applySection();
+    saveRouting();
     sayStatus();
     emit environmentChanged();
 }
@@ -308,6 +461,142 @@ void View3DPane::showPick(const Pick3D& pick) {
     sayStatus();
 }
 
+// ---- The route ------------------------------------------------------------------------------------
+
+void View3DPane::setRoutingStore(std::function<QJsonObject()> load, std::function<void(const QJsonObject&)> save,
+                                 std::function<QString()> drawingDir) {
+    loadRouting_ = std::move(load);
+    saveRouting_ = std::move(save);
+    drawingDir_ = std::move(drawingDir);
+}
+
+void View3DPane::reloadRouting(bool wait) {
+    const QJsonObject o = loadRouting_ ? loadRouting_() : QJsonObject();
+    route_ = Route3D::fromJson(o);
+    history_.clear();
+    canvas_->setRoute(routeRow_->isHidden() ? nullptr : &route_);
+    // THE ENVIRONMENT IT NAMES: read again only when it is another one - where it was, or beside the drawing.
+    const QString named = o.value(QStringLiteral("environment")).toObject().value(QStringLiteral("path")).toString();
+    if (named.isEmpty()) {
+        if (!loading_ && (!env_.parts.empty() || !envRef_.isEmpty())) {
+            env_ = Environment3D();
+            envIndex_.reset();
+            canvas_->clearPick();
+            canvas_->setEnvironment(nullptr, nullptr);
+            applySection();
+        }
+        envRef_.clear();
+    } else if (env_.empty() || QFileInfo(named).absoluteFilePath() != QFileInfo(env_.path).absoluteFilePath()) {
+        QString path = named;
+        if (!QFileInfo::exists(path) && drawingDir_) {
+            const QString beside = QDir(drawingDir_()).filePath(QFileInfo(named).fileName());
+            if (QFileInfo::exists(beside)) path = beside;
+        }
+        if (QFileInfo::exists(path)) {
+            quietLoad_ = true;
+            if (!loadEnvironment(path, wait)) quietLoad_ = false;
+        } else {
+            env_ = Environment3D();
+            envIndex_.reset();
+            canvas_->setEnvironment(nullptr, nullptr);
+            env_.how = QStringLiteral("the drawing's environment %1 was not found").arg(QFileInfo(named).fileName());
+            envRef_ = named;
+        }
+    }
+    {
+        filling_ = true;
+        diameter_->setValue(route_.diameter);
+        bend_->setValue(route_.bendRadius);
+        lead_->setValue(route_.lead);
+        filling_ = false;
+    }
+    refreshRoute();
+    sayStatus();
+}
+
+void View3DPane::saveRouting() {
+    if (!saveRouting_) return;
+    QJsonObject o;
+    if (!route_.empty() || !envRef_.isEmpty()) o = route_.toJson();
+    if (!envRef_.isEmpty())
+        o[QStringLiteral("environment")] = QJsonObject{{QStringLiteral("path"), QFileInfo(envRef_).absoluteFilePath()},
+                                                      {QStringLiteral("file"), QFileInfo(envRef_).fileName()}};
+    saveRouting_(o);
+}
+
+void View3DPane::beforeRouteChange() {
+    history_.push_back(route_.toJson());
+    if (history_.size() > 100) history_.erase(history_.begin());
+}
+
+void View3DPane::undoRoute() {
+    if (history_.empty()) return;
+    route_ = Route3D::fromJson(history_.back());
+    history_.pop_back();
+    {
+        filling_ = true;
+        diameter_->setValue(route_.diameter);
+        bend_->setValue(route_.bendRadius);
+        lead_->setValue(route_.lead);
+        filling_ = false;
+    }
+    saveRouting();
+    refreshRoute();
+    emit routeChanged();
+}
+
+void View3DPane::setRouteTool(RouteTool tool) {
+    if (QAbstractButton* b = tools_->button(static_cast<int>(tool))) b->setChecked(true);
+    canvas_->setRouteTool(tool);
+}
+
+void View3DPane::refreshRoute() {
+    filling_ = true;
+    const QString selected = canvas_->selectedSegment();
+    table_->setRowCount(0);
+    double total = 0.0;
+    int tight = 0;
+    for (const RouteSegment3D& s : route_.segments) {
+        const RouteNode3D* a = route_.node(s.a);
+        const RouteNode3D* b = route_.node(s.b);
+        int t = 0;
+        route_.centreline(s, &t);
+        tight += t;
+        const double len = route_.length(s);
+        total += len;
+        const int row = table_->rowCount();
+        table_->insertRow(row);
+        auto* name = new QTableWidgetItem(QStringLiteral("%1 - %2").arg(a ? a->label : s.a, b ? b->label : s.b));
+        name->setData(Qt::UserRole, s.id);
+        name->setFlags(name->flags() & ~Qt::ItemIsEditable);
+        auto* length = new QTableWidgetItem(QStringLiteral("%1 mm").arg(len, 0, 'f', 1));
+        length->setFlags(length->flags() & ~Qt::ItemIsEditable);
+        length->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        auto* dia = new QTableWidgetItem(s.diameter > 0.0 ? QString::number(s.diameter, 'f', 1)
+                                                          : QStringLiteral("%1 (route)").arg(route_.diameter, 0, 'f', 1));
+        dia->setToolTip(QStringLiteral("This bundle's diameter - empty for the route's"));
+        table_->setItem(row, 0, name);
+        table_->setItem(row, 1, length);
+        table_->setItem(row, 2, dia);
+        if (s.id == selected) table_->selectRow(row);
+    }
+    int connectors = 0;
+    for (const RouteNode3D& n : route_.nodes) connectors += n.kind == RouteNodeKind::Connector ? 1 : 0;
+    QString said = route_.empty() ? QStringLiteral("Nothing routed yet - put connectors on the environment, then lay bundles "
+                                                   "between them.")
+                                  : QStringLiteral("%1 bundle(s), %2 mm in all; %3 connector(s), %4 node(s).")
+                                        .arg(route_.segments.size())
+                                        .arg(total, 0, 'f', 1)
+                                        .arg(connectors)
+                                        .arg(route_.nodes.size());
+    if (tight > 0)
+        said += QStringLiteral(" %1 bend(s) tighter than the bend radius - not room for it between the points laid.").arg(tight);
+    totals_->setText(said);
+    undo_->setEnabled(!history_.empty());
+    filling_ = false;
+    canvas_->routeRedraw();
+}
+
 // ---- The picture ----------------------------------------------------------------------------------
 
 View3DCanvas::View3DCanvas(QWidget* parent) : QWidget(parent) {
@@ -315,7 +604,7 @@ View3DCanvas::View3DCanvas(QWidget* parent) : QWidget(parent) {
     setMouseTracking(false);
     setFocusPolicy(Qt::StrongFocus);
     setToolTip(QStringLiteral("Left drag: turn - right or middle drag: move - wheel: zoom - double-click: fit - click on the "
-                              "environment: pick a point on it"));
+                              "environment: pick a point on it, or use the route tool chosen"));
 }
 
 void View3DCanvas::setScene(const Harness3DScene* scene) { scene_ = scene; }
@@ -377,6 +666,8 @@ void View3DCanvas::fit() {
         }
     V3 a, b;
     if (env_ && envShown_ && env_->bounds(a, b)) take(a, b);
+    if (route_)
+        for (const RouteNode3D& n : route_->nodes) take(n.at, n.at);
     if (!any) {
         lo = {-50, -50, -50};
         hi = {50, 50, 50};
@@ -444,6 +735,105 @@ void View3DCanvas::remark() {
     marker_.append(tubeMesh({p, p + pick_.normal * (size * 6.0)}, size * 0.25, 10, true));
 }
 
+bool View3DCanvas::surfaceAt(const QPointF& at, V3& point, V3& normal) {
+    V3 origin, dir;
+    cam_.rayAt(at.x(), at.y(), width(), height(), origin, dir);
+    if (env_ && envIndex_ && envShown_ && !envIndex_->empty()) {
+        for (int tries = 0; tries < 256; ++tries) {
+            const Pick3D p = envIndex_->cast(origin, dir);
+            if (!p.hit) break;
+            if (!section_.cuts(p.point)) {
+                point = p.point;
+                normal = p.normal;
+                return true;
+            }
+            origin = p.point + dir * std::max(1e-6, p.distance * 1e-7);
+        }
+    }
+    // NOTHING THERE: on the ground, the plane the drawing lies in.
+    if (std::abs(dir.z) < 1e-9) return false;
+    const double t = -origin.z / dir.z;
+    if (t <= 0.0) return false;
+    point = origin + dir * t;
+    normal = V3{0.0, 0.0, origin.z > 0.0 ? 1.0 : -1.0};
+    return true;
+}
+
+bool View3DCanvas::toScreen(const V3& p, QPointF& at) const {
+    V3 right, up, forward;
+    cam_.axes(right, up, forward);
+    const V3 d = p - cam_.eye();
+    const double z = dot3(d, forward);
+    if (z < cam_.nearPlane()) return false;
+    const double focal = 0.5 * std::max(1, height()) / std::tan(cam_.fovDeg * M_PI / 360.0);
+    at = QPointF(width() * 0.5 + focal * dot3(d, right) / z, height() * 0.5 - focal * dot3(d, up) / z);
+    return true;
+}
+
+// ---- The route in the picture ---------------------------------------------------------------------
+
+void View3DCanvas::setRoute(Route3D* route) {
+    route_ = route;
+    cancelLaying();
+    selSegment_.clear();
+    selNode_.clear();
+    routeRedraw();
+}
+
+void View3DCanvas::setRouteTool(RouteTool tool) {
+    if (tool != RouteTool::Route) cancelLaying();
+    tool_ = tool;
+    setMouseTracking(tool == RouteTool::Route);
+    setCursor(tool == RouteTool::Select ? Qt::ArrowCursor : Qt::CrossCursor);
+}
+
+void View3DCanvas::routeRedraw() {
+    if (route_) {
+        if (!selSegment_.isEmpty() && !route_->segment(selSegment_)) selSegment_.clear();
+        if (!selNode_.isEmpty() && !route_->node(selNode_)) selNode_.clear();
+        if (!layFrom_.isEmpty() && !route_->node(layFrom_)) cancelLaying();
+    }
+    routeDirty_ = true;
+    update();
+}
+
+void View3DCanvas::selectSegment(const QString& id) {
+    selSegment_ = id;
+    selNode_.clear();
+    routeRedraw();
+}
+
+V3 View3DCanvas::nodeShown(const RouteNode3D& n) const {
+    if (!route_) return n.at;
+    return n.kind == RouteNodeKind::Connector ? n.at + n.normal * (route_->lead * 0.5) : n.at + n.normal * (route_->diameter * 0.5);
+}
+
+void View3DCanvas::buildRouteMeshes() const {
+    routeMeshes_.clear();
+    routeDirty_ = false;
+    if (!route_) return;
+    const QColor lit(80, 220, 255);
+    for (const RouteSegment3D& s : route_->segments) {
+        const std::vector<V3> c = route_->centreline(s);
+        if (c.size() < 2) continue;
+        routeMeshes_.push_back({tubeMesh(c, route_->diameterOf(s) / 2.0, 14, true), s.id == selSegment_ ? lit : QColor(235, 140, 40)});
+    }
+    const double d = std::max(0.5, route_->diameter);
+    for (const RouteNode3D& n : route_->nodes) {
+        const bool on = n.id == selNode_ || n.id == layFrom_;
+        if (n.kind == RouteNodeKind::Connector) {
+            // A CONNECTOR: a body standing out of the face, as far as the lead and a little wider than the bundle.
+            routeMeshes_.push_back({tubeMesh({n.at, n.at + n.normal * std::max(route_->lead, d)}, d * 0.95, 16, true),
+                                    on ? lit : QColor(205, 208, 214)});
+        } else {
+            const double h = n.kind == RouteNodeKind::Branch ? d * 0.6 : d * 0.5;
+            const V3 c = nodeShown(n);
+            routeMeshes_.push_back({boxMesh(c - V3{h, h, h}, c + V3{h, h, h}),
+                                    on ? lit : n.kind == RouteNodeKind::Branch ? QColor(250, 210, 60) : QColor(70, 190, 110)});
+        }
+    }
+}
+
 std::vector<DrawItem3D> View3DCanvas::drawItems() const {
     std::vector<DrawItem3D> items;
     if (scene_ && harnessShown_)
@@ -463,8 +853,164 @@ std::vector<DrawItem3D> View3DCanvas::drawItems() const {
                 c = QColor((c.red() + 43) / 2, (c.green() + 208) / 2, (c.blue() + 255) / 2);
             items.push_back({&part.mesh, c, envAlpha_, true});
         }
+    if (routeDirty_) buildRouteMeshes();
+    for (const Drawn& d : routeMeshes_) items.push_back({&d.mesh, d.color});
+    if (!layMesh_.empty()) items.push_back({&layMesh_, QColor(255, 255, 255), 0.75});
     if (!marker_.empty()) items.push_back({&marker_, QColor(255, 196, 40)});
     return items;
+}
+
+QString View3DCanvas::nodeAt(const QPointF& at) const {
+    if (!route_) return QString();
+    QString best;
+    double nearest = 10.0;
+    for (const RouteNode3D& n : route_->nodes) {
+        QPointF p;
+        if (!toScreen(nodeShown(n), p)) continue;
+        const double d = std::hypot(p.x() - at.x(), p.y() - at.y());
+        if (d < nearest) {
+            nearest = d;
+            best = n.id;
+        }
+    }
+    return best;
+}
+
+QString View3DCanvas::segmentAt(const QPointF& at, V3* point, V3* normal, int* afterVia) const {
+    if (!route_) return QString();
+    QString best;
+    double nearest = 8.0;
+    for (const RouteSegment3D& s : route_->segments) {
+        const std::vector<V3> c = route_->corners(s);
+        const RouteNode3D* a = route_->node(s.a);
+        const RouteNode3D* b = route_->node(s.b);
+        if (!a || !b || c.size() < 2) continue;
+        // The normal at each corner, as the corners are made: a connector's twice, a via's, the far node's.
+        std::vector<V3> normals;
+        if (a->kind == RouteNodeKind::Connector) normals.push_back(a->normal);
+        normals.push_back(a->normal);
+        for (const RouteVia3D& v : s.via) normals.push_back(v.normal);
+        normals.push_back(b->normal);
+        if (b->kind == RouteNodeKind::Connector) normals.push_back(b->normal);
+        const int offset = a->kind == RouteNodeKind::Connector ? 2 : 1;
+        for (size_t k = 0; k + 1 < c.size(); ++k) {
+            QPointF p, q;
+            if (!toScreen(c[k], p) || !toScreen(c[k + 1], q)) continue;
+            const QPointF e = q - p;
+            const double ll = e.x() * e.x() + e.y() * e.y();
+            const double t = ll < 1e-9 ? 0.0 : std::clamp(((at.x() - p.x()) * e.x() + (at.y() - p.y()) * e.y()) / ll, 0.0, 1.0);
+            const double d = std::hypot(p.x() + e.x() * t - at.x(), p.y() + e.y() * t - at.y());
+            if (d >= nearest) continue;
+            nearest = d;
+            best = s.id;
+            const V3 n = normals[std::min(t < 0.5 ? k : k + 1, normals.size() - 1)];
+            const V3 mid = c[k] + (c[k + 1] - c[k]) * t;
+            if (point) *point = mid - n * (route_->diameterOf(s) / 2.0);
+            if (normal) *normal = n;
+            if (afterVia) *afterVia = std::clamp(static_cast<int>(k) + 1 - offset, 0, static_cast<int>(s.via.size()));
+        }
+    }
+    return best;
+}
+
+void View3DCanvas::cancelLaying() {
+    layFrom_.clear();
+    layVia_.clear();
+    layMesh_ = Mesh3D();
+    hoverOk_ = false;
+    routeDirty_ = true;
+    update();
+}
+
+void View3DCanvas::finishLaying(const QString& endNode) {
+    emit routeAboutToChange();
+    const QString id = route_->addSegment(layFrom_, endNode, layVia_);
+    layFrom_.clear();
+    layVia_.clear();
+    layMesh_ = Mesh3D();
+    selSegment_ = id;
+    selNode_.clear();
+    routeDirty_ = true;
+    emit routeChanged();
+    emit selectionChanged(selSegment_);
+}
+
+void View3DCanvas::routeClick(const QPointF& at) {
+    if (!route_) return;
+    const QString node = nodeAt(at);
+    V3 p, n;
+    switch (tool_) {
+    case RouteTool::Select:
+        break;
+    case RouteTool::Connector:
+        if (!node.isEmpty()) {
+            selNode_ = node;
+            selSegment_.clear();
+            routeRedraw();
+        } else if (surfaceAt(at, p, n)) {
+            emit routeAboutToChange();
+            selNode_ = route_->addNode(RouteNodeKind::Connector, p, n);
+            selSegment_.clear();
+            routeDirty_ = true;
+            emit routeChanged();
+        }
+        break;
+    case RouteTool::Branch:
+    case RouteTool::Clip: {
+        const RouteNodeKind kind = tool_ == RouteTool::Branch ? RouteNodeKind::Branch : RouteNodeKind::Clip;
+        int after = 0;
+        if (!node.isEmpty()) {
+            selNode_ = node;
+            routeRedraw();
+        } else if (const QString seg = segmentAt(at, &p, &n, &after); !seg.isEmpty()) {
+            // ON A BUNDLE: it is divided there.
+            emit routeAboutToChange();
+            selNode_ = route_->splitSegment(seg, p, n, after, kind);
+            selSegment_.clear();
+            routeDirty_ = true;
+            emit routeChanged();
+        } else if (surfaceAt(at, p, n)) {
+            emit routeAboutToChange();
+            selNode_ = route_->addNode(kind, p, n);
+            selSegment_.clear();
+            routeDirty_ = true;
+            emit routeChanged();
+        }
+        break;
+    }
+    case RouteTool::Route:
+        if (layFrom_.isEmpty()) {
+            if (!node.isEmpty()) {
+                layFrom_ = node;
+                routeDirty_ = true;
+            } else if (surfaceAt(at, p, n)) {
+                // FROM A FACE: a new branch there to start from.
+                emit routeAboutToChange();
+                layFrom_ = route_->addNode(RouteNodeKind::Branch, p, n);
+                routeDirty_ = true;
+                emit routeChanged();
+            }
+        } else if (!node.isEmpty() && node != layFrom_) {
+            finishLaying(node);
+        } else if (node.isEmpty() && surfaceAt(at, p, n)) {
+            layVia_.push_back({p, n});
+        }
+        update();
+        break;
+    case RouteTool::Delete:
+        if (!node.isEmpty()) {
+            emit routeAboutToChange();
+            route_->removeNode(node);
+            routeDirty_ = true;
+            emit routeChanged();
+        } else if (const QString seg = segmentAt(at); !seg.isEmpty()) {
+            emit routeAboutToChange();
+            route_->removeSegment(seg);
+            routeDirty_ = true;
+            emit routeChanged();
+        }
+        break;
+    }
 }
 
 QImage View3DCanvas::render(const QSize& size) const {
@@ -486,6 +1032,50 @@ QImage View3DCanvas::render(const QSize& size) const {
 void View3DCanvas::paintEvent(QPaintEvent*) {
     QPainter p(this);
     p.drawImage(0, 0, render(size()));
+    p.setRenderHint(QPainter::Antialiasing, true);
+    // THE ROUTE'S NAMES AND LENGTHS, over the picture: each node's label, each bundle's length at its middle.
+    if (route_) {
+        QFont f = p.font();
+        f.setPointSizeF(std::max(7.0, f.pointSizeF() * 0.9));
+        p.setFont(f);
+        for (const RouteNode3D& n : route_->nodes) {
+            QPointF at;
+            if (!toScreen(nodeShown(n), at)) continue;
+            p.setPen(QColor(255, 255, 255));
+            p.drawText(at + QPointF(8, -6), n.label);
+        }
+        for (const RouteSegment3D& s : route_->segments) {
+            const std::vector<V3> c = route_->centreline(s);
+            if (c.size() < 2) continue;
+            // At the middle of its length.
+            double total = 0.0;
+            for (size_t i = 1; i < c.size(); ++i) total += (c[i] - c[i - 1]).length();
+            double gone = 0.0;
+            V3 mid = c.front();
+            for (size_t i = 1; i < c.size(); ++i) {
+                const double l = (c[i] - c[i - 1]).length();
+                if (gone + l >= total / 2.0 && l > 0.0) {
+                    mid = c[i - 1] + (c[i] - c[i - 1]) * ((total / 2.0 - gone) / l);
+                    break;
+                }
+                gone += l;
+            }
+            QPointF at;
+            if (!toScreen(mid, at)) continue;
+            const QString text = QStringLiteral("%1 mm").arg(total, 0, 'f', total < 100.0 ? 1 : 0);
+            const QRectF box = QRectF(at + QPointF(6, 4), QSizeF(p.fontMetrics().horizontalAdvance(text) + 8, p.fontMetrics().height() + 2));
+            p.fillRect(box, QColor(20, 24, 30, 190));
+            p.setPen(s.id == selSegment_ ? QColor(80, 220, 255) : QColor(255, 200, 140));
+            p.drawText(box, Qt::AlignCenter, text);
+        }
+        if (!layFrom_.isEmpty()) {
+            const RouteNode3D* from = route_->node(layFrom_);
+            p.setPen(QColor(255, 255, 255));
+            p.drawText(QPointF(10, 18), QStringLiteral("Laying a bundle from %1 - click the faces it runs over, then the node it "
+                                                       "ends at (or double-click for a new branch); Esc gives up")
+                                            .arg(from ? from->label : QString()));
+        }
+    }
     // THE AXES, small in the corner: which way is which as it is turned.
     V3 right, up, forward;
     cam_.axes(right, up, forward);
@@ -495,7 +1085,6 @@ void View3DCanvas::paintEvent(QPaintEvent*) {
         QColor c;
         const char* n;
     } ax[3] = {{{1, 0, 0}, QColor(230, 90, 90), "X"}, {{0, 1, 0}, QColor(90, 210, 110), "Y"}, {{0, 0, 1}, QColor(90, 140, 240), "Z"}};
-    p.setRenderHint(QPainter::Antialiasing, true);
     for (const auto& a : ax) {
         const QPointF tip = o + QPointF(dot3(a.d, right), -dot3(a.d, up)) * 22.0;
         p.setPen(QPen(a.c, 2.0));
@@ -512,7 +1101,23 @@ void View3DCanvas::mousePressEvent(QMouseEvent* e) {
 }
 
 void View3DCanvas::mouseMoveEvent(QMouseEvent* e) {
-    if (dragging_ == Qt::NoButton) return;
+    if (dragging_ == Qt::NoButton) {
+        // LAYING A BUNDLE: where it would go next, under the pointer.
+        if (route_ && !layFrom_.isEmpty()) {
+            layMesh_ = Mesh3D();
+            const RouteNode3D* from = route_->node(layFrom_);
+            V3 p, n;
+            if (from && surfaceAt(e->position(), p, n)) {
+                const double r = route_->diameter / 2.0;
+                std::vector<V3> path{nodeShown(*from)};
+                for (const RouteVia3D& v : layVia_) path.push_back(v.at + v.normal * r);
+                path.push_back(p + n * r);
+                layMesh_ = tubeMesh(path, std::max(0.2, r * 0.5), 10, false);
+            }
+            update();
+        }
+        return;
+    }
     const QPoint now = e->position().toPoint();
     if ((now - pressedAt_).manhattanLength() > 3) moved_ = true;
     if (!moved_) return;
@@ -533,12 +1138,100 @@ void View3DCanvas::mouseMoveEvent(QMouseEvent* e) {
 }
 
 void View3DCanvas::mouseReleaseEvent(QMouseEvent* e) {
-    // A CLICK, NOT A DRAG: what is under the pointer picked.
-    if (dragging_ == Qt::LeftButton && !moved_ && e->button() == Qt::LeftButton && env_) pickAt(e->position());
+    const bool click = dragging_ == Qt::LeftButton && !moved_ && e->button() == Qt::LeftButton;
     dragging_ = Qt::NoButton;
+    if (swallowRelease_) {
+        swallowRelease_ = false;
+        return;
+    }
+    if (!click) return;
+    // A CLICK, NOT A DRAG: the route tool's, or - selecting - a node or bundle, else the point of the environment under
+    // the pointer.
+    if (route_ && tool_ != RouteTool::Select) {
+        routeClick(e->position());
+        return;
+    }
+    if (route_) {
+        const QString node = nodeAt(e->position());
+        const QString seg = node.isEmpty() ? segmentAt(e->position()) : QString();
+        if (!node.isEmpty() || !seg.isEmpty()) {
+            selNode_ = node;
+            selSegment_ = seg;
+            routeRedraw();
+            emit selectionChanged(selSegment_);
+            return;
+        }
+        if (!selNode_.isEmpty() || !selSegment_.isEmpty()) {
+            selNode_.clear();
+            selSegment_.clear();
+            routeRedraw();
+            emit selectionChanged(QString());
+        }
+    }
+    if (env_) pickAt(e->position());
 }
 
-void View3DCanvas::mouseDoubleClickEvent(QMouseEvent*) { fit(); }
+void View3DCanvas::mouseDoubleClickEvent(QMouseEvent* e) {
+    if (route_ && tool_ == RouteTool::Route) {
+        swallowRelease_ = true;
+        // ENDED AT A NEW BRANCH where it was double-clicked - the point the double-click's first click laid is that
+        // branch, not a point on the way to it.
+        V3 p, n;
+        if (!layFrom_.isEmpty() && nodeAt(e->position()).isEmpty() && surfaceAt(e->position(), p, n)) {
+            if (!layVia_.empty() && (layVia_.back().at - p).length() < 1e-6 + route_->diameter) layVia_.pop_back();
+            emit routeAboutToChange();
+            const QString end = route_->addNode(RouteNodeKind::Branch, p, n);
+            const QString id = route_->addSegment(layFrom_, end, layVia_);
+            layFrom_.clear();
+            layVia_.clear();
+            layMesh_ = Mesh3D();
+            selSegment_ = id;
+            routeDirty_ = true;
+            emit routeChanged();
+            emit selectionChanged(selSegment_);
+        }
+        return;
+    }
+    if (route_ && tool_ != RouteTool::Select) {
+        swallowRelease_ = true;
+        return;
+    }
+    fit();
+}
+
+void View3DCanvas::keyPressEvent(QKeyEvent* e) {
+    if (e->matches(QKeySequence::Undo)) {
+        emit undoRequested();
+        return;
+    }
+    if (!route_) {
+        QWidget::keyPressEvent(e);
+        return;
+    }
+    if (e->key() == Qt::Key_Escape && !layFrom_.isEmpty()) {
+        cancelLaying();
+        return;
+    }
+    if (e->key() == Qt::Key_Backspace && !layFrom_.isEmpty()) {
+        if (!layVia_.empty()) layVia_.pop_back();
+        layMesh_ = Mesh3D();
+        update();
+        return;
+    }
+    if (e->key() == Qt::Key_Delete && (!selNode_.isEmpty() || !selSegment_.isEmpty())) {
+        emit routeAboutToChange();
+        if (!selNode_.isEmpty())
+            route_->removeNode(selNode_);
+        else
+            route_->removeSegment(selSegment_);
+        selNode_.clear();
+        selSegment_.clear();
+        routeDirty_ = true;
+        emit routeChanged();
+        return;
+    }
+    QWidget::keyPressEvent(e);
+}
 
 void View3DCanvas::wheelEvent(QWheelEvent* e) {
     // ZOOMED: nearer or further, a step a notch.

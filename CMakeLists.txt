@@ -166,6 +166,8 @@ add_library(edraw_core STATIC
     src/geometry/Environment3D.cpp
     src/harness/Harness3D.h
     src/harness/Harness3D.cpp
+    src/harness/Route3D.h
+    src/harness/Route3D.cpp
     src/app/BlockDialog.h
     src/app/BlockDialog.cpp
     src/app/TemplateDialog.h

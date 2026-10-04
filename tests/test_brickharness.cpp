@@ -14,6 +14,7 @@
 #include "geometry/Environment3D.h"
 #include "geometry/Mesh3D.h"
 #include "harness/Harness3D.h"
+#include "harness/Route3D.h"
 #include "render/Render3D.h"
 #include "harness/BrickHarness.h"
 #include "harness/PartsLibrary.h"
@@ -6014,6 +6015,151 @@ void testRoundFortyTwo() {
           "3d view: the wizard's view - no environment row");
 }
 
+// ROUND FORTY-THREE: THE HARNESS ROUTED IN 3D - connectors put on the environment's faces, bundles laid between them
+// over the faces clicked, kept off them by their radius, their corners turned on the bend radius; branches and clips
+// dividing a bundle; each bundle's length off its path; saved with the drawing and read back.
+void testRoundFortyThree() {
+    // ---- THE PATH: out of a connector along its face's normal, the corner turned on the bend radius ----
+    {
+        Route3D r;
+        r.diameter = 8.0;
+        r.bendRadius = 5.0;
+        r.lead = 10.0;
+        const QString x1 = r.addNode(RouteNodeKind::Connector, {0, 0, 0}, {0, 0, 1});
+        const QString x2 = r.addNode(RouteNodeKind::Connector, {100, 0, 0}, {0, 0, 1});
+        const QString s = r.addSegment(x1, x2, {});
+        check(r.node(x1)->label == QLatin1String("X1") && r.node(x2)->label == QLatin1String("X2"), "route: connectors labelled X1, X2");
+        const double expect = 10.0 + 100.0 + 10.0 - 4.0 * 5.0 + 2.0 * (3.14159265358979323846 / 2.0 * 5.0);
+        std::printf("  route: an up-over-down bundle %.2f mm (%.2f by hand)\n", r.length(*r.segment(s)), expect);
+        check(std::abs(r.length(*r.segment(s)) - expect) < 0.05, "route: up out of one connector, over, down into the other - "
+                                                                 "its corners on arcs of the bend radius, its length along them");
+        int tight = 0;
+        r.bendRadius = 100.0;
+        r.centreline(*r.segment(s), &tight);
+        check(tight == 2, "route: a bend radius there is no room for - said, corner by corner");
+        // Laid over a face: its middle its radius off it.
+        Route3D f;
+        f.diameter = 8.0;
+        const QString a = f.addNode(RouteNodeKind::Branch, {0, 0, 0}, {0, 0, 1});
+        const QString b = f.addNode(RouteNodeKind::Branch, {50, 0, 0}, {0, 0, 1});
+        const QString fs = f.addSegment(a, b, {{{25, 0, 0}, {0, 0, 1}}});
+        bool lifted = true;
+        for (const V3& p : f.corners(*f.segment(fs))) lifted = lifted && std::abs(p.z - 4.0) < 1e-9;
+        check(lifted && std::abs(f.length(*f.segment(fs)) - 50.0) < 1e-6, "route: a bundle over a face lies on it - its middle its radius off");
+        // Divided at its laid point by a clip: two bundles, the clip between them, the length kept.
+        const QString clip = f.splitSegment(fs, {25, 0, 0}, {0, 0, 1}, 1, RouteNodeKind::Clip);
+        double sum = 0.0;
+        for (const RouteSegment3D& g : f.segments) sum += f.length(g);
+        check(f.segments.size() == 2 && f.degree(clip) == 2 && f.node(clip)->label == QLatin1String("C1") && std::abs(sum - 50.0) < 1e-6,
+              "route: a clip on a bundle divides it in two, the length the same");
+        check(Route3D::fromJson(f.toJson()).toJson() == f.toJson(), "route: written and read back the same");
+        f.removeNode(clip);
+        check(f.segments.empty() && f.nodes.size() == 2, "route: a node taken away takes its bundles with it");
+        // In the drawing's file.
+        Document doc(QStringLiteral("routed"));
+        doc.routing3d() = r.toJson();
+        Document back(QStringLiteral("back"));
+        dwx::fromJson(back, dwx::toJson(doc));
+        check(back.routing3d() == r.toJson(), "route: saved in the drawing and read back with it");
+        Document plain(QStringLiteral("plain"));
+        check(!dwx::toJson(plain).contains(QStringLiteral("routing3d")), "route: a drawing with none saves none - old files as they were");
+    }
+#ifdef EDRAW_HAVE_OCCT
+    // ---- IN THE 3D VIEW: connectors clicked on, a bundle laid, a branch put on it, taken back, saved, read back ----
+    const QString dir = QDir::tempPath() + QStringLiteral("/edraw3d");
+    const QString stepPath = dir + QStringLiteral("/routing.step");
+    QDir().mkpath(dir);
+    writeTestStepAssembly(stepPath);
+    QJsonObject stored;
+    int saves = 0;
+    View3DPane pane;
+    pane.setRoutingStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; ++saves; }, [&] { return dir; });
+    pane.resize(1000, 700);
+    pane.show();
+    QApplication::processEvents();
+    pane.loadEnvironment(stepPath, true);
+    View3DCanvas* canvas = pane.canvas();
+    canvas->setUseGpu(false);
+    canvas->viewFrom(QStringLiteral("top"));
+    auto click = [&](const V3& p) {
+        QPointF at;
+        canvas->toScreen(p, at);
+        QMouseEvent press(QEvent::MouseButtonPress, at, canvas->mapToGlobal(at), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent release(QEvent::MouseButtonRelease, at, canvas->mapToGlobal(at), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &press);
+        QApplication::sendEvent(canvas, &release);
+    };
+    pane.setRouteTool(RouteTool::Connector);
+    click({5, 5, 10});
+    click({30, 5, 5});
+    const Route3D& route = pane.route();
+    check(route.nodes.size() == 2 && route.nodes[0].kind == RouteNodeKind::Connector &&
+              std::abs(route.nodes[0].at.z - 10.0) < 0.05 && route.nodes[0].normal.z > 0.99 && std::abs(route.nodes[1].at.z - 5.0) < 0.05,
+          "3d route: connectors put on the faces clicked, facing out of them");
+    const QString x1 = route.nodes[0].id, x2 = route.nodes[1].id;
+    // A bundle from X1, over the ground between the two solids, into X2.
+    pane.setRouteTool(RouteTool::Route);
+    click(route.nodes[0].at + route.nodes[0].normal * (route.lead * 0.5));
+    check(canvas->layingRoute(), "3d route: a bundle started from the connector clicked");
+    click({15, 5, 0});
+    click(route.nodes[1].at + route.nodes[1].normal * (route.lead * 0.5));
+    check(!canvas->layingRoute() && route.segments.size() == 1 && route.segments[0].a == x1 && route.segments[0].b == x2 &&
+              route.segments[0].via.size() == 1,
+          "3d route: laid from X1 over the point clicked into X2");
+    auto* table = pane.findChild<QTableWidget*>(QStringLiteral("view3dRoutes"));
+    const double len = route.segments.empty() ? 0.0 : route.length(route.segments[0]);
+    std::printf("  3d route: X1 - X2 %.1f mm; table says %s\n", len, table->rowCount() ? qPrintable(table->item(0, 1)->text()) : "-");
+    check(table->rowCount() == 1 && table->item(0, 0)->text() == QLatin1String("X1 - X2") && len > 30.0 &&
+              table->item(0, 1)->text() == QStringLiteral("%1 mm").arg(len, 0, 'f', 1),
+          "3d route: the bundle in the table, by its ends, with its length");
+    check(stored.value(QStringLiteral("segments")).toArray().size() == 1 &&
+              stored.value(QStringLiteral("environment")).toObject().value(QStringLiteral("file")).toString() == QLatin1String("routing.step"),
+          "3d route: written to the drawing as it is laid - and the environment's file with it");
+    // A BRANCH on the bundle, between the point laid and X2: two bundles.
+    pane.setRouteTool(RouteTool::Branch);
+    const std::vector<V3> c = route.corners(route.segments[0]);
+    click((c[2] + c[3]) * 0.5);
+    check(route.segments.size() == 2 && route.nodes.size() == 3 && route.nodes[2].kind == RouteNodeKind::Branch &&
+              route.degree(route.nodes[2].id) == 2,
+          "3d route: a branch put on the bundle divides it there");
+    double sum = 0.0;
+    for (const RouteSegment3D& g : route.segments) sum += route.length(g);
+    std::printf("  3d route: divided, %.1f mm in all (was %.1f)\n", sum, len);
+    check(std::abs(sum - len) < len * 0.08, "3d route: and the two halves are as long as the whole was, near enough (the corners redone)");
+    // Taken back; X2 deleted, its bundle with it.
+    pane.undoRoute();
+    check(route.segments.size() == 1 && route.nodes.size() == 2, "3d route: undone - the branch taken back");
+    pane.setRouteTool(RouteTool::Delete);
+    click(route.nodes[1].at + route.nodes[1].normal * (route.lead * 0.5));
+    check(route.nodes.size() == 1 && route.segments.empty(), "3d route: a connector deleted, its bundle with it");
+    pane.undoRoute();
+    // Esc gives up a bundle being laid.
+    pane.setRouteTool(RouteTool::Route);
+    click(route.nodes[0].at + route.nodes[0].normal * (route.lead * 0.5));
+    click({15, 20, 0});
+    QKeyEvent esc(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(canvas, &esc);
+    check(!canvas->layingRoute() && route.segments.size() == 1, "3d route: Esc gives up the bundle being laid");
+    // READ BACK: another view of the same drawing - the route, and the environment it names, read again.
+    View3DPane again;
+    again.setRoutingStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; }, [&] { return dir; });
+    const int before = saves;
+    again.reloadRouting(true);
+    check(again.route().toJson() == pane.route().toJson() && !again.environment().empty(),
+          "3d route: read back from the drawing - the route, and its environment read again");
+    check(saves == before, "3d route: reading it back does not count as a change to the drawing");
+    // The environment moved along with the drawing: found beside it.
+    QJsonObject moved = stored;
+    QJsonObject envRef = moved.value(QStringLiteral("environment")).toObject();
+    envRef[QStringLiteral("path")] = QStringLiteral("Z:/gone/elsewhere/routing.step");
+    moved[QStringLiteral("environment")] = envRef;
+    View3DPane third;
+    third.setRoutingStore([&] { return moved; }, [&](const QJsonObject&) {}, [&] { return dir; });
+    third.reloadRouting(true);
+    check(!third.environment().empty(), "3d route: an environment not where it was - found beside the drawing");
+#endif
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -6070,6 +6216,7 @@ int run_brickharness_tests() {
     testRoundForty();
     testRoundFortyOne();
     testRoundFortyTwo();
+    testRoundFortyThree();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

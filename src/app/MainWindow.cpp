@@ -15506,6 +15506,8 @@ void MainWindow::activateIndex(int index) {
     doc_ = docs_[index].get();
     canvas_->setDocument(doc_);
     editor_->setDocument(doc_); // resets selection/undo for this drawing
+    // The 3D routing of this drawing, and the environment it is routed in.
+    if (view3dPane_) view3dPane_->reloadRouting();
     // PARTS PUT DOWN BEFORE THEIR ENTRY FACES WERE CARRIED get them now, from the library - so Alt
     // shows them and Shift lands a run on them on an old drawing as on a new one.
     {
@@ -16598,12 +16600,25 @@ QDockWidget* MainWindow::makeView3DPanel() {
         return stored.isEmpty() ? QString() : DatasheetStore::pathOf(stored);
     });
     view3dPane_->setPinsLookup([catalog](const QString& libPart) { return partPinsOf(catalog->byId(libPart)); });
+    // THE ROUTING IN 3D, kept with the drawing: the environment's file and the route through it.
+    view3dPane_->setRoutingStore([this] { return doc_ ? doc_->routing3d() : QJsonObject(); },
+                                 [this](const QJsonObject& o) {
+                                     if (!doc_ || doc_->routing3d() == o) return;
+                                     doc_->routing3d() = o;
+                                     doc_->setDirty(true);
+                                 },
+                                 [this] {
+                                     const int i = activeIndex();
+                                     const QString path = i >= 0 && i < docPaths_.size() ? docPaths_.at(i) : QString();
+                                     return path.isEmpty() ? QString() : QFileInfo(path).absolutePath();
+                                 });
     connect(dock, &QDockWidget::visibilityChanged, this, [this, catalog](bool on) {
         if (!on || !view3dPane_) return;
         *catalog = PartsCatalog();
         catalog->openRemembered();
         view3dPane_->rebuild(true);
     });
+    view3dPane_->reloadRouting();
     // Off to begin with, and wide when it is opened: a picture wants room.
     addDockWidget(Qt::BottomDockWidgetArea, dock);
     dock->hide();
