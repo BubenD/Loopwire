@@ -32,6 +32,20 @@ void DrawingPreview::setPickable(bool on) {
     update();
 }
 
+void DrawingPreview::setBoxSelect(bool on) {
+    boxSelect_ = on;
+    setCursor(on ? Qt::CrossCursor : Qt::ArrowCursor);
+    setToolTip(on ? QStringLiteral("Drag a box round what to take. Scroll to zoom, drag with the middle or right "
+                                   "button to move, double-click to fit")
+                  : QStringLiteral("Scroll to zoom, drag to move, double-click to fit the whole drawing again"));
+    update();
+}
+
+void DrawingPreview::setSelectedBox(const Bounds& box) {
+    box_ = box;
+    update();
+}
+
 void DrawingPreview::setPickedIndex(int index) {
     if (picked_ == index) return;
     picked_ = index;
@@ -235,7 +249,16 @@ void DrawingPreview::mousePressEvent(QMouseEvent* e) {
             return;
         }
     }
-    if (e->button() == Qt::LeftButton || e->button() == Qt::MiddleButton) {
+    if (boxSelect_ && e->button() == Qt::LeftButton && lastVtValid_) {
+        boxing_ = true;
+        boxFrom_ = lastVt_.toWorld(e->position());
+        box_ = Bounds{boxFrom_, boxFrom_, true};
+        update();
+        e->accept();
+        return;
+    }
+    if (e->button() == Qt::LeftButton || e->button() == Qt::MiddleButton ||
+        (boxSelect_ && e->button() == Qt::RightButton)) {
         dragging_ = true;
         dragFrom_ = e->position();
         setCursor(Qt::ClosedHandCursor);
@@ -246,6 +269,15 @@ void DrawingPreview::mousePressEvent(QMouseEvent* e) {
 }
 
 void DrawingPreview::mouseMoveEvent(QMouseEvent* e) {
+    if (boxing_) {
+        const Vec2 to = lastVt_.toWorld(e->position());
+        box_ = Bounds{};
+        box_.expand(boxFrom_);
+        box_.expand(to);
+        update();
+        e->accept();
+        return;
+    }
     if (!dragging_) {
         QWidget::mouseMoveEvent(e);
         return;
@@ -257,6 +289,15 @@ void DrawingPreview::mouseMoveEvent(QMouseEvent* e) {
 }
 
 void DrawingPreview::mouseReleaseEvent(QMouseEvent* e) {
+    if (boxing_) {
+        boxing_ = false;
+        // A click, not a drag, draws no box.
+        if (box_.width() * lastScale_ < 4.0 || box_.height() * lastScale_ < 4.0) box_ = Bounds{};
+        update();
+        emit boxChanged();
+        e->accept();
+        return;
+    }
     if (dragging_) {
         dragging_ = false;
         unsetCursor();
@@ -377,6 +418,13 @@ void DrawingPreview::paintEvent(QPaintEvent*) {
             // the one thing a preview of the step being described has to allow.
             EntityRenderer::draw(p, e, doc, vt, QColor("#8a93a0"));
         else EntityRenderer::draw(p, e, doc, vt, QColor("#d7dade"));
+    }
+    // THE BOX, over the drawing: what will be taken.
+    if (box_.valid) {
+        const QRectF shown = QRectF(vt.toScreen(box_.min), vt.toScreen(box_.max)).normalized();
+        p.setPen(QPen(QColor("#2bd0ff"), 1.4, Qt::DashLine));
+        p.setBrush(QColor(43, 208, 255, 28));
+        p.drawRect(shown);
     }
     p.restore();
     // THE MAP: the whole drawing, small, and the part of it in view outlined.

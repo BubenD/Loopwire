@@ -1,6 +1,7 @@
 #include "harness/PartsLibrary.h"
 
 #include "harness/Harness.h"
+#include "harness/PartFromPdf.h"
 
 #include "model/Entity.h"
 #include "tools/EntityTransforms.h"
@@ -1165,6 +1166,21 @@ QJsonArray connectorSymbolFromData(const LibraryPart& part) {
     if (part.value(QStringLiteral("annotation")).startsWith(QStringLiteral("letter"),
                                                            Qt::CaseInsensitive))
         spec.annotation = QStringLiteral("letters");
+    // AND WHAT EACH PIN IS, when the part has its pinout from the datasheet: each pin labelled with its
+    // signal beside its number, "1 GND", so the symbol is wired from without the datasheet open beside it.
+    // A pinout in letters letters the symbol, whatever the annotation said.
+    const std::vector<PdfPin> pinout = partPinout(part);
+    if (!pinout.empty()) {
+        const QString first = pinout.front().pin;
+        if (first.size() == 1 && first[0].isLetter()) spec.annotation = QStringLiteral("letters");
+        regenPinLabels(spec);
+        for (QString& label : spec.pins)
+            for (const PdfPin& p : pinout)
+                if (p.pin.compare(label, Qt::CaseInsensitive) == 0) {
+                    label = pinLabelFor(p);
+                    break;
+                }
+    }
     // AND WHAT EACH PIN TAKES, when the connector comes with its pins and they are not all the same. A
     // power connector is two heavy ways and six signal ways in one housing - that is the whole reason for
     // buying one - and a symbol that says one gauge for the lot is a symbol somebody wires the wrong way

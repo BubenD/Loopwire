@@ -11,6 +11,7 @@ add_executable(edraw_tests
     test_picture.cpp
     test_pdftext.cpp
     test_pdfimport.cpp
+    test_partfrompdf.cpp
     test_sizetable.cpp
     test_cable.cpp
     test_detailview.cpp

@@ -4,6 +4,7 @@
 
 #include "harness/MechModels.h"
 #include "harness/PartsLibrary.h"
+#include "harness/PartFromPdf.h"
 
 #include <QDialog>
 #include <QHash>
@@ -103,6 +104,14 @@ public:
     void refreshContactRow();
     // Build the connector's schematic symbol from its own data (the way count above all).
     void generateConnectorSymbol();
+    // DRAW THE PART FROM A PDF: its mechanical drawing from a view boxed on the page, its pinout from the
+    // pin table. The PDF is the datasheet picked (or the first one attached), or one chosen when there is
+    // none; `path` gives it outright.
+    void drawFromPdf(const QString& path = QString());
+    // What that takes, put into the part showing: the drawing as its mechanical drawing, the pinout as its
+    // pin count and labels, and a connector's symbol built again from them. `ask` asks before replacing a
+    // drawing the part already has.
+    void applyFromPdf(const QJsonArray& drawing, const std::vector<PdfPin>& pinout, bool ask = true);
     // The part's page: open it in a browser, or read what can be read off it into the fields.
     void openPartLink();
     void fetchDataFromLink();
@@ -124,10 +133,6 @@ public:
     // Re-read the connected libraries off disk and redraw. Wanted when something OUTSIDE this window has
     // written to them - a pin table on the drawing correcting the figures it took from here.
     void reloadTreeForTest();
-    // Seed one fanout side from a one-off mirror of the other - a starting point to hand-correct
-    // and capture, not a transform applied every time the fanout is placed. `intoOpposite`: true
-    // seeds fanoutOpposite from fanout, false seeds fanout from fanoutOpposite.
-    void mirrorFanoutFromOpposite(bool intoOpposite);
     // Which side of the connector the fanout pane is working on, and that pane brought into step with it.
     // Front and back are two drawings, each captured and edited on its own; the side showing is the part's.
     bool showingBackFanout() const;
@@ -276,8 +281,7 @@ private:
     void writeWires();
     std::vector<QAction*> placeWhat_;
     void placeTicked();
-    // The OTHER side's fanout - its own drawing now, not a live mirror of fanoutPreview_'s (see
-    // fanoutOpposite / mirrorFanoutFromOpposite()).
+    // The OTHER side's fanout - its own drawing, not a live mirror of fanoutPreview_'s (see fanoutOpposite).
     DrawingPreview* fanoutOppositePreview_ = nullptr;
     // The eye over the three drawings: shows or hides the connection point - the line the harness attaches
     // to, drawn orange - so a part can be looked at with nothing over it. See applyShowConnection().
@@ -292,7 +296,6 @@ private:
     // drawings the taken one lands in, which is the button that was pressed to get here.
     void importFromDefaultModel(bool mechanical);
     QComboBox* fanoutSideBox_ = nullptr;
-    QPushButton* fanoutMirrorBtn_ = nullptr;
     QWidget* fanoutSideRow_ = nullptr;
     QComboBox* contactBox_ = nullptr;
     QListWidget* contactList_ = nullptr;   // every contact tied to the connector - there may be several

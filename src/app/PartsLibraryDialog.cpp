@@ -7,6 +7,9 @@
 #include <QTreeWidgetItem>
 #include "harness/MechModels.h"
 #include "app/PartWebDataDialog.h"
+#include "app/PartFromPdfDialog.h"
+#include "harness/PartFromPdf.h"
+#include "io/PdfText.h"
 #include "harness/MechanicalHarness.h"
 
 #include "app/DrawingPreview.h"
@@ -32,6 +35,7 @@
 #include <QUrl>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFile>
 #include <QFormLayout>
 #include <QInputDialog>
 #include <QGridLayout>
@@ -692,7 +696,6 @@ QSize PartsLibraryDialog::holdCaptions() {
                                     chrome + std::max(fm.horizontalAdvance(one), fm.horizontalAdvance(other))));
     };
     holdForEither(showConnBtn_, QStringLiteral("Connection points shown"), QStringLiteral("Connection points hidden"));
-    holdForEither(fanoutMirrorBtn_, QStringLiteral("Mirror the front"), QStringLiteral("Mirror the back"));
     // The part's column scrolls up and down - its sections can be pulled taller than the window - but
     // never sideways: it is as wide as its widest row of captions, so none of them is ever cut.
     if (auto* sc = findChild<QScrollArea*>(QStringLiteral("partPaneScroll")); sc && sc->widget()) {
@@ -1100,6 +1103,9 @@ void PartsLibraryDialog::buildUi() {
                     menu.addSeparator();
                     menu.addAction(QStringLiteral("Read the technical data from it"), this,
                                    [this] { pullFromDatasheet(); });
+                    menu.addAction(QStringLiteral("Draw the part from it…"), this, [this] {
+                        drawFromPdf(DatasheetStore::pathOf(selectedDatasheet()));
+                    });
                     menu.addSeparator();
                     menu.addAction(QStringLiteral("Take off this part"), this,
                                    [this] { removeDatasheet(); });
@@ -1462,8 +1468,8 @@ void PartsLibraryDialog::buildUi() {
         bl->setContentsMargins(0, 0, 0, 0);
         const bool mech = sides[i].mechanical;
         if (isFanout) {
-            // All of them on THE SIDE SHOWING: take it off the sheet, edit it in its own session, start it
-            // from a mirror of the other side, or throw it away. Each button asks the box which side that is.
+            // All of them on THE SIDE SHOWING: take it off the sheet, edit it in its own session, or throw it
+            // away. Each button asks the box which side that is.
             auto* cap = new QPushButton(QStringLiteral("Capture selection"), btns);
             cap->setToolTip(QStringLiteral(
                 "Take what is selected on the sheet as this part's fanout on the side showing"));
@@ -1477,13 +1483,6 @@ void PartsLibraryDialog::buildUi() {
                                                 : LibraryPartDrawing::Fanout);
             });
             bl->addWidget(edt);
-            // A STARTING POINT FROM THE OTHER SIDE, for the common case where the two sides really are
-            // mirror images bar a detail: mirrored once into a real drawing that can then be corrected by
-            // hand, not a transform re-applied every time one is placed.
-            fanoutMirrorBtn_ = new QPushButton(QStringLiteral("Mirror the other side"), btns);
-            connect(fanoutMirrorBtn_, &QPushButton::clicked, this,
-                    [this] { mirrorFanoutFromOpposite(showingBackFanout()); });
-            bl->addWidget(fanoutMirrorBtn_);
             auto* clr = new QPushButton(QStringLiteral("Clear"), btns);
             clr->setToolTip(QStringLiteral("Throw away the drawing on the side showing"));
             connect(clr, &QPushButton::clicked, this, [this] {
@@ -1555,6 +1554,18 @@ void PartsLibraryDialog::buildUi() {
                 hide();
             });
             bl->addWidget(outputFacesBtn_);
+        }
+        if (mech) {
+            // FROM THE DATASHEET. The outline drawing and the pin table are both in it already, as vector
+            // lines and placed text; drawing them again by hand is copying.
+            auto* fromPdf = new QPushButton(QStringLiteral("From PDF"), btns);
+            fromPdf->setObjectName(QStringLiteral("partFromPdf"));
+            fromPdf->setToolTip(QStringLiteral(
+                "Draw the part from its datasheet PDF: box the view of the part on the page to take it as "
+                "this drawing, at the width the datasheet gives it, and take the pinout from the pin table "
+                "- the pin count, and each pin's signal on the symbol."));
+            connect(fromPdf, &QPushButton::clicked, this, [this] { drawFromPdf(); });
+            bl->addWidget(fromPdf);
         }
         auto* fromModel = new QPushButton(QStringLiteral("From default"), btns);
         fromModel->setToolTip(QStringLiteral(
@@ -3298,6 +3309,79 @@ void PartsLibraryDialog::generateConnectorSymbol() {
                               .arg(p->wayCount() == 1 ? QString() : QStringLiteral("s")));
 }
 
+void PartsLibraryDialog::drawFromPdf(const QString& path) {
+    LibraryPart* p = current();
+    if (!p) return;
+    QString file = path;
+    if (file.isEmpty()) {
+        // The datasheet picked, then the others: the first of them that is a PDF.
+        QStringList order;
+        const QString picked = selectedDatasheet();
+        if (!picked.isEmpty()) order << picked;
+        for (const QString& s : p->datasheets)
+            if (!order.contains(s)) order << s;
+        for (const QString& s : order) {
+            const QString at = DatasheetStore::pathOf(s);
+            QFile f(at);
+            if (DatasheetStore::exists(s) && f.open(QIODevice::ReadOnly) && PdfText::looksLikePdf(f.read(1024))) {
+                file = at;
+                break;
+            }
+        }
+    }
+    if (file.isEmpty())
+        file = QFileDialog::getOpenFileName(this, QStringLiteral("Draw the part from a PDF"), QString(),
+                                            QStringLiteral("PDF (*.pdf);;All files (*)"));
+    if (file.isEmpty()) return;
+    PartFromPdfDialog dlg(file, p->title(), this);
+    if (!dlg.loaded()) {
+        QMessageBox::warning(this, QStringLiteral("Draw the part from a PDF"),
+                             QStringLiteral("The PDF could not be read as a drawing: %1").arg(dlg.error()));
+        return;
+    }
+    if (dlg.exec() != QDialog::Accepted) return;
+    applyFromPdf(dlg.takeDrawing() ? dlg.drawing() : QJsonArray(),
+                 dlg.takePinout() ? dlg.pinout() : std::vector<PdfPin>());
+}
+
+void PartsLibraryDialog::applyFromPdf(const QJsonArray& drawing, const std::vector<PdfPin>& pinout, bool ask) {
+    LibraryPart* p = current();
+    if (!p) return;
+    QStringList said;
+    if (!drawing.isEmpty() &&
+        (!ask || !p->hasMechanical() ||
+         QMessageBox::question(this, QStringLiteral("From PDF"),
+                               QStringLiteral("Replace the mechanical drawing this part already has?")) ==
+             QMessageBox::Yes)) {
+        p->mechanical = drawing;
+        if (mechPreview_) mechPreview_->setDrawing(p->mechanical);
+        said << QStringLiteral("the mechanical drawing (%1 objects)").arg(drawing.size());
+    }
+    if (!pinout.empty()) {
+        setPartPinout(*p, pinout);
+        said << QStringLiteral("the pinout (%1 pins)").arg(pinout.size());
+        rebuildParamForm();
+        // A CONNECTOR'S SYMBOL FROM IT, at once: the labels are why the pinout was taken.
+        if (p->kind == PartKind::Connector) {
+            const QJsonArray made = connectorSymbolFromData(*p);
+            if (!made.isEmpty() &&
+                (!ask || !p->hasSchematic() ||
+                 QMessageBox::question(this, QStringLiteral("From PDF"),
+                                       QStringLiteral("Build the schematic symbol again with the pins labelled "
+                                                      "from the pinout? It replaces the one the part has.")) ==
+                     QMessageBox::Yes)) {
+                p->schematic = made;
+                said << QStringLiteral("the schematic symbol, its pins labelled");
+            }
+            if (schemPreview_) schemPreview_->setDrawing(partSchematicDrawing(*p));
+        }
+    }
+    if (said.isEmpty()) return;
+    touched();
+    reloadTree();
+    if (summary_) summary_->setText(QStringLiteral("From the PDF: %1.").arg(said.join(QStringLiteral(", "))));
+}
+
 void PartsLibraryDialog::beginCaptureFanout(bool opposite) {
     LibraryPart* p = current();
     if (!p || !editor_) return;
@@ -3655,7 +3739,6 @@ void PartsLibraryDialog::showFanoutSide() {
     const LibraryPart* p = current();
     const bool back = showingBackFanout();
     const QJsonArray mine = !p ? QJsonArray() : (back ? p->fanoutOpposite : p->fanout);
-    const QJsonArray other = !p ? QJsonArray() : (back ? p->fanout : p->fanoutOpposite);
     if (fanoutPreview_) {
         // The caption says which side is on show, because two drawings in one pane with nothing to tell
         // them apart is worse than one drawing.
@@ -3665,46 +3748,6 @@ void PartsLibraryDialog::showFanoutSide() {
                                           : QStringLiteral("nothing drawn for the front yet"));
         fanoutPreview_->setDrawing(mine);
     }
-    if (fanoutMirrorBtn_) {
-        fanoutMirrorBtn_->setText(back ? QStringLiteral("Mirror the front")
-                                       : QStringLiteral("Mirror the back"));
-        fanoutMirrorBtn_->setToolTip(
-            QStringLiteral("Start this side from a mirror of the %1, then correct it by hand")
-                .arg(back ? QStringLiteral("front") : QStringLiteral("back")));
-        fanoutMirrorBtn_->setEnabled(!other.isEmpty());
-    }
-}
-
-void PartsLibraryDialog::mirrorFanoutFromOpposite(bool intoOpposite) {
-    LibraryPart* p = current();
-    if (!p) return;
-    const QJsonArray& from = intoOpposite ? p->fanout : p->fanoutOpposite;
-    if (from.isEmpty()) {
-        if (summary_)
-            summary_->setText(QStringLiteral(
-                "Nothing on that side yet to mirror — capture or draw it first"));
-        return;
-    }
-    // The exact mirror math placement already uses (partDrawingBlockInstance's mirrored branch,
-    // mirrorEntity about a horizontal line through the origin) - run once, into a real drawing this
-    // side can then be hand-corrected and captured over, not a transform re-applied every place.
-    std::vector<Entity> ents = partDrawingEntities(from);
-    for (Entity& e : ents) mirrorEntity(e, Vec2{0.0, 0.0}, Vec2{1.0, 0.0});
-    const QJsonArray mirrored = partDrawingFromEntities(ents);
-    if (intoOpposite) {
-        p->fanoutOpposite = mirrored;
-        if (fanoutOppositePreview_) fanoutOppositePreview_->setDrawing(mirrored);
-    } else {
-        p->fanout = mirrored;
-    }
-    showFanoutSide();
-    touched();
-    saveLibrary();
-    reloadTree();
-    if (summary_)
-        summary_->setText(QStringLiteral(
-            "Mirrored as a starting point — edit it on the canvas if the two sides are not identical, "
-            "then Capture selection to keep the correction"));
 }
 
 // The eye's answer, given to all three drawings. In one place because the three panes are shown one part

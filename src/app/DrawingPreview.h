@@ -71,11 +71,20 @@ public:
     bool minimap() const { return minimap_; }
     bool showsConnection() const { return showConn_; }
 
+    // A BOX DRAWN OVER THE DRAWING, for taking one view out of a sheet that has several: with this on, a
+    // drag with the left button draws the box, and the middle or right button moves the view instead.
+    void setBoxSelect(bool on);
+    // The box, in the drawing's own units; not valid until one is drawn. Setting it shows it.
+    Bounds selectedBox() const { return box_; }
+    void setSelectedBox(const Bounds& box);
+
     // The objects, so a caller can write the pick back onto the part.
     const std::vector<Entity>& entities() const { return ents_; }
 
 signals:
     void pickedChanged(int index);
+    // A box has been drawn (on release of the button).
+    void boxChanged();
 
 protected:
     void paintEvent(QPaintEvent*) override;
@@ -115,6 +124,10 @@ private:
     double lastFit_ = 0.0;   // the whole drawing's fit, as last painted
     QRect lastBox_;
     bool holdView_ = false;   // the next paint keeps the last paint's mapping
+    bool boxSelect_ = false;
+    bool boxing_ = false;     // a box being drawn
+    Vec2 boxFrom_;
+    Bounds box_;
 };
 
 } // namespace Edraw_Desktop

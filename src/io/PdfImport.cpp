@@ -908,7 +908,9 @@ bool notDrawing(const QHash<QByteArray, QByteArray>& d) {
 
 } // namespace
 
-bool parse(const QByteArray& bytes, Document& doc, QString* error, const Progress& progress) {
+bool parse(const QByteArray& bytes, Document& doc, QString* error, const Progress& progress,
+           std::vector<Bounds>* pageBoxes) {
+    if (pageBoxes) pageBoxes->clear();
     if (!PdfText::looksLikePdf(bytes)) {
         if (error) *error = QStringLiteral("The selected file is not a PDF.");
         return false;
@@ -984,6 +986,14 @@ bool parse(const QByteArray& bytes, Document& doc, QString* error, const Progres
                 }
                 texts.push_back(std::move(e));
             }
+            if (pageBoxes) {
+                Bounds onSheet;
+                if (page.box.size() == 4)
+                    for (const Vec2& corner : {Vec2{page.box[0], page.box[1]}, Vec2{page.box[2], page.box[1]},
+                                               Vec2{page.box[2], page.box[3]}, Vec2{page.box[0], page.box[3]}})
+                        onSheet.expand(pageToSheet(corner, page) + Vec2{offsetX, 0.0});
+                pageBoxes->push_back(onSheet);
+            }
             offsetX += pageWidth > 0.0 ? pageWidth + 20.0 : 0.0;
         }
     } else {
@@ -1047,14 +1057,15 @@ bool parse(const QByteArray& bytes, Document& doc, QString* error, const Progres
     return true;
 }
 
-bool importFile(Document& doc, const QString& path, QString* error, const Progress& progress) {
+bool importFile(Document& doc, const QString& path, QString* error, const Progress& progress,
+                std::vector<Bounds>* pages) {
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
         if (error) *error = file.errorString();
         return false;
     }
     if (progress) progress(0, QStringLiteral("Reading the file"));
-    return parse(file.readAll(), doc, error, progress);
+    return parse(file.readAll(), doc, error, progress, pages);
 }
 
 } // namespace Edraw_Desktop::pdf

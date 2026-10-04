@@ -75,6 +75,8 @@ add_library(edraw_core STATIC
     src/harness/Datasheet.h
     src/harness/Datasheet.cpp
     src/harness/PartsLibrary.cpp
+    src/harness/PartFromPdf.h
+    src/harness/PartFromPdf.cpp
     src/harness/MechBuildScript.h
     src/harness/MechBuildScript.cpp
     src/harness/MechanicalHarness.h
@@ -120,6 +122,8 @@ add_library(edraw_core STATIC
     src/app/SplashScreen.cpp
     src/app/PartsLibraryDialog.h
     src/app/PartsLibraryDialog.cpp
+    src/app/PartFromPdfDialog.h
+    src/app/PartFromPdfDialog.cpp
     src/app/DrawingPreview.h
     src/app/DrawingPreview.cpp
     src/app/HarnessStepsDialog.h
