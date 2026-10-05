@@ -16,6 +16,7 @@
 #include <QWidget>
 
 #include <functional>
+#include <map>
 #include <memory>
 
 class QButtonGroup;
@@ -200,6 +201,7 @@ public:
 private:
     void syncMove();
     void updateWheel();
+    void buildMoveWheel();
 public:
     // THE NODE SELECTED moved by so much, turned round a world axis, coloured.
     void moveSelectedNode(const V3& by);
@@ -450,6 +452,11 @@ public:
     // SAME AS: the next connector clicked copied to this one.
     void startSameAs(const QString& node);
     bool sameAsPending() const { return !sameAs_.isEmpty(); }
+    // HEATSHRINK SLEEVES drawn at branches - on the routed cable and on each leg.
+    int branchSleeves() const {
+        if (routeDirty_) buildRouteMeshes();
+        return branchSleeves_;
+    }
     // HOW THE PICTURE IS SHOWN behind what is in it: 0 dark, 1 light, 2 a dark gradient, 3 a light gradient, 4 a colour.
     void setBackground(int mode, const QColor& colour = QColor());
     int backgroundMode() const { return bgMode_; }
@@ -481,6 +488,8 @@ signals:
     void cameraChanged();
     // Esc with nothing being laid.
     void escapePressed();
+    // Esc with a tool in hand and nothing half done: back to Select.
+    void toolCancelRequested();
 
 protected:
     void paintEvent(QPaintEvent*) override;
@@ -546,6 +555,7 @@ private:
     // The release that ends a double-click is not another click.
     bool swallowRelease_ = false;
     bool layMadeStart_ = false;   // the bundle being laid started from a branch made for it
+    mutable int branchSleeves_ = 0;
     RouteNode3D ghost_, placeTemplate_;
     bool ghostOn_ = false, ghostFrozen_ = false;
     QString sameAs_;
@@ -596,6 +606,17 @@ private:
         double scale = 1.0;
     };
     std::vector<KeptLength> keptLen_;
+    // THE SAME CABLE BEYOND ITS CLIPS: each stretch, as long as it was, as short as it could be pulled, as it was laid -
+    // by the bundle at the node held that runs into them. And each bundle's length as it was drawn when taken hold of.
+    struct Through {
+        QString segment;
+        double length = 0.0, shortest = 0.0;
+        std::vector<RouteVia3D> was;
+    };
+    std::map<QString, std::vector<Through>> through_;
+    std::map<QString, double> keptBase_;
+    // Length given to (or taken from) a bundle out of the stretches beyond its clips; how much there was.
+    double slideThroughClips(const QString& segment, double take);
     bool keepLength() const;
     void beginKeepLength();
     void pullKept(V3 target);

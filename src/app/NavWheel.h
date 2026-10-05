@@ -19,6 +19,9 @@ public:
         QString tip;
         std::function<void()> act;
         std::function<bool()> lit;   // on (a toggle), or empty
+        // AN ARROW THE WAY SOMETHING RUNS ON THE SCREEN - an axis, as the view is turned - degrees counter-clockwise from
+        // three o'clock; unset: as the key draws it.
+        double arrowDeg = 1e9;
     };
     explicit NavWheel(QWidget* parent = nullptr);
     void setItems(std::vector<Item> items);
@@ -26,6 +29,8 @@ public:
     // unless set.
     void setMiddle(const QString& label, std::function<void(const QPoint& global)> act);
     int count() const { return static_cast<int>(items_.size()); }
+    const std::vector<Item>& items() const { return items_; }
+    double angleOf(int i) const;   // the middle of segment i, degrees counter-clockwise from three o'clock
     // The segment at a point (-1 off the ring), and the middle of a segment - for the tests to click.
     int segmentAt(const QPointF& p) const;
     QPointF segmentCentre(int i) const;
@@ -40,7 +45,6 @@ protected:
     void resizeEvent(QResizeEvent*) override;
 
 private:
-    double angleOf(int i) const;   // the middle of segment i, degrees counter-clockwise from three o'clock
     std::vector<Item> items_;
     QString middleLabel_ = QStringLiteral("Move");
     std::function<void(const QPoint&)> middleAct_;

@@ -171,6 +171,11 @@ const Topic kTopics[] = {
      "<p><b>To make it longer:</b> turn on <i>Add loose</i> and a pull lengthens it; or select a cable and press "
      "<i>Add length</i> (or right-click it) and say by how much - it is laid looser, bowed off the face it lies on, its "
      "ends where they are.</p>"
+     "<p><b>Through clips:</b> a clip guides the cable - pulled further than it reaches, the cable slides through the "
+     "clip, the stretch beyond it giving up length until it is straight; the cable as a whole stays as long as it was.</p>"
+     "<p><b>Which way a drag goes:</b> across the view - right, left, up, down as the pointer goes. Hold <i>Ctrl</i> and "
+     "move the pointer up or down to push it away from you or pull it toward you; hold <i>Shift</i> to slide a node "
+     "over the model's faces. <i>Esc</i> gives up what is half done, then puts the tool down (Select again).</p>"
      "<p><b>Stretch</b> pulls a connector: it stays, its cable pulled tight through it and the rest cut off.</p>"},
     {"14. Connectors - forms, Tab, Same as, colours",
      "",
@@ -185,7 +190,8 @@ const Topic kTopics[] = {
      "its form, size, how it lies and its colour.</p>"
      "<p><b>Colours:</b> right-click a connector or a cable and <i>Colour...</i>.</p>"
      "<p>A clip is drawn as a band round the cable with its foot on the face; a route given up (Esc) takes away the "
-     "branch it was started from.</p>"},
+     "branch it was started from. A <b>branch</b> gets heatshrink: a sleeve over the cable either side of it, and one on "
+     "each leg out of it. The table's last row is the <b>total</b> of every cable's length.</p>"},
     {"15. Display - background and shading",
      "",
      "<p><i>Display</i> (on the ribbon, or <i>Options</i> on the wheel) sets what is behind the picture - dark, light, "

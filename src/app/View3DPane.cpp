@@ -849,6 +849,12 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
         sayStatus();
     });
     connect(this, &View3DPane::routeToolChanged, this, [this] { syncMove(); });
+    // Esc with a tool in hand: Select again.
+    connect(canvas_, &View3DCanvas::toolCancelRequested, this, [this] { setRouteTool(RouteTool::Select); });
+    // THE WHEEL'S ARROWS the way the axes run as the view is turned.
+    connect(canvas_, &View3DCanvas::cameraChanged, this, [this] {
+        if (wheelMoving_) buildMoveWheel();
+    });
     connect(canvas_, &View3DCanvas::routeChanged, this, [this] { syncMove(); });
     // RIGHT-CLICKED ON THE ROUTE: the ruler, the node or the bundle under it deleted - or every ruler taken away.
     connect(canvas_, &View3DCanvas::routeMenuAsked, this, [this](const QString& node, const QString& seg, int measure, const QPoint& at) {
@@ -1294,29 +1300,7 @@ void View3DPane::updateWheel() {
     if (moving == wheelMoving_) return;
     wheelMoving_ = moving;
     if (moving) {
-        auto stepOf = [this] { return moveStep_->value(); };
-        std::vector<NavWheel::Item> items;
-        const char* axes = "xyz";
-        for (int axis = 0; axis < 3; ++axis)
-            for (int sign : {1, -1}) {
-                const QString key = QStringLiteral("%1%2").arg(QLatin1Char(axes[axis])).arg(sign > 0 ? QLatin1Char('+') : QLatin1Char('-'));
-                const QString name = QStringLiteral("%1%2").arg(QChar(QLatin1Char("XYZ"[axis]))).arg(sign > 0 ? QLatin1Char('+') : QLatin1Char('-'));
-                items.push_back({key, QStringLiteral("Move %1").arg(name), QStringLiteral("Move it a step along %1").arg(name),
-                                 [this, axis, sign, stepOf] {
-                                     V3 by;
-                                     (axis == 0 ? by.x : axis == 1 ? by.y : by.z) = stepOf() * sign;
-                                     moveSelectedNode(by);
-                                 },
-                                 {}});
-            }
-        for (int axis = 0; axis < 3; ++axis)
-            for (int sign : {1, -1}) {
-                const QString key = QStringLiteral("r%1%2").arg(QLatin1Char(axes[axis])).arg(sign > 0 ? QLatin1Char('+') : QLatin1Char('-'));
-                items.push_back({key, QStringLiteral("Turn %1").arg(QChar(QLatin1Char("XYZ"[axis]))),
-                                 QStringLiteral("Turn it 15° round %1").arg(QChar(QLatin1Char("XYZ"[axis]))),
-                                 [this, axis, sign] { rotateSelectedNode(axis, 15.0 * sign); }, {}});
-            }
-        wheel_->setItems(items);
+        buildMoveWheel();
         wheel_->setMiddle(QStringLiteral("Move"), [this](const QPoint&) {
             // The middle: done moving - the view's wheel back.
             canvas_->selectSegment(QString());
@@ -1326,6 +1310,68 @@ void View3DPane::updateWheel() {
         wheel_->setItems(viewWheel_);
         wheel_->setMiddle(QStringLiteral("View"), [this](const QPoint& at) { wheelOptions(at); });
     }
+    wheel_->update();
+}
+
+void View3DPane::buildMoveWheel() {
+    // EACH ARROW WHERE ITS AXIS POINTS ON THE SCREEN: +X in the segment on the side +X runs to as the view is turned (left
+    // where it goes left, right where it goes right), and drawn that way; the turns round each axis in the segments left.
+    auto stepOf = [this] { return moveStep_->value(); };
+    V3 right, up, forward;
+    canvas_->camera().axes(right, up, forward);
+    const int ring = 12;
+    std::vector<NavWheel::Item> items(static_cast<size_t>(ring));
+    std::vector<bool> taken(static_cast<size_t>(ring), false);
+    struct Way {
+        int axis, sign;
+        double deg, shown;
+    };
+    std::vector<Way> ways;
+    for (int axis = 0; axis < 3; ++axis)
+        for (int sign : {1, -1}) {
+            const V3 d = (axis == 0 ? V3{1, 0, 0} : axis == 1 ? V3{0, 1, 0} : V3{0, 0, 1}) * sign;
+            const double sx = dot3(d, right), sy = dot3(d, up);
+            ways.push_back({axis, sign, std::atan2(sy, sx) * 180.0 / M_PI, std::hypot(sx, sy)});
+        }
+    // Those that show longest first; one pointing straight at the eye takes what is left.
+    std::sort(ways.begin(), ways.end(), [](const Way& a, const Way& b) { return a.shown > b.shown; });
+    for (const Way& w : ways) {
+        int best = -1;
+        double nearest = 1e9;
+        for (int i = 0; i < ring; ++i) {
+            if (taken[static_cast<size_t>(i)]) continue;
+            const double slot = 90.0 - i * 360.0 / ring;
+            const double off = std::abs(std::remainder(w.deg - slot, 360.0));
+            if (off < nearest) {
+                nearest = off;
+                best = i;
+            }
+        }
+        taken[static_cast<size_t>(best)] = true;
+        const QString key = QStringLiteral("%1%2").arg(QLatin1Char("xyz"[w.axis])).arg(w.sign > 0 ? QLatin1Char('+') : QLatin1Char('-'));
+        const QString name = QStringLiteral("%1%2").arg(QChar(QLatin1Char("XYZ"[w.axis]))).arg(w.sign > 0 ? QLatin1Char('+') : QLatin1Char('-'));
+        NavWheel::Item it{key, QStringLiteral("Move %1").arg(name), QStringLiteral("Move it a step along %1").arg(name),
+                          [this, axis = w.axis, sign = w.sign, stepOf] {
+                              V3 by;
+                              (axis == 0 ? by.x : axis == 1 ? by.y : by.z) = stepOf() * sign;
+                              moveSelectedNode(by);
+                          },
+                          {}};
+        it.arrowDeg = w.shown > 0.05 ? w.deg : 1e9;
+        items[static_cast<size_t>(best)] = it;
+    }
+    int next = 0;
+    for (int axis = 0; axis < 3; ++axis)
+        for (int sign : {1, -1}) {
+            while (next < ring && taken[static_cast<size_t>(next)]) ++next;
+            if (next >= ring) break;
+            taken[static_cast<size_t>(next)] = true;
+            const QString key = QStringLiteral("r%1%2").arg(QLatin1Char("xyz"[axis])).arg(sign > 0 ? QLatin1Char('+') : QLatin1Char('-'));
+            items[static_cast<size_t>(next)] = {key, QStringLiteral("Turn %1").arg(QChar(QLatin1Char("XYZ"[axis]))),
+                                                QStringLiteral("Turn it 15° round %1").arg(QChar(QLatin1Char("XYZ"[axis]))),
+                                                [this, axis, sign] { rotateSelectedNode(axis, 15.0 * sign); }, {}};
+        }
+    wheel_->setItems(items);
     wheel_->update();
 }
 
@@ -2073,6 +2119,25 @@ void View3DPane::refreshRoute() {
         table_->setItem(row, 2, dia);
         if (s.id == selected) table_->selectRow(row);
     }
+    // THE TOTAL, the last row, lit - every bundle's length added up.
+    if (!route_.segments.empty()) {
+        const int row = table_->rowCount();
+        table_->insertRow(row);
+        const QColor lit(47, 133, 90), ink(255, 255, 255);
+        QFont bold = table_->font();
+        bold.setBold(true);
+        const QString texts[3] = {QStringLiteral("Total"), QStringLiteral("%1 mm").arg(total, 0, 'f', 1), QString()};
+        for (int c = 0; c < 3; ++c) {
+            auto* it = new QTableWidgetItem(texts[c]);
+            it->setFlags(Qt::ItemIsEnabled);
+            it->setBackground(lit);
+            it->setForeground(ink);
+            it->setFont(bold);
+            if (c == 1) it->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            table_->setItem(row, c, it);
+        }
+        table_->item(row, 0)->setData(Qt::UserRole + 1, true);   // the total, not a bundle
+    }
     int connectors = 0;
     for (const RouteNode3D& n : route_.nodes) connectors += n.kind == RouteNodeKind::Connector ? 1 : 0;
     QString said = route_.empty() ? QStringLiteral("Nothing routed yet - put connectors on the environment, then lay bundles "
@@ -2410,6 +2475,7 @@ void View3DCanvas::beginKeepLength() {
                 for (const auto& [id, length] : drawn)
                     if (id == k.segment) was = length;
                 keptLen_.push_back({k.segment, was, steps, 1.0});
+                keptBase_[k.segment] = was;
             }
         }
     };
@@ -2442,8 +2508,42 @@ void View3DCanvas::beginKeepLength() {
         else
             for (int i = static_cast<int>(s.via.size()) - 1; i >= 0; --i) order.push_back(i);
         chain(s, node->at, order, far->at);
+        // THROUGH ITS CLIPS: the stretches of the same cable beyond each clip it runs through (a clip with two bundles),
+        // as long as they are, and how short each could be pulled (straight) - the cable slides through a clip.
+        std::vector<Through> list;
+        QString at = far->id, from = s.id;
+        for (int guard = 0; guard < 64; ++guard) {
+            const RouteNode3D* clip = route_->node(at);
+            if (!clip || clip->kind != RouteNodeKind::Clip || route_->degree(at) != 2) break;
+            const RouteSegment3D* next = nullptr;
+            for (const RouteSegment3D& o : route_->segments)
+                if (o.id != from && (o.a == at || o.b == at)) next = &o;
+            if (!next) break;
+            const std::vector<V3> k = route_->corners(*next);
+            list.push_back({next->id, route_->length(*next), k.size() >= 2 ? (k.back() - k.front()).length() : 0.0, next->via});
+            from = next->id;
+            at = next->a == at ? next->b : next->a;
+        }
+        through_[s.id] = list;
     }
     account();
+}
+
+double View3DCanvas::slideThroughClips(const QString& segment, double take) {
+    // TAKEN FROM BEYOND THE CLIPS, the nearest stretch first, each down to straight - from each as it was taken hold of.
+    auto t = through_.find(segment);
+    if (t == through_.end()) return 0.0;
+    double left = std::max(0.0, take);
+    for (const Through& th : t->second) {
+        RouteSegment3D* s = route_->segment(th.segment);
+        if (!s) continue;
+        s->via = th.was;
+        const double cut = std::min(left, std::max(0.0, th.length - th.shortest - 0.05));
+        if (cut > 0.01) route_->lengthen(th.segment, th.length - cut);
+        // What it really gave - its bends may keep it from going as short as straight.
+        left -= std::max(0.0, th.length - route_->length(*route_->segment(th.segment)));
+    }
+    return std::max(0.0, take) - left;
 }
 
 void View3DCanvas::layKept(const Kept& k, const V3& start, double scale) {
@@ -2501,6 +2601,10 @@ void View3DCanvas::tightenKept(double by) {
             l.scale += (goal - now) / slope;
         }
         stretchCut_ += l.length - route_->length(*s);
+        // TIGHT, AND MORE PULLED: the rest through its clips - the stretches beyond them shortened in turn.
+        const double short_ = by - (l.length - route_->length(*s));
+        if (short_ > 0.05) stretchCut_ += slideThroughClips(l.segment, short_);
+        else slideThroughClips(l.segment, 0.0);
     }
 }
 
@@ -2511,6 +2615,20 @@ void View3DCanvas::pullKept(V3 target) {
             if (l.segment == id) return l.scale;
         return 1.0;
     };
+    // PULLED FURTHER THAN IT REACHES, THROUGH ITS CLIPS: the cable slides through each clip it runs through, the stretch
+    // beyond giving it length - down to straight - the cable as a whole as long as it was.
+    for (KeptLength& l : keptLen_) {
+        const auto base = keptBase_.find(l.segment);
+        if (base == keptBase_.end() || through_.find(l.segment) == through_.end()) continue;
+        const Kept* k = nullptr;
+        for (const Kept& c : kept_)
+            if (c.segment == l.segment) k = &c;
+        if (!k) continue;
+        const RouteNode3D* held = route_->node(dragId_);
+        const double lead = held && held->kind == RouteNodeKind::Connector ? route_->lead : 0.0;
+        const double need = (target - k->anchor).length() + lead;
+        l.length = base->second + slideThroughClips(l.segment, need - base->second);
+    }
     // ITS LENGTH AS IT IS DRAWN KEPT: bends and what it is laid over draw a cable longer or shorter than the points it is
     // laid through, so its steps are laid longer or shorter until it is drawn as long as it was.
     for (int fit = 0; fit < 14; ++fit) {
@@ -2548,6 +2666,8 @@ bool View3DCanvas::beginNodeDrag(const QPointF& at, bool stretch) {
     dragStarted_ = false;
     kept_.clear();
     keptLen_.clear();
+    through_.clear();
+    keptBase_.clear();
     if (!route_) return false;
     const QString id = nodeAt(at);
     const RouteNode3D* node = route_->node(id);
@@ -2698,6 +2818,34 @@ void View3DCanvas::buildRouteMeshes() const {
             const V3 c = nodeShown(n);
             routeMeshes_.push_back({boxMesh(c - V3{h, h, h}, c + V3{h, h, h}), on ? lit : n.color.isValid() ? n.color : QColor(250, 210, 60),
                                     Texture3D::None, n.id});
+        }
+    }
+    // HEATSHRINK AT A BRANCH: a sleeve over the routed cable where it divides, and over each leg out of it - each as long
+    // as three times the bundle's diameter from the branch, a little wider than the bundle.
+    branchSleeves_ = 0;
+    for (const RouteNode3D& n : route_->nodes) {
+        if (n.kind != RouteNodeKind::Branch || route_->degree(n.id) < 2) continue;
+        for (const RouteSegment3D& s : route_->segments) {
+            if (s.a != n.id && s.b != n.id) continue;
+            std::vector<V3> c = route_->centreline(s);
+            if (c.size() < 2) continue;
+            if (s.b == n.id) std::reverse(c.begin(), c.end());
+            const double dia = route_->diameterOf(s), reach = std::max(6.0, dia * 3.0);
+            std::vector<V3> sleeve{c.front()};
+            double gone = 0.0;
+            for (size_t i = 1; i < c.size() && gone < reach; ++i) {
+                const double l = (c[i] - c[i - 1]).length();
+                if (gone + l >= reach && l > 1e-9) {
+                    sleeve.push_back(c[i - 1] + (c[i] - c[i - 1]) * ((reach - gone) / l));
+                    gone = reach;
+                    break;
+                }
+                sleeve.push_back(c[i]);
+                gone += l;
+            }
+            if (sleeve.size() < 2) continue;
+            routeMeshes_.push_back({tubeMesh(sleeve, dia / 2.0 * 1.3, 18, true), QColor(28, 28, 32), Texture3D::Matte, QString()});
+            ++branchSleeves_;
         }
     }
     // A CONNECTOR BEING PUT: where it would go under the pointer - frozen there with Tab - in its form, see-through.
@@ -3577,7 +3725,10 @@ void View3DCanvas::mouseMoveEvent(QMouseEvent* e) {
         }
         V3 right, up, forward;
         cam_.axes(right, up, forward);
-        const V3 by = right * (dd.x() * dragPerPixel_) - up * (dd.y() * dragPerPixel_);
+        // ACROSS THE VIEW - right, left, up, down as the pointer goes; CTRL HELD, the pointer up and down pushes it away
+        // from the eye and pulls it back toward it.
+        const V3 by = (e->modifiers() & Qt::ControlModifier) ? forward * (-dd.y() * dragPerPixel_)
+                                                             : right * (dd.x() * dragPerPixel_) - up * (dd.y() * dragPerPixel_);
         // ITS LENGTH KEPT: the point where the pointer is - on the model, or across the picture - and the cable pulled
         // along behind it.
         if (keepLength()) {
@@ -3591,7 +3742,8 @@ void View3DCanvas::mouseMoveEvent(QMouseEvent* e) {
             }
             V3 target = held + by;
             V3 p, nn;
-            if (dragKind_ == 5 && surfaceAt(e->position(), p, nn)) {
+            // SHIFT: over the model's faces, where the pointer is; otherwise across the view (and Ctrl, into it).
+            if (dragKind_ == 5 && (e->modifiers() & Qt::ShiftModifier) && surfaceAt(e->position(), p, nn)) {
                 target = p;
                 if (RouteNode3D* n = route_->node(dragId_)) n->normal = nn.normalized();
             }
@@ -3602,10 +3754,10 @@ void View3DCanvas::mouseMoveEvent(QMouseEvent* e) {
             return;
         }
         if (dragKind_ == 5) {
-            // ON THE MODEL WHERE THE POINTER IS - or, off it, across the picture.
+            // SHIFT: ON THE MODEL WHERE THE POINTER IS - otherwise across the picture (Ctrl: into it).
             if (RouteNode3D* n = route_->node(dragId_)) {
                 V3 p, nn;
-                if (surfaceAt(e->position(), p, nn)) {
+                if ((e->modifiers() & Qt::ShiftModifier) && surfaceAt(e->position(), p, nn)) {
                     n->at = p;
                     n->normal = nn.normalized();
                 } else {
@@ -3665,6 +3817,8 @@ void View3DCanvas::mouseReleaseEvent(QMouseEvent* e) {
         dragging_ = Qt::NoButton;
         kept_.clear();
         keptLen_.clear();
+        through_.clear();
+        keptBase_.clear();
         setCursor(tool_ == RouteTool::Move || tool_ == RouteTool::Stretch ? Qt::SizeAllCursor : Qt::OpenHandCursor);
         if (changed) emit routeChanged();
         return;
@@ -3798,6 +3952,18 @@ void View3DCanvas::keyPressEvent(QKeyEvent* e) {
     // THE RULER SELECTED, deleted.
     if (e->key() == Qt::Key_Delete && selMeasure_ >= 0) {
         removeMeasure(selMeasure_);
+        return;
+    }
+    // ESC, NOTHING HALF DONE: the tool put down - Select again - then the selection let go.
+    if (e->key() == Qt::Key_Escape && tool_ != RouteTool::Select) {
+        emit toolCancelRequested();
+        return;
+    }
+    if (e->key() == Qt::Key_Escape && (!selNode_.isEmpty() || !selSegment_.isEmpty())) {
+        selNode_.clear();
+        selSegment_.clear();
+        routeRedraw();
+        emit selectionChanged(QString());
         return;
     }
     if (e->key() == Qt::Key_Escape) {

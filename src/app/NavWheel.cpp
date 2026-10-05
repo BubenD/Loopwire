@@ -202,8 +202,10 @@ void NavWheel::paintEvent(QPaintEvent*) {
                 p.setBrush(tint);
                 p.drawEllipse(tip, 2.0, 2.0);
             } else {
-                arrow(plus ? 90.0 : -90.0);
-                p.translate(-s * 1.1, 0.0);
+                // The way the axis runs on the screen, as the view is turned - left where it goes left.
+                arrow(it.arrowDeg < 1e8 ? it.arrowDeg : (plus ? 90.0 : -90.0));
+                const double back = (it.arrowDeg < 1e8 ? it.arrowDeg : (plus ? 90.0 : -90.0)) * M_PI / 180.0;
+                p.translate(-s * 1.0 * std::cos(back), s * 1.0 * std::sin(back));
             }
             QFont f = p.font();
             f.setBold(true);

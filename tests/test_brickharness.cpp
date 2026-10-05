@@ -6154,7 +6154,8 @@ void testRoundFortyThree() {
     auto* table = pane.findChild<QTableWidget*>(QStringLiteral("view3dRoutes"));
     const double len = route.segments.empty() ? 0.0 : route.length(route.segments[0]);
     std::printf("  3d route: X1 - X2 %.1f mm; table says %s\n", len, table->rowCount() ? qPrintable(table->item(0, 1)->text()) : "-");
-    check(table->rowCount() == 1 && table->item(0, 0)->text() == QLatin1String("X1 - X2") && len > 30.0 &&
+    // The bundle, and the total under it.
+    check(table->rowCount() == 2 && table->item(1, 0)->text() == QLatin1String("Total") && table->item(0, 0)->text() == QLatin1String("X1 - X2") && len > 30.0 &&
               table->item(0, 1)->text() == QStringLiteral("%1 mm").arg(len, 0, 'f', 1),
           "3d route: the bundle in the table, by its ends, with its length");
     check(stored.value(QStringLiteral("segments")).toArray().size() == 1 &&
@@ -7937,7 +7938,21 @@ void testRoundFiftyFour() {
             for (const RouteSegment3D& s : pane.route().segments)
                 if (s.id != far) nearId = s.id;
             const std::vector<V3> nc = pane.route().centreline(*pane.route().segment(nearId));
-            const QPointF grab = screen(nc[nc.size() / 2]);
+            // Clear of X1's housing: most of the way along the stretch, toward the clip.
+            V3 along = nc.back();
+            {
+                double total = 0.0, gone = 0.0;
+                for (size_t i = 1; i < nc.size(); ++i) total += (nc[i] - nc[i - 1]).length();
+                for (size_t i = 1; i < nc.size(); ++i) {
+                    const double l = (nc[i] - nc[i - 1]).length();
+                    if (gone + l >= total * 0.7 && l > 0.0) {
+                        along = nc[i - 1] + (nc[i] - nc[i - 1]) * ((total * 0.7 - gone) / l);
+                        break;
+                    }
+                    gone += l;
+                }
+            }
+            const QPointF grab = screen(along);
             QMouseEvent down(QEvent::MouseButtonPress, grab, canvas->mapToGlobal(grab), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
             QApplication::sendEvent(canvas, &down);
             for (int i = 1; i <= 8; ++i) {
@@ -8472,6 +8487,148 @@ void testRoundFiftySeven() {
           "ribbon: Display and Help on it");
 }
 
+// ROUND FIFTY-EIGHT: A CABLE PULLED THROUGH ITS CLIPS - pulled further than it reaches, it slides through the clip, the
+// stretch beyond giving it length, the cable as a whole as long as it was; MOVED ACROSS THE VIEW, Ctrl into it; THE TOTAL
+// in the lengths table; ESC puts the tool down; HEATSHRINK at a branch, on the cable and the leg; THE WHEEL'S ARROWS the
+// way the axes run on the screen.
+void testRoundFiftyEight() {
+    Route3D r;
+    r.diameter = 6.0;
+    r.lead = 10.0;
+    const QString x1 = r.addNode(RouteNodeKind::Connector, {-60, 0, 0}, {0, 0, 1});
+    const QString c1 = r.addNode(RouteNodeKind::Clip, {0, 0, 0}, {0, 0, 1});
+    const QString x2 = r.addNode(RouteNodeKind::Connector, {60, 0, 0}, {0, 0, 1});
+    const QString s0 = r.addSegment(x1, c1, {{{-30, 0, 0}, {0, 0, 1}}});
+    // Slack beyond the clip: the stretch to X2 laid wide.
+    const QString s1 = r.addSegment(c1, x2, {{{15, 30, 0}, {0, 0, 1}}, {{45, 30, 0}, {0, 0, 1}}});
+    QJsonObject stored = r.toJson();
+    View3DPane pane;
+    pane.setRoutingStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    pane.resize(1100, 760);
+    pane.show();
+    QApplication::processEvents();
+    pane.reloadRouting(true);
+    View3DCanvas* canvas = pane.canvas();
+    canvas->setUseGpu(false);
+    canvas->viewFrom(QStringLiteral("top"));
+    QApplication::processEvents();
+    const Route3D& route = pane.route();
+    auto screen = [&](const V3& p) {
+        QPointF at;
+        canvas->toScreen(p, at);
+        return at;
+    };
+    auto drag = [&](const QPointF& from, const QPointF& to, Qt::KeyboardModifiers mods = Qt::NoModifier) {
+        QMouseEvent press(QEvent::MouseButtonPress, from, canvas->mapToGlobal(from), Qt::LeftButton, Qt::LeftButton, mods);
+        QApplication::sendEvent(canvas, &press);
+        for (int i = 1; i <= 14; ++i) {
+            const QPointF at = from + (to - from) * (i / 14.0);
+            QMouseEvent move(QEvent::MouseMove, at, canvas->mapToGlobal(at), Qt::NoButton, Qt::LeftButton, mods);
+            QApplication::sendEvent(canvas, &move);
+        }
+        QMouseEvent release(QEvent::MouseButtonRelease, to, canvas->mapToGlobal(to), Qt::LeftButton, Qt::NoButton, mods);
+        QApplication::sendEvent(canvas, &release);
+        QApplication::processEvents();
+    };
+    const double a0 = route.length(*route.segment(s0)), b0 = route.length(*route.segment(s1));
+    // ---- PULLED THROUGH THE CLIP: X1 dragged well past where its stretch reaches ----
+    pane.setRouteTool(RouteTool::Move);
+    const QPointF grip = screen(route.node(x1)->at + route.node(x1)->normal * 5.0);
+    drag(grip, grip + (screen({-110, 0, 0}) - screen({-60, 0, 0})));
+    const double a1 = route.length(*route.segment(s0)), b1 = route.length(*route.segment(s1));
+    std::printf("  through clips: X1 to %.1f; its stretch %.1f -> %.1f, beyond the clip %.1f -> %.1f (all %.1f -> %.1f)\n",
+                route.node(x1)->at.x, a0, a1, b0, b1, a0 + b0, a1 + b1);
+    check(route.node(x1)->at.x < -75.0 && a1 > a0 + 10.0 && b1 < b0 - 10.0, "through clips: pulled past its reach - the cable slides through the clip");
+    check(std::abs((a1 + b1) - (a0 + b0)) < 1.5 && route.node(c1)->at.length() < 1e-9 && route.node(x2)->at.x == 60.0,
+          "through clips: the cable as a whole as long as it was, the clip and the far end where they were");
+    pane.undoRoute();
+    // ---- CTRL: into the view - from above, down ----
+    const V3 was = route.node(x2)->at;
+    const QPointF g2 = screen(was + route.node(x2)->normal * 5.0);
+    drag(g2, g2 + QPointF(0, -40), Qt::ControlModifier);
+    const V3 now = route.node(x2)->at;
+    std::printf("  ctrl: X2 from %.1f,%.1f,%.1f to %.1f,%.1f,%.1f\n", was.x, was.y, was.z, now.x, now.y, now.z);
+    check(std::abs(now.z - was.z) > 2.0 && std::abs(now.x - was.x) < 0.5 && std::abs(now.y - was.y) < 0.5,
+          "ctrl: the pointer up with Ctrl held - pushed away from the eye, not across");
+    pane.undoRoute();
+    // ---- THE TOTAL ----
+    auto* table = pane.findChild<QTableWidget*>(QStringLiteral("view3dRoutes"));
+    const int last = table ? table->rowCount() - 1 : -1;
+    const double sum = route.length(*route.segment(s0)) + route.length(*route.segment(s1));
+    check(table && last == 2 && table->item(last, 0)->text() == QLatin1String("Total") &&
+              table->item(last, 1)->text() == QStringLiteral("%1 mm").arg(sum, 0, 'f', 1) && table->item(last, 0)->font().bold(),
+          "total: under the bundles, every length added up, lit");
+    // ---- ESC: the tool put down ----
+    pane.setRouteTool(RouteTool::Move);
+    QKeyEvent esc(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(canvas, &esc);
+    check(pane.routeTool() == RouteTool::Select, "esc: with nothing half done, the tool put down - Select again");
+    // ---- THE WHEEL'S ARROWS: from above, +X to the right, +Y up the screen ----
+    pane.setRouteTool(RouteTool::Move);
+    {
+        QMouseEvent press(QEvent::MouseButtonPress, screen(route.node(x2)->at + route.node(x2)->normal * 5.0), QPointF(), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent release(QEvent::MouseButtonRelease, screen(route.node(x2)->at + route.node(x2)->normal * 5.0), QPointF(), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &press);
+        QApplication::sendEvent(canvas, &release);
+        QApplication::processEvents();
+    }
+    auto* wheel = pane.findChild<NavWheel*>(QStringLiteral("view3dWheel"));
+    check(pane.wheelMoving() && wheel, "wheel: moving - its arrows");
+    if (wheel && pane.wheelMoving()) {
+        int xi = -1, yi = -1;
+        double xDeg = 1e9, yDeg = 1e9;
+        for (int i = 0; i < wheel->count(); ++i) {
+            if (wheel->items()[static_cast<size_t>(i)].key == QLatin1String("x+")) {
+                xi = i;
+                xDeg = wheel->items()[static_cast<size_t>(i)].arrowDeg;
+            }
+            if (wheel->items()[static_cast<size_t>(i)].key == QLatin1String("y+")) {
+                yi = i;
+                yDeg = wheel->items()[static_cast<size_t>(i)].arrowDeg;
+            }
+        }
+        std::printf("  wheel: +X in segment %d drawn at %.0f deg, +Y in segment %d at %.0f deg\n", xi, xDeg, yi, yDeg);
+        check(std::abs(std::remainder(xDeg, 360.0)) < 5.0 && std::abs(std::remainder(wheel->angleOf(xi), 360.0)) < 16.0,
+              "wheel: from above, +X points right - in the segment on the right");
+        check(std::abs(std::remainder(yDeg - 90.0, 360.0)) < 5.0 && std::abs(std::remainder(wheel->angleOf(yi) - 90.0, 360.0)) < 16.0,
+              "wheel: +Y points up the screen - in the segment at the top");
+    }
+    pane.setRouteTool(RouteTool::Select);
+    // ---- HEATSHRINK AT A BRANCH: on the cable either side, and on the leg ----
+    pane.setRouteTool(RouteTool::Branch);
+    const std::vector<V3> c = route.corners(*route.segment(s0));
+    {
+        const QPointF at = screen((c[1] + c[2]) * 0.5);
+        QMouseEvent press(QEvent::MouseButtonPress, at, canvas->mapToGlobal(at), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent release(QEvent::MouseButtonRelease, at, canvas->mapToGlobal(at), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &press);
+        QApplication::sendEvent(canvas, &release);
+        QApplication::processEvents();
+    }
+    QString branch;
+    for (const RouteNode3D& n : route.nodes)
+        if (n.kind == RouteNodeKind::Branch) branch = n.id;
+    check(!branch.isEmpty() && canvas->branchSleeves() == 2, "heatshrink: a branch on the cable - a sleeve on it either side");
+    pane.setRouteTool(RouteTool::Route);
+    {
+        const RouteNode3D* b = route.node(branch);
+        for (const QPointF& at : {screen(b->at + b->normal * 3.0), screen({-20, -40, 0})}) {
+            QMouseEvent press(QEvent::MouseButtonPress, at, canvas->mapToGlobal(at), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QMouseEvent release(QEvent::MouseButtonRelease, at, canvas->mapToGlobal(at), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(canvas, &press);
+            QApplication::sendEvent(canvas, &release);
+            QApplication::processEvents();
+        }
+        const QPointF end = screen({-20, -40, 0});
+        QMouseEvent dbl(QEvent::MouseButtonDblClick, end, canvas->mapToGlobal(end), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &dbl);
+        QMouseEvent release(QEvent::MouseButtonRelease, end, canvas->mapToGlobal(end), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &release);
+        QApplication::processEvents();
+    }
+    check(route.degree(branch) == 3 && canvas->branchSleeves() == 3, "heatshrink: a leg out of the branch - its own sleeve too");
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -8553,6 +8710,7 @@ int run_brickharness_tests() {
     ROUND(testRoundFiftyFive);
     ROUND(testRoundFiftySix);
     ROUND(testRoundFiftySeven);
+    ROUND(testRoundFiftyEight);
 #undef ROUND
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
