@@ -121,6 +121,10 @@ which one wasn't and why.
   what the code plainly says.
 - Qt idioms: `QStringLiteral`, `QLatin1String` for comparisons, and `QSignalBlocker` when loading
   widgets from the design. Give every widget a test needs an `objectName` (`brick...`).
+- **A field that can be Auto gets a small "A" button beside it**, never an "Auto" special-value text.
+  While A is on, the field shows the real figure Auto comes to and can't be typed in; turning A off
+  starts the field from that real figure. Store 0 (or a negative value) for Auto. This holds in
+  every window, not only the wizard.
 - New UI goes next to its kind. Transition settings go in the transition frames; per-part
   settings go in the part panel.
 - MSVC shadowing warnings (C4456/C4458) already exist in these files. Don't add new ones where it's

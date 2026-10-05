@@ -8211,6 +8211,9 @@ void testRoundFiftySix() {
         form->setCurrentIndex(form->findData(QStringLiteral("round")));
         emit form->activated(form->currentIndex());
     }
+    // Auto off first - its "A" - then its own figures.
+    pane.findChild<QToolButton*>(QStringLiteral("view3dConnWAuto"))->setChecked(false);
+    pane.findChild<QToolButton*>(QStringLiteral("view3dConnLAuto"))->setChecked(false);
     pane.findChild<QDoubleSpinBox*>(QStringLiteral("view3dConnW"))->setValue(20.0);
     pane.findChild<QDoubleSpinBox*>(QStringLiteral("view3dConnL"))->setValue(30.0);
     check(route.node(x2)->form == QLatin1String("round") && route.node(x2)->formW == 20.0 && route.node(x2)->formL == 30.0,
@@ -8320,6 +8323,155 @@ void testRoundFiftySix() {
           "ribbon: compact - the views small with their names beside them, the main tools large");
 }
 
+// ROUND FIFTY-SEVEN: A CABLE'S LENGTH KEPT when it is moved - by a node or by a stretch of it between two nodes; MORE
+// LENGTH asked for; ITS COLOUR; A ROUTE GIVEN UP takes its start away; TAB freezes a connector being put to set it
+// first; SAME AS; "A" beside each field that can be Auto, the field showing the real figure; THE BACKGROUND; the 3D
+// Preview ribbon - Route next to View, Measure and Connector large with their arrows.
+void testRoundFiftySeven() {
+    // ---- MORE LENGTH: bowed off the face, its ends held ----
+    {
+        Route3D r;
+        r.diameter = 6.0;
+        const QString a = r.addNode(RouteNodeKind::Branch, {0, 0, 0}, {0, 0, 1});
+        const QString b = r.addNode(RouteNodeKind::Branch, {100, 0, 0}, {0, 0, 1});
+        const QString s = r.addSegment(a, b, {});
+        const double was = r.length(*r.segment(s));
+        r.lengthen(s, was + 25.0);
+        double top = 0.0;
+        for (const RouteVia3D& v : r.segment(s)->via) top = std::max(top, v.at.z);
+        std::printf("  add length: %.1f -> %.1f mm, bowed %.1f off the face\n", was, r.length(*r.segment(s)), top);
+        check(std::abs(r.length(*r.segment(s)) - (was + 25.0)) < 0.2 && top > 5.0 && r.node(a)->at.x == 0.0 && r.node(b)->at.x == 100.0,
+              "add length: as much longer as asked, bowed off what it lies on, its ends where they were");
+        r.segment(s)->color = QColor(20, 120, 220);
+        check(Route3D::fromJson(r.toJson()).segment(s)->color == QColor(20, 120, 220), "colour: a bundle's colour saved with the route");
+    }
+    Route3D r;
+    r.diameter = 6.0;
+    r.lead = 12.0;
+    const QString x1 = r.addNode(RouteNodeKind::Connector, {-50, 0, 0}, {0, 0, 1});
+    const QString x2 = r.addNode(RouteNodeKind::Connector, {50, 0, 0}, {0, 0, 1});
+    const QString seg = r.addSegment(x1, x2, {{{0, 0, 0}, {0, 0, 1}}});
+    QJsonObject stored = r.toJson();
+    View3DPane pane;
+    pane.setRoutingStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    pane.resize(1100, 760);
+    pane.show();
+    QApplication::processEvents();
+    pane.reloadRouting(true);
+    View3DCanvas* canvas = pane.canvas();
+    canvas->setUseGpu(false);
+    canvas->viewFrom(QStringLiteral("top"));
+    QApplication::processEvents();
+    const Route3D& route = pane.route();
+    auto screen = [&](const V3& p) {
+        QPointF at;
+        canvas->toScreen(p, at);
+        return at;
+    };
+    auto drag = [&](const QPointF& from, const QPointF& to) {
+        QMouseEvent press(QEvent::MouseButtonPress, from, canvas->mapToGlobal(from), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &press);
+        for (int i = 1; i <= 12; ++i) {
+            const QPointF at = from + (to - from) * (i / 12.0);
+            QMouseEvent move(QEvent::MouseMove, at, canvas->mapToGlobal(at), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(canvas, &move);
+        }
+        QMouseEvent release(QEvent::MouseButtonRelease, to, canvas->mapToGlobal(to), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &release);
+        QApplication::processEvents();
+    };
+    auto click = [&](const QPointF& at) {
+        QMouseEvent press(QEvent::MouseButtonPress, at, canvas->mapToGlobal(at), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent release(QEvent::MouseButtonRelease, at, canvas->mapToGlobal(at), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &press);
+        QApplication::sendEvent(canvas, &release);
+        QApplication::processEvents();
+    };
+    // ---- MOVED, ITS LENGTH KEPT: the connector dragged across, the cable the same length as it is drawn ----
+    const double before = route.length(*route.segment(seg));
+    pane.setRouteTool(RouteTool::Move);
+    drag(screen(route.node(x2)->at + route.node(x2)->normal * 6.0), screen({30, 35, 0}));
+    std::printf("  keep length: %.2f mm before, %.2f after X2 moved to %.1f, %.1f\n", before, route.length(*route.segment(seg)),
+                route.node(x2)->at.x, route.node(x2)->at.y);
+    check(route.node(x2)->at.y > 10.0 && std::abs(route.length(*route.segment(seg)) - before) < 0.2,
+          "keep length: a connector moved - the cable as long as it was drawn, to a fifth of a millimetre");
+    // A STRETCH OF IT taken hold of between its two ends: moved, the ends held, the length kept.
+    const std::vector<V3> c = route.centreline(*route.segment(seg));
+    const V3 mid = c[c.size() / 2];
+    const V3 x1Was = route.node(x1)->at, x2Was = route.node(x2)->at;
+    drag(screen(mid), screen(mid + V3{0, -15, 0}));
+    check((route.node(x1)->at - x1Was).length() < 1e-9 && (route.node(x2)->at - x2Was).length() < 1e-9 &&
+              std::abs(route.length(*route.segment(seg)) - before) < 0.2,
+          "move: a stretch of the cable dragged - its ends held, its length kept");
+    pane.undoRoute();
+    pane.undoRoute();
+    // ---- A ROUTE GIVEN UP: the branch it was started from taken away ----
+    const size_t nodes = route.nodes.size();
+    pane.setRouteTool(RouteTool::Route);
+    click(screen({-20, 40, 0}));
+    check(route.nodes.size() == nodes + 1 && canvas->layingRoute(), "route: started from a face - a branch made to start it from");
+    QKeyEvent esc(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(canvas, &esc);
+    check(route.nodes.size() == nodes && !canvas->layingRoute(), "route: given up - its branch taken away, nothing left behind");
+    // ---- TAB: the connector being put frozen, set on the right, put where it was frozen ----
+    pane.setRouteTool(RouteTool::Connector);
+    const QPointF over = screen({0, -40, 0});
+    QMouseEvent hover(QEvent::MouseMove, over, canvas->mapToGlobal(over), Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(canvas, &hover);
+    check(canvas->ghostShown(), "tab: the connector being put follows the pointer");
+    QKeyEvent tab(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+    QApplication::sendEvent(canvas, &tab);
+    check(canvas->ghostFrozen(), "tab: frozen where it would go");
+    auto* form = pane.findChild<QComboBox*>(QStringLiteral("view3dConnForm"));
+    check(form && form->isVisibleTo(&pane), "tab: its options on the right, to set first");
+    if (form) {
+        form->setCurrentIndex(form->findData(QStringLiteral("dsub")));
+        emit form->activated(form->currentIndex());
+    }
+    check(canvas->placeTemplate().form == QLatin1String("dsub"), "tab: set - a D-sub shell");
+    click(screen({30, 40, 0}));
+    const RouteNode3D& put = route.nodes.back();
+    check(put.form == QLatin1String("dsub") && std::abs(put.at.y + 40.0) < 1.0 && !canvas->ghostFrozen(),
+          "tab: a click puts it where it was frozen, as it was set - not where the click was");
+    // ---- SAME AS: X1 made like the D-sub ----
+    pane.setRouteTool(RouteTool::Select);
+    canvas->startSameAs(x1);
+    click(screen(put.at + put.normal * 6.0));
+    check(route.node(x1)->form == QLatin1String("dsub"), "same as: the connector clicked copied to the one asked for");
+    // ---- "A": the field showing the real figure Auto comes to ----
+    click(screen(route.node(x2)->at + route.node(x2)->normal * 6.0));
+    auto* wAuto = pane.findChild<QToolButton*>(QStringLiteral("view3dConnWAuto"));
+    auto* w = pane.findChild<QDoubleSpinBox*>(QStringLiteral("view3dConnW"));
+    check(wAuto && w && wAuto->isChecked() && !w->isEnabled() && std::abs(w->value() - 6.0 * 2.2) < 0.05,
+          "auto: A on - the width field shows the real figure (2.2 x the diameter), not typed in");
+    if (wAuto) wAuto->setChecked(false);
+    check(w && w->isEnabled() && std::abs(route.node(x2)->formW - 6.0 * 2.2) < 0.05, "auto: A off - its own width, from the real figure");
+    auto* bendAuto = pane.findChild<QToolButton*>(QStringLiteral("view3dRouteBendAuto"));
+    auto* bend = pane.findChild<QDoubleSpinBox*>(QStringLiteral("view3dRouteBend"));
+    check(bendAuto && bend && bendAuto->isChecked() && !bend->isEnabled() && std::abs(bend->value() - 36.0) < 0.05,
+          "auto: the bend radius's A - the field shows six times the diameter");
+    // ---- THE BACKGROUND ----
+    canvas->setBackground(2);
+    const QImage graded = canvas->render(QSize(200, 160));
+    check(graded.pixelColor(2, 2).lightness() > graded.pixelColor(2, 157).lightness() + 20, "background: a gradient, lighter at the top");
+    canvas->setBackground(0);
+    // ---- THE RIBBON ----
+    MainWindow mw;
+    mw.resize(1600, 900);
+    mw.show();
+    QApplication::processEvents();
+    auto* measure = mw.findChild<QToolButton*>(QStringLiteral("preview3dMeasure"));
+    auto* connector = mw.findChild<QToolButton*>(QStringLiteral("preview3dConnector"));
+    auto* selectB = mw.findChild<QToolButton*>(QStringLiteral("preview3dSelect"));
+    auto* harness = mw.findChild<QToolButton*>(QStringLiteral("preview3dHarness"));
+    check(measure && measure->toolButtonStyle() == Qt::ToolButtonTextUnderIcon && measure->menu() && measure->menu()->actions().size() == 2,
+          "ribbon: Measure large, its arrow - point to point or surface to surface");
+    check(connector && connector->menu() && connector->menu()->actions().size() == 5, "ribbon: Connector's arrow - the five forms");
+    check(selectB && harness && selectB->mapTo(&mw, QPoint()).x() < harness->mapTo(&mw, QPoint()).x(), "ribbon: Route next to View, before Show");
+    check(mw.findChild<QToolButton*>(QStringLiteral("preview3dDisplay")) && mw.findChild<QToolButton*>(QStringLiteral("preview3dHelp")),
+          "ribbon: Display and Help on it");
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -8400,6 +8552,7 @@ int run_brickharness_tests() {
     ROUND(testRoundFiftyFour);
     ROUND(testRoundFiftyFive);
     ROUND(testRoundFiftySix);
+    ROUND(testRoundFiftySeven);
 #undef ROUND
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;

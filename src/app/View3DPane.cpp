@@ -23,7 +23,9 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QMessageBox>
+#include <QActionGroup>
 #include <QColorDialog>
+#include <QInputDialog>
 #include <QContextMenuEvent>
 #include <limits>
 #include <QMenu>
@@ -55,6 +57,23 @@
 #include <cmath>
 
 namespace Edraw_Desktop {
+
+namespace {
+
+// THE "A" BESIDE A FIELD that can be Auto: pressed in, the field shows the real figure Auto comes to, and is not typed in.
+QToolButton* autoButton(QWidget* parent, const char* name, const QString& tip) {
+    auto* b = new QToolButton(parent);
+    b->setObjectName(QLatin1String(name));
+    b->setText(QStringLiteral("A"));
+    b->setCheckable(true);
+    b->setToolTip(tip);
+    b->setFixedWidth(22);
+    b->setStyleSheet(QStringLiteral("QToolButton{font-weight:bold;color:#e6ecf4;background:#3a4656;border:1px solid #5a6878;border-radius:3px;}"
+                                    "QToolButton:checked{background:#2f855a;border-color:#3fa36f;color:white;}"));
+    return b;
+}
+
+} // namespace
 
 namespace {
 // AN ANGLE BOX: a step past 180 comes round to -179 and on, as an angle does - not to a stop at the end.
@@ -347,17 +366,30 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
                      QStringLiteral("A bundle's diameter, where it is given none of its own (the table sets one bundle's)"));
     bend_ = spin("view3dRouteBend", QStringLiteral("Bend R"), 0.0, 2000.0, route_.bendRadius,
                  QStringLiteral("The tightest a bundle may be bent - Auto: six times its diameter"));
-    bend_->setSpecialValueText(QStringLiteral("Auto"));
+    // AUTO, BY ITS "A": six times the bundle's diameter - the field showing that, and not to be typed in while it is on.
+    bendAuto_ = autoButton(bundleRow_, "view3dRouteBendAuto", QStringLiteral("Auto: six times the bundle's diameter - the field shows it"));
+    br->addWidget(bendAuto_);
+    connect(bendAuto_, &QToolButton::toggled, this, [this](bool on) {
+        if (filling_) return;
+        beforeRouteChange();
+        route_.bendRadius = on ? 0.0 : std::max(0.1, route_.diameter * 6.0);
+        saveRouting();
+        refreshRoute();
+        syncBend();
+        emit routeChanged();
+    });
     lead_ = spin("view3dRouteLead", QStringLiteral("Lead"), 0.0, 500.0, route_.lead,
                  QStringLiteral("How far a bundle comes straight out of a connector before it may turn"));
     auto settings = [this] {
         if (filling_) return;
         beforeRouteChange();
         route_.diameter = diameter_->value();
-        route_.bendRadius = bend_->value();
+        route_.bendRadius = bendAuto_->isChecked() ? 0.0 : bend_->value();
         route_.lead = lead_->value();
         saveRouting();
         refreshRoute();
+        syncBend();
+        syncConnector();
         emit routeChanged();
     };
     for (QDoubleSpinBox* s : {diameter_, bend_, lead_}) connect(s, &QDoubleSpinBox::valueChanged, this, settings);
@@ -574,20 +606,30 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     cg->addWidget(connForm_, 5, 1);
     const char* sizeNames[3] = {"view3dConnW", "view3dConnH", "view3dConnL"};
     const QString sizeLabels[3] = {QStringLiteral("Width"), QStringLiteral("Height"), QStringLiteral("Length")};
+    const char* autoNames[3] = {"view3dConnWAuto", "view3dConnHAuto", "view3dConnLAuto"};
     for (int i = 0; i < 3; ++i) {
         cg->addWidget(new QLabel(sizeLabels[i], connBox_), 6 + i, 0);
         connSize_[i] = new QDoubleSpinBox(connBox_);
         connSize_[i]->setObjectName(QLatin1String(sizeNames[i]));
-        connSize_[i]->setRange(0.0, 1000.0);
+        connSize_[i]->setRange(0.1, 1000.0);
         connSize_[i]->setDecimals(1);
         connSize_[i]->setSuffix(QStringLiteral(" mm"));
-        connSize_[i]->setSpecialValueText(QStringLiteral("Auto"));
         connSize_[i]->setKeyboardTracking(false);
-        connSize_[i]->setToolTip(i == 2 ? QStringLiteral("How far it stands out of its face - Auto: the lead")
-                                        : QStringLiteral("Across its housing - Auto: from the bundle's diameter"));
+        connSize_[i]->setToolTip(i == 2 ? QStringLiteral("How far it stands out of its face") : QStringLiteral("Across its housing"));
         cg->addWidget(connSize_[i], 6 + i, 1);
+        // AUTO, BY ITS "A": from the bundle's diameter (and the lead) - the field showing what that comes to.
+        connAuto_[i] = autoButton(connBox_, autoNames[i],
+                                  i == 2 ? QStringLiteral("Auto: as far as the lead - the field shows it")
+                                         : QStringLiteral("Auto: from the bundle's diameter - the field shows it"));
+        cg->addWidget(connAuto_[i], 6 + i, 2);
         connect(connSize_[i], &QDoubleSpinBox::valueChanged, this, [this, i](double v) {
+            if (connAuto_[i]->isChecked()) return;
             editSelectedNode([i, v](RouteNode3D& n) { (i == 0 ? n.formW : i == 1 ? n.formH : n.formL) = v; });
+        });
+        connect(connAuto_[i], &QToolButton::toggled, this, [this, i](bool on) {
+            // Off: from what it showed - the real figure - to change.
+            const double shown = connSize_[i]->value();
+            editSelectedNode([i, on, shown](RouteNode3D& n) { (i == 0 ? n.formW : i == 1 ? n.formH : n.formL) = on ? 0.0 : shown; });
         });
     }
     connect(connForm_, &QComboBox::activated, this, [this](int) {
@@ -749,6 +791,12 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
         sayStatus();
     });
     applyIcons();
+    // HOW IT WAS SHOWN LAST TIME: its background.
+    {
+        const int mode = QSettings().value(QStringLiteral("view3d/background"), 0).toInt();
+        canvas_->setBackground(mode, QColor(QSettings().value(QStringLiteral("view3d/backgroundColour")).toString()));
+    }
+    connect(canvas_, &View3DCanvas::ghostFrozenChanged, this, [this] { syncConnector(); });
     // AT THE SIDE: one button over the picture, to open it below with everything.
     toBottom_ = new QToolButton(canvas_);
     toBottom_->setObjectName(QStringLiteral("view3dToBottom"));
@@ -814,12 +862,45 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
             QAction* del = menu.addAction(QStringLiteral("Delete %1").arg(n->label));
             del->setObjectName(QStringLiteral("view3dDeleteNode"));
             connect(del, &QAction::triggered, this, [this, node] { canvas_->removeRouteItem(node, QString()); });
+            if (n->kind == RouteNodeKind::Connector) {
+                // SAME AS: the connector clicked next copied to this one.
+                QAction* same = menu.addAction(QStringLiteral("Same as..."));
+                same->setObjectName(QStringLiteral("view3dSameAs"));
+                connect(same, &QAction::triggered, this, [this, node] { canvas_->startSameAs(node); });
+            }
+            QAction* colour = menu.addAction(QStringLiteral("Colour..."));
+            connect(colour, &QAction::triggered, this, [this, node] {
+                const RouteNode3D* m = route_.node(node);
+                const QColor c = QColorDialog::getColor(m && m->color.isValid() ? m->color : QColor(205, 208, 214), this, QStringLiteral("Its colour"));
+                if (!c.isValid() || !route_.node(node)) return;
+                beforeRouteChange();
+                route_.node(node)->color = c;
+                saveRouting();
+                refreshRoute();
+                emit routeChanged();
+            });
         } else if (const RouteSegment3D* s = route_.segment(seg)) {
             const RouteNode3D* a = route_.node(s->a);
             const RouteNode3D* b = route_.node(s->b);
             QAction* del = menu.addAction(QStringLiteral("Delete the bundle %1 - %2").arg(a ? a->label : s->a, b ? b->label : s->b));
             del->setObjectName(QStringLiteral("view3dDeleteSegment"));
             connect(del, &QAction::triggered, this, [this, seg] { canvas_->removeRouteItem(QString(), seg); });
+            // ITS COLOUR, and MORE LENGTH - laid looser, its ends where they are.
+            QAction* colour = menu.addAction(QStringLiteral("Colour..."));
+            colour->setObjectName(QStringLiteral("view3dSegmentColour"));
+            connect(colour, &QAction::triggered, this, [this, seg] {
+                const RouteSegment3D* t = route_.segment(seg);
+                const QColor c = QColorDialog::getColor(t && t->color.isValid() ? t->color : QColor(235, 140, 40), this, QStringLiteral("The bundle's colour"));
+                if (c.isValid()) setSegmentColour(seg, c);
+            });
+            QAction* longer = menu.addAction(QStringLiteral("Add length..."));
+            longer->setObjectName(QStringLiteral("view3dAddLength"));
+            connect(longer, &QAction::triggered, this, [this, seg] {
+                bool ok = false;
+                const double mm = QInputDialog::getDouble(this, QStringLiteral("Add length"), QStringLiteral("Make the bundle longer by (mm)"),
+                                                          10.0, 0.1, 10000.0, 1, &ok);
+                if (ok) addSegmentLength(seg, mm);
+            });
         }
         menu.addSeparator();
         QAction* rulers = menu.addAction(QStringLiteral("Remove all measures"));
@@ -881,8 +962,92 @@ bool View3DPane::eventFilter(QObject* watched, QEvent* event) {
     return QWidget::eventFilter(watched, event);
 }
 
+void View3DPane::setSegmentColour(const QString& seg, const QColor& c) {
+    if (!route_.segment(seg)) return;
+    beforeRouteChange();
+    route_.segment(seg)->color = c;
+    saveRouting();
+    refreshRoute();
+    emit routeChanged();
+}
+
+bool View3DPane::addSegmentLength(const QString& seg, double mm) {
+    const RouteSegment3D* s = route_.segment(seg);
+    if (!s || mm <= 0.0) return false;
+    const double target = route_.length(*s) + mm;
+    beforeRouteChange();
+    route_.lengthen(seg, target);
+    saveRouting();
+    refreshRoute();
+    emit routeChanged();
+    return true;
+}
+
+void View3DPane::setPlaceForm(const QString& form) { canvas_->setPlaceForm(form); }
+
+void View3DPane::addLengthToSelected() {
+    const QString seg = canvas_->selectedSegment();
+    if (!route_.segment(seg)) {
+        pickSaid_ = QStringLiteral("Select a bundle first - then Add length makes it longer.");
+        sayStatus();
+        return;
+    }
+    bool ok = false;
+    const double mm = QInputDialog::getDouble(this, QStringLiteral("Add length"), QStringLiteral("Make the bundle longer by (mm)"), 10.0, 0.1,
+                                              10000.0, 1, &ok);
+    if (ok) addSegmentLength(seg, mm);
+}
+
+void View3DPane::setMeasureMode(int mode) {
+    if (auto* c = findChild<QComboBox*>(QStringLiteral("view3dMeasureMode"))) c->setCurrentIndex(std::clamp(mode, 0, 1));
+}
+
+int View3DPane::measureMode() const { return canvas_->measureFaces() ? 1 : 0; }
+
+void View3DPane::fillDisplayMenu(QMenu* m) {
+    // WHAT IS BEHIND IT: dark, light, a gradient either way, or a colour of one's own - kept for next time.
+    QMenu* back = m->addMenu(QStringLiteral("Background"));
+    auto* group = new QActionGroup(back);
+    const char* names[] = {"Dark", "Light", "Gradient, dark", "Gradient, light"};
+    for (int i = 0; i < 4; ++i) {
+        QAction* a = back->addAction(QString::fromLatin1(names[i]), this, [this, i] { setBackgroundMode(i, QColor()); });
+        a->setCheckable(true);
+        a->setChecked(canvas_->backgroundMode() == i);
+        group->addAction(a);
+    }
+    QAction* own = back->addAction(QStringLiteral("A colour of my own..."), this, [this] {
+        const QColor c = QColorDialog::getColor(QColor(30, 36, 44), this, QStringLiteral("The background"));
+        if (c.isValid()) setBackgroundMode(4, c);
+    });
+    own->setCheckable(true);
+    own->setChecked(canvas_->backgroundMode() == 4);
+    group->addAction(own);
+    // HOW IT IS SHADED: solid, or its edges alone; and the model see-through, to see the harness in it.
+    QMenu* shade = m->addMenu(QStringLiteral("Shading"));
+    auto* wire = findChild<QCheckBox*>(QStringLiteral("view3dWireframe"));
+    QAction* solid = shade->addAction(QStringLiteral("Shaded"), this, [wire] { if (wire) wire->setChecked(false); });
+    QAction* edges = shade->addAction(QStringLiteral("Wireframe"), this, [wire] { if (wire) wire->setChecked(true); });
+    solid->setCheckable(true);
+    edges->setCheckable(true);
+    solid->setChecked(wire && !wire->isChecked());
+    edges->setChecked(wire && wire->isChecked());
+    shade->addSeparator();
+    QAction* through = shade->addAction(QStringLiteral("The model see-through"), this, [this](bool on) {
+        if (auto* s = findChild<QSlider*>(QStringLiteral("view3dEnvOpacity"))) s->setValue(on ? 35 : 100);
+    });
+    through->setCheckable(true);
+    if (auto* s = findChild<QSlider*>(QStringLiteral("view3dEnvOpacity"))) through->setChecked(s->value() < 100);
+}
+
+void View3DPane::setBackgroundMode(int mode, const QColor& colour) {
+    canvas_->setBackground(mode, colour);
+    QSettings().setValue(QStringLiteral("view3d/background"), mode);
+    if (mode == 4 && colour.isValid()) QSettings().setValue(QStringLiteral("view3d/backgroundColour"), colour.name());
+}
+
 void View3DPane::wheelOptions(const QPoint& at) {
     QMenu menu(this);
+    fillDisplayMenu(menu.addMenu(QStringLiteral("Display")));
     QMenu* stepMenu = menu.addMenu(QStringLiteral("Each click turns it"));
     for (const int s : {5, 15, 45, 90}) {
         QAction* a = stepMenu->addAction(QStringLiteral("%1°").arg(s), this, [this, s] { wheelStep_ = s; });
@@ -1059,7 +1224,23 @@ void View3DPane::syncCamera() {
     roll_->setValue(static_cast<int>(std::lround(wrapDegrees(cam.rollDeg))));
 }
 
+void View3DPane::syncBend() {
+    // AUTO: the field showing six times the diameter, and not to be typed in; otherwise its own figure.
+    const bool automatic = route_.bendRadius <= 0.0;
+    const QSignalBlocker a(bendAuto_), b(bend_);
+    bendAuto_->setChecked(automatic);
+    bend_->setEnabled(!automatic);
+    bend_->setValue(automatic ? route_.diameter * 6.0 : route_.bendRadius);
+}
+
 void View3DPane::editSelectedNode(const std::function<void(RouteNode3D&)>& change) {
+    // A CONNECTOR BEING PUT, FROZEN WITH TAB: the change is to it - nothing yet in the route to undo.
+    if (canvas_->ghostFrozen()) {
+        change(canvas_->placeTemplate());
+        canvas_->routeRedraw();
+        syncConnector();
+        return;
+    }
     const QString id = canvas_->selectedNode();
     if (!route_.node(id) || fillingMove_) return;
     beforeRouteChange();
@@ -1149,16 +1330,30 @@ void View3DPane::updateWheel() {
 }
 
 void View3DPane::syncConnector() {
-    const RouteNode3D* n = route_.node(canvas_->selectedNode());
-    const bool show = n && n->kind == RouteNodeKind::Connector && envChoice_;
+    // THE CONNECTOR SELECTED - or the one being put, frozen with Tab.
+    const bool frozen = canvas_->ghostFrozen();
+    const RouteNode3D* n = frozen ? &canvas_->placeTemplate() : route_.node(canvas_->selectedNode());
+    const bool show = n && (frozen || n->kind == RouteNodeKind::Connector) && envChoice_;
     connBox_->setVisible(show);
     if (!show) return;
     const QSignalBlocker a(aim_), b(aimTurn_), c(aimTilt_), d(spin_), e(connForm_);
-    const QSignalBlocker f0(connSize_[0]), f1(connSize_[1]), f2(connSize_[2]);
+    const QSignalBlocker f0(connSize_[0]), f1(connSize_[1]), f2(connSize_[2]), g0(connAuto_[0]), g1(connAuto_[1]), g2(connAuto_[2]);
     connForm_->setCurrentIndex(std::max(0, connForm_->findData(n->form.isEmpty() ? QStringLiteral("rect") : n->form)));
-    connSize_[0]->setValue(n->formW);
-    connSize_[1]->setValue(n->formH);
-    connSize_[2]->setValue(n->formL);
+    // EACH SIZE: its own, or - its "A" on - the real figure Auto comes to, not to be typed in.
+    const double dd = std::max(0.5, route_.diameter);
+    const double own[3] = {n->formW, n->formH, n->formL}, real[3] = {dd * 2.2, dd * 1.3, std::max(route_.lead, dd)};
+    for (int i = 0; i < 3; ++i) {
+        const bool automatic = own[i] <= 0.0;
+        connAuto_[i]->setChecked(automatic);
+        connSize_[i]->setEnabled(!automatic);
+        connSize_[i]->setValue(automatic ? real[i] : own[i]);
+    }
+    for (QWidget* w : {static_cast<QWidget*>(aim_), static_cast<QWidget*>(aimTurn_), static_cast<QWidget*>(aimTilt_)}) w->setEnabled(!frozen);
+    if (frozen) {
+        connSaid_->setText(QStringLiteral("<b>The connector being put</b> - frozen (Tab): set it, then click or Enter to put it"));
+        spin_->setValue(static_cast<int>(std::lround(wrapDegrees(n->spinDeg))));
+        return;
+    }
     connSaid_->setText(QStringLiteral("<b>Connector %1</b>").arg(n->label.toHtmlEscaped()));
     static const V3 dirs[] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
     int which = 7;
@@ -1173,6 +1368,11 @@ void View3DPane::syncConnector() {
 }
 
 void View3DPane::applyAim(const V3& dir, double spinDeg) {
+    if (canvas_->ghostFrozen()) {
+        canvas_->placeTemplate().spinDeg = wrapDegrees(spinDeg);
+        canvas_->routeRedraw();
+        return;
+    }
     const QString id = canvas_->selectedNode();
     if (!route_.node(id)) return;
     beforeRouteChange();
@@ -1647,9 +1847,9 @@ void View3DPane::reloadRouting(bool wait) {
     {
         filling_ = true;
         diameter_->setValue(route_.diameter);
-        bend_->setValue(route_.bendRadius);
         lead_->setValue(route_.lead);
         filling_ = false;
+        syncBend();
     }
     refreshRoute();
     refreshParts();
@@ -1688,9 +1888,9 @@ void View3DPane::undoRoute() {
     {
         filling_ = true;
         diameter_->setValue(route_.diameter);
-        bend_->setValue(route_.bendRadius);
         lead_->setValue(route_.lead);
         filling_ = false;
+        syncBend();
     }
     saveRouting();
     refreshRoute();
@@ -2112,11 +2312,45 @@ void View3DCanvas::setRoute(Route3D* route) {
     routeRedraw();
 }
 
+void View3DCanvas::setPlaceForm(const QString& form) {
+    placeTemplate_.form = form;
+    routeDirty_ = true;
+    update();
+}
+
+void View3DCanvas::setGhostFrozen(bool on) {
+    if (on && !ghostOn_) return;
+    ghostFrozen_ = on;
+    routeDirty_ = true;
+    update();
+    emit ghostFrozenChanged(ghostFrozen_);
+}
+
+void View3DCanvas::startSameAs(const QString& node) {
+    sameAs_ = node;
+    const RouteNode3D* n = route_ ? route_->node(node) : nullptr;
+    if (n) emit message(QStringLiteral("%1 the same as: click the connector to copy from (Esc: not)").arg(n->label));
+}
+
+bool View3DCanvas::event(QEvent* e) {
+    // TAB, PUTTING A CONNECTOR: it stays where it is under the pointer - its options to change on the right - until Tab
+    // again, or a click (or Enter) puts it there.
+    if (e->type() == QEvent::KeyPress && static_cast<QKeyEvent*>(e)->key() == Qt::Key_Tab && tool_ == RouteTool::Connector && route_) {
+        setGhostFrozen(!ghostFrozen_);
+        return true;
+    }
+    return QWidget::event(e);
+}
+
 void View3DCanvas::setRouteTool(RouteTool tool) {
     if (tool != RouteTool::Route) cancelLaying();
+    if (tool != RouteTool::Connector) {
+        ghostOn_ = false;
+        if (ghostFrozen_) setGhostFrozen(false);
+    }
     if (tool != RouteTool::Measure && measureStage_ == 1) clearMeasure();
     tool_ = tool;
-    setMouseTracking(tool == RouteTool::Route || tool == RouteTool::Measure);
+    setMouseTracking(tool == RouteTool::Route || tool == RouteTool::Measure || tool == RouteTool::Connector);
     setCursor(tool == RouteTool::Select                                    ? Qt::ArrowCursor
               : tool == RouteTool::Move || tool == RouteTool::Stretch ? Qt::SizeAllCursor
                                                                            : Qt::CrossCursor);
@@ -2161,6 +2395,24 @@ void View3DCanvas::beginKeepLength() {
         k.step.push_back((anchor - from).length());
         kept_.push_back(std::move(k));
     };
+    // EACH BUNDLE PULLED, the length it is to keep: as it was drawn when taken hold of - a corner's bundle as well as a
+    // node's bundles.
+    auto account = [&] {
+        for (const Kept& k : kept_) {
+            const RouteSegment3D* s = route_->segment(k.segment);
+            if (!s) continue;
+            double steps = 0.0;
+            for (double d : k.step) steps += d;
+            auto had = std::find_if(keptLen_.begin(), keptLen_.end(), [&](const KeptLength& l) { return l.segment == k.segment; });
+            if (had != keptLen_.end()) had->steps += steps;
+            else {
+                double was = route_->length(*s);
+                for (const auto& [id, length] : drawn)
+                    if (id == k.segment) was = length;
+                keptLen_.push_back({k.segment, was, steps, 1.0});
+            }
+        }
+    };
     if (dragKind_ == 2) {
         // A CORNER OF A BUNDLE: pulled, the bundle both ways from it to its two ends.
         RouteSegment3D* s = route_->segment(dragId_);
@@ -2174,6 +2426,7 @@ void View3DCanvas::beginKeepLength() {
         for (int i = dragVia_ + 1; i < static_cast<int>(s->via.size()); ++i) ahead.push_back(i);
         chain(*s, held, back, a->at);
         chain(*s, held, ahead, b->at);
+        account();
         return;
     }
     const RouteNode3D* node = route_->node(dragId_);
@@ -2190,20 +2443,7 @@ void View3DCanvas::beginKeepLength() {
             for (int i = static_cast<int>(s.via.size()) - 1; i >= 0; --i) order.push_back(i);
         chain(s, node->at, order, far->at);
     }
-    for (const Kept& k : kept_) {
-        const RouteSegment3D* s = route_->segment(k.segment);
-        if (!s) continue;
-        double steps = 0.0;
-        for (double d : k.step) steps += d;
-        auto had = std::find_if(keptLen_.begin(), keptLen_.end(), [&](const KeptLength& l) { return l.segment == k.segment; });
-        if (had != keptLen_.end()) had->steps += steps;
-        else {
-            double was = route_->length(*s);
-            for (const auto& [id, length] : drawn)
-                if (id == k.segment) was = length;
-            keptLen_.push_back({k.segment, was, steps, 1.0});
-        }
-    }
+    account();
 }
 
 void View3DCanvas::layKept(const Kept& k, const V3& start, double scale) {
@@ -2273,7 +2513,7 @@ void View3DCanvas::pullKept(V3 target) {
     };
     // ITS LENGTH AS IT IS DRAWN KEPT: bends and what it is laid over draw a cable longer or shorter than the points it is
     // laid through, so its steps are laid longer or shorter until it is drawn as long as it was.
-    for (int fit = 0; fit < 4; ++fit) {
+    for (int fit = 0; fit < 14; ++fit) {
         V3 t = target;
         // NO FURTHER THAN THE CABLE REACHES from where each bundle holds.
         for (int pass = 0; pass < 4; ++pass)
@@ -2412,8 +2652,8 @@ void View3DCanvas::buildRouteMeshes() const {
     for (const RouteSegment3D& s : route_->segments) {
         const std::vector<V3> c = route_->centreline(s);
         if (c.size() < 2) continue;
-        routeMeshes_.push_back({tubeMesh(c, route_->diameterOf(s) / 2.0, 14, true), s.id == selSegment_ ? lit : QColor(235, 140, 40),
-                                Texture3D::Plastic});
+        routeMeshes_.push_back({tubeMesh(c, route_->diameterOf(s) / 2.0, 14, true),
+                                s.id == selSegment_ ? lit : s.color.isValid() ? s.color : QColor(235, 140, 40), Texture3D::Plastic});
     }
     const double d = std::max(0.5, route_->diameter);
     for (const RouteNode3D& n : route_->nodes) {
@@ -2431,13 +2671,42 @@ void View3DCanvas::buildRouteMeshes() const {
             (void)v;
             routeMeshes_.push_back({connectorHousing(n, d, route_->lead), on ? lit : n.color.isValid() ? n.color : QColor(205, 208, 214),
                                     Texture3D::Metal, n.id});
-        } else {
-            const double h = n.kind == RouteNodeKind::Branch ? d * 0.6 : d * 0.5;
+        } else if (n.kind == RouteNodeKind::Clip) {
+            // A CLIP AS A CLIP IS: a band round the bundle where it is held, the way the bundle runs there, and its foot
+            // down to the face it is fixed to.
             const V3 c = nodeShown(n);
-            const QColor own = n.kind == RouteNodeKind::Branch ? QColor(250, 210, 60) : QColor(70, 190, 110);
-            routeMeshes_.push_back({boxMesh(c - V3{h, h, h}, c + V3{h, h, h}), on ? lit : n.color.isValid() ? n.color : own,
+            V3 along;
+            for (const RouteSegment3D& s : route_->segments) {
+                if (s.a != n.id && s.b != n.id) continue;
+                const std::vector<V3> k = route_->corners(s);
+                if (k.size() < 2) continue;
+                along = s.a == n.id ? k[1] - k[0] : k[k.size() - 2] - k.back();
+                if (along.length() > 1e-9) break;
+            }
+            if (along.length() < 1e-9) along = cross3(n.normal, V3{0, 0, 1}).length() > 1e-6 ? cross3(n.normal, V3{0, 0, 1}) : V3{1, 0, 0};
+            along = along.normalized();
+            const double r = route_->diameter / 2.0, band = std::max(1.5, d * 0.8);
+            Mesh3D clip = tubeMesh({c - along * (band / 2.0), c + along * (band / 2.0)}, r * 1.35, 24, true);
+            const V3 across = cross3(n.normal, along).normalized();
+            Mesh3D foot = boxMesh({0, 0, 0}, {1, 1, 1});
+            for (V3& q : foot.v)
+                q = n.at + along * ((q.x - 0.5) * band) + across * ((q.y - 0.5) * r * 1.6) + n.normal * (q.z * r * 0.7);
+            clip.append(foot);
+            routeMeshes_.push_back({clip, on ? lit : n.color.isValid() ? n.color : QColor(70, 190, 110), Texture3D::Plastic, n.id});
+        } else {
+            const double h = d * 0.6;
+            const V3 c = nodeShown(n);
+            routeMeshes_.push_back({boxMesh(c - V3{h, h, h}, c + V3{h, h, h}), on ? lit : n.color.isValid() ? n.color : QColor(250, 210, 60),
                                     Texture3D::None, n.id});
         }
+    }
+    // A CONNECTOR BEING PUT: where it would go under the pointer - frozen there with Tab - in its form, see-through.
+    if (ghostOn_ && tool_ == RouteTool::Connector) {
+        RouteNode3D g = placeTemplate_;
+        g.at = ghost_.at;
+        g.normal = ghost_.normal;
+        routeMeshes_.push_back({connectorHousing(g, d, route_->lead), ghostFrozen_ ? QColor(80, 220, 255) : QColor(235, 240, 248),
+                                Texture3D::None, QString()});
     }
 }
 
@@ -2641,6 +2910,17 @@ QString View3DCanvas::segmentAt(const QPointF& at, V3* point, V3* normal, int* a
 }
 
 void View3DCanvas::cancelLaying() {
+    // GIVEN UP: a branch made only to start it from is not left behind on its own.
+    if (route_ && layMadeStart_ && route_->node(layFrom_) && route_->degree(layFrom_) == 0) {
+        const QString made = layFrom_;
+        layFrom_.clear();
+        layMadeStart_ = false;
+        emit routeAboutToChange();
+        route_->removeNode(made);
+        routeDirty_ = true;
+        emit routeChanged();
+    }
+    layMadeStart_ = false;
     layFrom_.clear();
     layVia_.clear();
     layMesh_ = Mesh3D();
@@ -2670,6 +2950,30 @@ void View3DCanvas::routeClick(const QPointF& at) {
     case RouteTool::Select:
         break;
     case RouteTool::Connector:
+        // FROZEN WITH TAB: put where it was frozen, wherever the click is.
+        if (ghostFrozen_ && ghostOn_) {
+            emit routeAboutToChange();
+            selNode_ = route_->addNode(RouteNodeKind::Connector, ghost_.at, ghost_.normal);
+            if (RouteNode3D* made = route_->node(selNode_)) {
+                made->form = placeTemplate_.form;
+                made->formW = placeTemplate_.formW;
+                made->formH = placeTemplate_.formH;
+                made->formL = placeTemplate_.formL;
+                made->color = placeTemplate_.color;
+                route_->aimNode(selNode_, made->normal, placeTemplate_.spinDeg);
+                if (!placeBrick_.isEmpty()) {
+                    made = route_->node(selNode_);
+                    made->brick = placeBrick_;
+                    made->part = placePart_;
+                    made->label = placePart_;
+                }
+            }
+            selSegment_.clear();
+            routeDirty_ = true;
+            setGhostFrozen(false);
+            emit routeChanged();
+            break;
+        }
         // A HARNESS PART BEING PUT goes where clicked - onto its own housing too (moved there); a free connector
         // clicked on is selected.
         if (!node.isEmpty() && placeBrick_.isEmpty()) {
@@ -2690,6 +2994,15 @@ void View3DCanvas::routeClick(const QPointF& at) {
                 selNode_ = put->id;
             } else {
                 selNode_ = route_->addNode(placeBrick_.isEmpty() ? RouteNodeKind::Connector : placeKind_, p, n);
+                // IN THE FORM CHOSEN for the next connector (the Connector button's menu, or Tab and the panel).
+                if (RouteNode3D* made = route_->node(selNode_); made && made->kind == RouteNodeKind::Connector) {
+                    made->form = placeTemplate_.form;
+                    made->formW = placeTemplate_.formW;
+                    made->formH = placeTemplate_.formH;
+                    made->formL = placeTemplate_.formL;
+                    made->color = placeTemplate_.color;
+                    if (std::abs(placeTemplate_.spinDeg) > 1e-9) route_->aimNode(selNode_, made->normal, placeTemplate_.spinDeg);
+                }
                 if (!placeBrick_.isEmpty()) {
                     RouteNode3D* made = route_->node(selNode_);
                     made->brick = placeBrick_;
@@ -2731,9 +3044,10 @@ void View3DCanvas::routeClick(const QPointF& at) {
                 layFrom_ = node;
                 routeDirty_ = true;
             } else if (surfaceAt(at, p, n)) {
-                // FROM A FACE: a new branch there to start from.
+                // FROM A FACE: a new branch there to start from - taken away again if the bundle is given up.
                 emit routeAboutToChange();
                 layFrom_ = route_->addNode(RouteNodeKind::Branch, p, n);
+                layMadeStart_ = true;
                 routeDirty_ = true;
                 emit routeChanged();
             }
@@ -2770,20 +3084,38 @@ void View3DCanvas::routeClick(const QPointF& at) {
     }
 }
 
+void View3DCanvas::setBackground(int mode, const QColor& colour) {
+    bgMode_ = std::clamp(mode, 0, 4);
+    if (mode == 4 && colour.isValid()) bgColour_ = colour;
+    else if (mode == 0) bgColour_ = QColor(30, 36, 44);
+    else if (mode == 1) bgColour_ = QColor(226, 230, 236);
+    update();
+}
+
 QImage View3DCanvas::render(const QSize& size) const {
-    QImage img(size.expandedTo(QSize(1, 1)), QImage::Format_RGB32);
+    const QSize sz = size.expandedTo(QSize(1, 1));
     const std::vector<DrawItem3D> items = drawItems();
-    const QColor background(30, 36, 44);
+    // A GRADIENT BEHIND IT: the picture drawn on nothing, then laid over the gradient.
+    const bool graded = bgMode_ == 2 || bgMode_ == 3;
+    QImage img(sz, graded ? QImage::Format_ARGB32_Premultiplied : QImage::Format_RGB32);
+    const QColor background = graded ? QColor(0, 0, 0, 0) : bgColour_;
+    bool drawn = false;
     if (useGpu_) {
         if (!gl_) gl_ = std::make_unique<GlRenderer3D>();
-        if (gl_->render(img, items, cam_, wire_, background, section_)) {
-            lastOnGpu_ = true;
-            return img;
-        }
+        drawn = gl_->render(img, items, cam_, wire_, background, section_);
     }
-    lastOnGpu_ = false;
-    renderScene3D(img, items, cam_, wire_, background, section_);
-    return img;
+    lastOnGpu_ = drawn;
+    if (!drawn) renderScene3D(img, items, cam_, wire_, background, section_);
+    if (!graded) return img;
+    QImage out(sz, QImage::Format_RGB32);
+    QPainter p(&out);
+    QLinearGradient g(0, 0, 0, sz.height());
+    g.setColorAt(0.0, bgMode_ == 2 ? QColor(70, 88, 112) : QColor(240, 243, 248));
+    g.setColorAt(1.0, bgMode_ == 2 ? QColor(16, 19, 25) : QColor(150, 160, 178));
+    p.fillRect(out.rect(), g);
+    p.drawImage(0, 0, img);
+    p.end();
+    return out;
 }
 
 void View3DCanvas::paintEvent(QPaintEvent*) {
@@ -3162,9 +3494,11 @@ void View3DCanvas::mousePressEvent(QMouseEvent* e) {
     last_ = e->position().toPoint();
     pressedAt_ = last_;
     moved_ = false;
-    // MOVE OR STRETCH: a press on a node takes hold of it.
+    // MOVE OR STRETCH: a press on a node takes hold of it - or, moving, on a bundle: that stretch of it between its two
+    // nodes (a clip, a connector) pulled where it is dragged, its length kept unless pulling adds length.
     if (route_ && e->button() == Qt::LeftButton && (tool_ == RouteTool::Move || tool_ == RouteTool::Stretch)) {
         if (beginNodeDrag(e->position(), tool_ == RouteTool::Stretch)) setCursor(Qt::ClosedHandCursor);
+        else if (tool_ == RouteTool::Move && segmentAt(e->position()).size() && beginItemDrag(e->position())) setCursor(Qt::ClosedHandCursor);
         return;
     }
     // LOCKED: a press on something takes hold of it.
@@ -3179,6 +3513,18 @@ void View3DCanvas::mouseMoveEvent(QMouseEvent* e) {
             measureDirty_ = true;
             update();
         }
+        return;
+    }
+    // PUTTING A CONNECTOR: where it would go, under the pointer - unless frozen there with Tab.
+    if (dragging_ == Qt::NoButton && tool_ == RouteTool::Connector && route_ && !ghostFrozen_) {
+        V3 p, n;
+        ghostOn_ = surfaceAt(e->position(), p, n);
+        if (ghostOn_) {
+            ghost_.at = p;
+            ghost_.normal = n.normalized();
+        }
+        routeDirty_ = true;
+        update();
         return;
     }
     if (dragging_ == Qt::NoButton) {
@@ -3330,6 +3676,31 @@ void View3DCanvas::mouseReleaseEvent(QMouseEvent* e) {
         return;
     }
     if (!click) return;
+    // SAME AS: the connector clicked is copied - its form, size, how it lies and its colour - to the one asked for.
+    if (!sameAs_.isEmpty() && route_) {
+        const QString from = nodeAt(e->position());
+        const RouteNode3D* src = route_->node(from);
+        if (src && from != sameAs_ && route_->node(sameAs_)) {
+            emit routeAboutToChange();
+            RouteNode3D* to = route_->node(sameAs_);
+            to->form = src->form;
+            to->formW = src->formW;
+            to->formH = src->formH;
+            to->formL = src->formL;
+            to->color = src->color;
+            route_->aimNode(sameAs_, to->normal, src->spinDeg);
+            routeDirty_ = true;
+            emit message(QStringLiteral("%1 made the same as %2").arg(route_->node(sameAs_)->label, src->label));
+            sameAs_.clear();
+            emit routeChanged();
+            return;
+        }
+        if (!src) {
+            sameAs_.clear();
+            emit message(QString());
+        }
+        return;
+    }
     // A CLICK, NOT A DRAG: the route tool's, or - selecting - a node or bundle, else the point of the environment under
     // the pointer.
     if (route_ && tool_ != RouteTool::Select) {
@@ -3404,6 +3775,20 @@ void View3DCanvas::keyPressEvent(QKeyEvent* e) {
     }
     if (e->key() == Qt::Key_Escape && !layFrom_.isEmpty()) {
         cancelLaying();
+        return;
+    }
+    if (e->key() == Qt::Key_Escape && !sameAs_.isEmpty()) {
+        sameAs_.clear();
+        emit message(QString());
+        return;
+    }
+    if (e->key() == Qt::Key_Escape && ghostFrozen_) {
+        setGhostFrozen(false);
+        return;
+    }
+    // ENTER, A CONNECTOR FROZEN WITH TAB: put there.
+    if ((e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) && ghostFrozen_) {
+        routeClick(QPointF());
         return;
     }
     if (e->key() == Qt::Key_Escape && measureStage_ != 0) {

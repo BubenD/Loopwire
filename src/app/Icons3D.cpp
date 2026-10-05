@@ -142,6 +142,17 @@ void draw(QPainter& p, const QString& k, const QColor& ink, const QColor& acc) {
                QRectF(20, 1, 12, 12), acc);
         return;
     }
+    if (k == QLatin1String("display")) {
+        // A screen with a gradient on it.
+        QLinearGradient g(0, 5, 0, 23);
+        g.setColorAt(0, acc.lighter(140));
+        g.setColorAt(1, QColor(30, 36, 44));
+        p.setBrush(g);
+        p.drawRoundedRect(QRectF(3, 5, 26, 18), 2, 2);
+        p.drawLine(12, 27, 20, 27);
+        p.drawLine(16, 23, 16, 27);
+        return;
+    }
     if (k == QLatin1String("expand")) {
         // A panel opened out below: a frame, and an arrow down into its lower half.
         p.setBrush(soft);

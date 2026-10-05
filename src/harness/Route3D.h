@@ -57,6 +57,8 @@ struct RouteSegment3D {
     QString a, b;
     std::vector<RouteVia3D> via;
     double diameter = 0.0;
+    // Its colour - none: as bundles are.
+    QColor color;
 };
 
 struct Route3D {
@@ -91,6 +93,9 @@ struct Route3D {
     // go to the first half, those after to the second. `afterVia` is how many of them come before the point. The new
     // node's id, or empty.
     QString splitSegment(const QString& id, const V3& at, const V3& normal, int afterVia, RouteNodeKind kind);
+    // A BUNDLE MADE LONGER - to `target` mm along it - its ends where they are: laid through more points where it has few,
+    // and bowed out from what it lies on until it is that long (or as near as it will go). False where there is none.
+    bool lengthen(const QString& id, double target);
     // How many bundles meet at a node.
     int degree(const QString& id) const;
     double diameterOf(const RouteSegment3D& s) const;

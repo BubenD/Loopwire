@@ -149,6 +149,81 @@ QString Route3D::splitSegment(const QString& id, const V3& at, const V3& normal,
     return mid;
 }
 
+bool Route3D::lengthen(const QString& id, double target) {
+    RouteSegment3D* s = segment(id);
+    if (!s) return false;
+    const RouteNode3D* a = node(s->a);
+    const RouteNode3D* b = node(s->b);
+    if (!a || !b) return false;
+    // MORE POINTS TO BEND AT: at least a dozen along it, where it was laid through fewer.
+    if (s->via.size() < 12) {
+        std::vector<RouteVia3D> pts{{a->at, a->normal}};
+        pts.insert(pts.end(), s->via.begin(), s->via.end());
+        pts.push_back({b->at, b->normal});
+        std::vector<double> along{0.0};
+        for (size_t i = 1; i < pts.size(); ++i) along.push_back(along.back() + (pts[i].at - pts[i - 1].at).length());
+        const double total = along.back();
+        if (total < 1e-9) return false;
+        std::vector<RouteVia3D> more;
+        size_t k = 1;
+        for (int i = 1; i <= 12; ++i) {
+            const double want = total * i / 13.0;
+            while (k + 1 < pts.size() && along[k] < want) ++k;
+            const double t = (want - along[k - 1]) / std::max(1e-12, along[k] - along[k - 1]);
+            more.push_back({pts[k - 1].at + (pts[k].at - pts[k - 1].at) * t,
+                            (pts[k - 1].normal * (1.0 - t) + pts[k].normal * t).normalized()});
+        }
+        s->via = more;
+    }
+    // BOWED OUT FROM WHAT IT LIES ON: started off a hair, the most at its middle, so it has a way to go.
+    {
+        const double span = (b->at - a->at).length();
+        const int n = static_cast<int>(s->via.size());
+        for (int i = 0; i < n; ++i) s->via[static_cast<size_t>(i)].at = s->via[static_cast<size_t>(i)].at +
+                                                                         s->via[static_cast<size_t>(i)].normal * (span * 0.002 * std::sin(kPi * (i + 1.0) / (n + 1.0)));
+    }
+    std::vector<double> step;
+    {
+        V3 from = a->at;
+        for (const RouteVia3D& v : s->via) {
+            step.push_back((v.at - from).length());
+            from = v.at;
+        }
+        step.push_back((b->at - from).length());
+    }
+    double steps = 0.0;
+    for (double d : step) steps += d;
+    auto toward = [](const V3& from, const V3& to, double d) {
+        const V3 dir = to - from;
+        return dir.length() < 1e-12 ? from : from + dir.normalized() * d;
+    };
+    // EACH STEP LONGER, BOTH ENDS HELD (FABRIK), until it is drawn as long as it is to be.
+    double scale = 1.0, lastScale = -1.0, lastNow = 0.0, slope = steps;
+    for (int fit = 0; fit < 20; ++fit) {
+        std::vector<V3> p{a->at};
+        for (const RouteVia3D& v : s->via) p.push_back(v.at);
+        p.push_back(b->at);
+        const size_t n = p.size() - 1;
+        for (int iter = 0; iter < 16; ++iter) {
+            p[0] = a->at;
+            for (size_t i = 1; i <= n; ++i) p[i] = toward(p[i - 1], p[i], step[i - 1] * scale);
+            p[n] = b->at;
+            for (size_t i = n; i-- > 0;) p[i] = toward(p[i + 1], p[i], step[i] * scale);
+        }
+        for (size_t i = 0; i < s->via.size(); ++i) s->via[i].at = p[i + 1];
+        const double now = length(*s);
+        if (std::abs(now - target) < 0.05) return true;
+        if (lastScale >= 0.0 && std::abs(scale - lastScale) > 1e-9) {
+            const double measured = (now - lastNow) / (scale - lastScale);
+            if (measured > steps * 0.05) slope = measured;
+        }
+        lastScale = scale;
+        lastNow = now;
+        scale = std::clamp(scale + (target - now) / slope, 0.2, 10.0);
+    }
+    return true;
+}
+
 int Route3D::degree(const QString& id) const {
     int n = 0;
     for (const RouteSegment3D& s : segments) n += (s.a == id ? 1 : 0) + (s.b == id ? 1 : 0);
@@ -331,6 +406,7 @@ QJsonObject Route3D::toJson() const {
         j[QStringLiteral("a")] = s.a;
         j[QStringLiteral("b")] = s.b;
         if (s.diameter > 0.0) j[QStringLiteral("diameter")] = s.diameter;
+        if (s.color.isValid()) j[QStringLiteral("color")] = s.color.name();
         QJsonArray via;
         for (const RouteVia3D& v : s.via) via.append(QJsonObject{{QStringLiteral("at"), v3Json(v.at)}, {QStringLiteral("normal"), v3Json(v.normal)}});
         j[QStringLiteral("via")] = via;
@@ -371,6 +447,7 @@ Route3D Route3D::fromJson(const QJsonObject& o) {
         s.a = j.value(QStringLiteral("a")).toString();
         s.b = j.value(QStringLiteral("b")).toString();
         s.diameter = j.value(QStringLiteral("diameter")).toDouble(0.0);
+        if (j.contains(QStringLiteral("color"))) s.color = QColor(j.value(QStringLiteral("color")).toString());
         for (const QJsonValue& w : j.value(QStringLiteral("via")).toArray()) {
             const QJsonObject k = w.toObject();
             s.via.push_back({v3From(k.value(QStringLiteral("at"))), unitOr(v3From(k.value(QStringLiteral("normal")), {0, 0, 1}), {0, 0, 1})});

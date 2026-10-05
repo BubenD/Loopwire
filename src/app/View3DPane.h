@@ -27,6 +27,7 @@ class QComboBox;
 class QDoubleSpinBox;
 class QLabel;
 class QListWidget;
+class QMenu;
 class QSlider;
 class QDialog;
 class QProgressBar;
@@ -182,6 +183,21 @@ private:
     void takeEnvironment(Environment3D env, std::shared_ptr<RayIndex3D> index);
     // THE NODE SELECTED changed - one step to undo, everything shown again.
     void editSelectedNode(const std::function<void(RouteNode3D&)>& change);
+    void syncBend();
+    void setBackgroundMode(int mode, const QColor& colour);
+public:
+    // A BUNDLE'S COLOUR; MORE LENGTH for it, its ends where they are.
+    void setSegmentColour(const QString& seg, const QColor& c);
+    bool addSegmentLength(const QString& seg, double mm);
+    // THE FORM of the next connector put; how the ruler measures (0 point to point, 1 surface to surface).
+    void setPlaceForm(const QString& form);
+    void setMeasureMode(int mode);
+    int measureMode() const;
+    // THE DISPLAY OPTIONS - background and shading - into a menu (the wheel's, the ribbon's).
+    void fillDisplayMenu(QMenu* menu);
+    // MORE LENGTH for the bundle selected - asked how much.
+    void addLengthToSelected();
+private:
     void syncMove();
     void updateWheel();
 public:
@@ -286,6 +302,8 @@ private:
     // The connector's form and sizes; the node being moved - where, the step, its colour and turns; the wheel's two sets.
     QComboBox* connForm_ = nullptr;
     QDoubleSpinBox* connSize_[3] = {};
+    QToolButton* connAuto_[3] = {};
+    QToolButton* bendAuto_ = nullptr;
     QWidget* moveBox_ = nullptr;
     QLabel* moveSaid_ = nullptr;
     QDoubleSpinBox* moveAt_[3] = {};
@@ -422,6 +440,19 @@ public:
     bool measureFaces() const { return measureFaces_; }
     // A NODE OR A BUNDLE TAKEN AWAY - a node with its bundles: one change, to undo.
     void removeRouteItem(const QString& node, const QString& segment);
+    // THE NEXT CONNECTOR PUT: its form, size, how it lies and its colour (the template); frozen where it would go with
+    // Tab, to change them first.
+    RouteNode3D& placeTemplate() { return placeTemplate_; }
+    void setPlaceForm(const QString& form);
+    bool ghostFrozen() const { return ghostFrozen_; }
+    bool ghostShown() const { return ghostOn_; }
+    void setGhostFrozen(bool on);
+    // SAME AS: the next connector clicked copied to this one.
+    void startSameAs(const QString& node);
+    bool sameAsPending() const { return !sameAs_.isEmpty(); }
+    // HOW THE PICTURE IS SHOWN behind what is in it: 0 dark, 1 light, 2 a dark gradient, 3 a light gradient, 4 a colour.
+    void setBackground(int mode, const QColor& colour = QColor());
+    int backgroundMode() const { return bgMode_; }
     // What the ruler says: the distance straight, and along and across each axis and plane.
     static QString measureSaid(const V3& a, const V3& b);
     void zoomBy(double factor);
@@ -442,6 +473,8 @@ signals:
     void partMenuAsked(int envPart, const QString& brick, const QPoint& globalPos);
     // A RIGHT CLICK on the route: a node or a bundle (or neither), and a ruler (or -1).
     void routeMenuAsked(const QString& node, const QString& segment, int measure, const QPoint& globalPos);
+    // A connector being put frozen with Tab - or let go.
+    void ghostFrozenChanged(bool frozen);
     // Something to tell the user.
     void message(const QString& text);
     // The camera turned, moved or zoomed.
@@ -458,6 +491,7 @@ protected:
     void wheelEvent(QWheelEvent* e) override;
     void keyPressEvent(QKeyEvent* e) override;
     void contextMenuEvent(QContextMenuEvent* e) override;
+    bool event(QEvent* e) override;
 
 private:
     std::vector<DrawItem3D> drawItems() const;
@@ -511,6 +545,12 @@ private:
     Mesh3D layMesh_;
     // The release that ends a double-click is not another click.
     bool swallowRelease_ = false;
+    bool layMadeStart_ = false;   // the bundle being laid started from a branch made for it
+    RouteNode3D ghost_, placeTemplate_;
+    bool ghostOn_ = false, ghostFrozen_ = false;
+    QString sameAs_;
+    int bgMode_ = 0;
+    QColor bgColour_{30, 36, 44};
     QSet<QString> hiddenBricks_;
     QPointer<QVariantAnimation> turnAnim_;
     // The solids of the model hidden, and the ruler. Not saved.

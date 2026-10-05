@@ -147,7 +147,55 @@ const Topic kTopics[] = {
      "the screen - with every row and the panel on the right, so nothing is lost. It is a window still: drag it by its "
      "title bar, make it smaller, or put it on another screen. <b>F11</b>, <i>Back</i> or closing the window "
      "returns it to where it was.</p>"},
-    {"12. What every command does",
+    {"12. Measuring - point to point, surface to surface",
+     "",
+     "<p>Choose <i>Measure</i>, click one end, then the other. The distance is written by the ruler, and in full at the "
+     "foot of the picture: straight, along X, Y and Z, and across each plane.</p>"
+     "<p><b>Surface to surface</b> (the arrow on <i>Measure</i>, or the box beside the tools): click a face, then the "
+     "face opposite - the ruler goes square from the second face back to the first, so it is the gap between two faces "
+     "however far apart along them you clicked. <i>Example:</i> the inside of a box 40 deep - click the floor, then "
+     "the lid anywhere: 40.0 mm.</p>"
+     "<p><b>Rulers stay</b> until you take them away: click one (it lights) and press <i>Delete</i>, or right-click it "
+     "and <i>Delete this measure</i>. <i>Remove all measures</i> on any right-click menu takes every one away (it is "
+     "greyed while there are none). <i>Esc</i> gives up only a ruler you are in the middle of making.</p>"},
+    {"13. Moving and pulling a cable - its length kept",
+     "",
+     "<p><b>Move:</b> choose <i>Move</i> and click a connector, branch or clip. On the right: where it is (X, Y, Z), a "
+     "step, its colour and turns of 15&deg; round each axis; the wheel turns into arrows along X, Y and Z (red, green, "
+     "blue) and turns round each - its middle, or another tool, gives the view's wheel back. Drag it, too. Drag a "
+     "<b>stretch of a cable</b> between two nodes - between a clip and a connector, say - and that stretch moves.</p>"
+     "<p><b>The length is kept.</b> A cable pulled is pulled along behind the point like a real one: its length stays "
+     "what it was (the figure on it does not change), its far end holds, and it goes no further than it reaches. "
+     "<i>Example:</i> a 78 mm cable from a connector to a clip, the connector dragged across - the cable bends round, "
+     "still 78 mm.</p>"
+     "<p><b>To make it longer:</b> turn on <i>Add loose</i> and a pull lengthens it; or select a cable and press "
+     "<i>Add length</i> (or right-click it) and say by how much - it is laid looser, bowed off the face it lies on, its "
+     "ends where they are.</p>"
+     "<p><b>Stretch</b> pulls a connector: it stays, its cable pulled tight through it and the rest cut off.</p>"},
+    {"14. Connectors - forms, Tab, Same as, colours",
+     "",
+     "<p><b>Its form:</b> the arrow on <i>Connector</i> chooses the form the next ones are put in - rectangular, "
+     "cylindrical, T (a flange and a body), right angle, or a D-sub shell. Select one put already and change its form and "
+     "size on the right. Each size has an <b>A</b> beside it: on, it is Auto (from the cable's diameter and the lead) "
+     "and the field shows what that comes to; off, type your own.</p>"
+     "<p><b>Tab:</b> with <i>Connector</i> chosen, the connector follows the pointer over the model. Press <i>Tab</i> "
+     "and it stays where it is - set its form, size and how it lies on the right - then click (or <i>Enter</i>) to put "
+     "it there. <i>Tab</i> again or <i>Esc</i> lets it follow the pointer again.</p>"
+     "<p><b>Same as:</b> right-click a connector, <i>Same as...</i>, then click another - the first is made like it: "
+     "its form, size, how it lies and its colour.</p>"
+     "<p><b>Colours:</b> right-click a connector or a cable and <i>Colour...</i>.</p>"
+     "<p>A clip is drawn as a band round the cable with its foot on the face; a route given up (Esc) takes away the "
+     "branch it was started from.</p>"},
+    {"15. Display - background and shading",
+     "",
+     "<p><i>Display</i> (on the ribbon, or <i>Options</i> on the wheel) sets what is behind the picture - dark, light, "
+     "a gradient either way, or a colour of your own (kept for next time) - and how it is shaded: shaded, wireframe, "
+     "and the model see-through so the harness shows in it.</p>"
+     "<p>The view's name is in the picture's top left corner: Top, Bottom, Front, Back, Left, Right, Iso - or Custom "
+     "once it is turned away from those.</p>"
+     "<p>At the side of the window the 3D view is the picture alone; <i>Open below</i> puts it under the drawing with "
+     "everything, and <i>To the side</i> puts it back.</p>"},
+    {"16. What every command does",
      "",
      "<p><b>The top row - what is shown, and the view</b></p><dl>"
      "<dt><i>The drawing / The harness wizard</i></dt><dd>Which harness to show: the one on the sheet, or the one open in "
@@ -214,7 +262,7 @@ const Topic kTopics[] = {
      "<dt>Ctrl+Z</dt><dd>Undo.</dd>"
      "<dt>F11</dt><dd>Full screen, and back.</dd>"
      "</dl>"},
-    {"13. Words used here",
+    {"17. Words used here",
      "",
      "<dl>"
      "<dt><b>Environment</b></dt><dd>The CAD model the harness is routed in (STEP, STL or OBJ).</dd>"

@@ -253,7 +253,7 @@ bool GlRenderer3D::render(QImage& image, const std::vector<DrawItem3D>& items, c
     }
     d_->fbo->bind();
     gl->glViewport(0, 0, w, h);
-    gl->glClearColor(background.redF(), background.greenF(), background.blueF(), 1.0f);
+    gl->glClearColor(background.redF(), background.greenF(), background.blueF(), background.alphaF());
     gl->glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     gl->glEnable(GL_DEPTH_TEST);
     gl->glDepthFunc(GL_LEQUAL);

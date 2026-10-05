@@ -22,6 +22,8 @@
 #include <QDockWidget>
 #include <QHBoxLayout>
 #include <QGridLayout>
+#include <QActionGroup>
+#include <QMenu>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QStackedWidget>
@@ -41,6 +43,12 @@ void MainWindow::buildView3DTab() {
         row->setSpacing(1);
         fill(w, row);
         addGroup(lay, title, w);
+    };
+    // A FIELD'S NAME, in the scheme's own ink - readable on the ribbon, light or dark.
+    auto fieldLabel = [](const QString& text, QWidget* parent) {
+        auto* l = new QLabel(text, parent);
+        l->setStyleSheet(QStringLiteral("color:%1;").arg(Chrome::ink().name()));
+        return l;
     };
     auto big = [this](QWidget* parent, QHBoxLayout* row, const char* name, const QString& text, const QString& icon,
                       const QString& tip, auto fn) {
@@ -89,7 +97,7 @@ void MainWindow::buildView3DTab() {
         gl->setVerticalSpacing(1);
         const char* turns[3][2] = {{"Turn", "view3dTurn"}, {"Tilt", "view3dTilt"}, {"Roll", "view3dRoll"}};
         for (int i = 0; i < 3; ++i) {
-            gl->addWidget(new QLabel(QString::fromLatin1(turns[i][0]), g), i, 0);
+            gl->addWidget(fieldLabel(QString::fromLatin1(turns[i][0]), g), i, 0);
             auto* s = new QSpinBox(g);
             s->setObjectName(QStringLiteral("preview3d%1").arg(QString::fromLatin1(turns[i][0])));
             s->setMinimumWidth(70);
@@ -105,6 +113,70 @@ void MainWindow::buildView3DTab() {
         gl->addWidget(wire, 1, 2);
         preview3dMirrors_.append({wire, QStringLiteral("view3dWireframe")});
         row->addWidget(g);
+    });
+    group(QStringLiteral("Route"), [&](QWidget* w, QHBoxLayout* row) {
+        auto* tools = new QButtonGroup(w);
+        tools->setExclusive(true);
+        const struct {
+            RouteTool tool;
+            const char* name;
+            const char* text;
+            const char* key;
+            const char* tip;
+        } list[] = {
+            {RouteTool::Select, "preview3dSelect", "Select", "select", "Pick a point on the model, or select a node or a bundle"},
+            {RouteTool::Connector, "preview3dConnector", "Connector", "connector",
+             "Put a connector - or the harness part chosen - on the face clicked; its arrow: the form it is put in. "
+             "Tab: freeze it where it would go, to set it on the right first"},
+            {RouteTool::Route, "preview3dRoute", "Route", "route", "Lay a bundle from node to node over the faces clicked"},
+            {RouteTool::Measure, "preview3dMeasure", "Measure", "measure",
+             "A ruler: one end, then the other - its arrow: point to point, or surface to surface"},
+            {RouteTool::Branch, "preview3dBranch", "Branch", "branch", "Put a branch down - on a bundle, dividing it, or on a face"},
+            {RouteTool::Clip, "preview3dClip", "Clip", "clip", "Put a clip on the bundle where clicked - it holds it only at that point"},
+            {RouteTool::Move, "preview3dMove", "Move", "move", "Drag a node - or a stretch of a bundle between two nodes - to somewhere else"},
+            {RouteTool::Stretch, "preview3dStretch", "Stretch", "stretch",
+             "Pull a connector: it stays, its cable pulled tight through it and the rest cut off"},
+            {RouteTool::Delete, "preview3dDelete", "Delete", "delete", "Take away the node or bundle clicked"},
+        };
+        for (const auto& t : list) {
+            QToolButton* b = big(w, row, t.name, QString::fromLatin1(t.text), QString::fromLatin1(t.key), QString::fromLatin1(t.tip),
+                                 [this, tool = t.tool] { if (view3dPane_) view3dPane_->setRouteTool(tool); });
+            b->setCheckable(true);
+            tools->addButton(b, static_cast<int>(t.tool));
+            preview3dTools_.append({static_cast<int>(t.tool), b});
+        }
+        if (QAbstractButton* first = tools->button(static_cast<int>(RouteTool::Select))) first->setChecked(true);
+        big(w, row, "preview3dUndo", QStringLiteral("Undo"), QStringLiteral("undo"), QStringLiteral("Take back the last change to the route"),
+            [this] { if (view3dPane_) view3dPane_->undoRoute(); });
+        // THEIR ARROWS: the form a connector is put in, and how the ruler measures.
+        auto popup = [&](const char* name, const QList<QPair<QString, std::function<void()>>>& choices, int on) {
+            auto* b = page->findChild<QToolButton*>(QLatin1String(name));
+            if (!b) return;
+            auto* menu = new QMenu(b);
+            auto* group = new QActionGroup(menu);
+            for (int i = 0; i < choices.size(); ++i) {
+                QAction* a = menu->addAction(choices[i].first);
+                a->setCheckable(true);
+                a->setChecked(i == on);
+                group->addAction(a);
+                connect(a, &QAction::triggered, this, [fn = choices[i].second, b] {
+                    fn();
+                    b->click();
+                    b->setChecked(true);
+                });
+            }
+            b->setMenu(menu);
+            b->setPopupMode(QToolButton::MenuButtonPopup);
+        };
+        QList<QPair<QString, std::function<void()>>> forms;
+        for (const auto& [text, key] : {std::pair<const char*, const char*>{"Rectangular", "rect"}, {"Cylindrical", "round"}, {"T (flange and body)", "tee"},
+                                        {"Right angle (L)", "angle"}, {"D-sub shell", "dsub"}})
+            forms.append({QString::fromLatin1(text), [this, k = QString::fromLatin1(key)] { if (view3dPane_) view3dPane_->setPlaceForm(k); }});
+        popup("preview3dConnector", forms, 0);
+        popup("preview3dMeasure",
+              {{QStringLiteral("Point to point"), [this] { if (view3dPane_) view3dPane_->setMeasureMode(0); }},
+               {QStringLiteral("Surface to surface"), [this] { if (view3dPane_) view3dPane_->setMeasureMode(1); }}},
+              0);
     });
     group(QStringLiteral("Show"), [&](QWidget* w, QHBoxLayout* row) {
         auto* g = new QWidget(w);
@@ -161,44 +233,6 @@ void MainWindow::buildView3DTab() {
         preview3dMirrors_.append({sectionAt, QStringLiteral("view3dSectionAt")});
         row->addWidget(g);
     });
-    group(QStringLiteral("Route"), [&](QWidget* w, QHBoxLayout* row) {
-        auto* tools = new QButtonGroup(w);
-        tools->setExclusive(true);
-        const struct {
-            RouteTool tool;
-            const char* name;
-            const char* text;
-            const char* key;
-            const char* tip;
-        } list[] = {
-            {RouteTool::Select, "preview3dSelect", "Select", "select", "Pick a point on the model, or select a node or a bundle"},
-            {RouteTool::Connector, "preview3dConnector", "Connector", "connector", "Put a connector - or the harness part chosen - on the face clicked"},
-            {RouteTool::Branch, "preview3dBranch", "Branch", "branch", "Put a branch down - on a bundle, dividing it, or on a face"},
-            {RouteTool::Clip, "preview3dClip", "Clip", "clip", "Put a clip on the bundle where clicked - it holds it only at that point"},
-            {RouteTool::Route, "preview3dRoute", "Route", "route", "Lay a bundle from node to node over the faces clicked"},
-            {RouteTool::Move, "preview3dMove", "Move", "move", "Drag a node to somewhere else on the model"},
-            {RouteTool::Stretch, "preview3dStretch", "Stretch", "stretch",
-             "Pull a connector: it stays, its cable pulled tight through it and the rest cut off"},
-            {RouteTool::Delete, "preview3dDelete", "Delete", "delete", "Take away the node or bundle clicked"},
-            {RouteTool::Measure, "preview3dMeasure", "Measure", "measure",
-             "A ruler: one end, then the other - the distance straight, and along and across each axis"},
-        };
-        for (const auto& t : list) {
-            QToolButton* b = big(w, row, t.name, QString::fromLatin1(t.text), QString::fromLatin1(t.key), QString::fromLatin1(t.tip),
-                                 [this, tool = t.tool] { if (view3dPane_) view3dPane_->setRouteTool(tool); });
-            b->setCheckable(true);
-            tools->addButton(b, static_cast<int>(t.tool));
-            preview3dTools_.append({static_cast<int>(t.tool), b});
-        }
-        if (QAbstractButton* first = tools->button(static_cast<int>(RouteTool::Select))) first->setChecked(true);
-        big(w, row, "preview3dUndo", QStringLiteral("Undo"), QStringLiteral("undo"), QStringLiteral("Take back the last change to the route"),
-            [this] { if (view3dPane_) view3dPane_->undoRoute(); });
-        // How the ruler measures: point to point, or surface to surface.
-        auto* mode = new QComboBox(w);
-        mode->setObjectName(QStringLiteral("preview3dMeasureMode"));
-        row->addWidget(mode);
-        preview3dMirrors_.append({mode, QStringLiteral("view3dMeasureMode")});
-    });
     // THE BUNDLES' SIZES, and where a click lands.
     group(QStringLiteral("Bundle"), [&](QWidget* w, QHBoxLayout* row) {
         auto* g = new QWidget(w);
@@ -209,7 +243,7 @@ void MainWindow::buildView3DTab() {
                                    {"Bend R", "preview3dBend", "view3dRouteBend"},
                                    {"Lead", "preview3dLead", "view3dRouteLead"}};
         for (int i = 0; i < 3; ++i) {
-            gl->addWidget(new QLabel(QString::fromUtf8(sizes[i][0]), g), i, 0);
+            gl->addWidget(fieldLabel(QString::fromUtf8(sizes[i][0]), g), i, 0);
             auto* s = new QDoubleSpinBox(g);
             s->setObjectName(QLatin1String(sizes[i][1]));
             s->setMinimumWidth(84);
@@ -233,7 +267,7 @@ void MainWindow::buildView3DTab() {
         plane->setObjectName(QStringLiteral("preview3dWorkPlane"));
         gl->addWidget(plane, 0, 0, 1, 2);
         preview3dMirrors_.append({plane, QStringLiteral("view3dWorkPlane")});
-        gl->addWidget(new QLabel(QStringLiteral("at"), g), 1, 0);
+        gl->addWidget(fieldLabel(QStringLiteral("at"), g), 1, 0);
         auto* at = new QDoubleSpinBox(g);
         at->setObjectName(QStringLiteral("preview3dWorkPlaneAt"));
         gl->addWidget(at, 1, 1);
@@ -252,8 +286,43 @@ void MainWindow::buildView3DTab() {
         big(w, row, "preview3dRefresh", QStringLiteral("Refresh"), QStringLiteral("refresh"), QStringLiteral("Build the 3D harness again from the drawing"),
             [this] { if (view3dPane_) view3dPane_->rebuild(false); });
         big(w, row, "preview3dHelp", QStringLiteral("Help"), QStringLiteral("help"),
-            QStringLiteral("How to work in the 3D view - every command, with recordings"), [this] { if (view3dPane_) view3dPane_->showHelp(); });
+            QStringLiteral("How to work in the 3D view - every command explained, with recordings of it being done"),
+            [this] { if (view3dPane_) view3dPane_->showHelp(); });
     });
+    // THE DISPLAY: the background behind the picture and how it is shaded - as on the wheel's options.
+    if (auto* fit = page->findChild<QToolButton*>(QStringLiteral("preview3dFit"))) {
+        auto* row = qobject_cast<QHBoxLayout*>(fit->parentWidget()->layout());
+        auto* display = new QToolButton(fit->parentWidget());
+        display->setObjectName(QStringLiteral("preview3dDisplay"));
+        display->setText(QStringLiteral("Display"));
+        display->setToolTip(QStringLiteral("The background behind the picture - dark, light, a gradient, a colour - and how it is shaded"));
+        display->setIcon(icon3D(QStringLiteral("display"), Chrome::ink()));
+        display->setAutoRaise(true);
+        display->setFocusPolicy(Qt::NoFocus);
+        display->setPopupMode(QToolButton::InstantPopup);
+        auto* menu = new QMenu(display);
+        connect(menu, &QMenu::aboutToShow, this, [this, menu] {
+            menu->clear();
+            if (view3dPane_) view3dPane_->fillDisplayMenu(menu);
+        });
+        display->setMenu(menu);
+        preview3dIcons_.append({QStringLiteral("display"), display});
+        if (row) row->insertWidget(row->indexOf(fit) + 1, display);
+    }
+    // ADD LENGTH: the bundle selected made longer by so much.
+    if (auto* loose = page->findChild<QToolButton*>(QStringLiteral("preview3dAddLoose"))) {
+        auto* row = qobject_cast<QHBoxLayout*>(loose->parentWidget()->layout());
+        auto* more = new QToolButton(loose->parentWidget());
+        more->setObjectName(QStringLiteral("preview3dAddLength"));
+        more->setText(QStringLiteral("Add length"));
+        more->setToolTip(QStringLiteral("The bundle selected made longer by so much - laid looser, its ends where they are"));
+        more->setIcon(icon3D(QStringLiteral("loose"), Chrome::ink()));
+        more->setAutoRaise(true);
+        more->setFocusPolicy(Qt::NoFocus);
+        connect(more, &QToolButton::clicked, this, [this] { if (view3dPane_) view3dPane_->addLengthToSelected(); });
+        preview3dIcons_.append({QStringLiteral("loose"), more});
+        if (row) row->insertWidget(row->indexOf(loose) + 1, more);
+    }
     // COMPACT, AS A 3D PROGRAM'S RIBBON IS: the commands used most large (Fit, Select, Connector, Route, Load, Lengths),
     // the rest small - their picture with their name beside it - three to a column, so the tab takes half the room.
     auto stack = [&](const QStringList& names) {
@@ -280,16 +349,17 @@ void MainWindow::buildView3DTab() {
         }
         row->insertWidget(std::max(0, at), column);
     };
+    stack({QStringLiteral("preview3dDisplay")});
     stack({QStringLiteral("preview3dIso"), QStringLiteral("preview3dTop"), QStringLiteral("preview3dBottom"), QStringLiteral("preview3dFront"),
            QStringLiteral("preview3dBack"), QStringLiteral("preview3dLeft"), QStringLiteral("preview3dSide"), QStringLiteral("preview3dFlip"),
            QStringLiteral("preview3dFullScreen"), QStringLiteral("preview3dLock")});
     stack({QStringLiteral("preview3dHarness"), QStringLiteral("preview3dParts")});
     stack({QStringLiteral("preview3dEnvClear")});
     stack({QStringLiteral("preview3dBranch"), QStringLiteral("preview3dClip"), QStringLiteral("preview3dMove"), QStringLiteral("preview3dStretch"),
-           QStringLiteral("preview3dDelete"), QStringLiteral("preview3dMeasure"), QStringLiteral("preview3dUndo")});
-    stack({QStringLiteral("preview3dAddLoose")});
+           QStringLiteral("preview3dDelete"), QStringLiteral("preview3dUndo")});
+    stack({QStringLiteral("preview3dAddLoose"), QStringLiteral("preview3dAddLength")});
     stack({QStringLiteral("preview3dWorkPlaneHere")});
-    stack({QStringLiteral("preview3dRefresh"), QStringLiteral("preview3dHelp")});
+    stack({QStringLiteral("preview3dRefresh")});
     for (QToolButton* b : page->findChildren<QToolButton*>())
         if (b->toolButtonStyle() == Qt::ToolButtonTextUnderIcon) b->setIconSize(QSize(26, 26));
     lay->addStretch(1);
