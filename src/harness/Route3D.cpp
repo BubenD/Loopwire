@@ -316,6 +316,11 @@ QJsonObject Route3D::toJson() const {
             j[QStringLiteral("brick")] = n.brick;
             j[QStringLiteral("part")] = n.part;
         }
+        if (!n.form.isEmpty() && n.form != QLatin1String("rect")) j[QStringLiteral("form")] = n.form;
+        if (n.formW > 0.0) j[QStringLiteral("fw")] = n.formW;
+        if (n.formH > 0.0) j[QStringLiteral("fh")] = n.formH;
+        if (n.formL > 0.0) j[QStringLiteral("fl")] = n.formL;
+        if (n.color.isValid()) j[QStringLiteral("color")] = n.color.name();
         ns.append(j);
     }
     o[QStringLiteral("nodes")] = ns;
@@ -352,6 +357,11 @@ Route3D Route3D::fromJson(const QJsonObject& o) {
         n.spinDeg = j.value(QStringLiteral("spin")).toDouble(0.0);
         n.brick = j.value(QStringLiteral("brick")).toString();
         n.part = j.value(QStringLiteral("part")).toString();
+        n.form = j.value(QStringLiteral("form")).toString();
+        n.formW = j.value(QStringLiteral("fw")).toDouble(0.0);
+        n.formH = j.value(QStringLiteral("fh")).toDouble(0.0);
+        n.formL = j.value(QStringLiteral("fl")).toDouble(0.0);
+        if (j.contains(QStringLiteral("color"))) n.color = QColor(j.value(QStringLiteral("color")).toString());
         if (!n.id.isEmpty()) r.nodes.push_back(n);
     }
     for (const QJsonValue& v : o.value(QStringLiteral("segments")).toArray()) {

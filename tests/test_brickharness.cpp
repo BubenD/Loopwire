@@ -6163,7 +6163,8 @@ void testRoundFortyThree() {
     // A BRANCH on the bundle, between the point laid and X2: two bundles.
     pane.setRouteTool(RouteTool::Branch);
     const std::vector<V3> c = route.corners(route.segments[0]);
-    click((c[2] + c[3]) * 0.5);
+    // Clear of the connector's housing and its key, which stand over the bundle's last stretch.
+    click(c[2] + (c[3] - c[2]) * 0.3);
     check(route.segments.size() == 2 && route.nodes.size() == 3 && route.nodes[2].kind == RouteNodeKind::Branch &&
               route.degree(route.nodes[2].id) == 2,
           "3d route: a branch put on the bundle divides it there");
@@ -7542,8 +7543,8 @@ void testRoundFiftyTwo() {
     check(view3d && host && view3d->parentWidget() == host && host->isVisible(), "3d preview: open - the 3D view where the drawing was");
     check(dock && dock->widget() != view3d && !dock->isVisible(), "3d preview: out of its panel while it is there");
     auto* stretch = w.findChild<QToolButton*>(QStringLiteral("preview3dStretch"));
-    check(stretch && !stretch->icon().isNull() && stretch->toolButtonStyle() == Qt::ToolButtonTextUnderIcon,
-          "3d preview: its commands as pictures, their names under them");
+    check(stretch && !stretch->icon().isNull() && !stretch->text().isEmpty() && stretch->toolButtonStyle() != Qt::ToolButtonIconOnly,
+          "3d preview: its commands as pictures with their names (the less used small, the name beside)");
     if (stretch) stretch->click();
     check(view3d && view3d->routeTool() == RouteTool::Stretch, "3d preview: Stretch on the tab - the 3D view's tool");
     view3d->setRouteTool(RouteTool::Clip);
@@ -7865,7 +7866,8 @@ void testRoundFiftyFour() {
         check(said.contains(QStringLiteral("Direct 50.0")) && said.contains(QStringLiteral("XY plane 50.0")), "ruler: said in words");
         QKeyEvent esc(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
         QApplication::sendEvent(canvas, &esc);
-        check(!canvas->measured(), "ruler: Esc takes it away");
+        check(canvas->measured(), "ruler: kept - Esc gives up only a ruler being made");
+        canvas->clearMeasures();
     }
 
     // ---- A CLIP WHERE THE BUNDLE IS, HOLDING ONLY THERE ----
@@ -8118,75 +8120,287 @@ void testRoundFiftyFive() {
 #endif
 }
 
+// ROUND FIFTY-SIX: A CONNECTOR DELETED wherever on its body it is clicked, or from its right-click menu, or with Delete;
+// ITS FORM AND SIZE; RULERS kept until deleted, surface to surface as well as point to point, all taken away from the
+// menu; A NODE MOVED by numbers, by the wheel's arrows and turns, and coloured; THE VIEW'S NAME in its corner; AT THE SIDE
+// the picture alone, opened below with everything; the 3D Preview ribbon compact.
+void testRoundFiftySix() {
+    Route3D r;
+    r.diameter = 6.0;
+    r.lead = 12.0;
+    const QString x1 = r.addNode(RouteNodeKind::Connector, {-40, 0, 0}, {0, 0, 1});
+    const QString x2 = r.addNode(RouteNodeKind::Connector, {40, 0, 0}, {0, 0, 1});
+    r.addSegment(x1, x2, {});
+    QJsonObject stored = r.toJson();
+    View3DPane pane;
+    pane.setRoutingStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    pane.resize(1100, 760);
+    pane.show();
+    QApplication::processEvents();
+    pane.reloadRouting(true);
+    View3DCanvas* canvas = pane.canvas();
+    canvas->setUseGpu(false);
+    canvas->viewFrom(QStringLiteral("front"));
+    QApplication::processEvents();
+    const Route3D& route = pane.route();
+    auto screen = [&](const V3& p) {
+        QPointF at;
+        canvas->toScreen(p, at);
+        return at;
+    };
+    auto click = [&](const QPointF& at, Qt::KeyboardModifiers mods = Qt::NoModifier) {
+        QMouseEvent press(QEvent::MouseButtonPress, at, canvas->mapToGlobal(at), Qt::LeftButton, Qt::LeftButton, mods);
+        QMouseEvent release(QEvent::MouseButtonRelease, at, canvas->mapToGlobal(at), Qt::LeftButton, Qt::NoButton, mods);
+        QApplication::sendEvent(canvas, &press);
+        QApplication::sendEvent(canvas, &release);
+        QApplication::processEvents();
+    };
+    check(canvas->viewName() == QLatin1String("Front"), "view name: Front, square on");
+    canvas->viewFrom(QStringLiteral("back"));
+    check(canvas->viewName() == QLatin1String("Back"), "view name: Back");
+    canvas->viewFrom(QStringLiteral("iso"));
+    check(canvas->viewName() == QLatin1String("Iso"), "view name: Iso");
+    canvas->nudge(10, 0, 0);
+    check(canvas->viewName() == QLatin1String("Custom"), "view name: turned away - Custom");
+    canvas->viewFrom(QStringLiteral("front"));
+    QApplication::processEvents();
+
+    // ---- DELETE: the connector clicked near the top of its housing, far from its middle ----
+    pane.setRouteTool(RouteTool::Delete);
+    const RouteNode3D* n2 = route.node(x2);
+    click(screen(n2->at + n2->normal * (route.lead * 0.95)));
+    check(!route.node(x2) && route.segments.empty(), "delete: a connector clicked at the top of its housing - it is deleted, its bundle with it");
+    pane.undoRoute();
+    check(route.node(x2) && route.segments.size() == 1, "delete: undone");
+    // With Delete, the one selected.
+    pane.setRouteTool(RouteTool::Select);
+    click(screen(route.node(x2)->at + route.node(x2)->normal * (route.lead * 0.9)));
+    check(canvas->selectedNode() == x2, "select: a connector clicked anywhere on its body - selected");
+    QKeyEvent del(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
+    QApplication::sendEvent(canvas, &del);
+    check(!route.node(x2), "delete: the Delete key deletes the connector selected");
+    pane.undoRoute();
+    // From its right-click menu.
+    auto rightClickAndTrigger = [&](const QPointF& at, const QString& action, bool* enabled = nullptr) {
+        QTimer::singleShot(40, canvas, [&, action, enabled] {
+            if (auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget())) {
+                for (QAction* a : menu->actions())
+                    if (a->objectName() == action) {
+                        if (enabled) *enabled = a->isEnabled();
+                        if (a->isEnabled() && !enabled) a->trigger();
+                    }
+                menu->close();
+            }
+        });
+        QContextMenuEvent e(QContextMenuEvent::Mouse, at.toPoint(), canvas->mapToGlobal(at.toPoint()));
+        QApplication::sendEvent(canvas, &e);
+        QApplication::processEvents();
+    };
+    bool removeAllOn = true;
+    rightClickAndTrigger(screen(route.node(x2)->at + route.node(x2)->normal * (route.lead * 0.5)), QStringLiteral("view3dRemoveMeasures"), &removeAllOn);
+    check(!removeAllOn, "menu: Remove all measures there, greyed while there are none");
+    rightClickAndTrigger(screen(route.node(x2)->at + route.node(x2)->normal * (route.lead * 0.5)), QStringLiteral("view3dDeleteNode"));
+    check(!route.node(x2), "menu: a connector right-clicked - Delete deletes it");
+    pane.undoRoute();
+
+    // ---- ITS FORM AND SIZE ----
+    click(screen(route.node(x2)->at + route.node(x2)->normal * (route.lead * 0.5)));
+    auto* form = pane.findChild<QComboBox*>(QStringLiteral("view3dConnForm"));
+    check(form && form->isVisibleTo(&pane), "form: offered for the connector selected");
+    if (form) {
+        form->setCurrentIndex(form->findData(QStringLiteral("round")));
+        emit form->activated(form->currentIndex());
+    }
+    pane.findChild<QDoubleSpinBox*>(QStringLiteral("view3dConnW"))->setValue(20.0);
+    pane.findChild<QDoubleSpinBox*>(QStringLiteral("view3dConnL"))->setValue(30.0);
+    check(route.node(x2)->form == QLatin1String("round") && route.node(x2)->formW == 20.0 && route.node(x2)->formL == 30.0,
+          "form: cylindrical, 20 across and 30 long");
+    check(Route3D::fromJson(route.toJson()).node(x2)->formL == 30.0, "form: saved with the route");
+    // Clicked high up its now longer body: still it.
+    pane.setRouteTool(RouteTool::Select);
+    click(QPointF(0, 0));
+    click(screen(route.node(x2)->at + route.node(x2)->normal * 27.0));
+    check(canvas->selectedNode() == x2, "form: the longer body clicked at its far end - the connector");
+
+    // ---- RULERS: kept, selected and deleted; surface to surface; all taken away ----
+    canvas->viewFrom(QStringLiteral("top"));
+    QApplication::processEvents();
+    pane.setRouteTool(RouteTool::Measure);
+    click(screen({-30, 0, 0}));
+    click(screen({-10, 0, 0}));
+    click(screen({0, 0, 0}));
+    click(screen({20, 0, 0}));
+    check(canvas->measureCount() == 2, "ruler: two made - both kept");
+    QKeyEvent esc(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(canvas, &esc);
+    check(canvas->measureCount() == 2, "ruler: Esc does not take them away");
+    pane.setRouteTool(RouteTool::Select);
+    click(screen({-20, 0, 0}));
+    check(canvas->selectedMeasure() == 0, "ruler: clicked on - selected");
+    QApplication::sendEvent(canvas, &del);
+    check(canvas->measureCount() == 1, "ruler: selected and Delete - that one taken away");
+    // Surface to surface: from the second point square back to the first face.
+    canvas->setMeasureFaces(true);
+    pane.setRouteTool(RouteTool::Measure);
+    canvas->viewFrom(QStringLiteral("top"));
+    QApplication::processEvents();
+    click(screen({-30, -10, 0}));   // on the ground, its face looking up
+    pane.setRouteTool(RouteTool::Measure);
+    {
+        // The second point a face 15 above, wherever across: the gap is 15.
+        V3 p, nrm;
+        canvas->surfaceAt(screen({-30, -10, 0}), p, nrm);
+    }
+    canvas->setWorkPlane(2, 15.0);
+    click(screen({10, 20, 15}));
+    canvas->setWorkPlane(-1, 0.0);
+    const View3DCanvas::Measure3D& faced = canvas->measures().back();
+    std::printf("  ruler: surface to surface %.2f (straight between the clicks %.1f)\n", (faced.b - faced.a).length(),
+                (V3{10, 20, 15} - V3{-30, -10, 0}).length());
+    check(faced.faces && std::abs((faced.b - faced.a).length() - 15.0) < 0.2, "ruler: surface to surface - the gap square between the faces");
+    canvas->setMeasureFaces(false);
+    rightClickAndTrigger(screen({70, 70, 0}), QStringLiteral("view3dRemoveMeasures"));
+    check(canvas->measureCount() == 0, "ruler: Remove all measures from the menu - every ruler taken away");
+
+    // ---- MOVED: by numbers, the wheel's arrows and turns, and coloured ----
+    canvas->viewFrom(QStringLiteral("front"));
+    QApplication::processEvents();
+    pane.setRouteTool(RouteTool::Move);
+    click(screen(route.node(x1)->at + route.node(x1)->normal * (route.lead * 0.5)));
+    auto* moveBox = pane.findChild<QWidget*>(QStringLiteral("view3dMoveBox"));
+    check(moveBox && moveBox->isVisibleTo(&pane) && pane.wheelMoving(), "move: a node clicked - where it is offered, and the wheel's arrows");
+    pane.findChild<QDoubleSpinBox*>(QStringLiteral("view3dMoveZ"))->setValue(25.0);
+    check(std::abs(route.node(x1)->at.z - 25.0) < 1e-9, "move: typed - put there");
+    auto* wheel = pane.findChild<NavWheel*>(QStringLiteral("view3dWheel"));
+    const double x0 = route.node(x1)->at.x;
+    pane.moveSelectedNode({5, 0, 0});
+    check(std::abs(route.node(x1)->at.x - (x0 + 5.0)) < 1e-9, "move: a step along X");
+    pane.rotateSelectedNode(1, 90.0);
+    check(std::abs(route.node(x1)->normal.x - 1.0) < 1e-6, "move: turned 90° round Y - pointing along X now");
+    pane.setSelectedNodeColor(QColor(200, 30, 30));
+    check(route.node(x1)->color == QColor(200, 30, 30) && Route3D::fromJson(route.toJson()).node(x1)->color == QColor(200, 30, 30),
+          "move: coloured - and saved so");
+    pane.setRouteTool(RouteTool::Select);
+    check(wheel && !pane.wheelMoving(), "move: another tool - the view's wheel back");
+
+    // ---- AT THE SIDE: THE PICTURE ALONE; OPENED BELOW WITH EVERYTHING, AND BACK ----
+    MainWindow w;
+    w.resize(1500, 900);
+    w.show();
+    QApplication::processEvents();
+    auto* dock = w.findChild<QDockWidget*>(QStringLiteral("view3dDock"));
+    auto* view3d = w.findChild<View3DPane*>(QStringLiteral("view3d"));
+    if (!dock || !view3d) return;
+    w.addDockWidget(Qt::RightDockWidgetArea, dock);
+    dock->show();
+    QApplication::processEvents();
+    auto* toBottom = view3d->findChild<QToolButton*>(QStringLiteral("view3dToBottom"));
+    auto* side = view3d->findChild<QWidget*>(QStringLiteral("view3dRoutes"));
+    std::printf("  side: compact %d, open-below button %d, panel %d, wheel %d, floating %d, area %d\n", view3d->compact(),
+                toBottom && toBottom->isVisible(), side && side->isVisible(),
+                view3d->findChild<NavWheel*>(QStringLiteral("view3dWheel"))->isVisible(), dock->isFloating(), static_cast<int>(w.dockWidgetArea(dock)));
+    // Shown or hidden by the pane itself - whatever the panel round it remembers (rolled up from an earlier run).
+    check(view3d->compact() && toBottom && !toBottom->isHidden() && side && !side->isVisibleTo(view3d) &&
+              view3d->findChild<NavWheel*>(QStringLiteral("view3dWheel"))->isHidden(),
+          "side: at the side of the window - the picture alone, no wheel, no options, a button to open it below");
+    if (toBottom) toBottom->click();
+    QApplication::processEvents();
+    auto* toSide = view3d->findChild<QToolButton*>(QStringLiteral("view3dToSide"));
+    check(w.dockWidgetArea(dock) == Qt::BottomDockWidgetArea && !view3d->compact() && toSide && !toSide->isHidden(),
+          "side: opened below - everything, and a button back to the side");
+    if (toSide) toSide->click();
+    QApplication::processEvents();
+    check(w.dockWidgetArea(dock) == Qt::RightDockWidgetArea && view3d->compact(), "side: back to the side it came from - the picture alone");
+    // THE RIBBON COMPACT: the views small, three to a column, their names beside them.
+    auto* iso = w.findChild<QToolButton*>(QStringLiteral("preview3dIso"));
+    auto* back = w.findChild<QToolButton*>(QStringLiteral("preview3dBack"));
+    auto* select = w.findChild<QToolButton*>(QStringLiteral("preview3dSelect"));
+    check(iso && back && select && iso->toolButtonStyle() == Qt::ToolButtonTextBesideIcon &&
+              select->toolButtonStyle() == Qt::ToolButtonTextUnderIcon,
+          "ribbon: compact - the views small with their names beside them, the main tools large");
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
-    testLinks();
-    testJson();
-    testRoutes();
-    testArrange();
-    testBuild();
-    testFanoutJointAndExtras();
-    testPortsPerFace();
-    testDialog();
-    testDialogMore();
-    testRoundThree();
-    testRoundFour();
-    testRoundFive();
-    testRoundSix();
-    testRoundSeven();
-    testPartSizeByEntry();
-    testConnectPointFacesBrick();
-    testLengthsAndBridges();
-    testRoundEight();
-    testRoundNine();
-    testRoundTen();
-    testRoundEleven();
-    testRoundTwelve();
-    testRoundThirteen();
-    testConnectorContactsOnBill();
-    testRoundFourteen();
-    testRoundFifteen();
-    testRoundSixteen();
-    testRoundSeventeen();
-    testRoundEighteen();
-    testRoundNineteen();
-    testRoundTwenty();
-    testRoundTwentyOne();
-    testRoundTwentyTwo();
-    testRoundTwentyThree();
-    testRoundTwentyFour();
-    testRoundTwentyFive();
-    testRoundTwentySix();
-    testRoundTwentySeven();
-    testRoundTwentyEight();
-    testRoundTwentyNine();
-    testRoundThirty();
-    testRoundThirtyOne();
-    testRoundThirtyTwo();
-    testRoundThirtyThree();
-    testRoundThirtyFour();
-    testRoundThirtyFive();
-    testRoundThirtySix();
-    testRoundThirtySeven();
-    testRoundThirtyEight();
-    testRoundThirtyNine();
-    testRoundForty();
-    testRoundFortyOne();
-    testRoundFortyTwo();
-    testRoundFortyThree();
-    testRoundFortyFour();
-    testRoundFortyFive();
-    testRoundFortySix();
-    testRoundFortySeven();
-    testRoundFortyEight();
-    testRoundFortyNine();
-    testRoundFifty();
-    testRoundFiftyOne();
-    testRoundFiftyTwo();
-    testRoundFiftyThree();
-    testRoundFiftyFour();
-    testRoundFiftyFive();
+    // SOME ROUNDS ONLY (EDRAW_ROUNDS=FortyThree,FiftySix): each test whose name ends in one of them.
+    const QList<QByteArray> rounds = qgetenv("EDRAW_ROUNDS").split(',');
+    auto wanted = [&](const char* name) {
+        if (qgetenv("EDRAW_ROUNDS").isEmpty()) return true;
+        for (const QByteArray& r : rounds)
+            if (!r.isEmpty() && QByteArray(name).endsWith(r)) return true;
+        return false;
+    };
+#define ROUND(f) \
+    if (wanted(#f)) f()
+    ROUND(testLinks);
+    ROUND(testJson);
+    ROUND(testRoutes);
+    ROUND(testArrange);
+    ROUND(testBuild);
+    ROUND(testFanoutJointAndExtras);
+    ROUND(testPortsPerFace);
+    ROUND(testDialog);
+    ROUND(testDialogMore);
+    ROUND(testRoundThree);
+    ROUND(testRoundFour);
+    ROUND(testRoundFive);
+    ROUND(testRoundSix);
+    ROUND(testRoundSeven);
+    ROUND(testPartSizeByEntry);
+    ROUND(testConnectPointFacesBrick);
+    ROUND(testLengthsAndBridges);
+    ROUND(testRoundEight);
+    ROUND(testRoundNine);
+    ROUND(testRoundTen);
+    ROUND(testRoundEleven);
+    ROUND(testRoundTwelve);
+    ROUND(testRoundThirteen);
+    ROUND(testConnectorContactsOnBill);
+    ROUND(testRoundFourteen);
+    ROUND(testRoundFifteen);
+    ROUND(testRoundSixteen);
+    ROUND(testRoundSeventeen);
+    ROUND(testRoundEighteen);
+    ROUND(testRoundNineteen);
+    ROUND(testRoundTwenty);
+    ROUND(testRoundTwentyOne);
+    ROUND(testRoundTwentyTwo);
+    ROUND(testRoundTwentyThree);
+    ROUND(testRoundTwentyFour);
+    ROUND(testRoundTwentyFive);
+    ROUND(testRoundTwentySix);
+    ROUND(testRoundTwentySeven);
+    ROUND(testRoundTwentyEight);
+    ROUND(testRoundTwentyNine);
+    ROUND(testRoundThirty);
+    ROUND(testRoundThirtyOne);
+    ROUND(testRoundThirtyTwo);
+    ROUND(testRoundThirtyThree);
+    ROUND(testRoundThirtyFour);
+    ROUND(testRoundThirtyFive);
+    ROUND(testRoundThirtySix);
+    ROUND(testRoundThirtySeven);
+    ROUND(testRoundThirtyEight);
+    ROUND(testRoundThirtyNine);
+    ROUND(testRoundForty);
+    ROUND(testRoundFortyOne);
+    ROUND(testRoundFortyTwo);
+    ROUND(testRoundFortyThree);
+    ROUND(testRoundFortyFour);
+    ROUND(testRoundFortyFive);
+    ROUND(testRoundFortySix);
+    ROUND(testRoundFortySeven);
+    ROUND(testRoundFortyEight);
+    ROUND(testRoundFortyNine);
+    ROUND(testRoundFifty);
+    ROUND(testRoundFiftyOne);
+    ROUND(testRoundFiftyTwo);
+    ROUND(testRoundFiftyThree);
+    ROUND(testRoundFiftyFour);
+    ROUND(testRoundFiftyFive);
+    ROUND(testRoundFiftySix);
+#undef ROUND
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

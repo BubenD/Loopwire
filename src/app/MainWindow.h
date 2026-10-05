@@ -281,6 +281,8 @@ private:
     void buildView3DTab();
     void showPreview3D(bool on);
     void restylePreview3DIcons();
+    // THE 3D VIEW'S PANEL PUT AT A SIDE (the picture alone) or below (everything).
+    void placeView3DDock(Qt::DockWidgetArea area);
     // The ribbon's controls of the 3D view tied to the view's own, once.
     void mirrorPreview3D();
     void setPanelsVisible(bool on);
@@ -1029,6 +1031,7 @@ private:
     bool preview3dOn_ = false;
     bool preview3dDockWas_ = false;
     bool preview3dShownOnce_ = false;
+    Qt::DockWidgetArea view3dSideArea_ = Qt::NoDockWidgetArea;   // the side the 3D view's panel was last at
     QList<QPointer<QDockWidget>> preview3dDocksHidden_;   // the panels put away while the 3D Preview tab is open
     QProgressBar* modelLoadBar_ = nullptr;          // a 3D model being read, at the bottom right
     // Each ribbon control and the name of the 3D view's own it stands for.

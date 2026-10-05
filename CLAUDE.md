@@ -50,6 +50,10 @@ Don't use it.
   and starts from anywhere.
 - The full run takes several minutes. Run it in the background, redirect output to a log, and
   grep the log for `FAIL|PASSED`. Don't re-run the suite to find out what broke; read the log.
+- To look into a failure, run only some suites or rounds: `EDRAW_TEST_ONLY=brickharness`
+  (suite names as in `test_main.cpp`, comma-separated) and `EDRAW_ROUNDS=FortyThree,FiftySix`
+  (brick-harness tests whose names end in those). Finish with a full run before committing; a
+  round can pass alone and fail after another one leaves state behind.
 - Tests are plain functions using `check(cond, "what: plain statement")`, grouped one function per
   round (`testRoundThirtyOne()` and so on). Each new round's function is registered in
   `run_brickharness_tests()`.

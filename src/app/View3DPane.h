@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/NavWheel.h"
 #include "geometry/Environment3D.h"
 #include "harness/Harness3D.h"
 #include "harness/Route3D.h"
@@ -41,7 +42,6 @@ namespace Edraw_Desktop {
 
 class View3DCanvas;
 class View3DHelpDialog;
-class NavWheel;
 
 // WHAT A CLICK IN THE 3D VIEW DOES: picks (and selects a node or a bundle), puts a connector on a face, puts a branch
 // or a clip down (on a bundle, dividing it), lays a bundle from node to node through the points clicked, or takes a
@@ -128,6 +128,14 @@ public:
     void showPartsList();
     // THE PANE'S OWN ROWS shown, or not - the 3D Preview tab has all of them on its ribbon.
     void setRowsShown(bool on);
+    // AT THE SIDE OF THE WINDOW: the picture alone, with a button to open it below (dockBelowRequested); below, a button
+    // back to the side it came from (dockSideRequested), shown while `sideDocked` says it came from one.
+    void setCompact(bool on);
+    bool compact() const { return compact_; }
+    void setSideDocked(bool fromSide) {
+        sideDocked_ = fromSide;
+        applyLayout();
+    }
     // The solids and parts in view listed again, each ticked as shown.
     void refreshSolids();
     // THE VIEW LOCKED (and the button and the wheel saying so).
@@ -163,6 +171,8 @@ signals:
     void routeChanged();
     // The route tool chosen - here, or from outside.
     void routeToolChanged(RouteTool tool);
+    void dockBelowRequested();
+    void dockSideRequested();
     // A MODEL BEING READ: how far (a hundredth), what it is doing, and whether it still is.
     void loadProgress(int percent, const QString& said, bool running);
     // The view locked, or not.
@@ -170,11 +180,23 @@ signals:
 
 private:
     void takeEnvironment(Environment3D env, std::shared_ptr<RayIndex3D> index);
+    // THE NODE SELECTED changed - one step to undo, everything shown again.
+    void editSelectedNode(const std::function<void(RouteNode3D&)>& change);
+    void syncMove();
+    void updateWheel();
+public:
+    // THE NODE SELECTED moved by so much, turned round a world axis, coloured.
+    void moveSelectedNode(const V3& by);
+    void rotateSelectedNode(int axis, double degrees);
+    void setSelectedNodeColor(const QColor& c);
+    bool wheelMoving() const { return wheelMoving_; }
+private:
     void applyIcons();
     void applySection();
     void showPick(const Pick3D& pick);
     void sayStatus();
     void fitRows();
+    void applyLayout();
     void partsShownChanged();
     QString envPartName(int part) const;
     QStringList harnessBricks() const;
@@ -257,6 +279,20 @@ private:
     QWidget* rowsBox_ = nullptr;
     QVBoxLayout* rowsLay_ = nullptr;
     QWidget* solidsPanel_ = nullptr;          // what is in view, on the left (the 3D Preview tab)
+    bool compact_ = false;                    // at the side of the window: the picture alone
+    bool sideDocked_ = false;                 // below, having come from the side
+    QToolButton* toBottom_ = nullptr;
+    QToolButton* toSide_ = nullptr;
+    // The connector's form and sizes; the node being moved - where, the step, its colour and turns; the wheel's two sets.
+    QComboBox* connForm_ = nullptr;
+    QDoubleSpinBox* connSize_[3] = {};
+    QWidget* moveBox_ = nullptr;
+    QLabel* moveSaid_ = nullptr;
+    QDoubleSpinBox* moveAt_[3] = {};
+    QDoubleSpinBox* moveStep_ = nullptr;
+    bool fillingMove_ = false;
+    std::vector<NavWheel::Item> viewWheel_;
+    bool wheelMoving_ = false;
     QTreeWidget* solidsTree_ = nullptr;
     bool fillingSolids_ = false;
     QToolButton* lockBtn_ = nullptr;
@@ -365,14 +401,32 @@ public:
     bool turning() const;
     void setAllEnvPartsHidden(bool hidden);
     bool envPartHidden(int part) const;
-    // THE RULER: its two ends, set by two clicks with the Measure tool; and taken away.
-    bool measured() const { return measureStage_ == 2; }
-    V3 measureFrom() const { return measureA_; }
-    V3 measureTo() const { return measureB_; }
+    // THE RULERS: each by two clicks with the Measure tool - point to point, or (surface to surface) square from the
+    // first face to the second - kept in the picture until each is selected and deleted, or all are taken away. The
+    // last one's two ends; the one being made given up.
+    struct Measure3D {
+        V3 a, b;
+        bool faces = false;
+    };
+    bool measured() const { return !measures_.empty(); }
+    V3 measureFrom() const { return measures_.empty() ? V3{} : measures_.back().a; }
+    V3 measureTo() const { return measures_.empty() ? V3{} : measures_.back().b; }
+    const std::vector<Measure3D>& measures() const { return measures_; }
+    int measureCount() const { return static_cast<int>(measures_.size()); }
     void clearMeasure();
+    void clearMeasures();
+    void removeMeasure(int index);
+    int selectedMeasure() const { return selMeasure_; }
+    void selectMeasure(int index);
+    void setMeasureFaces(bool on) { measureFaces_ = on; }
+    bool measureFaces() const { return measureFaces_; }
+    // A NODE OR A BUNDLE TAKEN AWAY - a node with its bundles: one change, to undo.
+    void removeRouteItem(const QString& node, const QString& segment);
     // What the ruler says: the distance straight, and along and across each axis and plane.
     static QString measureSaid(const V3& a, const V3& b);
     void zoomBy(double factor);
+    // The view as it stands: "Top", "Front", "Back", "Left", "Right", "Bottom", "Iso" - or "Custom".
+    QString viewName() const;
     int workPlaneAxis() const { return planeAxis_; }
     double workPlaneAt() const { return planeAt_; }
 
@@ -386,6 +440,8 @@ signals:
     void routeMoving();
     // A RIGHT CLICK on a solid of the model (its index, or -1) or a part of the harness (its brick, or empty).
     void partMenuAsked(int envPart, const QString& brick, const QPoint& globalPos);
+    // A RIGHT CLICK on the route: a node or a bundle (or neither), and a ruler (or -1).
+    void routeMenuAsked(const QString& node, const QString& segment, int measure, const QPoint& globalPos);
     // Something to tell the user.
     void message(const QString& text);
     // The camera turned, moved or zoomed.
@@ -448,6 +504,7 @@ private:
         Mesh3D mesh;
         QColor color;
         int texture = Texture3D::None;
+        QString node;   // the node it is the body of - clicked anywhere on it, it is that node
     };
     mutable std::vector<Drawn> routeMeshes_;
     mutable bool routeDirty_ = true;
@@ -458,10 +515,17 @@ private:
     QPointer<QVariantAnimation> turnAnim_;
     // The solids of the model hidden, and the ruler. Not saved.
     std::vector<char> envHidden_;
-    int measureStage_ = 0;      // 0 none, 1 its first end set, 2 both
-    V3 measureA_, measureB_;
-    mutable Mesh3D measureMesh_;
+    int measureStage_ = 0;      // 0 none being made, 1 its first end set
+    V3 measureA_, measureB_, measureNormal_;
+    std::vector<Measure3D> measures_;
+    int selMeasure_ = -1;
+    bool measureFaces_ = false;
+    mutable Mesh3D measureMesh_, measureLitMesh_;
     mutable bool measureDirty_ = true;
+    // The ruler near a point of the picture - its line or its label - or -1.
+    int measureAt(const QPointF& at) const;
+    // A ruler being made: from its first end, to where the pointer is - square off the first face, surface to surface.
+    Measure3D measureMaking(const V3& to) const;
     // The section's see-through plane, over only the solids it cuts. Not saved.
     mutable Mesh3D sectionMesh_;
     mutable bool sectionDirty_ = true;

@@ -185,6 +185,32 @@ void NavWheel::paintEvent(QPaintEvent*) {
             p.drawRoundedRect(QRectF(-s - 1.0, -2.6, s + 2.5, 5.2), 2.6, 2.6);
             p.drawRoundedRect(QRectF(-1.5, -2.6, s + 2.5, 5.2), 2.6, 2.6);
             p.restore();
+        } else if (it.key.size() >= 2 && QStringLiteral("xyz").contains(it.key.at(it.key.size() - 2))) {
+            // MOVED ALONG AN AXIS, or TURNED ROUND ONE: in the axis's own colour (X red, Y green, Z blue), its letter
+            // beside an arrow pointing the way (+ up, - down) or round it.
+            const QChar axis = it.key.at(it.key.size() - 2);
+            const bool plus = it.key.endsWith(QLatin1Char('+'));
+            const QColor tint = axis == QLatin1Char('x') ? QColor(240, 110, 110) : axis == QLatin1Char('y') ? QColor(110, 220, 130) : QColor(120, 160, 255);
+            p.setPen(QPen(tint, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            p.setBrush(tint);
+            if (it.key.startsWith(QLatin1Char('r'))) {
+                const QRectF ring(-s * 0.9, -s * 0.9, 1.8 * s, 1.8 * s);
+                p.setBrush(Qt::NoBrush);
+                p.drawArc(ring, (plus ? 120 : 60) * 16, (plus ? 240 : -240) * 16);
+                const double end = (plus ? 120.0 + 240.0 : 60.0 - 240.0) * M_PI / 180.0;
+                const QPointF tip(s * 0.9 * std::cos(end), -s * 0.9 * std::sin(end));
+                p.setBrush(tint);
+                p.drawEllipse(tip, 2.0, 2.0);
+            } else {
+                arrow(plus ? 90.0 : -90.0);
+                p.translate(-s * 1.1, 0.0);
+            }
+            QFont f = p.font();
+            f.setBold(true);
+            f.setPixelSize(9);
+            p.setFont(f);
+            p.setPen(QColor(255, 255, 255));
+            p.drawText(QRectF(-6, -6, 12, 12), Qt::AlignCenter, QString(axis.toUpper()));
         }
         p.restore();
     }

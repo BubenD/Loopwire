@@ -2,6 +2,7 @@
 
 #include "geometry/Mesh3D.h"
 
+#include <QColor>
 #include <QJsonObject>
 #include <QString>
 
@@ -42,6 +43,12 @@ struct RouteNode3D {
     // Empty: a node of the route's own.
     QString brick;
     QString part;
+    // HOW A CONNECTOR LOOKS: its form - "rect" (as it starts), "round", "tee" (a flange and a body), "angle" (a right
+    // angle), "dsub" (a D-shaped shell) - its sizes across, up and along (0: from the bundle's diameter and the lead),
+    // and its colour (none: as connectors are).
+    QString form;
+    double formW = 0.0, formH = 0.0, formL = 0.0;
+    QColor color;
 };
 
 // A BUNDLE between two nodes, through the points it was laid along. Its diameter, or the route's where it has none.

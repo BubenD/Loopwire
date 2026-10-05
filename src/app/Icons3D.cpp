@@ -135,6 +135,23 @@ void draw(QPainter& p, const QString& k, const QColor& ink, const QColor& acc) {
     }
     // ---- Views ----
     if (k == QLatin1String("iso")) return cube(p, 16, 16, 12, ink, acc, 0);
+    // The far sides: the cube with the side looked at from lettered on it.
+    if (k == QLatin1String("back") || k == QLatin1String("bottom") || k == QLatin1String("left") || k == QLatin1String("right")) {
+        cube(p, 14, 17, 11, ink, acc, k == QLatin1String("bottom") ? 1 : k == QLatin1String("back") ? 2 : 3, true);
+        letter(p, k == QLatin1String("bottom") ? QStringLiteral("B") : k == QLatin1String("back") ? QStringLiteral("K") : k.left(1).toUpper(),
+               QRectF(20, 1, 12, 12), acc);
+        return;
+    }
+    if (k == QLatin1String("expand")) {
+        // A panel opened out below: a frame, and an arrow down into its lower half.
+        p.setBrush(soft);
+        p.drawRect(QRectF(4, 4, 24, 24));
+        p.setBrush(acc);
+        p.drawRect(QRectF(4, 18, 24, 10));
+        p.setPen(QPen(ink, 2.2, Qt::SolidLine, Qt::RoundCap));
+        arrow(p, QPointF(16, 6), QPointF(16, 17), 5);
+        return;
+    }
     if (k == QLatin1String("top")) return cube(p, 16, 16, 12, ink, acc, 1);
     if (k == QLatin1String("front")) return cube(p, 16, 16, 12, ink, acc, 2);
     if (k == QLatin1String("side")) return cube(p, 16, 16, 12, ink, acc, 3);

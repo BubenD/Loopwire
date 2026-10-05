@@ -21,6 +21,7 @@
 #include <QSpinBox>
 #include <QDockWidget>
 #include <QHBoxLayout>
+#include <QGridLayout>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QStackedWidget>
@@ -64,7 +65,9 @@ void MainWindow::buildView3DTab() {
             const char* name;
             const char* text;
             const char* key;
-        } views[] = {{"preview3dIso", "Iso", "iso"}, {"preview3dTop", "Top", "top"}, {"preview3dFront", "Front", "front"}, {"preview3dSide", "Side", "side"}};
+        } views[] = {{"preview3dIso", "Iso", "iso"},       {"preview3dTop", "Top", "top"},    {"preview3dBottom", "Bottom", "bottom"},
+                     {"preview3dFront", "Front", "front"}, {"preview3dBack", "Back", "back"}, {"preview3dLeft", "Left", "left"},
+                     {"preview3dSide", "Right", "side"}};
         for (const auto& v : views)
             big(w, row, v.name, QString::fromLatin1(v.text), QString::fromLatin1(v.key), QStringLiteral("Looked at from there"),
                 [this, k = QString::fromLatin1(v.key)] { if (view3dPane_) view3dPane_->canvas()->viewFrom(k); });
@@ -190,6 +193,11 @@ void MainWindow::buildView3DTab() {
         if (QAbstractButton* first = tools->button(static_cast<int>(RouteTool::Select))) first->setChecked(true);
         big(w, row, "preview3dUndo", QStringLiteral("Undo"), QStringLiteral("undo"), QStringLiteral("Take back the last change to the route"),
             [this] { if (view3dPane_) view3dPane_->undoRoute(); });
+        // How the ruler measures: point to point, or surface to surface.
+        auto* mode = new QComboBox(w);
+        mode->setObjectName(QStringLiteral("preview3dMeasureMode"));
+        row->addWidget(mode);
+        preview3dMirrors_.append({mode, QStringLiteral("view3dMeasureMode")});
     });
     // THE BUNDLES' SIZES, and where a click lands.
     group(QStringLiteral("Bundle"), [&](QWidget* w, QHBoxLayout* row) {
@@ -246,6 +254,44 @@ void MainWindow::buildView3DTab() {
         big(w, row, "preview3dHelp", QStringLiteral("Help"), QStringLiteral("help"),
             QStringLiteral("How to work in the 3D view - every command, with recordings"), [this] { if (view3dPane_) view3dPane_->showHelp(); });
     });
+    // COMPACT, AS A 3D PROGRAM'S RIBBON IS: the commands used most large (Fit, Select, Connector, Route, Load, Lengths),
+    // the rest small - their picture with their name beside it - three to a column, so the tab takes half the room.
+    auto stack = [&](const QStringList& names) {
+        QList<QToolButton*> buttons;
+        for (const QString& n : names)
+            if (auto* b = page->findChild<QToolButton*>(n)) buttons << b;
+        if (buttons.isEmpty()) return;
+        QWidget* holder = buttons.first()->parentWidget();
+        auto* row = holder ? qobject_cast<QHBoxLayout*>(holder->layout()) : nullptr;
+        if (!row) return;
+        const int at = row->indexOf(buttons.first());
+        auto* column = new QWidget(holder);
+        auto* gl = new QGridLayout(column);
+        gl->setContentsMargins(2, 0, 2, 0);
+        gl->setHorizontalSpacing(2);
+        gl->setVerticalSpacing(0);
+        for (int i = 0; i < buttons.size(); ++i) {
+            QToolButton* b = buttons[i];
+            row->removeWidget(b);
+            b->setParent(column);
+            b->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+            b->setIconSize(QSize(18, 18));
+            gl->addWidget(b, i % 3, i / 3);
+        }
+        row->insertWidget(std::max(0, at), column);
+    };
+    stack({QStringLiteral("preview3dIso"), QStringLiteral("preview3dTop"), QStringLiteral("preview3dBottom"), QStringLiteral("preview3dFront"),
+           QStringLiteral("preview3dBack"), QStringLiteral("preview3dLeft"), QStringLiteral("preview3dSide"), QStringLiteral("preview3dFlip"),
+           QStringLiteral("preview3dFullScreen"), QStringLiteral("preview3dLock")});
+    stack({QStringLiteral("preview3dHarness"), QStringLiteral("preview3dParts")});
+    stack({QStringLiteral("preview3dEnvClear")});
+    stack({QStringLiteral("preview3dBranch"), QStringLiteral("preview3dClip"), QStringLiteral("preview3dMove"), QStringLiteral("preview3dStretch"),
+           QStringLiteral("preview3dDelete"), QStringLiteral("preview3dMeasure"), QStringLiteral("preview3dUndo")});
+    stack({QStringLiteral("preview3dAddLoose")});
+    stack({QStringLiteral("preview3dWorkPlaneHere")});
+    stack({QStringLiteral("preview3dRefresh"), QStringLiteral("preview3dHelp")});
+    for (QToolButton* b : page->findChildren<QToolButton*>())
+        if (b->toolButtonStyle() == Qt::ToolButtonTextUnderIcon) b->setIconSize(QSize(26, 26));
     lay->addStretch(1);
     // NEVER SQUEEZED: every button its picture and its whole name, every box as wide as what is in it - the page as
     // wide as all of that wants, and scrolled across (a thin bar under it) where the window is narrower.
@@ -266,6 +312,15 @@ void MainWindow::buildView3DTab() {
     scroll->setStyleSheet(QStringLiteral("QScrollArea#preview3dScroll{background:transparent;}"));
     view3dTabPage_ = scroll;
     ribbon_->addTab(scroll, QStringLiteral("3D Preview"));
+}
+
+void MainWindow::placeView3DDock(Qt::DockWidgetArea area) {
+    // AT THE SIDE: the picture alone. BELOW (or floating): everything, and - having come from a side - a way back there.
+    if (!view3dPane_ || !view3dDock_ || preview3dOn_) return;
+    const bool side = (area == Qt::LeftDockWidgetArea || area == Qt::RightDockWidgetArea) && !view3dDock_->isFloating();
+    if (side) view3dSideArea_ = area;
+    view3dPane_->setCompact(side);
+    view3dPane_->setSideDocked(!side && view3dSideArea_ != Qt::NoDockWidgetArea);
 }
 
 void MainWindow::restylePreview3DIcons() {
@@ -358,6 +413,8 @@ void MainWindow::showPreview3D(bool on) {
     if (on) {
         // OUT OF ITS PANEL INTO THE MIDDLE: the panel put away for as long as the tab is open, and given back after.
         if (view3dPane_->fullScreenView()) view3dPane_->setFullScreen(false);
+        view3dPane_->setCompact(false);
+        view3dPane_->setSideDocked(false);
         preview3dDockWas_ = view3dDock_->isVisible();
         // THE PANELS ROUND THE DRAWING PUT AWAY: the 3D view has its own on either side - what is in view on the left,
         // the route on the right. Given back as they were when the tab is left.
@@ -393,6 +450,7 @@ void MainWindow::showPreview3D(bool on) {
         preview3dHost_->layout()->removeWidget(view3dPane_);
         view3dDock_->setWidget(view3dPane_);
         view3dDock_->setVisible(preview3dDockWas_);
+        placeView3DDock(dockWidgetArea(view3dDock_));
         for (const QPointer<QDockWidget>& d : preview3dDocksHidden_)
             if (d) d->show();
         preview3dDocksHidden_.clear();

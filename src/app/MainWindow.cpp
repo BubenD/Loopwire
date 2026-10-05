@@ -16678,6 +16678,22 @@ QDockWidget* MainWindow::makeView3DPanel() {
         view3dPane_->rebuild(true);
     });
     view3dPane_->reloadRouting();
+    // AT THE SIDE, THE PICTURE ALONE; BELOW, EVERYTHING - and a button over each to go to the other.
+    connect(dock, &QDockWidget::dockLocationChanged, this, [this](Qt::DockWidgetArea area) { placeView3DDock(area); });
+    connect(dock, &QDockWidget::topLevelChanged, this, [this, dock](bool) { placeView3DDock(dockWidgetArea(dock)); });
+    connect(view3dPane_, &View3DPane::dockBelowRequested, this, [this, dock] {
+        dock->setFloating(false);
+        addDockWidget(Qt::BottomDockWidgetArea, dock);
+        dock->show();
+        placeView3DDock(Qt::BottomDockWidgetArea);
+    });
+    connect(view3dPane_, &View3DPane::dockSideRequested, this, [this, dock] {
+        const Qt::DockWidgetArea side = view3dSideArea_ != Qt::NoDockWidgetArea ? view3dSideArea_ : Qt::RightDockWidgetArea;
+        dock->setFloating(false);
+        addDockWidget(side, dock);
+        dock->show();
+        placeView3DDock(side);
+    });
     // A MODEL BEING READ: its bar at the bottom right of the window, wherever the 3D view is - put away once read.
     modelLoadBar_ = new QProgressBar(this);
     modelLoadBar_->setObjectName(QStringLiteral("modelLoadBar"));
