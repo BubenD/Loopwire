@@ -1024,6 +1024,22 @@ private:
     // the drawing or the 3D view, and what the 3D view's panel stood in for while it is there.
     QWidget* view3dTabPage_ = nullptr;
     QList<QPair<QString, QToolButton*>> preview3dIcons_;
+    // THE 3D PREVIEW TAB'S GROUPS, each folded into one button (its name and an arrow, the group in a popup under it)
+    // where the window is too narrow for all of them open - the least used first.
+    struct Preview3DFold {
+        QString title;
+        QPointer<QWidget> slot, content;
+        QPointer<QToolButton> fold;
+        QPointer<QWidget> popup;
+        int order = 0;   // folded in this order: lower first
+        bool folded = false;
+    };
+    QList<Preview3DFold> preview3dFolds_;
+    bool preview3dFolding_ = false;
+public:
+    // The groups folded or opened to fit the width the ribbon has.
+    void fitPreview3DRibbon();
+private:
     QList<QPair<int, QToolButton*>> preview3dTools_;
     QStackedWidget* centralStack_ = nullptr;
     QWidget* preview3dHost_ = nullptr;

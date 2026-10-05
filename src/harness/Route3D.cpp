@@ -288,8 +288,36 @@ std::vector<V3> Route3D::cornerNormals(const RouteSegment3D& s) const {
     return out;
 }
 
-std::vector<V3> Route3D::overSolids(const std::vector<V3>& p, const std::vector<V3>& nrm, double r, bool freeFirst, bool freeLast) const {
-    if (!solids || p.size() < 2) return p;
+bool Route3D::inside(const V3& p) const {
+    if (!insideSolid) return false;
+    const std::string key = QString::asprintf("%.2f %.2f %.2f", p.x, p.y, p.z).toStdString();
+    if (const auto f = insideCache_.find(key); f != insideCache_.end()) return f->second;
+    if (insideCache_.size() > 20000) insideCache_.clear();
+    return insideCache_[key] = insideSolid(p);
+}
+
+std::vector<V3> Route3D::overSolids(const std::vector<V3>& pIn, const std::vector<V3>& nrm, double r, bool freeFirst, bool freeLast) const {
+    if (!solids || pIn.size() < 2) return pIn;
+    // A POINT IT RUNS THROUGH INSIDE A SOLID - pulled there, or laid on a face since moved: pushed back out the way its face
+    // looks, its radius clear. Its ends (the nodes, a connector's lead) where they are.
+    std::vector<V3> p = pIn;
+    if (insideSolid && p.size() > 2) {
+        const size_t first = freeFirst ? 2 : 1;
+        const size_t last = p.size() - 1 - (freeLast ? 2 : 1);
+        for (size_t k = first; k <= last && k < p.size(); ++k) {
+            if (!inside(p[k])) continue;
+            V3 up = k < nrm.size() ? nrm[k] : V3{0, 0, 1};
+            if (up.length() < 1e-6) up = {0, 0, 1};
+            up = up.normalized();
+            const double step = std::max(0.5, r);
+            for (double h = step; h <= 400.0; h += step)
+                if (!inside(p[k] + up * h)) {
+                    // Out: and its radius more, off the face it came out of.
+                    p[k] = p[k] + up * (h + r);
+                    break;
+                }
+        }
+    }
     std::vector<V3> out{p.front()};
     for (size_t i = 1; i < p.size(); ++i) {
         const V3 a = p[i - 1], b = p[i];
@@ -441,6 +469,18 @@ std::vector<V3> Route3D::centreline(const RouteSegment3D& s, int* tight) const {
     if (tight) *tight = 0;
     if (p.size() < 3) return p;
     const double bend = bendRadiusOf(s);
+    // A connector's lead's end - its bend starts by the connector, where the cable comes out through what it is fitted in.
+    const size_t leadA = ca ? (bodyEndA != 0 ? 2 : 1) : 0;
+    const size_t leadB = cb ? (bodyEndB != 0 ? bodyEndB - 1 : p.size() - 2) : 0;
+    auto arcClear = [&](const std::vector<V3>& arc) {
+        for (size_t k = 1; k < arc.size(); ++k) {
+            const V3 e = arc[k] - arc[k - 1];
+            const double l = e.length();
+            V3 hit;
+            if (l > 1e-6 && solids(arc[k - 1], e / l, l, hit)) return false;
+        }
+        return true;
+    };
     std::vector<V3> out{p.front()};
     for (size_t i = 1; i + 1 < p.size(); ++i) {
         const V3 in = p[i] - p[i - 1], on = p[i + 1] - p[i];
@@ -460,15 +500,27 @@ std::vector<V3> Route3D::centreline(const RouteSegment3D& s, int* tight) const {
             t = room;
             if (tight) ++*tight;
         }
-        const double radius = t / half;
-        const V3 p1 = p[i] - d1 * t;
         const V3 n1 = (d2 - d1 * std::cos(turn)).normalized();
-        const V3 centre = p1 + n1 * radius;
         const int steps = std::max(2, static_cast<int>(std::ceil(turn / (kPi / 18.0))));
-        for (int k = 0; k <= steps; ++k) {
-            const double phi = turn * k / steps;
-            out.push_back(centre + (n1 * -std::cos(phi) + d1 * std::sin(phi)) * radius);
-        }
+        auto arcOf = [&](double tt) {
+            const double radius = tt / half;
+            const V3 centre = p[i] - d1 * tt + n1 * radius;
+            std::vector<V3> arc;
+            for (int k = 0; k <= steps; ++k) {
+                const double phi = turn * k / steps;
+                arc.push_back(centre + (n1 * -std::cos(phi) + d1 * std::sin(phi)) * radius);
+            }
+            return arc;
+        };
+        std::vector<V3> arc = arcOf(t);
+        // THE ARC CUTTING INTO A SOLID - round the inside of a corner laid over an edge: turned tighter until it clears it.
+        if (solids && i != leadA && i != leadB)
+            for (int tries = 0; tries < 6 && !arcClear(arc); ++tries) {
+                t *= 0.5;
+                arc = arcOf(t);
+                if (tight && tries == 0) ++*tight;
+            }
+        out.insert(out.end(), arc.begin(), arc.end());
     }
     out.push_back(p.back());
     return out;

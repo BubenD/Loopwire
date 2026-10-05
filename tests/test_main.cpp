@@ -41,6 +41,8 @@ int run_mechwizard_tests();
 int run_brickharness_tests();
 
 int main(int argc, char** argv) {
+    // UNBUFFERED: a run that dies leaves its log up to the line it died after, not a page short of it.
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     // A window can only be built with an application object behind it, and the step builder is a
     // window. Offscreen, so this runs the same on a machine with no display as on one with a screen -
     // set here rather than left to whoever starts the tests.

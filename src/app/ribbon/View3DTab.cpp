@@ -24,6 +24,10 @@
 #include <QGridLayout>
 #include <QActionGroup>
 #include <QMenu>
+#include <QEvent>
+#include <QFrame>
+#include <QHash>
+#include <QTimer>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QStackedWidget>
@@ -36,13 +40,56 @@ namespace Edraw_Desktop {
 void MainWindow::buildView3DTab() {
     auto [page, lay] = makeTabPage();
     view3dTabPage_ = page;
+    // EACH GROUP IN A SLOT that can hold it open, or fold it into one button - its picture, its name and an arrow - that
+    // opens the group in a popup under it, as a CAD program's ribbon does where the window is narrow.
+    const QHash<QString, QPair<QString, int>> foldOf{
+        {QStringLiteral("View"), {QStringLiteral("iso"), 5}},          {QStringLiteral("Route"), {QStringLiteral("route"), 6}},
+        {QStringLiteral("Show"), {QStringLiteral("harness"), 4}},      {QStringLiteral("Environment"), {QStringLiteral("load"), 3}},
+        {QStringLiteral("Bundle"), {QStringLiteral("loose"), 2}},      {QStringLiteral("Route to land"), {QStringLiteral("workplane"), 1}},
+        {QStringLiteral("Harness"), {QStringLiteral("lengths"), 0}}};
     auto group = [&](const QString& title, auto fill) {
-        auto* w = new QWidget(page);
+        auto* slot = new QWidget(page);
+        auto* sl = new QHBoxLayout(slot);
+        sl->setContentsMargins(0, 0, 0, 0);
+        sl->setSpacing(0);
+        auto* w = new QWidget(slot);
         auto* row = new QHBoxLayout(w);
         row->setContentsMargins(0, 0, 0, 0);
         row->setSpacing(1);
         fill(w, row);
-        addGroup(lay, title, w);
+        sl->addWidget(w);
+        auto* fold = new QToolButton(slot);
+        fold->setObjectName(QStringLiteral("preview3dFold") + QString(title).remove(QLatin1Char(' ')));
+        fold->setText(title + QStringLiteral(" ▾"));
+        fold->setToolTip(QStringLiteral("%1 - folded where the window is narrow: click for all of it").arg(title));
+        const QPair<QString, int> how = foldOf.value(title, {QStringLiteral("fit"), 0});
+        fold->setIcon(icon3D(how.first, Chrome::ink()));
+        fold->setIconSize(QSize(26, 26));
+        fold->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        fold->setAutoRaise(true);
+        fold->setFocusPolicy(Qt::NoFocus);
+        fold->hide();
+        sl->addWidget(fold);
+        preview3dIcons_.append({how.first, fold});
+        auto* popup = new QFrame(slot, Qt::Popup);
+        popup->setObjectName(QStringLiteral("preview3dFoldPopup"));
+        popup->setFrameShape(QFrame::StyledPanel);
+        auto* pl = new QHBoxLayout(popup);
+        pl->setContentsMargins(6, 4, 6, 4);
+        connect(fold, &QToolButton::clicked, this, [fold, popup] {
+            popup->adjustSize();
+            popup->move(fold->mapToGlobal(QPoint(0, fold->height())));
+            popup->show();
+        });
+        Preview3DFold f;
+        f.title = title;
+        f.slot = slot;
+        f.content = w;
+        f.fold = fold;
+        f.popup = popup;
+        f.order = how.second;
+        preview3dFolds_.append(f);
+        addGroup(lay, title, slot);
     };
     // A FIELD'S NAME, in the scheme's own ink - readable on the ribbon, light or dark.
     auto fieldLabel = [](const QString& text, QWidget* parent) {
@@ -189,6 +236,9 @@ void MainWindow::buildView3DTab() {
         preview3dMirrors_.append({source, QStringLiteral("view3dSource")});
         auto* look = new QComboBox(g);
         look->setObjectName(QStringLiteral("preview3dPartLook"));
+        // NO WIDER THAN THIS, so the group stays open on a narrower window - the whole name in its list.
+        source->setMaximumWidth(160);
+        look->setMaximumWidth(160);
         gl->addWidget(look, 1, 0);
         preview3dMirrors_.append({look, QStringLiteral("view3dPartLook")});
         row->addWidget(g);
@@ -391,7 +441,6 @@ void MainWindow::buildView3DTab() {
     lay->addStretch(1);
     // NEVER SQUEEZED: every button its picture and its whole name, every box as wide as what is in it - the page as
     // wide as all of that wants, and scrolled across (a thin bar under it) where the window is narrower.
-    page->setMinimumWidth(page->sizeHint().width());
     auto* scroll = new QScrollArea(ribbon_);
     scroll->setObjectName(QStringLiteral("preview3dScroll"));
     scroll->setFrameShape(QFrame::NoFrame);
@@ -408,6 +457,67 @@ void MainWindow::buildView3DTab() {
     scroll->setStyleSheet(QStringLiteral("QScrollArea#preview3dScroll{background:transparent;}"));
     view3dTabPage_ = scroll;
     ribbon_->addTab(scroll, QStringLiteral("3D Preview"));
+    // FITTED TO THE WIDTH whenever it changes: groups folded or opened again.
+    class Watcher : public QObject {
+    public:
+        Watcher(QObject* parent, std::function<void()> fn) : QObject(parent), fn_(std::move(fn)) {}
+        bool eventFilter(QObject*, QEvent* e) override {
+            if (e->type() == QEvent::Resize) fn_();
+            return false;
+        }
+
+    private:
+        std::function<void()> fn_;
+    };
+    scroll->viewport()->installEventFilter(new Watcher(scroll, [this] { QTimer::singleShot(0, this, [this] { fitPreview3DRibbon(); }); }));
+    fitPreview3DRibbon();
+}
+
+void MainWindow::fitPreview3DRibbon() {
+    auto* scroll = qobject_cast<QScrollArea*>(view3dTabPage_);
+    QWidget* page = scroll ? scroll->widget() : nullptr;
+    if (!page || preview3dFolding_) return;
+    preview3dFolding_ = true;
+    auto setFolded = [](Preview3DFold& f, bool on) {
+        if (!f.slot || !f.content || !f.fold || !f.popup || f.folded == on) return;
+        f.folded = on;
+        if (on) {
+            f.popup->layout()->addWidget(f.content);
+            f.content->show();
+            f.fold->show();
+        } else {
+            f.popup->hide();
+            qobject_cast<QHBoxLayout*>(f.slot->layout())->insertWidget(0, f.content);
+            f.content->show();
+            f.fold->hide();
+        }
+    };
+    auto wants = [page] {
+        page->setMinimumWidth(0);
+        page->layout()->invalidate();
+        page->layout()->activate();
+        return page->sizeHint().width();
+    };
+    // ALL OPEN, then folded one by one - the least used first - until the tab fits the width there is.
+    for (Preview3DFold& f : preview3dFolds_) setFolded(f, false);
+    QList<int> order;
+    for (int i = 0; i < preview3dFolds_.size(); ++i) order << i;
+    std::sort(order.begin(), order.end(), [this](int a, int b) { return preview3dFolds_[a].order < preview3dFolds_[b].order; });
+    const int room = scroll->viewport()->width();
+    for (int i : order) {
+        if (wants() <= room) break;
+        setFolded(preview3dFolds_[i], true);
+    }
+    // ROOM LEFT: a small group folded on the way opened again where it still fits - the most used first.
+    for (auto it = order.rbegin(); it != order.rend(); ++it) {
+        Preview3DFold& f = preview3dFolds_[*it];
+        if (!f.folded) continue;
+        setFolded(f, false);
+        if (wants() > room) setFolded(f, true);
+    }
+    // Never squeezed past that: scrolled across where even folded it is wider than the window.
+    page->setMinimumWidth(wants());
+    preview3dFolding_ = false;
 }
 
 void MainWindow::placeView3DDock(Qt::DockWidgetArea area) {
@@ -531,9 +641,7 @@ void MainWindow::showPreview3D(bool on) {
         if (auto* scroll = qobject_cast<QScrollArea*>(view3dTabPage_))
             if (QWidget* page = scroll->widget()) {
                 for (QComboBox* c : page->findChildren<QComboBox*>()) c->setSizeAdjustPolicy(QComboBox::AdjustToContents);
-                page->setMinimumWidth(0);
-                page->adjustSize();
-                page->setMinimumWidth(page->sizeHint().width());
+                fitPreview3DRibbon();
             }
         view3dPane_->setRowsShown(false);
         view3dPane_->show();

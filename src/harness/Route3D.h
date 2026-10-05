@@ -78,6 +78,9 @@ struct Route3D {
     // - set by the 3D view from the model it is routed in. A bundle's middle that would pass through one is laid over
     // it instead, its radius off it, and its length is the length over it. Not saved.
     std::function<bool(const V3& origin, const V3& dir, double far, V3& hit)> solids;
+    // WHETHER A POINT IS INSIDE ONE OF THEM - a point a bundle was laid or pulled through, pushed back out of it the way
+    // its face looks. Not saved.
+    std::function<bool(const V3& point)> insideSolid;
 
     bool empty() const { return nodes.empty() && segments.empty(); }
     const RouteNode3D* node(const QString& id) const;
@@ -113,7 +116,10 @@ struct Route3D {
     V3 exitOf(const RouteNode3D& n) const;
     double leadOf(const RouteNode3D& n, double radius) const;
     // What is laid over the solids is kept, by where it was laid from and to - forgotten when the solids change.
-    void solidsChanged() const { overCache_.clear(); }
+    void solidsChanged() const {
+        overCache_.clear();
+        insideCache_.clear();
+    }
 
     // THE MIDDLE OF A BUNDLE: out of a connector straight along its face's normal for the lead, through each point it
     // was laid along its radius off the face, into the far node - every corner turned on an arc of the bend radius,
@@ -139,6 +145,9 @@ private:
     QString freshId(const QString& prefix) const;
     // A STRETCH LAID OVER WHAT IT PASSES THROUGH, by its ends, its radius and the ways its ends' faces look. Not saved.
     mutable std::unordered_map<std::string, std::vector<V3>> overCache_;
+    // Whether a point is inside a solid, by where it is (to a hundredth of a millimetre). Not saved.
+    mutable std::unordered_map<std::string, bool> insideCache_;
+    bool inside(const V3& p) const;
     std::vector<V3> overOne(const V3& a, const V3& b, const V3& na, const V3& nb, double r) const;
 };
 

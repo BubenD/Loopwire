@@ -272,6 +272,7 @@ private:
     std::function<void(const QJsonObject&)> saveRouting_;
     std::function<QString()> drawingDir_;
     QWidget* routeRow_ = nullptr;
+    QWidget* editRow_ = nullptr;
     QWidget* bundleRow_ = nullptr;
     QToolButton* grow_ = nullptr;   // Add loose
     QButtonGroup* tools_ = nullptr;
@@ -301,7 +302,7 @@ private:
     bool rowsShown_ = true;    // the pane's own rows shown (none while the 3D Preview tab has them on its ribbon)
     QScrollArea* rowsArea_ = nullptr;   // the rows, scrolled across where the pane is narrower than they are
     QWidget* rowsBox_ = nullptr;
-    QVBoxLayout* rowsLay_ = nullptr;
+    QLayout* rowsLay_ = nullptr;
     QWidget* solidsPanel_ = nullptr;          // what is in view, on the left (the 3D Preview tab)
     bool compact_ = false;                    // at the side of the window: the picture alone
     bool sideDocked_ = false;                 // below, having come from the side

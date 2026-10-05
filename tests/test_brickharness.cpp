@@ -7517,11 +7517,15 @@ void testRoundFiftyTwo() {
               std::abs(route.segment(s2)->via[0].at.y - 30.0) < 1e-6,
           "move: a node moved on the model, the points its bundles were laid through left as they were");
     // THE BUTTONS: pictures with their names.
-    for (const char* name : {"view3dToolStretch", "view3dToolMove", "view3dFit", "view3dEnvLoad"}) {
+    for (const char* name : {"view3dToolStretch", "view3dToolMove", "view3dToolRoute", "view3dEnvLoad"}) {
         auto* b = pane.findChild<QToolButton*>(QLatin1String(name));
         check(b && !b->icon().isNull() && b->toolButtonStyle() == Qt::ToolButtonTextBesideIcon,
               qPrintable(QStringLiteral("3d buttons: %1 has its picture, its name beside it").arg(QLatin1String(name))));
     }
+    // The views' buttons their pictures alone, the name on the tip - the strip thinner.
+    if (auto* fit = pane.findChild<QToolButton*>(QStringLiteral("view3dFit")))
+        check(fit->toolButtonStyle() == Qt::ToolButtonIconOnly && fit->toolTip().contains(QLatin1String("Fit")),
+              "3d buttons: Fit its picture alone, named on its tip");
     // ---- THE 3D PREVIEW TAB ----
     MainWindow w;
     w.show();
@@ -8132,7 +8136,7 @@ void testRoundFiftyFive() {
     // THE RIBBON NEVER SQUEEZED: each button at least as wide as its name wants, the page scrolled across instead.
     bool whole = true;
     for (const char* name : {"preview3dFit", "preview3dFront", "preview3dFlip", "preview3dConnector", "preview3dStretch"})
-        if (auto* b = w.findChild<QToolButton*>(QLatin1String(name))) whole = whole && b->width() >= b->sizeHint().width();
+        if (auto* b = w.findChild<QToolButton*>(QLatin1String(name)); b && b->isVisible()) whole = whole && b->width() >= b->sizeHint().width();
     check(whole && w.findChild<QScrollArea*>(QStringLiteral("preview3dScroll")), "3d preview: every button its whole name - the ribbon scrolled, not squeezed");
     ribbon->setCurrentIndex(was);
     QApplication::processEvents();
@@ -8782,6 +8786,104 @@ void testRoundFiftyNine() {
     check(same, "panels: back as they were when the 3D Preview tab is left - each open, as wide");
 }
 
+// ROUND SIXTY: A CABLE PULLED INTO A SOLID PUSHED BACK OUT of it, its bends turned tighter where they would cut into one;
+// THE 3D VIEW'S CONTROLS on as few lines as the width allows; THE 3D PREVIEW RIBBON never scrolled - its groups folded
+// into a button with an arrow where the window is narrow.
+void testRoundSixty() {
+    // ---- A POINT INSIDE A BLOCK (x -10..10, y -10..10, z 0..20) pushed out the way its face looks ----
+    const V3 lo{-10, -10, 0}, hi{10, 10, 20};
+    auto inBlock = [&](const V3& p) { return p.x > lo.x && p.x < hi.x && p.y > lo.y && p.y < hi.y && p.z > lo.z && p.z < hi.z; };
+    Route3D r;
+    r.diameter = 4.0;
+    r.solids = [&](const V3& o, const V3& d, double far, V3& hit) {
+        double t0 = 0.0, t1 = far;
+        const double os[3] = {o.x, o.y, o.z}, ds[3] = {d.x, d.y, d.z}, l[3] = {lo.x, lo.y, lo.z}, h[3] = {hi.x, hi.y, hi.z};
+        for (int k = 0; k < 3; ++k) {
+            if (std::abs(ds[k]) < 1e-12) {
+                if (os[k] < l[k] || os[k] > h[k]) return false;
+                continue;
+            }
+            double a = (l[k] - os[k]) / ds[k], b = (h[k] - os[k]) / ds[k];
+            if (a > b) std::swap(a, b);
+            t0 = std::max(t0, a);
+            t1 = std::min(t1, b);
+            if (t0 > t1) return false;
+        }
+        hit = o + d * t0;
+        return true;
+    };
+    r.insideSolid = inBlock;
+    const QString a = r.addNode(RouteNodeKind::Branch, {-50, 0, 0}, {0, 0, 1});
+    const QString b = r.addNode(RouteNodeKind::Branch, {50, 0, 0}, {0, 0, 1});
+    // Laid through a point in the middle of the block - as a pull leaves it.
+    const QString s = r.addSegment(a, b, {{{0, 0, 10}, {0, 0, 1}}});
+    const std::vector<V3> line = r.centreline(*r.segment(s));
+    bool clear = true;
+    for (size_t i = 1; i < line.size(); ++i)
+        for (int k = 0; k <= 20; ++k) clear = clear && !inBlock(line[i - 1] + (line[i] - line[i - 1]) * (k / 20.0));
+    double top = 0.0;
+    for (const V3& p : line) top = std::max(top, p.z);
+    std::printf("  pushed out: highest %.1f (the block's top 20)\n", top);
+    check(clear && top >= 20.0 + r.diameter / 2.0 - 1e-6, "solids: a point pulled into a block pushed back out over it, the cable nowhere in it");
+
+    // ---- THE 3D VIEW: its controls side by side, on few lines ----
+    {
+        View3DPane pane;
+        // Wide enough for every group on one line, whatever the font; then narrow.
+        pane.resize(6000, 600);
+        pane.show();
+        QApplication::processEvents();
+        auto* rows = pane.findChild<QScrollArea*>(QStringLiteral("view3dRows"));
+        const int wide = rows ? rows->height() : 9999;
+        pane.resize(700, 600);
+        QApplication::processEvents();
+        QApplication::processEvents();
+        const int narrow = rows ? rows->height() : 0;
+        std::printf("  3d view: its controls %d px deep at 6000 wide, %d at 700\n", wide, narrow);
+        check(rows && wide < 80 && narrow > 2 * wide, "3d view: its controls on one line where there is room - on more where it is narrow");
+    }
+
+    // ---- THE RIBBON: folded, never scrolled ----
+    MainWindow win;
+    win.resize(1000, 700);
+    win.show();
+    QApplication::processEvents();
+    QTabWidget* ribbon = nullptr;
+    int tab = -1;
+    for (QTabWidget* t : win.findChildren<QTabWidget*>())
+        for (int i = 0; i < t->count(); ++i)
+            if (t->tabText(i) == QLatin1String("3D Preview")) {
+                ribbon = t;
+                tab = i;
+            }
+    if (!ribbon) return;
+    ribbon->setCurrentIndex(tab);
+    for (int i = 0; i < 5; ++i) QApplication::processEvents();
+    auto* scroll = win.findChild<QScrollArea*>(QStringLiteral("preview3dScroll"));
+    auto* fold = win.findChild<QToolButton*>(QStringLiteral("preview3dFoldEnvironment"));
+    // Fitted - or, where even every group folded is wider than the window (the tests' wide stand-in letters), all folded.
+    bool allFolded = true;
+    for (QToolButton* b : win.findChildren<QToolButton*>())
+        if (b->objectName().startsWith(QLatin1String("preview3dFold")) && !b->isVisible()) allFolded = false;
+    check(scroll && (scroll->widget()->width() <= scroll->viewport()->width() + 1 || allFolded) && fold && fold->isVisible(),
+          "ribbon: on a narrow window nothing off the edge - Environment folded into its button");
+    if (fold && fold->isVisible()) {
+        fold->click();
+        QApplication::processEvents();
+        auto* opacity = win.findChild<QSlider*>(QStringLiteral("preview3dEnvOpacity"));
+        check(opacity && opacity->isVisible() && opacity->window() != &win, "ribbon: the folded group opened under its button - all of it there");
+        if (opacity) opacity->window()->hide();
+    }
+    win.resize(6000, 700);
+    for (int i = 0; i < 5; ++i) QApplication::processEvents();
+    bool none = true;
+    for (QToolButton* b : win.findChildren<QToolButton*>())
+        if (b->objectName().startsWith(QLatin1String("preview3dFold")) && b->isVisible()) none = false;
+    check(none, "ribbon: wide enough - every group open again");
+    ribbon->setCurrentIndex(tab - 1);
+    QApplication::processEvents();
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -8865,6 +8967,7 @@ int run_brickharness_tests() {
     ROUND(testRoundFiftySeven);
     ROUND(testRoundFiftyEight);
     ROUND(testRoundFiftyNine);
+    ROUND(testRoundSixty);
 #undef ROUND
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;

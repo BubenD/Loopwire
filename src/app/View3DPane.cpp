@@ -88,6 +88,56 @@ public:
         setValue(static_cast<int>(std::lround(wrapDegrees(value() + steps * singleStep()))));
     }
 };
+
+// THE GROUPS OF CONTROLS SIDE BY SIDE, on as few lines as the width allows: the next group on the same line while it
+// fits, on the next line where it does not - so the strip is one or two lines deep in a wide pane, more only where it
+// is narrow. Each group kept whole, never squeezed.
+class FlowLayout : public QLayout {
+public:
+    FlowLayout(QWidget* parent, int hGap, int vGap) : QLayout(parent), hGap_(hGap), vGap_(vGap) { setContentsMargins(0, 0, 0, 0); }
+    ~FlowLayout() override {
+        while (QLayoutItem* it = takeAt(0)) delete it;
+    }
+    void addItem(QLayoutItem* item) override { items_.append(item); }
+    int count() const override { return static_cast<int>(items_.size()); }
+    QLayoutItem* itemAt(int i) const override { return i >= 0 && i < items_.size() ? items_.at(i) : nullptr; }
+    QLayoutItem* takeAt(int i) override { return i >= 0 && i < items_.size() ? items_.takeAt(i) : nullptr; }
+    Qt::Orientations expandingDirections() const override { return {}; }
+    bool hasHeightForWidth() const override { return true; }
+    int heightForWidth(int width) const override { return place(QRect(0, 0, width, 0), false); }
+    void setGeometry(const QRect& rect) override {
+        QLayout::setGeometry(rect);
+        place(rect, true);
+    }
+    QSize sizeHint() const override { return minimumSize(); }
+    // As wide as its widest group; as tall as one line.
+    QSize minimumSize() const override {
+        QSize s;
+        for (QLayoutItem* it : items_)
+            if (!it->isEmpty()) s = s.expandedTo(it->sizeHint());
+        return s;
+    }
+
+private:
+    int place(const QRect& rect, bool apply) const {
+        int x = rect.x(), y = rect.y(), line = 0;
+        for (QLayoutItem* it : items_) {
+            if (it->isEmpty()) continue;
+            const QSize h = it->sizeHint();
+            if (x > rect.x() && x + h.width() > rect.right() + 1) {
+                x = rect.x();
+                y += line + vGap_;
+                line = 0;
+            }
+            if (apply) it->setGeometry(QRect(QPoint(x, y), h));
+            x += h.width() + hGap_;
+            line = std::max(line, h.height());
+        }
+        return y + line - rect.y();
+    }
+    QList<QLayoutItem*> items_;
+    int hGap_, vGap_;
+};
 } // namespace
 
 View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
@@ -107,10 +157,9 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
         "QScrollBar::add-line:horizontal,QScrollBar::sub-line:horizontal{width:0;}"
         "QScrollBar::add-page:horizontal,QScrollBar::sub-page:horizontal{background:transparent;}"));
     rowsBox_ = new QWidget(rowsArea_);
-    rowsLay_ = new QVBoxLayout(rowsBox_);
-    rowsLay_->setContentsMargins(0, 0, 0, 0);
-    rowsLay_->setSpacing(4);
+    rowsLay_ = new FlowLayout(rowsBox_, 14, 3);
     rowsArea_->setWidget(rowsBox_);
+    rowsArea_->installEventFilter(this);
     lay->addWidget(rowsArea_);
     lay->setContentsMargins(4, 4, 4, 4);
     lay->setSpacing(4);
@@ -286,17 +335,16 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     rowsLay_->addWidget(envRow_);
 
     // THE ROUTE'S ROW: what a click does, and the bundles' diameter, bend radius and lead out of a connector.
-    // ON TWO LINES, so the panel need not be wide: placing and laying on the first, changing and measuring on the second.
+    // TWO GROUPS, each kept whole in the strip: placing and laying; changing and measuring.
     routeRow_ = new QWidget(this);
-    auto* rv = new QVBoxLayout(routeRow_);
-    rv->setContentsMargins(0, 0, 0, 0);
-    rv->setSpacing(1);
-    auto* rr = new QHBoxLayout;
+    auto* rr = new QHBoxLayout(routeRow_);
+    rr->setContentsMargins(0, 0, 0, 0);
     rr->setSpacing(3);
-    auto* rr2 = new QHBoxLayout;
+    editRow_ = new QWidget(this);
+    editRow_->setObjectName(QStringLiteral("view3dEditRow"));
+    auto* rr2 = new QHBoxLayout(editRow_);
+    rr2->setContentsMargins(0, 0, 0, 0);
     rr2->setSpacing(3);
-    rv->addLayout(rr);
-    rv->addLayout(rr2);
     rr->addWidget(new QLabel(QStringLiteral("Route:"), routeRow_));
     tools_ = new QButtonGroup(this);
     tools_->setExclusive(true);
@@ -328,7 +376,8 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
                                                              "and along X, Y and Z and across each plane (Esc takes it away)"},
     };
     for (const auto& t : tools) {
-        auto* b = new QToolButton(routeRow_);
+        const bool editing = t.tool == RouteTool::Move || t.tool == RouteTool::Stretch || t.tool == RouteTool::Delete || t.tool == RouteTool::Measure;
+        auto* b = new QToolButton(editing ? editRow_ : routeRow_);
         b->setObjectName(QLatin1String(t.name));
         b->setText(QString::fromLatin1(t.text));
         b->setToolTip(QString::fromLatin1(t.tip));
@@ -336,11 +385,11 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
         b->setAutoRaise(true);
         tools_->addButton(b, static_cast<int>(t.tool));
         // Select, Connector, Route, Branch, Clip; then Move, Stretch, Delete, Measure.
-        (t.tool == RouteTool::Move || t.tool == RouteTool::Stretch || t.tool == RouteTool::Delete || t.tool == RouteTool::Measure ? rr2 : rr)->addWidget(b);
+        (editing ? rr2 : rr)->addWidget(b);
     }
     tools_->button(static_cast<int>(RouteTool::Select))->setChecked(true);
     // HOW THE RULER MEASURES: point to point, or square from the first face to the second.
-    auto* measureMode = new QComboBox(routeRow_);
+    auto* measureMode = new QComboBox(editRow_);
     measureMode->setObjectName(QStringLiteral("view3dMeasureMode"));
     measureMode->addItems({QStringLiteral("Point to point"), QStringLiteral("Surface to surface")});
     measureMode->setToolTip(QStringLiteral("Point to point: straight between the two points clicked. Surface to surface: from the "
@@ -424,14 +473,15 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     rr2->addStretch(1);
     br->addStretch(1);
     rowsLay_->addWidget(routeRow_);
+    rowsLay_->addWidget(editRow_);
     rowsLay_->addWidget(bundleRow_);
 
     // THE WORK PLANE: where a click lands. On the model's faces (and the ground where there is no model) - or on a
     // plane, level or upright, put at any height or place: how a bundle is laid through the air, up a riser, over a
     // gap, at the height it really runs.
-    // ON TWO LINES: where a route lands, and below it the view's angles.
+    // WHERE A ROUTE LANDS, and the view's angles beside it.
     planeRow_ = new QWidget(this);
-    auto* pv = new QVBoxLayout(planeRow_);
+    auto* pv = new QHBoxLayout(planeRow_);
     pv->setContentsMargins(0, 0, 0, 0);
     pv->setSpacing(1);
     auto* pr = new QHBoxLayout;
@@ -1020,6 +1070,11 @@ void View3DPane::placeWheel() {
 
 bool View3DPane::eventFilter(QObject* watched, QEvent* event) {
     if (watched == canvas_ && (event->type() == QEvent::Resize || event->type() == QEvent::Show)) placeWheel();
+    // The strip as wide as the pane now: its groups on more lines, or fewer.
+    if (watched == rowsArea_ && event->type() == QEvent::Resize) {
+        const auto* r = static_cast<QResizeEvent*>(event);
+        if (r->size().width() != r->oldSize().width()) QTimer::singleShot(0, this, [this] { fitRows(); });
+    }
     return QWidget::eventFilter(watched, event);
 }
 
@@ -1141,6 +1196,22 @@ void View3DPane::armSolids() {
         if (!p.hit || p.distance > far) return false;
         hit = p.point;
         return true;
+    };
+    // INSIDE A SOLID: a ray out of the point, the faces of each solid it crosses counted - an odd number for a solid,
+    // and the point is in it. Aimed a little askew, so it does not run along an edge.
+    route_.insideSolid = [this](const V3& point) {
+        if (!envIndex_ || envIndex_->empty() || !canvas_) return false;
+        const V3 dir = V3{0.1234, 0.2711, 0.9545}.normalized();
+        std::map<int, int> crossed;
+        V3 from = point;
+        for (int n = 0; n < 64; ++n) {
+            const Pick3D p = envIndex_->cast(from, dir, [this](int part, const V3&) { return canvas_->envPartHidden(part); });
+            if (!p.hit) break;
+            ++crossed[p.part];
+            from = p.point + dir * 1e-4;
+        }
+        for (const auto& c : crossed)
+            if (c.second % 2 == 1) return true;
         return false;
     };
 }
@@ -1190,7 +1261,7 @@ void View3DPane::applyLayout() {
     // to open it below with all of them. In the 3D Preview tab: the rows on the ribbon, what is in view on the left.
     const bool rows = rowsShown_ && !compact_;
     topRow_->setVisible(rows);
-    for (QWidget* w : {envRow_, routeRow_, bundleRow_, planeRow_})
+    for (QWidget* w : {envRow_, routeRow_, editRow_, bundleRow_, planeRow_})
         if (w) w->setVisible(rows && envChoice_);
     solidsPanel_->setVisible(!rowsShown_ && envChoice_ && !compact_);
     side_->setVisible(envChoice_ && !compact_);
@@ -1543,7 +1614,17 @@ void View3DPane::applyIcons() {
         if (auto* b = findChild<QToolButton*>(QLatin1String(i.name))) {
             b->setIcon(icon3D(QLatin1String(i.icon), ink));
             b->setIconSize(QSize(18, 18));
-            b->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+            // THE VIEWS AND WHAT ONLY MOVES THE VIEW: their pictures alone (the name on the tip), as a CAD program's view
+            // cube buttons are - the strip that much thinner.
+            const QLatin1String name(i.name);
+            const bool pictureOnly = name == QLatin1String("view3dRefresh") || name == QLatin1String("view3dFit") ||
+                                     name == QLatin1String("view3dIso") || name == QLatin1String("view3dTop") ||
+                                     name == QLatin1String("view3dFront") || name == QLatin1String("view3dSide") ||
+                                     name == QLatin1String("view3dFlip") || name == QLatin1String("view3dFullScreen") ||
+                                     name == QLatin1String("view3dEnvClear") || name == QLatin1String("view3dRouteUndo") ||
+                                     name == QLatin1String("view3dHelp");
+            b->setToolButtonStyle(pictureOnly ? Qt::ToolButtonIconOnly : Qt::ToolButtonTextBesideIcon);
+            if (pictureOnly && !b->toolTip().startsWith(QLatin1String("<b>"))) b->setToolTip(QStringLiteral("<b>%1</b> - %2").arg(b->text(), b->toolTip()));
         }
 }
 
@@ -1610,13 +1691,17 @@ void View3DPane::setEnvironmentChoice(bool shown) {
 
 void View3DPane::fitRows() {
     bool any = false;
-    for (QWidget* w : {topRow_, envRow_, routeRow_, bundleRow_, planeRow_}) any = any || (w && !w->isHidden());
+    for (QWidget* w : {topRow_, envRow_, routeRow_, editRow_, bundleRow_, planeRow_}) any = any || (w && !w->isHidden());
     rowsArea_->setVisible(any);
     if (!any) return;
-    rowsBox_->adjustSize();
-    const QSize want = rowsBox_->sizeHint();
-    rowsBox_->setMinimumWidth(want.width());
-    rowsArea_->setFixedHeight(want.height() + 10);
+    // AS DEEP AS THE GROUPS COME TO at the width there is - scrolled across only where one group is wider than that.
+    rowsLay_->activate();
+    const int wide = rowsLay_->minimumSize().width();
+    rowsBox_->setMinimumWidth(wide);
+    const int width = std::max(wide, rowsArea_->viewport()->width());
+    const int tall = rowsLay_->heightForWidth(width);
+    const bool across = rowsArea_->viewport()->width() < wide;
+    rowsArea_->setFixedHeight(tall + 4 + (across ? rowsArea_->horizontalScrollBar()->sizeHint().height() : 0));
 }
 
 QString View3DPane::envPartName(int part) const {
