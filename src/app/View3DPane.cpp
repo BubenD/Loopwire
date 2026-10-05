@@ -286,10 +286,17 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     rowsLay_->addWidget(envRow_);
 
     // THE ROUTE'S ROW: what a click does, and the bundles' diameter, bend radius and lead out of a connector.
+    // ON TWO LINES, so the panel need not be wide: placing and laying on the first, changing and measuring on the second.
     routeRow_ = new QWidget(this);
-    auto* rr = new QHBoxLayout(routeRow_);
-    rr->setContentsMargins(0, 0, 0, 0);
+    auto* rv = new QVBoxLayout(routeRow_);
+    rv->setContentsMargins(0, 0, 0, 0);
+    rv->setSpacing(1);
+    auto* rr = new QHBoxLayout;
     rr->setSpacing(3);
+    auto* rr2 = new QHBoxLayout;
+    rr2->setSpacing(3);
+    rv->addLayout(rr);
+    rv->addLayout(rr2);
     rr->addWidget(new QLabel(QStringLiteral("Route:"), routeRow_));
     tools_ = new QButtonGroup(this);
     tools_->setExclusive(true);
@@ -302,12 +309,13 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
         {RouteTool::Select, "view3dToolSelect", "Select", "Pick a point on the environment, or select a node or a bundle"},
         {RouteTool::Connector, "view3dToolConnector", "Connector", "Put a connector on the face clicked - its bundle leaves it "
                                                                    "along the face's normal"},
-        {RouteTool::Branch, "view3dToolBranch", "Branch", "Put a branch point down - on a bundle, dividing it, or on a face"},
-        {RouteTool::Clip, "view3dToolClip", "Clip", "Put a clip down - on a bundle, holding it there, or on a face"},
         {RouteTool::Route, "view3dToolRoute", "Route", "Lay a bundle: click the node it starts from (or a face, for a new "
                                                        "branch), the faces it runs over, and the node it ends at - or "
                                                        "double-click to end at a new branch. Esc: give up; Backspace: the "
                                                        "last point back"},
+        {RouteTool::Branch, "view3dToolBranch", "Branch", "Put a branch point down - on a bundle, dividing it, or on a face; "
+                                                          "on a connector, a bundle started from its front or its back"},
+        {RouteTool::Clip, "view3dToolClip", "Clip", "Put a clip down - on a bundle, holding it there, or on a face"},
         {RouteTool::Move, "view3dToolMove", "Move", "Drag a node - a connector, a part, a branch, a clip - to somewhere else "
                                                     "on the model; its bundles follow from where they were laid"},
         {RouteTool::Stretch, "view3dToolStretch", "Stretch", "Take hold of a connector and pull: it stays where it is, and its "
@@ -327,17 +335,18 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
         b->setCheckable(true);
         b->setAutoRaise(true);
         tools_->addButton(b, static_cast<int>(t.tool));
-        rr->addWidget(b);
+        // Select, Connector, Route, Branch, Clip; then Move, Stretch, Delete, Measure.
+        (t.tool == RouteTool::Move || t.tool == RouteTool::Stretch || t.tool == RouteTool::Delete || t.tool == RouteTool::Measure ? rr2 : rr)->addWidget(b);
     }
     tools_->button(static_cast<int>(RouteTool::Select))->setChecked(true);
     // HOW THE RULER MEASURES: point to point, or square from the first face to the second.
     auto* measureMode = new QComboBox(routeRow_);
     measureMode->setObjectName(QStringLiteral("view3dMeasureMode"));
-    measureMode->addItems({QStringLiteral("Measure point to point"), QStringLiteral("Measure surface to surface")});
+    measureMode->addItems({QStringLiteral("Point to point"), QStringLiteral("Surface to surface")});
     measureMode->setToolTip(QStringLiteral("Point to point: straight between the two points clicked. Surface to surface: from the "
                                            "second face square back to the first - the gap between two faces"));
     connect(measureMode, &QComboBox::currentIndexChanged, this, [this](int i) { canvas_->setMeasureFaces(i == 1); });
-    rr->addWidget(measureMode);
+    rr2->addWidget(measureMode);
     connect(tools_, &QButtonGroup::idClicked, this, [this](int id) {
         canvas_->setRouteTool(static_cast<RouteTool>(id));
         emit routeToolChanged(static_cast<RouteTool>(id));
@@ -404,14 +413,15 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
                                      "its length - pulled along behind the point, its far ends held, no further than it reaches"));
     connect(grow_, &QToolButton::toggled, this, [this](bool on) { canvas_->setGrowLength(on); });
     br->addWidget(grow_);
-    undo_ = button(rr, "view3dRouteUndo", QStringLiteral("Undo"), QStringLiteral("Take back the last change to the route (Ctrl+Z)"),
+    undo_ = button(rr2, "view3dRouteUndo", QStringLiteral("Undo"), QStringLiteral("Take back the last change to the route (Ctrl+Z)"),
                    [this] { undoRoute(); });
     // HOW IT IS DONE, SHOWN: the view itself recorded being used - the plane a click lands on, a cable routed from
     // one connector to the next, and how it bends - beside the same steps in words.
-    button(rr, "view3dHelp", QStringLiteral("Help"),
+    button(rr2, "view3dHelp", QStringLiteral("Help"),
            QStringLiteral("How to work in the 3D view: the plane, routing a cable from connector to connector, bending it"),
            [this] { showHelp(); });
     rr->addStretch(1);
+    rr2->addStretch(1);
     br->addStretch(1);
     rowsLay_->addWidget(routeRow_);
     rowsLay_->addWidget(bundleRow_);
@@ -419,15 +429,23 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     // THE WORK PLANE: where a click lands. On the model's faces (and the ground where there is no model) - or on a
     // plane, level or upright, put at any height or place: how a bundle is laid through the air, up a riser, over a
     // gap, at the height it really runs.
+    // ON TWO LINES: where a route lands, and below it the view's angles.
     planeRow_ = new QWidget(this);
-    auto* pr = new QHBoxLayout(planeRow_);
-    pr->setContentsMargins(0, 0, 0, 0);
+    auto* pv = new QVBoxLayout(planeRow_);
+    pv->setContentsMargins(0, 0, 0, 0);
+    pv->setSpacing(1);
+    auto* pr = new QHBoxLayout;
     pr->setSpacing(3);
-    pr->addWidget(new QLabel(QStringLiteral("Clicks land on:"), planeRow_));
+    auto* pr2 = new QHBoxLayout;
+    pr2->setSpacing(3);
+    pv->addLayout(pr);
+    pv->addLayout(pr2);
+    pr->addWidget(new QLabel(QStringLiteral("Route to land:"), planeRow_));
     plane_ = new QComboBox(planeRow_);
     plane_->setObjectName(QStringLiteral("view3dWorkPlane"));
-    plane_->addItems({QStringLiteral("the model's faces (the ground, Z = 0, beyond it)"), QStringLiteral("a plane across X (upright)"),
-                      QStringLiteral("a plane across Y (upright)"), QStringLiteral("a plane across Z (level - a height)")});
+    plane_->addItems({QStringLiteral("Model faces"), QStringLiteral("Plane across X (upright)"),
+                      QStringLiteral("Plane across Y (upright)"), QStringLiteral("Plane across Z (a height)")});
+    plane_->setItemData(0, QStringLiteral("The model's faces - the ground (Z = 0) beyond the model"), Qt::ToolTipRole);
     plane_->setToolTip(QStringLiteral("Where a click lands. A plane: the points of a bundle at that height (Z) or place (X, Y), in "
                                       "the air if need be - drawn see-through where it is"));
     pr->addWidget(plane_);
@@ -441,7 +459,7 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     planeAt_->setKeyboardTracking(false);
     planeAt_->setToolTip(QStringLiteral("Where the plane is along its axis - for a level plane, its height"));
     pr->addWidget(planeAt_);
-    button(pr, "view3dWorkPlaneHere", QStringLiteral("Through the point picked"),
+    button(pr, "view3dWorkPlaneHere", QStringLiteral("Through point"),
            QStringLiteral("The plane put through the node selected, or the point last picked on the model"), [this] {
                const int axis = plane_->currentIndex() - 1;
                if (axis < 0) return;
@@ -456,8 +474,10 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
                }
                if (have) planeAt_->setValue(axis == 0 ? p.x : axis == 1 ? p.y : p.z);
            });
-    pr->addWidget(viewBits_);
+    viewRow->setContentsMargins(0, 0, 0, 0);
+    pr2->addWidget(viewBits_);
     pr->addStretch(1);
+    pr2->addStretch(1);
     rowsLay_->addWidget(planeRow_);
     connect(plane_, &QComboBox::currentIndexChanged, this, [this](int i) {
         // A plane chosen afresh is put through the middle of the model, where it can be seen to be.
@@ -636,6 +656,15 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
         const QString form = connForm_->currentData().toString();
         editSelectedNode([form](RouteNode3D& n) { n.form = form; });
     });
+    // ITS CABLE OUT OF ITS FRONT, or out of its back - through the panel it is fitted in.
+    cg->addWidget(new QLabel(QStringLiteral("Cable out of"), connBox_), 9, 0);
+    connBack_ = new QComboBox(connBox_);
+    connBack_->setObjectName(QStringLiteral("view3dConnBack"));
+    connBack_->addItems({QStringLiteral("Its front"), QStringLiteral("Its back (through the panel)")});
+    connBack_->setToolTip(QStringLiteral("Front: the cable leaves the way it points. Back: out behind its face - a connector "
+                                         "fitted through a panel, mated outside, its wires inside"));
+    cg->addWidget(connBack_, 9, 1);
+    connect(connBack_, &QComboBox::activated, this, [this](int i) { editSelectedNode([i](RouteNode3D& n) { n.back = i == 1; }); });
     connBox_->setVisible(false);
     sl->addWidget(connBox_);
     // MOVING A NODE (the Move tool, a node clicked): where it is, by so much a step - or by the wheel's arrows - turned
@@ -797,6 +826,19 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
         canvas_->setBackground(mode, QColor(QSettings().value(QStringLiteral("view3d/backgroundColour")).toString()));
     }
     connect(canvas_, &View3DCanvas::ghostFrozenChanged, this, [this] { syncConnector(); });
+    // THE BRANCH TOOL ON A CONNECTOR: from its front, or its back.
+    connect(canvas_, &View3DCanvas::connectorBranchAsked, this, [this](const QString& node, const QPoint& at) {
+        const RouteNode3D* n = route_.node(node);
+        if (!n) return;
+        QMenu menu(this);
+        QAction* front = menu.addAction(QStringLiteral("Start a bundle from the front of %1").arg(n->label));
+        front->setObjectName(QStringLiteral("view3dBranchFront"));
+        connect(front, &QAction::triggered, this, [this, node] { startBranchFrom(node, false); });
+        QAction* back = menu.addAction(QStringLiteral("Start a bundle from the back of %1").arg(n->label));
+        back->setObjectName(QStringLiteral("view3dBranchBack"));
+        connect(back, &QAction::triggered, this, [this, node] { startBranchFrom(node, true); });
+        menu.exec(at);
+    });
     // AT THE SIDE: one button over the picture, to open it below with everything.
     toBottom_ = new QToolButton(canvas_);
     toBottom_->setObjectName(QStringLiteral("view3dToBottom"));
@@ -826,6 +868,9 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
                 for (const QString& b : harnessBricks()) canvas_->setBrickHidden(b, b != brick);
                 partsShownChanged();
             });
+            QMenu* see = menu.addMenu(QStringLiteral("Opacity of %1").arg(name));
+            see->setObjectName(QStringLiteral("view3dPartOpacity"));
+            fillOpacityMenu(see, part, brick);
             menu.addSeparator();
         }
         QAction* all = menu.addAction(QStringLiteral("Show all"));
@@ -873,6 +918,16 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
                 QAction* same = menu.addAction(QStringLiteral("Same as..."));
                 same->setObjectName(QStringLiteral("view3dSameAs"));
                 connect(same, &QAction::triggered, this, [this, node] { canvas_->startSameAs(node); });
+                // ITS CABLE OUT OF ITS BACK (through the panel it is fitted in) or its front; a bundle started from either.
+                QAction* back = menu.addAction(QStringLiteral("Cable out of its back"));
+                back->setObjectName(QStringLiteral("view3dConnBackAction"));
+                back->setCheckable(true);
+                back->setChecked(n->back);
+                connect(back, &QAction::toggled, this, [this, node](bool on) { setConnectorBack(node, on); });
+                QAction* fromFront = menu.addAction(QStringLiteral("Start a bundle from its front"));
+                connect(fromFront, &QAction::triggered, this, [this, node] { startBranchFrom(node, false); });
+                QAction* fromBack = menu.addAction(QStringLiteral("Start a bundle from its back"));
+                connect(fromBack, &QAction::triggered, this, [this, node] { startBranchFrom(node, true); });
             }
             QAction* colour = menu.addAction(QStringLiteral("Colour..."));
             connect(colour, &QAction::triggered, this, [this, node] {
@@ -1078,6 +1133,7 @@ void View3DPane::wheelOptions(const QPoint& at) {
 }
 
 void View3DPane::armSolids() {
+    route_.solidsChanged();
     route_.solids = [this](const V3& origin, const V3& dir, double far, V3& hit) {
         if (!envIndex_ || envIndex_->empty() || !canvas_) return false;
         // A hidden solid is no obstacle: on past it.
@@ -1295,16 +1351,16 @@ void View3DPane::syncMove() {
 }
 
 void View3DPane::updateWheel() {
-    // MOVING A NODE: the wheel's segments its arrows along X, Y and Z and its turns round each; otherwise the view's.
-    const bool moving = moveBox_ && moveBox_->isVisible();
+    // THE MOVE TOOL IN HAND: the wheel's segments its arrows along X, Y and Z and its turns round each - for the node
+    // clicked; otherwise the view's.
+    const bool moving = canvas_->routeTool() == RouteTool::Move && envChoice_;
     if (moving == wheelMoving_) return;
     wheelMoving_ = moving;
     if (moving) {
         buildMoveWheel();
         wheel_->setMiddle(QStringLiteral("Move"), [this](const QPoint&) {
-            // The middle: done moving - the view's wheel back.
-            canvas_->selectSegment(QString());
-            syncMove();
+            // The middle: done moving - the tool put down, the view's wheel back.
+            setRouteTool(RouteTool::Select);
         });
     } else {
         wheel_->setItems(viewWheel_);
@@ -1352,6 +1408,10 @@ void View3DPane::buildMoveWheel() {
         const QString name = QStringLiteral("%1%2").arg(QChar(QLatin1Char("XYZ"[w.axis]))).arg(w.sign > 0 ? QLatin1Char('+') : QLatin1Char('-'));
         NavWheel::Item it{key, QStringLiteral("Move %1").arg(name), QStringLiteral("Move it a step along %1").arg(name),
                           [this, axis = w.axis, sign = w.sign, stepOf] {
+                              if (!route_.node(canvas_->selectedNode())) {
+                                  emit canvas_->message(QStringLiteral("Move: click the connector, clip or branch to move first"));
+                                  return;
+                              }
                               V3 by;
                               (axis == 0 ? by.x : axis == 1 ? by.y : by.z) = stepOf() * sign;
                               moveSelectedNode(by);
@@ -1369,7 +1429,13 @@ void View3DPane::buildMoveWheel() {
             const QString key = QStringLiteral("r%1%2").arg(QLatin1Char("xyz"[axis])).arg(sign > 0 ? QLatin1Char('+') : QLatin1Char('-'));
             items[static_cast<size_t>(next)] = {key, QStringLiteral("Turn %1").arg(QChar(QLatin1Char("XYZ"[axis]))),
                                                 QStringLiteral("Turn it 15° round %1").arg(QChar(QLatin1Char("XYZ"[axis]))),
-                                                [this, axis, sign] { rotateSelectedNode(axis, 15.0 * sign); }, {}};
+                                                [this, axis, sign] {
+                                                    if (!route_.node(canvas_->selectedNode())) {
+                                                        emit canvas_->message(QStringLiteral("Move: click the connector, clip or branch to turn first"));
+                                                        return;
+                                                    }
+                                                    rotateSelectedNode(axis, 15.0 * sign);
+                                                }, {}};
         }
     wheel_->setItems(items);
     wheel_->update();
@@ -1385,9 +1451,13 @@ void View3DPane::syncConnector() {
     const QSignalBlocker a(aim_), b(aimTurn_), c(aimTilt_), d(spin_), e(connForm_);
     const QSignalBlocker f0(connSize_[0]), f1(connSize_[1]), f2(connSize_[2]), g0(connAuto_[0]), g1(connAuto_[1]), g2(connAuto_[2]);
     connForm_->setCurrentIndex(std::max(0, connForm_->findData(n->form.isEmpty() ? QStringLiteral("rect") : n->form)));
+    {
+        const QSignalBlocker hold(connBack_);
+        connBack_->setCurrentIndex(n->back ? 1 : 0);
+    }
     // EACH SIZE: its own, or - its "A" on - the real figure Auto comes to, not to be typed in.
     const double dd = std::max(0.5, route_.diameter);
-    const double own[3] = {n->formW, n->formH, n->formL}, real[3] = {dd * 2.2, dd * 1.3, std::max(route_.lead, dd)};
+    const double own[3] = {n->formW, n->formH, n->formL}, real[3] = {dd * 2.2, dd * 1.3, route_.housingLength(*n)};
     for (int i = 0; i < 3; ++i) {
         const bool automatic = own[i] <= 0.0;
         connAuto_[i]->setChecked(automatic);
@@ -1472,7 +1542,7 @@ void View3DPane::applyIcons() {
     for (const auto& i : icons)
         if (auto* b = findChild<QToolButton*>(QLatin1String(i.name))) {
             b->setIcon(icon3D(QLatin1String(i.icon), ink));
-            b->setIconSize(QSize(20, 20));
+            b->setIconSize(QSize(18, 18));
             b->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
         }
 }
@@ -1612,6 +1682,54 @@ void View3DPane::refreshSolids() {
         top->setExpanded(true);
     }
     fillingSolids_ = false;
+}
+
+void View3DPane::startBranchFrom(const QString& node, bool back) {
+    const RouteNode3D* n = route_.node(node);
+    if (!n) return;
+    if (n->kind == RouteNodeKind::Connector && n->back != back) setConnectorBack(node, back);
+    setRouteTool(RouteTool::Route);
+    canvas_->beginLaying(node);
+    emit canvas_->message(QStringLiteral("A bundle from the %1 of %2 - click the points it runs through, then the node it ends on")
+                              .arg(back ? QStringLiteral("back") : QStringLiteral("front"), n->label));
+}
+
+void View3DPane::setConnectorBack(const QString& node, bool back) {
+    RouteNode3D* n = route_.node(node);
+    if (!n || n->back == back) return;
+    beforeRouteChange();
+    n->back = back;
+    saveRouting();
+    refreshRoute();
+    syncConnector();
+    emit routeChanged();
+}
+
+void View3DPane::fillOpacityMenu(QMenu* menu, int envPart, const QString& brick) {
+    const double now = envPart >= 0 ? canvas_->envPartOpacity(envPart) : canvas_->brickOpacity(brick);
+    auto set = [this, envPart, brick](double a) {
+        if (envPart >= 0) canvas_->setEnvPartOpacity(envPart, a);
+        else canvas_->setBrickOpacity(brick, a);
+    };
+    QAction* same = menu->addAction(envPart >= 0 ? QStringLiteral("As the model (the Opacity slider)") : QStringLiteral("Solid, as drawn"));
+    same->setCheckable(true);
+    same->setChecked(now <= 0.0);
+    connect(same, &QAction::triggered, this, [set] { set(0.0); });
+    menu->addSeparator();
+    for (int pc : {100, 75, 50, 25, 10}) {
+        QAction* a = menu->addAction(QStringLiteral("%1%").arg(pc));
+        a->setObjectName(QStringLiteral("view3dOpacity%1").arg(pc));
+        a->setCheckable(true);
+        a->setChecked(now > 0.0 && std::abs(now * 100.0 - pc) < 0.5);
+        connect(a, &QAction::triggered, this, [set, pc] { set(pc / 100.0); });
+    }
+    QAction* own = menu->addAction(QStringLiteral("Other..."));
+    connect(own, &QAction::triggered, this, [this, set, now] {
+        bool ok = false;
+        const int pc = QInputDialog::getInt(this, QStringLiteral("Opacity"), QStringLiteral("How solid it is drawn (%)"),
+                                            now > 0.0 ? static_cast<int>(std::lround(now * 100.0)) : 100, 5, 100, 5, &ok);
+        if (ok) set(pc / 100.0);
+    });
 }
 
 void View3DPane::partsShownChanged() {
@@ -2170,7 +2288,96 @@ void View3DCanvas::setScene(const Harness3DScene* scene) { scene_ = scene; }
 void View3DCanvas::setEnvironment(const Environment3D* env, const RayIndex3D* index) {
     env_ = env;
     envIndex_ = index;
+    envOwnAlpha_.clear();
+    if (route_) route_->solidsChanged();
+    routeDirty_ = true;
     update();
+}
+
+void View3DCanvas::setEnvPartOpacity(int part, double alpha) {
+    if (part < 0) return;
+    if (static_cast<size_t>(part) >= envOwnAlpha_.size()) envOwnAlpha_.resize(static_cast<size_t>(part) + 1, 0.0);
+    envOwnAlpha_[static_cast<size_t>(part)] = alpha <= 0.0 ? 0.0 : std::clamp(alpha, 0.05, 1.0);
+    update();
+}
+
+double View3DCanvas::envPartOpacity(int part) const {
+    return part >= 0 && static_cast<size_t>(part) < envOwnAlpha_.size() ? envOwnAlpha_[static_cast<size_t>(part)] : 0.0;
+}
+
+void View3DCanvas::setBrickOpacity(const QString& brick, double alpha) {
+    if (alpha <= 0.0 || alpha >= 1.0) brickAlpha_.remove(brick);
+    else brickAlpha_[brick] = std::max(0.05, alpha);
+    update();
+}
+
+double View3DCanvas::brickOpacity(const QString& brick) const { return brickAlpha_.value(brick, 0.0); }
+
+void View3DCanvas::beginLaying(const QString& node) {
+    if (!route_ || !route_->node(node)) return;
+    layFrom_ = node;
+    layVia_.clear();
+    layMadeStart_ = false;
+    routeDirty_ = true;
+    update();
+}
+
+Mesh3D View3DCanvas::faceAround(int part, const V3& point, const V3& normal) const {
+    Mesh3D out;
+    if (!env_ || part < 0 || static_cast<size_t>(part) >= env_->parts.size()) return out;
+    const Mesh3D& m = env_->parts[static_cast<size_t>(part)].mesh;
+    if (m.f.empty()) return out;
+    V3 lo, hi;
+    m.bounds(lo, hi);
+    const double scale = std::max(1e-3, (hi - lo).length());
+    std::vector<V3> tn(m.f.size());
+    for (size_t i = 0; i < m.f.size(); ++i)
+        tn[i] = cross3(m.v[static_cast<size_t>(m.f[i][1])] - m.v[static_cast<size_t>(m.f[i][0])],
+                       m.v[static_cast<size_t>(m.f[i][2])] - m.v[static_cast<size_t>(m.f[i][0])]).normalized();
+    // THE TRIANGLE THE POINT IS ON: in its plane, inside its three edges.
+    int seed = -1;
+    double nearest = 1e300;
+    for (size_t i = 0; i < m.f.size(); ++i) {
+        const V3 a = m.v[static_cast<size_t>(m.f[i][0])], b = m.v[static_cast<size_t>(m.f[i][1])], c = m.v[static_cast<size_t>(m.f[i][2])];
+        const double off = std::abs(dot3(point - a, tn[i]));
+        if (off > scale * 1e-3 || off >= nearest) continue;
+        const double tol = -scale * 1e-6;
+        if (dot3(cross3(b - a, point - a), tn[i]) < tol || dot3(cross3(c - b, point - b), tn[i]) < tol ||
+            dot3(cross3(a - c, point - c), tn[i]) < tol)
+            continue;
+        nearest = off;
+        seed = static_cast<int>(i);
+    }
+    if (seed < 0) return out;
+    // ON FROM IT across the edges it shares, while the surface turns gently (a round face) and no further than a right
+    // angle from the way the face clicked looks - a corner between two faces ends it.
+    std::vector<std::vector<int>> byVertex(m.v.size());
+    for (size_t i = 0; i < m.f.size(); ++i)
+        for (int k : m.f[i]) byVertex[static_cast<size_t>(k)].push_back(static_cast<int>(i));
+    const V3 look = dot3(tn[static_cast<size_t>(seed)], normal) < 0.0 ? tn[static_cast<size_t>(seed)] * -1.0 : tn[static_cast<size_t>(seed)];
+    std::vector<char> in(m.f.size(), 0);
+    std::vector<int> todo{seed};
+    in[static_cast<size_t>(seed)] = 1;
+    const double lift = scale * 0.0015;
+    while (!todo.empty()) {
+        const int t = todo.back();
+        todo.pop_back();
+        const auto& f = m.f[static_cast<size_t>(t)];
+        const V3 side = dot3(tn[static_cast<size_t>(t)], look) < 0.0 ? tn[static_cast<size_t>(t)] * -1.0 : tn[static_cast<size_t>(t)];
+        const int base = static_cast<int>(out.v.size());
+        for (int k : f) out.v.push_back(m.v[static_cast<size_t>(k)] + side * lift);
+        out.addTri(base, base + 1, base + 2);
+        if (out.f.size() > 400000) break;
+        for (int k : f)
+            for (int o : byVertex[static_cast<size_t>(k)]) {
+                if (in[static_cast<size_t>(o)]) continue;
+                const double bend = std::abs(dot3(tn[static_cast<size_t>(o)], tn[static_cast<size_t>(t)]));
+                if (bend < 0.985 || std::abs(dot3(tn[static_cast<size_t>(o)], look)) < 0.7) continue;
+                in[static_cast<size_t>(o)] = 1;
+                todo.push_back(o);
+            }
+    }
+    return out;
 }
 
 void View3DCanvas::setEnvironmentShown(bool on) {
@@ -2325,6 +2532,7 @@ void View3DCanvas::setWorkPlane(int axis, double at) {
 }
 
 bool View3DCanvas::surfaceAt(const QPointF& at, V3& point, V3& normal) {
+    surfacePart_ = -1;
     V3 origin, dir;
     cam_.rayAt(at.x(), at.y(), width(), height(), origin, dir);
     // ON THE WORK PLANE, where there is one - in front of the model or behind it, in the air or not: the plane is
@@ -2344,6 +2552,7 @@ bool View3DCanvas::surfaceAt(const QPointF& at, V3& point, V3& normal) {
         if (p.hit) {
             point = p.point;
             normal = p.normal;
+            surfacePart_ = p.part;
             return true;
         }
     }
@@ -2723,7 +2932,7 @@ namespace {
 // A CONNECTOR'S HOUSING as its form has it: standing out of its face the way it points, turned round that by its spin -
 // a box (with a key on its top edge, so how it lies is seen), a cylinder, a flange and a narrower body, a right angle,
 // or a D-shaped shell - as wide, as tall and as long as it is said to be, or as the bundle and the lead make it.
-Mesh3D connectorHousing(const RouteNode3D& n, double d, double lead) {
+Mesh3D connectorHousing(const RouteNode3D& n, double d, const Route3D& route) {
     const V3 ax = n.normal;
     V3 u = cross3(ax, V3{0, 0, 1});
     if (u.length() < 1e-6) u = cross3(ax, V3{1, 0, 0});
@@ -2731,7 +2940,7 @@ Mesh3D connectorHousing(const RouteNode3D& n, double d, double lead) {
     const V3 v = cross3(ax, u).normalized();
     const double s = n.spinDeg * M_PI / 180.0;
     const V3 su = u * std::cos(s) + v * std::sin(s), sv = v * std::cos(s) - u * std::sin(s);
-    const double len = n.formL > 0.0 ? n.formL : std::max(lead, d);
+    const double len = route.housingLength(n);
     const double w = n.formW > 0.0 ? n.formW : d * 2.2, h = n.formH > 0.0 ? n.formH : d * 1.3;
     auto box = [&](double x0, double x1, double y0, double y1, double z0, double z1) {
         Mesh3D b = boxMesh({0, 0, 0}, {1, 1, 1});
@@ -2758,6 +2967,12 @@ Mesh3D connectorHousing(const RouteNode3D& n, double d, double lead) {
     } else {
         m = box(0.0, len, -w / 2, w / 2, -h / 2, h / 2);
         m.append(box(0.0, len, -w * 0.15, w * 0.15, h * 0.5, h * 0.75));
+    }
+    // ITS CABLE OUT OF ITS BACK: a narrower body behind its face, the cable out of the end of that.
+    if (n.back) {
+        const double body = route.bodyLength(n);
+        if (n.form == QLatin1String("round")) m.append(tubeMesh({n.at, n.at - ax * body}, w * 0.34, 20, true));
+        else m.append(box(-body, 0.0, -w * 0.34, w * 0.34, -h * 0.34, h * 0.34));
     }
     return m;
 }
@@ -2789,7 +3004,7 @@ void View3DCanvas::buildRouteMeshes() const {
             (void)ax;
             (void)u;
             (void)v;
-            routeMeshes_.push_back({connectorHousing(n, d, route_->lead), on ? lit : n.color.isValid() ? n.color : QColor(205, 208, 214),
+            routeMeshes_.push_back({connectorHousing(n, d, *route_), on ? lit : n.color.isValid() ? n.color : QColor(205, 208, 214),
                                     Texture3D::Metal, n.id});
         } else if (n.kind == RouteNodeKind::Clip) {
             // A CLIP AS A CLIP IS: a band round the bundle where it is held, the way the bundle runs there, and its foot
@@ -2853,7 +3068,7 @@ void View3DCanvas::buildRouteMeshes() const {
         RouteNode3D g = placeTemplate_;
         g.at = ghost_.at;
         g.normal = ghost_.normal;
-        routeMeshes_.push_back({connectorHousing(g, d, route_->lead), ghostFrozen_ ? QColor(80, 220, 255) : QColor(235, 240, 248),
+        routeMeshes_.push_back({connectorHousing(g, d, *route_), ghostFrozen_ ? QColor(80, 220, 255) : QColor(235, 240, 248),
                                 Texture3D::None, QString()});
     }
 }
@@ -2867,7 +3082,7 @@ std::vector<DrawItem3D> View3DCanvas::drawItems() const {
             QColor c = it.color;
             if (!it.brick.isEmpty() && lit_.contains(it.brick))
                 c = QColor((c.red() + 2 * 43) / 3, (c.green() + 2 * 208) / 3, (c.blue() + 2 * 255) / 3);
-            items.push_back({&it.mesh, c, 1.0, false, it.texture});
+            items.push_back({&it.mesh, c, it.brick.isEmpty() ? 1.0 : brickAlpha_.value(it.brick, 1.0), false, it.texture});
         }
     if (env_ && envShown_)
         for (size_t i = 0; i < env_->parts.size(); ++i) {
@@ -2877,7 +3092,8 @@ std::vector<DrawItem3D> View3DCanvas::drawItems() const {
             // The solid last picked, lit.
             if (pick_.hit && pick_.part == static_cast<int>(i))
                 c = QColor((c.red() + 43) / 2, (c.green() + 208) / 2, (c.blue() + 255) / 2);
-            items.push_back({&part.mesh, c, envAlpha_, true});
+            const double own = envPartOpacity(static_cast<int>(i));
+            items.push_back({&part.mesh, c, own > 0.0 ? own : envAlpha_, true});
         }
     if (routeDirty_) buildRouteMeshes();
     for (const Drawn& d : routeMeshes_) items.push_back({&d.mesh, d.color, 1.0, false, d.texture});
@@ -2900,6 +3116,13 @@ std::vector<DrawItem3D> View3DCanvas::drawItems() const {
         }
         if (!measureMesh_.empty()) items.push_back({&measureMesh_, QColor(255, 220, 60)});
         if (!measureLitMesh_.empty()) items.push_back({&measureLitMesh_, QColor(80, 220, 255)});
+        // SURFACE TO SURFACE: the two faces measured between, lit - the one selected in the highlight colour.
+        for (size_t i = 0; i < measures_.size(); ++i) {
+            const QColor c = static_cast<int>(i) == selMeasure_ ? QColor(80, 220, 255) : QColor(255, 170, 40);
+            for (const Mesh3D* f : {&measures_[i].faceA, &measures_[i].faceB})
+                if (!f->empty()) items.push_back({f, c, 0.6});
+        }
+        if (measureStage_ == 1 && !measureFaceA_.empty()) items.push_back({&measureFaceA_, QColor(255, 170, 40), 0.6});
     }
     // THE SECTION'S PLANE, nearly see-through, over only the solids it cuts - so it is seen where the cut is.
     if (section_.on && env_ && envShown_) {
@@ -3167,7 +3390,13 @@ void View3DCanvas::routeClick(const QPointF& at) {
     case RouteTool::Clip: {
         const RouteNodeKind kind = tool_ == RouteTool::Branch ? RouteNodeKind::Branch : RouteNodeKind::Clip;
         int after = 0;
-        if (!node.isEmpty()) {
+        const RouteNode3D* on = node.isEmpty() ? nullptr : route_->node(node);
+        if (tool_ == RouteTool::Branch && on && on->kind == RouteNodeKind::Connector) {
+            // A CONNECTOR: a bundle to start from it - out of its front or its back.
+            selNode_ = node;
+            routeRedraw();
+            emit connectorBranchAsked(node, mapToGlobal(at.toPoint()));
+        } else if (!node.isEmpty()) {
             selNode_ = node;
             routeRedraw();
         } else if (const QString seg = segmentAt(at, &p, &n, &after); !seg.isEmpty()) {
@@ -3209,12 +3438,18 @@ void View3DCanvas::routeClick(const QPointF& at) {
     case RouteTool::Measure:
         // FIRST ONE END, THEN THE OTHER - kept, and the next two clicks another ruler.
         if (surfaceAt(at, p, n)) {
+            // SURFACE TO SURFACE: the face clicked, to light it.
+            const Mesh3D face = measureFaces_ ? faceAround(surfacePart_, p, n) : Mesh3D();
             if (measureStage_ != 1) {
                 measureA_ = measureB_ = p;
                 measureNormal_ = n.normalized();
                 measureStage_ = 1;
+                measureFaceA_ = face;
             } else {
                 measures_.push_back(measureMaking(p));
+                measures_.back().faceA = measureFaceA_;
+                measures_.back().faceB = face;
+                measureFaceA_ = Mesh3D();
                 measureStage_ = 0;
                 selMeasure_ = static_cast<int>(measures_.size()) - 1;
                 emit message(measureSaid(measures_.back().a, measures_.back().b));
@@ -3484,6 +3719,7 @@ void View3DCanvas::setEnvPartHidden(int part, bool hidden) {
     envHidden_[static_cast<size_t>(part)] = hidden ? 1 : 0;
     sectionDirty_ = true;
     routeDirty_ = true;
+    if (route_) route_->solidsChanged();
     update();
 }
 
@@ -3491,6 +3727,7 @@ void View3DCanvas::setAllEnvPartsHidden(bool hidden) {
     envHidden_.assign(env_ ? env_->parts.size() : 0, hidden ? 1 : 0);
     sectionDirty_ = true;
     routeDirty_ = true;
+    if (route_) route_->solidsChanged();
     update();
 }
 
@@ -3502,12 +3739,14 @@ bool View3DCanvas::skipPart(int part, const V3& point) const { return section_.c
 
 void View3DCanvas::clearMeasure() {
     measureStage_ = 0;
+    measureFaceA_ = Mesh3D();
     measureDirty_ = true;
     update();
 }
 
 void View3DCanvas::clearMeasures() {
     measures_.clear();
+    measureFaceA_ = Mesh3D();
     selMeasure_ = -1;
     measureStage_ = 0;
     measureDirty_ = true;

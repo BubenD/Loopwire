@@ -208,6 +208,12 @@ public:
     void rotateSelectedNode(int axis, double degrees);
     void setSelectedNodeColor(const QColor& c);
     bool wheelMoving() const { return wheelMoving_; }
+    // A BUNDLE STARTED FROM A CONNECTOR, its cable out of its front or its back.
+    void startBranchFrom(const QString& node, bool back);
+    // A connector's cable out of its back, or its front.
+    void setConnectorBack(const QString& node, bool back);
+    // How see-through each solid (or harness part) is - into a menu.
+    void fillOpacityMenu(QMenu* menu, int envPart, const QString& brick);
 private:
     void applyIcons();
     void applySection();
@@ -303,6 +309,7 @@ private:
     QToolButton* toSide_ = nullptr;
     // The connector's form and sizes; the node being moved - where, the step, its colour and turns; the wheel's two sets.
     QComboBox* connForm_ = nullptr;
+    QComboBox* connBack_ = nullptr;
     QDoubleSpinBox* connSize_[3] = {};
     QToolButton* connAuto_[3] = {};
     QToolButton* bendAuto_ = nullptr;
@@ -427,6 +434,8 @@ public:
     struct Measure3D {
         V3 a, b;
         bool faces = false;
+        // SURFACE TO SURFACE: the two faces measured between, to light them.
+        Mesh3D faceA, faceB;
     };
     bool measured() const { return !measures_.empty(); }
     V3 measureFrom() const { return measures_.empty() ? V3{} : measures_.back().a; }
@@ -440,6 +449,17 @@ public:
     void selectMeasure(int index);
     void setMeasureFaces(bool on) { measureFaces_ = on; }
     bool measureFaces() const { return measureFaces_; }
+    // THE FACE OF A SOLID round a point of it: the triangles it is meshed in that run on from the one there without a
+    // corner between - a flat face, or a round one - lifted a little off it, to be lit.
+    Mesh3D faceAround(int part, const V3& point, const V3& normal) const;
+    // EACH SOLID'S OWN OPACITY (0: as the model's), and each harness part's. Not saved.
+    void setEnvPartOpacity(int part, double alpha);
+    double envPartOpacity(int part) const;
+    void setBrickOpacity(const QString& brick, double alpha);
+    double brickOpacity(const QString& brick) const;
+    // A BUNDLE STARTED from a node - the Route tool in hand.
+    void beginLaying(const QString& node);
+    QString layingFrom() const { return layFrom_; }
     // A NODE OR A BUNDLE TAKEN AWAY - a node with its bundles: one change, to undo.
     void removeRouteItem(const QString& node, const QString& segment);
     // THE NEXT CONNECTOR PUT: its form, size, how it lies and its colour (the template); frozen where it would go with
@@ -482,6 +502,8 @@ signals:
     void routeMenuAsked(const QString& node, const QString& segment, int measure, const QPoint& globalPos);
     // A connector being put frozen with Tab - or let go.
     void ghostFrozenChanged(bool frozen);
+    // THE BRANCH TOOL ON A CONNECTOR: a bundle to start from it, out of its front or its back - asked at that point.
+    void connectorBranchAsked(const QString& node, const QPoint& globalPos);
     // Something to tell the user.
     void message(const QString& text);
     // The camera turned, moved or zoomed.
@@ -565,6 +587,11 @@ private:
     QPointer<QVariantAnimation> turnAnim_;
     // The solids of the model hidden, and the ruler. Not saved.
     std::vector<char> envHidden_;
+    std::vector<double> envOwnAlpha_;
+    QHash<QString, double> brickAlpha_;
+    // The solid the last point found on the model is on (-1: none - the ground, the work plane).
+    int surfacePart_ = -1;
+    Mesh3D measureFaceA_;
     int measureStage_ = 0;      // 0 none being made, 1 its first end set
     V3 measureA_, measureB_, measureNormal_;
     std::vector<Measure3D> measures_;

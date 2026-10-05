@@ -234,6 +234,18 @@ double Route3D::diameterOf(const RouteSegment3D& s) const { return s.diameter > 
 
 double Route3D::bendRadiusOf(const RouteSegment3D& s) const { return bendRadius > 0.0 ? bendRadius : 6.0 * diameterOf(s); }
 
+double Route3D::housingLength(const RouteNode3D& n) const {
+    return n.formL > 0.0 ? n.formL : std::max(0.5 * std::max(0.0, lead), 1.0);
+}
+
+double Route3D::bodyLength(const RouteNode3D& n) const { return n.back ? 0.6 * housingLength(n) : housingLength(n); }
+
+V3 Route3D::exitOf(const RouteNode3D& n) const { return n.back ? n.normal * -1.0 : n.normal; }
+
+double Route3D::leadOf(const RouteNode3D& n, double radius) const {
+    return std::max({lead, radius, bodyLength(n) + radius});
+}
+
 std::vector<V3> Route3D::corners(const RouteSegment3D& s) const {
     std::vector<V3> pts;
     const RouteNode3D* a = node(s.a);
@@ -245,13 +257,13 @@ std::vector<V3> Route3D::corners(const RouteSegment3D& s) const {
     };
     if (a->kind == RouteNodeKind::Connector) {
         add(a->at);
-        add(a->at + a->normal * std::max(lead, r));
+        add(a->at + exitOf(*a) * leadOf(*a, r));
     } else {
         add(a->at + a->normal * r);
     }
     for (const RouteVia3D& v : s.via) add(v.at + v.normal * r);
     if (b->kind == RouteNodeKind::Connector) {
-        add(b->at + b->normal * std::max(lead, r));
+        add(b->at + exitOf(*b) * leadOf(*b, r));
         add(b->at);
     } else {
         add(b->at + b->normal * r);
@@ -276,31 +288,60 @@ std::vector<V3> Route3D::cornerNormals(const RouteSegment3D& s) const {
     return out;
 }
 
-std::vector<V3> Route3D::overSolids(const std::vector<V3>& p, const std::vector<V3>& nrm, double r) const {
+std::vector<V3> Route3D::overSolids(const std::vector<V3>& p, const std::vector<V3>& nrm, double r, bool freeFirst, bool freeLast) const {
     if (!solids || p.size() < 2) return p;
     std::vector<V3> out{p.front()};
     for (size_t i = 1; i < p.size(); ++i) {
         const V3 a = p[i - 1], b = p[i];
-        const V3 d = b - a;
-        const double len = d.length();
-        if (len < 1e-6) continue;
-        const V3 u = d / len;
-        // CLEAR OF WHAT IT STARTS AND ENDS ON: a connector's own face, the face a point was laid on.
-        const double eps = std::min(len * 0.25, std::max(0.5, r));
-        V3 hit;
-        if (len <= 2.0 * eps || !solids(a + u * eps, u, len - 2.0 * eps, hit)) {
+        if ((b - a).length() < 1e-6) continue;
+        if ((i == 1 && freeFirst) || (i + 1 == p.size() && freeLast)) {
             out.push_back(b);
             continue;
         }
-        // THROUGH SOMETHING: laid over it - each point along it lifted, the way the faces at its ends look, to the top
-        // of what is under it and its radius more.
-        V3 up = i < nrm.size() ? nrm[i - 1] + nrm[i] : V3{0, 0, 1};
-        if (up.length() < 1e-6) up = {0, 0, 1};
-        up = up.normalized();
-        if (std::abs(dot3(u, up)) > 0.95) {
-            out.push_back(b);   // running that way itself: nothing to be laid over
-            continue;
+        const V3 na = i - 1 < nrm.size() ? nrm[i - 1] : V3{0, 0, 1};
+        const V3 nb = i < nrm.size() ? nrm[i] : V3{0, 0, 1};
+        const std::vector<V3> over = overOne(a, b, na, nb, r);
+        out.insert(out.end(), over.begin(), over.end());
+    }
+    return out;
+}
+
+std::vector<V3> Route3D::overOne(const V3& a, const V3& b, const V3& na, const V3& nb, double r) const {
+    const V3 d = b - a;
+    const double len = d.length();
+    const V3 u = d / len;
+    // CLEAR OF WHAT IT STARTS AND ENDS ON: a connector's own face, the face a point was laid on.
+    const double eps = std::min(len * 0.25, std::max(0.5, r));
+    auto through = [&](const V3& x, const V3& y, double ex, double ey) {
+        const V3 e = y - x;
+        const double l = e.length();
+        if (l <= ex + ey + 1e-6) return false;
+        const V3 w = e / l;
+        V3 hit;
+        return solids(x + w * ex, w, l - ex - ey, hit);
+    };
+    if (len <= 2.0 * eps || !through(a, b, eps, eps)) return {b};
+    const std::string key = QString::asprintf("%.4f %.4f %.4f %.4f %.4f %.4f %.4f %.3f %.3f %.3f %.3f %.3f %.3f", a.x, a.y, a.z, b.x,
+                                              b.y, b.z, r, na.x, na.y, na.z, nb.x, nb.y, nb.z)
+                                .toStdString();
+    if (const auto f = overCache_.find(key); f != overCache_.end()) return f->second;
+    // A PATH CLEAR all the way: each stretch of it past nothing, its first and last clear of the faces they start on.
+    auto clear = [&](const std::vector<V3>& path) {
+        V3 from = a;
+        for (size_t k = 0; k < path.size(); ++k) {
+            if (through(from, path[k], k == 0 ? eps : 0.02, k + 1 == path.size() ? eps : 0.02)) return false;
+            from = path[k];
         }
+        return true;
+    };
+    std::vector<V3> laid{b};
+    // THROUGH SOMETHING LOW: laid over it - each point along it lifted, the way the faces at its ends look, to the top
+    // of what is under it and its radius more.
+    V3 up = na + nb;
+    if (up.length() < 1e-6) up = {0, 0, 1};
+    up = up.normalized();
+    bool done = false;
+    if (std::abs(dot3(u, up)) <= 0.95) {
         const double H = std::clamp(len, 20.0, 2000.0);
         const double step = std::max(r, len / 160.0);
         const int n = std::max(2, static_cast<int>(std::ceil(len / step)));
@@ -317,17 +358,86 @@ std::vector<V3> Route3D::overSolids(const std::vector<V3>& p, const std::vector<
             lifted.push_back((q - x).length() > 1e-6);
         }
         // Only where it is lifted, and a point either side - the rest of it straight as it was.
-        for (size_t k = 0; k < run.size(); ++k) {
-            const bool keep = lifted[k] || (k + 1 < run.size() && lifted[k + 1]) || (k > 0 && lifted[k - 1]);
-            if (keep) out.push_back(run[k]);
+        auto keepOf = [&] {
+            std::vector<V3> kept;
+            for (size_t k = 0; k < run.size(); ++k) {
+                const bool keep = lifted[k] || (k + 1 < run.size() && lifted[k + 1]) || (k > 0 && lifted[k - 1]);
+                if (keep) kept.push_back(run[k]);
+            }
+            kept.push_back(b);
+            return kept;
+        };
+        laid = keepOf();
+        done = clear(laid);
+        // CLIPPING AN EDGE on the way up or down: the point before it raised as high as the one on top, so it rises
+        // clear of the edge and not across it.
+        if (!done) {
+            const std::vector<V3> was = run;
+            for (size_t k = 0; k < run.size(); ++k) {
+                if (lifted[k]) continue;
+                double rise = 0.0;
+                for (size_t o : {k - 1, k + 1})
+                    if (o < run.size() && lifted[o]) rise = std::max(rise, dot3(was[o] - run[k], up));
+                if (rise > 1e-6) run[k] = run[k] + up * rise;
+            }
+            const std::vector<V3> raised = keepOf();
+            if (clear(raised)) {
+                laid = raised;
+                done = true;
+            }
         }
-        out.push_back(b);
     }
-    return out;
+    // STILL THROUGH IT - A WALL, a rim, what it would have to climb: taken up off its ends, over the top and down again,
+    // whichever way (the ways its faces look, then up, down and across) takes it over in the shortest way.
+    if (!done) {
+        const V3 ways[] = {up, na, nb, {0, 0, 1}, {0, 0, -1}, {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}};
+        double best = 1e300;
+        std::vector<V3> chosen;
+        const double far = std::clamp(4.0 * len, 200.0, 3000.0);
+        for (V3 w : ways) {
+            if (w.length() < 1e-6) continue;
+            w = w.normalized();
+            if (std::abs(dot3(u, w)) > 0.95) continue;
+            for (double h = std::max(1.0, 2.0 * r); h <= far && 2.0 * h + len < best; h *= 1.35) {
+                const V3 lift = w * (h + 1.5 * r);
+                const std::vector<V3> path{a + lift, b + lift, b};
+                if (!clear(path)) continue;
+                best = 2.0 * h + len;
+                chosen = path;
+                break;
+            }
+        }
+        if (!chosen.empty()) laid = chosen;
+    }
+    if (overCache_.size() > 4096) overCache_.clear();
+    overCache_[key] = laid;
+    return laid;
 }
 
 std::vector<V3> Route3D::centreline(const RouteSegment3D& s, int* tight) const {
-    const std::vector<V3> p = solids ? overSolids(corners(s), cornerNormals(s), diameterOf(s) / 2.0) : corners(s);
+    const RouteNode3D* na = node(s.a);
+    const RouteNode3D* nb = node(s.b);
+    const bool ca = na && na->kind == RouteNodeKind::Connector, cb = nb && nb->kind == RouteNodeKind::Connector;
+    std::vector<V3> p = solids ? overSolids(corners(s), cornerNormals(s), diameterOf(s) / 2.0, ca, cb) : corners(s);
+    // OUT OF THE END OF A CONNECTOR'S BODY, STRAIGHT: a point where the body ends, on the way to the lead's end, so a bend
+    // there starts past the body and the cable comes out of its end face - never through its side.
+    // The bend there may take all the way back to the end of the body - nothing bends at that point itself.
+    size_t bodyEndA = 0, bodyEndB = 0;
+    if (ca && p.size() >= 2) {
+        const double body = bodyLength(*na);
+        if (body > 1e-6 && body < (p[1] - p[0]).length() - 1e-6) {
+            p.insert(p.begin() + 1, p[0] + exitOf(*na) * body);
+            bodyEndA = 1;
+        }
+    }
+    if (cb && p.size() >= 2) {
+        const double body = bodyLength(*nb);
+        const size_t e = p.size() - 1;
+        if (body > 1e-6 && body < (p[e - 1] - p[e]).length() - 1e-6) {
+            p.insert(p.begin() + static_cast<long long>(e), p[e] + exitOf(*nb) * body);
+            bodyEndB = e;
+        }
+    }
     if (tight) *tight = 0;
     if (p.size() < 3) return p;
     const double bend = bendRadiusOf(s);
@@ -345,7 +455,7 @@ std::vector<V3> Route3D::centreline(const RouteSegment3D& s, int* tight) const {
         // at its two ends never meet.
         const double half = std::tan(turn / 2.0);
         double t = bend * half;
-        const double room = 0.5 * std::min(l1, l2);
+        const double room = std::min(bodyEndA != 0 && i - 1 == bodyEndA ? l1 : 0.5 * l1, bodyEndB != 0 && i + 1 == bodyEndB ? l2 : 0.5 * l2);
         if (t > room + 1e-9) {
             t = room;
             if (tight) ++*tight;
@@ -396,6 +506,7 @@ QJsonObject Route3D::toJson() const {
         if (n.formH > 0.0) j[QStringLiteral("fh")] = n.formH;
         if (n.formL > 0.0) j[QStringLiteral("fl")] = n.formL;
         if (n.color.isValid()) j[QStringLiteral("color")] = n.color.name();
+        if (n.back) j[QStringLiteral("back")] = true;
         ns.append(j);
     }
     o[QStringLiteral("nodes")] = ns;
@@ -438,6 +549,7 @@ Route3D Route3D::fromJson(const QJsonObject& o) {
         n.formH = j.value(QStringLiteral("fh")).toDouble(0.0);
         n.formL = j.value(QStringLiteral("fl")).toDouble(0.0);
         if (j.contains(QStringLiteral("color"))) n.color = QColor(j.value(QStringLiteral("color")).toString());
+        n.back = j.value(QStringLiteral("back")).toBool(false);
         if (!n.id.isEmpty()) r.nodes.push_back(n);
     }
     for (const QJsonValue& v : o.value(QStringLiteral("segments")).toArray()) {

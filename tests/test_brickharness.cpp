@@ -7184,7 +7184,7 @@ void testRoundFortyNine() {
         bool all = true;
         for (const char* name : {"Refresh", "Wireframe", "Turn, Tilt, Roll", "Full screen", "Lock view", "Load...", "Opacity",
                                  "Section", "Connector", "Branch", "Clip", "Route", "Delete", "Bend R", "Lead", "Undo",
-                                 "Clicks land on", "Lengths to harness", "Backspace"})
+                                 "Route to land", "Lengths to harness", "Backspace"})
             all = all && said.contains(QString::fromLatin1(name));
         check(all, "help: every command named, and what it is for");
     }
@@ -7896,8 +7896,13 @@ void testRoundFiftyFour() {
         double top = 0.0;
         for (const V3& q : before) top = std::max(top, q.z);
         check(top > 30.0, "3d: the bundle laid over the block in its way");
-        // A clip on it where it is drawn, a little way along.
-        const V3 on = before[before.size() / 5];
+        // A clip on it where it is drawn, a little way along - clear of the connector's housing seen from above.
+        V3 on = before[before.size() / 5];
+        for (const V3& q : before)
+            if (q.x > 40.0) {
+                on = q;
+                break;
+            }
         pane.setRouteTool(RouteTool::Clip);
         clickAt(screen(on));
         const RouteNode3D* clip = nullptr;
@@ -8183,13 +8188,13 @@ void testRoundFiftySix() {
     // ---- DELETE: the connector clicked near the top of its housing, far from its middle ----
     pane.setRouteTool(RouteTool::Delete);
     const RouteNode3D* n2 = route.node(x2);
-    click(screen(n2->at + n2->normal * (route.lead * 0.95)));
+    click(screen(n2->at + n2->normal * (route.housingLength(*n2) * 0.95)));
     check(!route.node(x2) && route.segments.empty(), "delete: a connector clicked at the top of its housing - it is deleted, its bundle with it");
     pane.undoRoute();
     check(route.node(x2) && route.segments.size() == 1, "delete: undone");
     // With Delete, the one selected.
     pane.setRouteTool(RouteTool::Select);
-    click(screen(route.node(x2)->at + route.node(x2)->normal * (route.lead * 0.9)));
+    click(screen(route.node(x2)->at + route.node(x2)->normal * (route.housingLength(*route.node(x2)) * 0.9)));
     check(canvas->selectedNode() == x2, "select: a connector clicked anywhere on its body - selected");
     QKeyEvent del(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
     QApplication::sendEvent(canvas, &del);
@@ -8629,6 +8634,154 @@ void testRoundFiftyEight() {
     check(route.degree(branch) == 3 && canvas->branchSleeves() == 3, "heatshrink: a leg out of the branch - its own sleeve too");
 }
 
+// ROUND FIFTY-NINE: A CABLE NEVER THROUGH A SOLID - over a wall it would pass through; A CONNECTOR'S CABLE OUT OF ITS
+// BACK, and out of the end of its body (a cylinder's flat end), never its side; THE FACES MEASURED BETWEEN, lit; EACH
+// SOLID'S OPACITY; THE WHEEL'S ARROWS with Move in hand; A BUNDLE STARTED FROM A CONNECTOR; ROUTE TO LAND on the
+// ribbon, its sliders named; THE PANELS round the drawing as they were after the 3D Preview tab.
+void testRoundFiftyNine() {
+    // ---- OVER A WALL: x -2..2, z 0..30, the whole way across y ----
+    const V3 lo{-2, -1000, 0}, hi{2, 1000, 30};
+    auto inWall = [&](const V3& p, double r) {
+        return p.x > lo.x - r + 1e-6 && p.x < hi.x + r - 1e-6 && p.z > lo.z - r + 1e-6 && p.z < hi.z + r - 1e-6;
+    };
+    Route3D r;
+    r.diameter = 4.0;
+    r.lead = 10.0;
+    r.solids = [&](const V3& o, const V3& d, double far, V3& hit) {
+        double t0 = 0.0, t1 = far;
+        const double os[3] = {o.x, o.y, o.z}, ds[3] = {d.x, d.y, d.z}, l[3] = {lo.x, lo.y, lo.z}, h[3] = {hi.x, hi.y, hi.z};
+        for (int k = 0; k < 3; ++k) {
+            if (std::abs(ds[k]) < 1e-12) {
+                if (os[k] < l[k] || os[k] > h[k]) return false;
+                continue;
+            }
+            double a = (l[k] - os[k]) / ds[k], b = (h[k] - os[k]) / ds[k];
+            if (a > b) std::swap(a, b);
+            t0 = std::max(t0, a);
+            t1 = std::min(t1, b);
+            if (t0 > t1) return false;
+        }
+        hit = o + d * t0;
+        return true;
+    };
+    const QString a = r.addNode(RouteNodeKind::Branch, {-40, 0, 0}, {0, 0, 1});
+    const QString b = r.addNode(RouteNodeKind::Branch, {40, 0, 0}, {0, 0, 1});
+    const QString s = r.addSegment(a, b, {});
+    const std::vector<V3> line = r.centreline(*r.segment(s));
+    bool clear = true;
+    for (size_t i = 1; i < line.size(); ++i)
+        for (int k = 0; k <= 20; ++k) clear = clear && !inWall(line[i - 1] + (line[i] - line[i - 1]) * (k / 20.0), 0.0);
+    std::printf("  over the wall: %zu points, %.1f mm (straight 80), clear %d\n", line.size(), r.length(*r.segment(s)), clear ? 1 : 0);
+    check(clear && r.length(*r.segment(s)) > 80.0 + 28.0, "solids: a cable that would pass through a wall laid over it, its length over it");
+    // A connector out on the far side of the wall, its cable out of its front - away from the wall - and back over it.
+    const QString x = r.addNode(RouteNodeKind::Connector, {2, 0, 15}, {1, 0, 0});
+    const QString c = r.addNode(RouteNodeKind::Clip, {-30, 0, 0}, {0, 0, 1});
+    const QString s2 = r.addSegment(x, c, {});
+    const std::vector<V3> line2 = r.centreline(*r.segment(s2));
+    bool clear2 = true;
+    for (size_t i = 2; i < line2.size(); ++i)
+        for (int k = 1; k < 20; ++k) clear2 = clear2 && !inWall(line2[i - 1] + (line2[i] - line2[i - 1]) * (k / 20.0), 0.0);
+    check(clear2, "solids: out of a connector on the wall's far side - round over the wall, not through it");
+
+    // ---- OUT OF ITS BACK: behind its face, the lead the other way - and saved so ----
+    r.node(x)->back = true;
+    const std::vector<V3> k = r.corners(*r.segment(s2));
+    check(k.size() >= 2 && k[1].x < 2.0 - r.lead + 1e-6, "back: the cable out behind the connector's face");
+    check(Route3D::fromJson(r.toJson()).node(x)->back && !Route3D::fromJson(r.toJson()).node(c)->back,
+          "back: saved with the route - and none said for the others");
+    r.node(x)->back = false;
+
+    // ---- OUT OF THE END OF ITS BODY: a cylinder's cable on its axis as far as the body goes, bent only past it ----
+    Route3D q;
+    q.diameter = 8.0;
+    q.lead = 10.0;
+    const QString cx = q.addNode(RouteNodeKind::Connector, {0, 0, 0}, {0, 0, 1});
+    q.node(cx)->form = QStringLiteral("round");
+    q.node(cx)->formL = 14.0;
+    const QString cb = q.addNode(RouteNodeKind::Branch, {60, 0, 0}, {0, 0, 1});
+    const QString cs = q.addSegment(cx, cb, {});
+    bool onAxis = true;
+    // From the connector's face up, point by point, until the body ends.
+    for (const V3& p : q.centreline(*q.segment(cs))) {
+        if (p.z >= q.housingLength(*q.node(cx)) - 1e-6) break;
+        onAxis = onAxis && std::hypot(p.x, p.y) < 1e-6;
+    }
+    std::printf("  cylinder: housing %.1f, lead to %.1f\n", q.housingLength(*q.node(cx)), q.leadOf(*q.node(cx), 4.0));
+    check(onAxis && q.leadOf(*q.node(cx), 4.0) > q.housingLength(*q.node(cx)),
+          "cylinder: the cable straight up its axis out of its flat end - bent only past the body, never out of its side");
+
+    // ---- THE PANE ----
+    Route3D route;
+    route.diameter = 4.0;
+    const QString p1 = route.addNode(RouteNodeKind::Connector, {0, 0, 5}, {0, 0, 1});
+    QJsonObject stored = route.toJson();
+    View3DPane pane;
+    pane.setRoutingStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    pane.resize(1100, 760);
+    pane.show();
+    QApplication::processEvents();
+    pane.reloadRouting(true);
+    View3DCanvas* canvas = pane.canvas();
+    canvas->setUseGpu(false);
+    // A box to measure on and see through.
+    Environment3D env;
+    env.parts.push_back({QStringLiteral("box"), QColor(), boxMesh({-10, -10, 0}, {10, 10, 5})});
+    RayIndex3D none;
+    canvas->setEnvironment(&env, &none);
+    const Mesh3D top = canvas->faceAround(0, {3, 2, 5}, {0, 0, 1});
+    bool flat = top.f.size() == 2;
+    for (const V3& v : top.v) flat = flat && std::abs(v.z - 5.0) < 0.2;
+    check(flat, "faces: the face measured on found whole - the box's top, and only it - to be lit");
+    canvas->setEnvPartOpacity(0, 0.4);
+    check(std::abs(canvas->envPartOpacity(0) - 0.4) < 1e-9, "opacity: a solid's own");
+    canvas->setEnvPartOpacity(0, 0.0);
+    check(canvas->envPartOpacity(0) == 0.0, "opacity: and back to the model's");
+    canvas->setEnvironment(nullptr, nullptr);
+    // The wheel: Move in hand, its arrows - before anything is clicked.
+    pane.setRouteTool(RouteTool::Move);
+    check(pane.wheelMoving(), "wheel: Move chosen - the wheel's arrows straight away");
+    pane.setRouteTool(RouteTool::Select);
+    check(!pane.wheelMoving(), "wheel: and the view's again with Select");
+    // A bundle from the back of a connector.
+    pane.startBranchFrom(p1, true);
+    check(pane.route().node(p1)->back && pane.routeTool() == RouteTool::Route && canvas->layingFrom() == p1,
+          "branch: from a connector's back - its cable out of the back, a bundle being laid from it");
+    auto* backBox = pane.findChild<QComboBox*>(QStringLiteral("view3dConnBack"));
+    check(backBox != nullptr, "branch: front or back chosen in the connector's panel too");
+    pane.setRouteTool(RouteTool::Select);
+
+    // ---- THE RIBBON: Route to land, the sliders named; the panels as they were after ----
+    MainWindow win;
+    win.show();
+    QApplication::processEvents();
+    QTabWidget* ribbon = nullptr;
+    int tab = -1;
+    for (QTabWidget* t : win.findChildren<QTabWidget*>())
+        for (int i = 0; i < t->count(); ++i)
+            if (t->tabText(i) == QLatin1String("3D Preview")) {
+                ribbon = t;
+                tab = i;
+            }
+    if (!ribbon) return;
+    QList<QDockWidget*> open;
+    QList<int> widths;
+    for (QDockWidget* d : win.findChildren<QDockWidget*>())
+        if (d->isVisible() && !d->isFloating()) {
+            open << d;
+            widths << d->width();
+        }
+    ribbon->setCurrentIndex(tab);
+    QApplication::processEvents();
+    auto* land = win.findChild<QToolButton*>(QStringLiteral("preview3dRouteToLand"));
+    auto* named = win.findChild<QLabel*>(QStringLiteral("preview3dEnvOpacityLabel"));
+    check(land && land->menu() && named && named->text() == QLatin1String("Opacity"), "ribbon: Route to land, and the opacity slider named");
+    ribbon->setCurrentIndex(tab - 1);
+    QApplication::processEvents();
+    bool same = !open.isEmpty();
+    for (int i = 0; i < open.size(); ++i) same = same && open[i]->isVisible() && std::abs(open[i]->width() - widths[i]) <= 2;
+    check(same, "panels: back as they were when the 3D Preview tab is left - each open, as wide");
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -8711,6 +8864,7 @@ int run_brickharness_tests() {
     ROUND(testRoundFiftySix);
     ROUND(testRoundFiftySeven);
     ROUND(testRoundFiftyEight);
+    ROUND(testRoundFiftyNine);
 #undef ROUND
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;

@@ -1033,6 +1033,7 @@ private:
     bool preview3dShownOnce_ = false;
     Qt::DockWidgetArea view3dSideArea_ = Qt::NoDockWidgetArea;   // the side the 3D view's panel was last at
     QList<QPointer<QDockWidget>> preview3dDocksHidden_;   // the panels put away while the 3D Preview tab is open
+    QByteArray preview3dLayout_;   // the panels round the drawing as they were - where, how wide, which tab in front
     QProgressBar* modelLoadBar_ = nullptr;          // a 3D model being read, at the bottom right
     // Each ribbon control and the name of the 3D view's own it stands for.
     QList<QPair<QPointer<QWidget>, QString>> preview3dMirrors_;

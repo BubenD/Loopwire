@@ -7,6 +7,7 @@
 #include <QString>
 
 #include <functional>
+#include <unordered_map>
 #include <vector>
 
 namespace Edraw_Desktop {
@@ -49,6 +50,9 @@ struct RouteNode3D {
     QString form;
     double formW = 0.0, formH = 0.0, formL = 0.0;
     QColor color;
+    // A CONNECTOR'S CABLE OUT OF ITS BACK - a connector through a panel, mated outside, its wires out behind it through
+    // the cutout. Otherwise out of its front, the way it points.
+    bool back = false;
 };
 
 // A BUNDLE between two nodes, through the points it was laid along. Its diameter, or the route's where it has none.
@@ -100,6 +104,16 @@ struct Route3D {
     int degree(const QString& id) const;
     double diameterOf(const RouteSegment3D& s) const;
     double bendRadiusOf(const RouteSegment3D& s) const;
+    // HOW FAR A CONNECTOR'S HOUSING STANDS OUT OF ITS FACE: its own length, or (Auto) from the lead and the diameter.
+    double housingLength(const RouteNode3D& n) const;
+    // ITS BODY THE CABLE COMES OUT OF: the housing out of its front, or a shorter body behind its face.
+    double bodyLength(const RouteNode3D& n) const;
+    // THE WAY A CONNECTOR'S CABLE LEAVES IT - out of its front or its back - and how far straight before it may turn:
+    // the lead, and always past its body, so it comes out of the end of the body and not through its side.
+    V3 exitOf(const RouteNode3D& n) const;
+    double leadOf(const RouteNode3D& n, double radius) const;
+    // What is laid over the solids is kept, by where it was laid from and to - forgotten when the solids change.
+    void solidsChanged() const { overCache_.clear(); }
 
     // THE MIDDLE OF A BUNDLE: out of a connector straight along its face's normal for the lead, through each point it
     // was laid along its radius off the face, into the far node - every corner turned on an arc of the bend radius,
@@ -116,10 +130,16 @@ struct Route3D {
     // The way each corner's face looks, corner for corner with corners().
     std::vector<V3> cornerNormals(const RouteSegment3D& s) const;
     // The corners laid over what they would pass through (as they are, where there are no solids).
-    std::vector<V3> overSolids(const std::vector<V3>& corners, const std::vector<V3>& normals, double radius) const;
+    // `freeFirst` / `freeLast`: the first or last stretch passes through as it is (a connector's lead, out of its body
+    // and through the cutout it is fitted in).
+    std::vector<V3> overSolids(const std::vector<V3>& corners, const std::vector<V3>& normals, double radius,
+                               bool freeFirst = false, bool freeLast = false) const;
 
 private:
     QString freshId(const QString& prefix) const;
+    // A STRETCH LAID OVER WHAT IT PASSES THROUGH, by its ends, its radius and the ways its ends' faces look. Not saved.
+    mutable std::unordered_map<std::string, std::vector<V3>> overCache_;
+    std::vector<V3> overOne(const V3& a, const V3& b, const V3& na, const V3& nb, double r) const;
 };
 
 } // namespace Edraw_Desktop

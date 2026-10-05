@@ -215,11 +215,15 @@ void MainWindow::buildView3DTab() {
         shown->setObjectName(QStringLiteral("preview3dEnvShown"));
         gl->addWidget(shown, 0, 0);
         preview3dMirrors_.append({shown, QStringLiteral("view3dEnvShown")});
+        // EACH SLIDER NAMED: how solid the model is, where the cut is.
+        auto* opacityName = fieldLabel(QStringLiteral("Opacity"), g);
+        opacityName->setObjectName(QStringLiteral("preview3dEnvOpacityLabel"));
+        gl->addWidget(opacityName, 0, 1);
         auto* opacity = new QSlider(Qt::Horizontal, g);
         opacity->setObjectName(QStringLiteral("preview3dEnvOpacity"));
         opacity->setMinimumWidth(90);
-        opacity->setToolTip(QStringLiteral("How solid the model is drawn"));
-        gl->addWidget(opacity, 0, 1);
+        opacity->setToolTip(QStringLiteral("How solid the model is drawn (a solid's own: right-click it, Opacity)"));
+        gl->addWidget(opacity, 0, 2);
         preview3dMirrors_.append({opacity, QStringLiteral("view3dEnvOpacity")});
         auto* section = new QComboBox(g);
         section->setObjectName(QStringLiteral("preview3dSection"));
@@ -229,7 +233,8 @@ void MainWindow::buildView3DTab() {
         sectionAt->setObjectName(QStringLiteral("preview3dSectionAt"));
         sectionAt->setMinimumWidth(90);
         sectionAt->setToolTip(QStringLiteral("Where the cut is"));
-        gl->addWidget(sectionAt, 1, 1);
+        gl->addWidget(fieldLabel(QStringLiteral("Cut at"), g), 1, 1);
+        gl->addWidget(sectionAt, 1, 2);
         preview3dMirrors_.append({sectionAt, QStringLiteral("view3dSectionAt")});
         row->addWidget(g);
     });
@@ -258,7 +263,28 @@ void MainWindow::buildView3DTab() {
         loose->setCheckable(true);
         preview3dMirrors_.append({loose, QStringLiteral("view3dAddLoose")});
     });
-    group(QStringLiteral("Clicks land on"), [&](QWidget* w, QHBoxLayout* row) {
+    group(QStringLiteral("Route to land"), [&](QWidget* w, QHBoxLayout* row) {
+        // ROUTE TO LAND: where the points of a route land - the model's faces, or a plane - chosen from its menu, as in the
+        // 3D view.
+        QToolButton* land = big(w, row, "preview3dRouteToLand", QStringLiteral("Route to land"), QStringLiteral("workplane"),
+                                QStringLiteral("Where the points of a route land: on the model's faces, or on a plane across X, "
+                                               "Y or Z (in the air if need be)"),
+                                [] {});
+        land->setPopupMode(QToolButton::InstantPopup);
+        auto* landMenu = new QMenu(land);
+        landMenu->setObjectName(QStringLiteral("preview3dRouteToLandMenu"));
+        land->setMenu(landMenu);
+        connect(landMenu, &QMenu::aboutToShow, this, [this, landMenu] {
+            landMenu->clear();
+            auto* box = view3dPane_ ? view3dPane_->findChild<QComboBox*>(QStringLiteral("view3dWorkPlane")) : nullptr;
+            if (!box) return;
+            for (int i = 0; i < box->count(); ++i) {
+                QAction* a = landMenu->addAction(box->itemText(i));
+                a->setCheckable(true);
+                a->setChecked(box->currentIndex() == i);
+                connect(a, &QAction::triggered, box, [box, i] { box->setCurrentIndex(i); });
+            }
+        });
         auto* g = new QWidget(w);
         auto* gl = new QGridLayout(g);
         gl->setContentsMargins(4, 2, 4, 2);
@@ -486,6 +512,7 @@ void MainWindow::showPreview3D(bool on) {
         view3dPane_->setCompact(false);
         view3dPane_->setSideDocked(false);
         preview3dDockWas_ = view3dDock_->isVisible();
+        preview3dLayout_ = saveState();
         // THE PANELS ROUND THE DRAWING PUT AWAY: the 3D view has its own on either side - what is in view on the left,
         // the route on the right. Given back as they were when the tab is left.
         preview3dDocksHidden_.clear();
@@ -524,6 +551,12 @@ void MainWindow::showPreview3D(bool on) {
         for (const QPointer<QDockWidget>& d : preview3dDocksHidden_)
             if (d) d->show();
         preview3dDocksHidden_.clear();
+        // THE PANELS AS THEY WERE: each where it was, as wide, the same tab of a group in front.
+        if (!preview3dLayout_.isEmpty()) {
+            restoreState(preview3dLayout_);
+            view3dDock_->setVisible(preview3dDockWas_);
+            preview3dLayout_.clear();
+        }
         canvas_->setFocus();
     }
 }
