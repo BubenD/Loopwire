@@ -258,10 +258,10 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
                                                        "last point back"},
         {RouteTool::Move, "view3dToolMove", "Move", "Drag a node - a connector, a part, a branch, a clip - to somewhere else "
                                                     "on the model; its bundles follow from where they were laid"},
-        {RouteTool::Stretch, "view3dToolStretch", "Stretch", "Pull a node - an end, to make the harness shorter or longer: "
-                                                             "the points its bundles were laid through go with it, the nearer "
-                                                             "the more; a clip or a branch at a bundle's other end holds it "
-                                                             "where it is"},
+        {RouteTool::Stretch, "view3dToolStretch", "Stretch", "Take hold of a connector and pull: it stays where it is, and its "
+                                                             "cable is pulled tight through it - as far as the pointer goes, "
+                                                             "up to straight - and what comes through is cut off, the cable "
+                                                             "that much shorter; a clip or a branch at its other end holds it"},
         {RouteTool::Delete, "view3dToolDelete", "Delete", "Take away the node or bundle clicked (a node takes its bundles "
                                                           "with it)"},
         {RouteTool::Measure, "view3dToolMeasure", "Measure", "A ruler: click one end, then the other - the distance straight, "
@@ -320,13 +320,16 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
         emit routeChanged();
     };
     for (QDoubleSpinBox* s : {diameter_, bend_, lead_}) connect(s, &QDoubleSpinBox::valueChanged, this, settings);
-    // PULLING: the bundles' lengths kept (a cable pulled along), or grown as a point is pulled.
-    grow_ = new QCheckBox(QStringLiteral("Grow length"), bundleRow_);
-    grow_->setObjectName(QStringLiteral("view3dGrowLength"));
-    grow_->setToolTip(QStringLiteral("On: a point pulled (Move, Stretch, or dragged with the view locked) makes its bundles longer "
-                                     "or shorter. Off: they keep their lengths - the cable is pulled along behind the point, its "
-                                     "far ends held, and goes no further than it reaches"));
-    connect(grow_, &QCheckBox::toggled, this, [this](bool on) { canvas_->setGrowLength(on); });
+    // PULLING: the bundles' lengths kept (a cable pulled along), or loose added where a point is pulled.
+    grow_ = new QToolButton(bundleRow_);
+    grow_->setObjectName(QStringLiteral("view3dAddLoose"));
+    grow_->setText(QStringLiteral("Add loose"));
+    grow_->setCheckable(true);
+    grow_->setAutoRaise(true);
+    grow_->setToolTip(QStringLiteral("On: the point pulled - a cable taken hold of with the view locked, or a node moved - goes "
+                                     "alone, and the cable is made longer there, the rest of it where it was. Off: a cable keeps "
+                                     "its length - pulled along behind the point, its far ends held, no further than it reaches"));
+    connect(grow_, &QToolButton::toggled, this, [this](bool on) { canvas_->setGrowLength(on); });
     br->addWidget(grow_);
     undo_ = button(rr, "view3dRouteUndo", QStringLiteral("Undo"), QStringLiteral("Take back the last change to the route (Ctrl+Z)"),
                    [this] { undoRoute(); });
@@ -825,6 +828,7 @@ void View3DPane::applyIcons() {
         {"view3dToolDelete", "delete"},   {"view3dRouteUndo", "undo"},    {"view3dLinkPart", "link"},
         {"view3dUnlinkPart", "unlink"},   {"view3dLengthsToHarness", "lengths"}, {"view3dWorkPlaneHere", "workplane"},
         {"view3dToolMeasure", "measure"}, {"view3dFlip", "flip"},         {"view3dParts", "parts"},
+        {"view3dAddLoose", "loose"},
     };
     for (const auto& i : icons)
         if (auto* b = findChild<QToolButton*>(QLatin1String(i.name))) {
@@ -1616,11 +1620,15 @@ void View3DCanvas::setRouteTool(RouteTool tool) {
                                                                            : Qt::CrossCursor);
 }
 
-bool View3DCanvas::keepLength() const { return !grow_ && route_ && (dragKind_ == 1 || dragKind_ == 2 || dragKind_ == 4 || dragKind_ == 5); }
+bool View3DCanvas::keepLength() const { return !grow_ && route_ && (dragKind_ == 1 || dragKind_ == 2 || dragKind_ == 5); }
 
 void View3DCanvas::beginKeepLength() {
     kept_.clear();
     if (!route_) return;
+    // EACH BUNDLE'S LENGTH AS IT WAS DRAWN, before it is given more points to bend at - which round its bends
+    // differently, and would draw it longer or shorter by themselves.
+    std::vector<std::pair<QString, double>> drawn;
+    for (const RouteSegment3D& s : route_->segments) drawn.push_back({s.id, route_->length(s)});
     // A CABLE BENDS ALONG ITS LENGTH: a bundle laid through few points is given more, so it can be pulled round.
     auto bendable = [&](RouteSegment3D& s) {
         const RouteNode3D* a = route_->node(s.a);
@@ -1680,51 +1688,124 @@ void View3DCanvas::beginKeepLength() {
             for (int i = static_cast<int>(s.via.size()) - 1; i >= 0; --i) order.push_back(i);
         chain(s, node->at, order, far->at);
     }
+    for (const Kept& k : kept_) {
+        const RouteSegment3D* s = route_->segment(k.segment);
+        if (!s) continue;
+        double steps = 0.0;
+        for (double d : k.step) steps += d;
+        auto had = std::find_if(keptLen_.begin(), keptLen_.end(), [&](const KeptLength& l) { return l.segment == k.segment; });
+        if (had != keptLen_.end()) had->steps += steps;
+        else {
+            double was = route_->length(*s);
+            for (const auto& [id, length] : drawn)
+                if (id == k.segment) was = length;
+            keptLen_.push_back({k.segment, was, steps, 1.0});
+        }
+    }
+}
+
+void View3DCanvas::layKept(const Kept& k, const V3& start, double scale) {
+    // EACH BUNDLE PULLED ALONG BEHIND IT, every step as long as it was (times `scale`), its far end where it holds (FABRIK).
+    RouteSegment3D* s = route_->segment(k.segment);
+    if (!s) return;
+    std::vector<V3> p{start};
+    for (int i : k.via) p.push_back(s->via[static_cast<size_t>(i)].at);
+    p.push_back(k.anchor);
+    const size_t n = p.size() - 1;
+    auto toward = [](const V3& from, const V3& to, double d) {
+        const V3 dir = to - from;
+        return dir.length() < 1e-12 ? from : from + dir.normalized() * d;
+    };
+    for (int iter = 0; iter < 12; ++iter) {
+        p[0] = start;
+        for (size_t i = 1; i <= n; ++i) p[i] = toward(p[i - 1], p[i], k.step[i - 1] * scale);
+        p[n] = k.anchor;
+        for (size_t i = n; i-- > 0;) p[i] = toward(p[i + 1], p[i], k.step[i] * scale);
+        if ((p[0] - start).length() < 1e-4) break;
+    }
+    for (size_t j = 0; j < k.via.size(); ++j) s->via[static_cast<size_t>(k.via[j])].at = p[j + 1];
+}
+
+void View3DCanvas::tightenKept(double by) {
+    stretchCut_ = 0.0;
+    const RouteNode3D* node = route_ ? route_->node(dragId_) : nullptr;
+    if (!node) return;
+    const V3 start = node->at;
+    for (KeptLength& l : keptLen_) {
+        const RouteSegment3D* s = route_->segment(l.segment);
+        if (!s || l.steps < 1e-9) continue;
+        // NO SHORTER THAN STRAIGHT ACROSS to where its other end holds.
+        double tight = 0.0;
+        for (const Kept& k : kept_)
+            if (k.segment == l.segment) tight = std::max(tight, (k.anchor - start).length() / l.steps);
+        tight = std::min(1.0, tight * 1.0001);
+        const double goal = l.length - by;
+        // HOW MUCH SHORTER IT IS DRAWN for its steps laid shorter - its bends round them make it less than one for one -
+        // taken from the last two tries (secant).
+        double slope = l.steps, lastScale = -1.0, lastNow = 0.0;
+        for (int fit = 0; fit < 10; ++fit) {
+            l.scale = std::clamp(l.scale, tight, 1.0);
+            for (const Kept& k : kept_)
+                if (k.segment == l.segment) layKept(k, start, l.scale);
+            const double now = route_->length(*s);
+            if (std::abs(now - goal) < 0.05) break;
+            if (lastScale >= 0.0 && std::abs(l.scale - lastScale) > 1e-9) {
+                const double measured = (now - lastNow) / (l.scale - lastScale);
+                if (measured > l.steps * 0.02) slope = measured;
+            }
+            if ((l.scale <= tight && now > goal) || (l.scale >= 1.0 && now < goal)) break;   // as far as it goes
+            lastScale = l.scale;
+            lastNow = now;
+            l.scale += (goal - now) / slope;
+        }
+        stretchCut_ += l.length - route_->length(*s);
+    }
 }
 
 void View3DCanvas::pullKept(V3 target) {
     if (!route_ || kept_.empty()) return;
-    // NO FURTHER THAN THE CABLE REACHES from where each bundle holds.
-    for (int pass = 0; pass < 4; ++pass)
-        for (const Kept& k : kept_) {
-            double reach = 0.0;
-            for (double d : k.step) reach += d;
-            const V3 off = target - k.anchor;
-            if (off.length() > reach && off.length() > 1e-9) target = k.anchor + off.normalized() * reach;
+    auto scaleOf = [&](const QString& id) {
+        for (const KeptLength& l : keptLen_)
+            if (l.segment == id) return l.scale;
+        return 1.0;
+    };
+    // ITS LENGTH AS IT IS DRAWN KEPT: bends and what it is laid over draw a cable longer or shorter than the points it is
+    // laid through, so its steps are laid longer or shorter until it is drawn as long as it was.
+    for (int fit = 0; fit < 4; ++fit) {
+        V3 t = target;
+        // NO FURTHER THAN THE CABLE REACHES from where each bundle holds.
+        for (int pass = 0; pass < 4; ++pass)
+            for (const Kept& k : kept_) {
+                double reach = 0.0;
+                for (double d : k.step) reach += d;
+                reach *= scaleOf(k.segment);
+                const V3 off = t - k.anchor;
+                if (off.length() > reach && off.length() > 1e-9) t = k.anchor + off.normalized() * reach;
+            }
+        for (const Kept& k : kept_) layKept(k, t, scaleOf(k.segment));
+        if (dragKind_ == 2) {
+            if (RouteSegment3D* s = route_->segment(dragId_))
+                if (dragVia_ >= 0 && dragVia_ < static_cast<int>(s->via.size())) s->via[static_cast<size_t>(dragVia_)].at = t;
+        } else if (RouteNode3D* n = route_->node(dragId_)) {
+            n->at = t;
         }
-    // EACH BUNDLE PULLED ALONG BEHIND IT, every step as long as it was, its far end where it holds (FABRIK).
-    for (const Kept& k : kept_) {
-        RouteSegment3D* s = route_->segment(k.segment);
-        if (!s) continue;
-        std::vector<V3> p{target};
-        for (int i : k.via) p.push_back(s->via[static_cast<size_t>(i)].at);
-        p.push_back(k.anchor);
-        const size_t n = p.size() - 1;
-        auto toward = [](const V3& from, const V3& to, double d) {
-            const V3 dir = to - from;
-            return dir.length() < 1e-12 ? from : from + dir.normalized() * d;
-        };
-        for (int iter = 0; iter < 12; ++iter) {
-            p[0] = target;
-            for (size_t i = 1; i <= n; ++i) p[i] = toward(p[i - 1], p[i], k.step[i - 1]);
-            p[n] = k.anchor;
-            for (size_t i = n; i-- > 0;) p[i] = toward(p[i + 1], p[i], k.step[i]);
-            if ((p[0] - target).length() < 1e-4) break;
+        bool close = true;
+        for (KeptLength& l : keptLen_) {
+            const RouteSegment3D* s = route_->segment(l.segment);
+            if (!s || l.steps < 1e-9) continue;
+            const double now = route_->length(*s);
+            if (std::abs(now - l.length) > 0.05) close = false;
+            l.scale = std::clamp(l.scale + (l.length - now) / l.steps, 0.3, 3.0);
         }
-        for (size_t j = 0; j < k.via.size(); ++j) s->via[static_cast<size_t>(k.via[j])].at = p[j + 1];
-    }
-    if (dragKind_ == 2) {
-        if (RouteSegment3D* s = route_->segment(dragId_))
-            if (dragVia_ >= 0 && dragVia_ < static_cast<int>(s->via.size())) s->via[static_cast<size_t>(dragVia_)].at = target;
-    } else if (RouteNode3D* n = route_->node(dragId_)) {
-        n->at = target;
+        if (close) break;
     }
 }
 
 bool View3DCanvas::beginNodeDrag(const QPointF& at, bool stretch) {
     dragKind_ = 0;
     dragStarted_ = false;
-    stretched_.clear();
+    kept_.clear();
+    keptLen_.clear();
     if (!route_) return false;
     const QString id = nodeAt(at);
     const RouteNode3D* node = route_->node(id);
@@ -1738,25 +1819,6 @@ bool View3DCanvas::beginNodeDrag(const QPointF& at, bool stretch) {
     dragFrom_ = node->at;
     selNode_ = id;
     selSegment_.clear();
-    if (stretch)
-        for (const RouteSegment3D& s : route_->segments) {
-            if (s.a != id && s.b != id) continue;
-            // HOW FAR EACH LAID POINT GOES: by how far along the bundle it is, from its other end (none) to this one (all).
-            const RouteNode3D* a = route_->node(s.a);
-            const RouteNode3D* b = route_->node(s.b);
-            if (!a || !b) continue;
-            std::vector<V3> pts{a->at};
-            for (const RouteVia3D& v : s.via) pts.push_back(v.at);
-            pts.push_back(b->at);
-            std::vector<double> along{0.0};
-            for (size_t i = 1; i < pts.size(); ++i) along.push_back(along.back() + (pts[i] - pts[i - 1]).length());
-            const double total = std::max(1e-9, along.back());
-            Stretched st;
-            st.segment = s.id;
-            st.was = s.via;
-            for (size_t i = 0; i < s.via.size(); ++i) st.share.push_back(s.a == id ? 1.0 - along[i + 1] / total : along[i + 1] / total);
-            stretched_.push_back(std::move(st));
-        }
     // Off the model, it goes across the picture at its own depth.
     V3 right, up, forward;
     cam_.axes(right, up, forward);
@@ -2412,6 +2474,18 @@ void View3DCanvas::mouseMoveEvent(QMouseEvent* e) {
         }
         const QPoint dd = now - last_;
         last_ = now;
+        // STRETCHED: the node where it is, its cables pulled tight through it as far as the pointer has gone.
+        if (dragKind_ == 4) {
+            if (kept_.empty()) beginKeepLength();
+            const QPoint gone = now - pressedAt_;
+            tightenKept(std::hypot(gone.x(), gone.y()) * dragPerPixel_);
+            if (const RouteNode3D* n = route_->node(dragId_))
+                emit message(QStringLiteral("%1: %2 mm of cable pulled through and cut off").arg(n->label).arg(stretchCut_, 0, 'f', 1));
+            routeDirty_ = true;
+            update();
+            emit routeMoving();
+            return;
+        }
         V3 right, up, forward;
         cam_.axes(right, up, forward);
         const V3 by = right * (dd.x() * dragPerPixel_) - up * (dd.y() * dragPerPixel_);
@@ -2428,7 +2502,7 @@ void View3DCanvas::mouseMoveEvent(QMouseEvent* e) {
             }
             V3 target = held + by;
             V3 p, nn;
-            if ((dragKind_ == 4 || dragKind_ == 5) && surfaceAt(e->position(), p, nn)) {
+            if (dragKind_ == 5 && surfaceAt(e->position(), p, nn)) {
                 target = p;
                 if (RouteNode3D* n = route_->node(dragId_)) n->normal = nn.normalized();
             }
@@ -2438,7 +2512,7 @@ void View3DCanvas::mouseMoveEvent(QMouseEvent* e) {
             emit routeMoving();
             return;
         }
-        if (dragKind_ == 4 || dragKind_ == 5) {
+        if (dragKind_ == 5) {
             // ON THE MODEL WHERE THE POINTER IS - or, off it, across the picture.
             if (RouteNode3D* n = route_->node(dragId_)) {
                 V3 p, nn;
@@ -2447,13 +2521,6 @@ void View3DCanvas::mouseMoveEvent(QMouseEvent* e) {
                     n->normal = nn.normalized();
                 } else {
                     n->at = n->at + by;
-                }
-                if (dragKind_ == 4) {
-                    const V3 moved = n->at - dragFrom_;
-                    for (const Stretched& st : stretched_)
-                        if (RouteSegment3D* s = route_->segment(st.segment))
-                            for (size_t i = 0; i < s->via.size() && i < st.was.size(); ++i)
-                                s->via[i].at = st.was[i].at + moved * st.share[i];
                 }
             }
             routeDirty_ = true;
@@ -2476,10 +2543,14 @@ void View3DCanvas::mouseMoveEvent(QMouseEvent* e) {
     if (viewLocked_) return;
     const QPoint d = now - last_;
     last_ = now;
-    if (dragging_ == Qt::LeftButton && (e->modifiers() & Qt::ShiftModifier)) {
+    // TURNED WITH THE WHEEL BUTTON held (Shift: rolled); moved with the right button, or Ctrl and the wheel button. The left
+    // button is for picking and placing, and does not turn the view.
+    const bool wheelButton = dragging_ == Qt::MiddleButton && !(e->modifiers() & Qt::ControlModifier);
+    if (dragging_ == Qt::LeftButton) return;
+    if (wheelButton && (e->modifiers() & Qt::ShiftModifier)) {
         // ROLLED round the way it looks.
         cam_.rollDeg = wrapDegrees(cam_.rollDeg + d.x() * 0.4);
-    } else if (dragging_ == Qt::LeftButton) {
+    } else if (wheelButton) {
         // TURNED: round the upright, and up and over - all the way round, upside down past the top. Upside down, a drag
         // to the right still turns the picture to the right.
         const double over = std::cos(cam_.pitchDeg * M_PI / 180.0) < 0.0 ? -1.0 : 1.0;
@@ -2503,8 +2574,8 @@ void View3DCanvas::mouseReleaseEvent(QMouseEvent* e) {
         dragKind_ = 0;
         dragStarted_ = false;
         dragging_ = Qt::NoButton;
-        stretched_.clear();
         kept_.clear();
+        keptLen_.clear();
         setCursor(tool_ == RouteTool::Move || tool_ == RouteTool::Stretch ? Qt::SizeAllCursor : Qt::OpenHandCursor);
         if (changed) emit routeChanged();
         return;

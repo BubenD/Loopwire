@@ -173,7 +173,7 @@ void MainWindow::buildView3DTab() {
             {RouteTool::Route, "preview3dRoute", "Route", "route", "Lay a bundle from node to node over the faces clicked"},
             {RouteTool::Move, "preview3dMove", "Move", "move", "Drag a node to somewhere else on the model"},
             {RouteTool::Stretch, "preview3dStretch", "Stretch", "stretch",
-             "Pull a node - an end - to make the harness shorter or longer; clips and branches hold it"},
+             "Pull a connector: it stays, its cable pulled tight through it and the rest cut off"},
             {RouteTool::Delete, "preview3dDelete", "Delete", "delete", "Take away the node or bundle clicked"},
             {RouteTool::Measure, "preview3dMeasure", "Measure", "measure",
              "A ruler: one end, then the other - the distance straight, and along and across each axis"},
@@ -206,11 +206,13 @@ void MainWindow::buildView3DTab() {
             gl->addWidget(s, i, 1);
             preview3dMirrors_.append({s, QString::fromLatin1(sizes[i][2])});
         }
-        auto* grow = new QCheckBox(QStringLiteral("Grow length"), g);
-        grow->setObjectName(QStringLiteral("preview3dGrow"));
-        gl->addWidget(grow, 0, 2);
-        preview3dMirrors_.append({grow, QStringLiteral("view3dGrowLength")});
         row->addWidget(g);
+        QToolButton* loose = big(w, row, "preview3dAddLoose", QStringLiteral("Add loose"), QStringLiteral("loose"),
+                                 QStringLiteral("On: a cable pulled is made longer where it is pulled, the rest of it left "
+                                                "where it is. Off: a cable keeps its length"),
+                                 [] {});
+        loose->setCheckable(true);
+        preview3dMirrors_.append({loose, QStringLiteral("view3dAddLoose")});
     });
     group(QStringLiteral("Clicks land on"), [&](QWidget* w, QHBoxLayout* row) {
         auto* g = new QWidget(w);

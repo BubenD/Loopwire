@@ -5477,12 +5477,17 @@ void testRoundThirtySix() {
               "3d pane: built from the drawing, and says what it shows");
         View3DCanvas* canvas = pane.canvas();
         const double yaw = canvas->camera().yawDeg, dist = canvas->camera().distance;
-        mouse(canvas, QEvent::MouseButtonPress, QPointF(100, 100));
-        QMouseEvent mv(QEvent::MouseMove, QPointF(160, 120), canvas->mapToGlobal(QPointF(160, 120)), Qt::NoButton, Qt::LeftButton,
+        // Turned with the wheel button held.
+        QMouseEvent down(QEvent::MouseButtonPress, QPointF(100, 100), canvas->mapToGlobal(QPointF(100, 100)), Qt::MiddleButton,
+                         Qt::MiddleButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &down);
+        QMouseEvent mv(QEvent::MouseMove, QPointF(160, 120), canvas->mapToGlobal(QPointF(160, 120)), Qt::NoButton, Qt::MiddleButton,
                        Qt::NoModifier);
         QApplication::sendEvent(canvas, &mv);
-        mouse(canvas, QEvent::MouseButtonRelease, QPointF(160, 120));
-        check(std::abs(canvas->camera().yawDeg - yaw) > 1.0, "3d pane: dragged, it turns");
+        QMouseEvent up(QEvent::MouseButtonRelease, QPointF(160, 120), canvas->mapToGlobal(QPointF(160, 120)), Qt::MiddleButton,
+                       Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &up);
+        check(std::abs(canvas->camera().yawDeg - yaw) > 1.0, "3d pane: dragged with the wheel button, it turns");
         QWheelEvent wheel(QPointF(100, 100), canvas->mapToGlobal(QPointF(100, 100)), QPoint(), QPoint(0, 120), Qt::NoButton,
                           Qt::NoModifier, Qt::NoScrollPhase, false);
         QApplication::sendEvent(canvas, &wheel);
@@ -6577,17 +6582,25 @@ void testRoundFortySix() {
             QMouseEvent e(t, at, canvas->mapToGlobal(at), b, held, mods);
             QApplication::sendEvent(canvas, &e);
         };
+        // Turned with the wheel button held (the left button picks, and does not turn it).
+        send(QEvent::MouseButtonPress, c, Qt::MiddleButton, Qt::MiddleButton);
+        for (int i = 1; i <= 20; ++i) send(QEvent::MouseMove, c + QPointF(0, i * 12), Qt::NoButton, Qt::MiddleButton);
+        send(QEvent::MouseButtonRelease, c + QPointF(0, 240), Qt::MiddleButton, Qt::NoButton);
+        const double turned = canvas->camera().pitchDeg;
+        const Camera3D was = canvas->camera();
         send(QEvent::MouseButtonPress, c, Qt::LeftButton, Qt::LeftButton);
-        for (int i = 1; i <= 20; ++i) send(QEvent::MouseMove, c + QPointF(0, i * 12), Qt::NoButton, Qt::LeftButton);
-        send(QEvent::MouseButtonRelease, c + QPointF(0, 240), Qt::LeftButton, Qt::NoButton);
+        for (int i = 1; i <= 10; ++i) send(QEvent::MouseMove, c + QPointF(i * 12, 0), Qt::NoButton, Qt::LeftButton);
+        send(QEvent::MouseButtonRelease, c + QPointF(120, 0), Qt::LeftButton, Qt::NoButton);
+        check(std::abs(canvas->camera().yawDeg - was.yawDeg) < 1e-9 && std::abs(canvas->camera().pitchDeg - turned) < 1e-9,
+              "3d camera: a drag with the left button does not turn the view - the wheel button does");
         auto* tilt = pane.findChild<QSpinBox*>(QStringLiteral("view3dTilt"));
         std::printf("  3d camera: dragged to pitch %.1f, the box says %d\n", canvas->camera().pitchDeg, tilt ? tilt->value() : -999);
         check(canvas->camera().pitchDeg > 100.0 && tilt && tilt->value() == std::lround(canvas->camera().pitchDeg),
               "3d camera: a drag tilts it on past the top, and the Tilt box follows");
         const double yaw = canvas->camera().yawDeg;
-        send(QEvent::MouseButtonPress, c, Qt::LeftButton, Qt::LeftButton, Qt::ShiftModifier);
-        for (int i = 1; i <= 10; ++i) send(QEvent::MouseMove, c + QPointF(i * 10, 0), Qt::NoButton, Qt::LeftButton, Qt::ShiftModifier);
-        send(QEvent::MouseButtonRelease, c + QPointF(100, 0), Qt::LeftButton, Qt::NoButton, Qt::ShiftModifier);
+        send(QEvent::MouseButtonPress, c, Qt::MiddleButton, Qt::MiddleButton, Qt::ShiftModifier);
+        for (int i = 1; i <= 10; ++i) send(QEvent::MouseMove, c + QPointF(i * 10, 0), Qt::NoButton, Qt::MiddleButton, Qt::ShiftModifier);
+        send(QEvent::MouseButtonRelease, c + QPointF(100, 0), Qt::MiddleButton, Qt::NoButton, Qt::ShiftModifier);
         check(std::abs(canvas->camera().rollDeg - 40.0) < 1e-6 && std::abs(canvas->camera().yawDeg - yaw) < 1e-9,
               "3d camera: Shift and a drag rolls it, and only rolls it");
         auto* turn = pane.findChild<QSpinBox*>(QStringLiteral("view3dTurn"));
@@ -7008,8 +7021,20 @@ void testRoundFortyNine() {
 
     // ---- UNLOCKED, A DRAG TURNS THE VIEW; LOCKED, IT DOES NOT ----
     const double yaw0 = canvas->camera().yawDeg;
-    drag(QPointF(canvas->width() * 0.5, canvas->height() * 0.2), QPointF(60, 0));
-    check(std::abs(canvas->camera().yawDeg - yaw0) > 1.0, "lock: unlocked, a drag on nothing turns the view");
+    {
+        const QPointF from(canvas->width() * 0.5, canvas->height() * 0.2);
+        QMouseEvent down(QEvent::MouseButtonPress, from, canvas->mapToGlobal(from), Qt::MiddleButton, Qt::MiddleButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &down);
+        for (int i = 1; i <= 6; ++i) {
+            const QPointF at = from + QPointF(10.0 * i, 0);
+            QMouseEvent mv(QEvent::MouseMove, at, canvas->mapToGlobal(at), Qt::NoButton, Qt::MiddleButton, Qt::NoModifier);
+            QApplication::sendEvent(canvas, &mv);
+        }
+        QMouseEvent up(QEvent::MouseButtonRelease, from + QPointF(60, 0), canvas->mapToGlobal(from + QPointF(60, 0)), Qt::MiddleButton,
+                       Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &up);
+    }
+    check(std::abs(canvas->camera().yawDeg - yaw0) > 1.0, "lock: unlocked, a drag with the wheel button on nothing turns the view");
     canvas->viewFrom(QStringLiteral("top"));
     auto* lock = pane.findChild<QToolButton*>(QStringLiteral("view3dLock"));
     if (lock) lock->click();
@@ -7416,7 +7441,7 @@ void testRoundFiftyTwo() {
     const QString c1 = r.addNode(RouteNodeKind::Clip, {0, 0, 0}, {0, 0, 1});
     const QString x2 = r.addNode(RouteNodeKind::Connector, {60, 0, 0}, {0, 0, 1});
     const QString s1 = r.addSegment(x1, c1, {{{-30, 0, 0}, {0, 0, 1}}});
-    const QString s2 = r.addSegment(c1, x2, {{{30, 0, 0}, {0, 0, 1}}});
+    const QString s2 = r.addSegment(c1, x2, {{{30, 30, 0}, {0, 0, 1}}});   // with some slack in it
     QJsonObject stored = r.toJson();
     View3DPane pane;
     pane.setRoutingStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
@@ -7448,35 +7473,42 @@ void testRoundFiftyTwo() {
         const RouteNode3D* n = route.node(id);
         return screen(n->at + n->normal * (n->kind == RouteNodeKind::Connector ? route.lead * 0.5 : route.diameter * 0.5));
     };
-    // Stretched longer: Grow length on (off, the cable keeps its length - round fifty-three).
-    pane.findChild<QCheckBox*>(QStringLiteral("view3dGrowLength"))->setChecked(true);
     const double before = route.length(*route.segment(s2));
-    // STRETCHED: X2 pulled out along the ground from 60 to 90.
+    const double s1was = route.length(*route.segment(s1));
+    // STRETCHED: X2 taken hold of and pulled 10 mm - it stays where it is, its cable pulled tight through it, and what
+    // comes through cut off.
     pane.setRouteTool(RouteTool::Stretch);
     const QPointF grip = shown(x2);
-    drag(grip, grip + (screen({90, 0, 0}) - screen({60, 0, 0})));
+    drag(grip, grip + (screen({70, 0, 0}) - screen({60, 0, 0})));
     const RouteNode3D* end = route.node(x2);
     const RouteSegment3D* out = route.segment(s2);
-    std::printf("  stretch: X2 to %.1f, its bundle's laid point to %.1f, %.1f mm long (was %.1f)\n", end->at.x, out->via[0].at.x,
-                route.length(*out), before);
-    check(end->at.x > 80.0 && std::abs(out->via[0].at.x - (30.0 + (end->at.x - 60.0) / 2.0)) < 0.01,
-          "stretch: the end pulled out, its bundle's laid point going half as far - half way to the clip");
-    check(route.node(c1)->at.length() < 1e-9 && std::abs(route.segment(s1)->via[0].at.x + 30.0) < 1e-9,
+    std::printf("  stretch: X2 at %.1f, %.1f mm long (was %.1f), its laid point at %.1f, %.1f\n", end->at.x, route.length(*out), before,
+                out->via[0].at.x, out->via[0].at.y);
+    check(std::abs(end->at.x - 60.0) < 1e-9 && std::abs(route.length(*out) - (before - 10.0)) < 0.5,
+          "stretch: X2 stays where it is - its cable pulled tight through it, as much shorter as it was pulled");
+    check(route.node(c1)->at.length() < 1e-9 && std::abs(route.length(*route.segment(s1)) - s1was) < 1e-9,
           "stretch: the clip holds the harness - it and the bundle beyond it stay where they are");
-    check(route.length(*out) > before + 25.0, "stretch: the bundle as much longer as the end was pulled");
+    // AS FAR AS STRAIGHT, NO FURTHER.
+    drag(grip, grip + (screen({200, 0, 0}) - screen({60, 0, 0})));
+    std::printf("  stretch: pulled hard - %.1f mm long, its laid point at %.1f, %.1f\n", route.length(*out), out->via[0].at.x, out->via[0].at.y);
+    check(std::abs(out->via[0].at.y) < 1.5 && route.length(*out) > 60.0 && std::abs(end->at.x - 60.0) < 1e-9,
+          "stretch: pulled hard - tight and straight, and no shorter");
     // A CLIP IS NOT STRETCHED - it holds; it says so.
     drag(shown(c1), shown(c1) + QPointF(0, 40));
     check(route.node(c1)->at.length() < 1e-9 &&
               pane.findChild<QLabel*>(QStringLiteral("view3dStatus"))->text().contains(QStringLiteral("clip")),
           "stretch: a clip is not pulled - it holds the harness, and says so");
     pane.undoRoute();
-    check(std::abs(route.node(x2)->at.x - 60.0) < 1e-6 && std::abs(route.segment(s2)->via[0].at.x - 30.0) < 1e-6,
-          "stretch: undone in one step");
+    pane.undoRoute();
+    check(std::abs(route.length(*route.segment(s2)) - before) < 1e-6 && std::abs(route.segment(s2)->via[0].at.y - 30.0) < 1e-6,
+          "stretch: undone a pull at a time");
+    // Moved alone, the cable left where it was laid: Add loose on (off, the cable keeps its length - round fifty-three).
+    pane.findChild<QAbstractButton*>(QStringLiteral("view3dAddLoose"))->setChecked(true);
     // MOVED: the clip somewhere else, its bundles' laid points left where they are.
     pane.setRouteTool(RouteTool::Move);
     drag(shown(c1), shown(c1) + (screen({0, 20, 0}) - screen({0, 0, 0})));
     check(std::abs(route.node(c1)->at.y - 20.0) < 1.0 && std::abs(route.segment(s2)->via[0].at.x - 30.0) < 1e-6 &&
-              std::abs(route.segment(s2)->via[0].at.y) < 1e-6,
+              std::abs(route.segment(s2)->via[0].at.y - 30.0) < 1e-6,
           "move: a node moved on the model, the points its bundles were laid through left as they were");
     // THE BUTTONS: pictures with their names.
     for (const char* name : {"view3dToolStretch", "view3dToolMove", "view3dFit", "view3dEnvLoad"}) {
@@ -7570,8 +7602,9 @@ void testRoundFiftyThree() {
         const RouteNode3D* n = route.node(id);
         return screen(n->at + n->normal * (route.lead * 0.5));
     };
-    check(!pane.findChild<QCheckBox*>(QStringLiteral("view3dGrowLength"))->isChecked() && !canvas->growLength(),
-          "pull: Grow length off as it starts - a cable keeps its length");
+    check(!pane.findChild<QAbstractButton*>(QStringLiteral("view3dAddLoose"))->isChecked() && !canvas->growLength(),
+          "pull: Add loose off as it starts - a cable keeps its length");
+    const double drawnWas = route.length(*route.segment(s));
     const double before = laid();
     pane.setRouteTool(RouteTool::Move);
     // Out past its reach: it goes no further than the cable does.
@@ -7582,13 +7615,14 @@ void testRoundFiftyThree() {
     drag(grip(x2), grip(x2) + (screen({20, 40, 0}) - screen({60, 0, 0})));
     std::printf("  pull: X2 moved to %.1f, %.1f - laid %.1f through %d point(s)\n", route.node(x2)->at.x, route.node(x2)->at.y, laid(),
                 static_cast<int>(route.segment(s)->via.size()));
-    check(route.node(x2)->at.y > 20.0 && std::abs(laid() - before) < before * 0.01 && route.node(x1)->at.x == -60.0,
-          "pull: moved in and across - the cable bent round, as long as it was, its other end held");
-    // GROW LENGTH: the cable longer for being pulled.
-    pane.findChild<QCheckBox*>(QStringLiteral("view3dGrowLength"))->setChecked(true);
+    std::printf("  pull: drawn %.2f mm, was %.2f\n", route.length(*route.segment(s)), drawnWas);
+    check(route.node(x2)->at.y > 20.0 && std::abs(route.length(*route.segment(s)) - drawnWas) < 0.2 && route.node(x1)->at.x == -60.0,
+          "pull: moved in and across - the cable bent round, drawn as long as it was (its bends and all), its other end held");
+    // ADD LOOSE: the cable longer for being pulled.
+    pane.findChild<QAbstractButton*>(QStringLiteral("view3dAddLoose"))->setChecked(true);
     const double grown = laid();
     drag(grip(x2), grip(x2) + (screen({120, 40, 0}) - screen({20, 40, 0})));
-    check(canvas->growLength() && laid() > grown + 30.0, "pull: Grow length on - pulled out, the cable longer");
+    check(canvas->growLength() && laid() > grown + 30.0, "pull: Add loose on - pulled out, the cable longer");
 
     // ---- THE PART'S 3D MODEL ----
 #ifdef EDRAW_HAVE_OCCT

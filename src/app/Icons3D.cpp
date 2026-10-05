@@ -292,6 +292,22 @@ void draw(QPainter& p, const QString& k, const QColor& ink, const QColor& acc) {
         p.drawEllipse(QPointF(16, 16), 4, 4);
         return;
     }
+    if (k == QLatin1String("loose")) {
+        // A cable out of a connector with a loop of slack in it, a plus over it.
+        p.setPen(QPen(ink, 1.4));
+        p.setBrush(QColor(205, 208, 214));
+        p.drawRect(QRectF(2, 19, 6, 9));
+        p.setPen(accLine);
+        p.setBrush(Qt::NoBrush);
+        QPainterPath slack(QPointF(8, 23.5));
+        slack.cubicTo(QPointF(16, 23.5), QPointF(22, 14), QPointF(17, 12));
+        slack.cubicTo(QPointF(12, 10), QPointF(12, 23.5), QPointF(29, 23.5));
+        p.drawPath(slack);
+        p.setPen(QPen(ink, 2.0, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(QPointF(25, 4), QPointF(25, 12));
+        p.drawLine(QPointF(21, 8), QPointF(29, 8));
+        return;
+    }
     if (k == QLatin1String("stretch")) {
         p.setPen(accLine);
         p.drawLine(4, 22, 18, 22);

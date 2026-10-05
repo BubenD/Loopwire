@@ -212,7 +212,7 @@ private:
     std::function<QString()> drawingDir_;
     QWidget* routeRow_ = nullptr;
     QWidget* bundleRow_ = nullptr;
-    QCheckBox* grow_ = nullptr;
+    QToolButton* grow_ = nullptr;   // Add loose
     QButtonGroup* tools_ = nullptr;
     QDoubleSpinBox* diameter_ = nullptr;
     QDoubleSpinBox* bend_ = nullptr;
@@ -436,15 +436,11 @@ private:
     bool skipPart(int part, const V3& point) const;
     // Locked, and what a drag is moving. Not saved.
     bool viewLocked_ = false;
-    // A NODE TAKEN HOLD OF WITH MOVE OR STRETCH: where it was, and - stretching - each of its bundles' laid points as
-    // they were, with how far each goes with the node (one at the node, none at the bundle's other end).
+    // A NODE TAKEN HOLD OF WITH MOVE OR STRETCH: where it was. Stretched, it stays where it is: its bundles are pulled
+    // tight through it, as far as the pointer goes, and what comes through is cut off.
     bool beginNodeDrag(const QPointF& at, bool stretch);
-    struct Stretched {
-        QString segment;
-        std::vector<RouteVia3D> was;
-        std::vector<double> share;
-    };
-    std::vector<Stretched> stretched_;
+    void tightenKept(double by);
+    double stretchCut_ = 0.0;
     // PULLED, ITS LENGTH KEPT: from the point taken hold of out to the node at each bundle's far end, the points in
     // between (by their places in the bundle's laid points), the far node where it holds, and each step's length -
     // the cable laid as a cable is, pulled along behind the point and no longer than it was.
@@ -455,13 +451,23 @@ private:
         std::vector<double> step;   // from the point held to via[0], ..., to the anchor
     };
     std::vector<Kept> kept_;
+    // EACH BUNDLE'S LENGTH AS DRAWN when it was taken hold of - with its bends and what it is laid over - and how much
+    // longer or shorter than they were its steps are laid, to keep it so.
+    struct KeptLength {
+        QString segment;
+        double length = 0.0;
+        double steps = 0.0;
+        double scale = 1.0;
+    };
+    std::vector<KeptLength> keptLen_;
     bool keepLength() const;
     void beginKeepLength();
     void pullKept(V3 target);
+    void layKept(const Kept& k, const V3& start, double scale);
     bool grow_ = false;
 public:
-    // PULLING GROWS THE CABLE: on, a point dragged lengthens or shortens the bundles it is in; off (as it starts), the
-    // bundles keep their lengths and are pulled along behind it.
+    // ADD LOOSE: on, the point pulled (a corner of a cable, a node moved) goes alone - the cable is made longer there,
+    // the rest of it left where it is; off (as it starts), the bundles keep their lengths and are pulled along behind it.
     void setGrowLength(bool on) { grow_ = on; }
     bool growLength() const { return grow_; }
 private:

@@ -39,9 +39,10 @@ const Topic kTopics[] = {
      "while you work; F11 or <i>Back</i> comes back.</p>"},
     {"2. Turning the view, all the way round",
      ":/help3d/view.gif",
-     "<p><b>With the mouse:</b> drag with the left button to turn (left and right) and tilt (up and down) - all the way "
-     "round, over the top and underneath. Hold <i>Shift</i> and drag to roll. Drag with the right or middle button to "
-     "move the view; the wheel zooms. Double-click (with <i>Select</i>) fits everything in.</p>"
+     "<p><b>With the mouse:</b> hold the wheel button down and drag to turn (left and right) and tilt (up and down) - "
+     "all the way round, over the top and underneath. Hold <i>Shift</i> as well to roll. Drag with the right button (or "
+     "<i>Ctrl</i> and the wheel button) to move the view; turning the wheel zooms. The left button picks and places, "
+     "and does not turn the view. Double-click (with <i>Select</i>) fits everything in.</p>"
      "<p><b>By the numbers:</b> <i>Turn</i>, <i>Tilt</i> and <i>Roll</i> in the top row are the same three turns in "
      "degrees, each going all the way round (-180&deg; to 180&deg;, and on). Their arrows step by 15&deg;; type any "
      "figure.</p>"
@@ -135,6 +136,9 @@ const Topic kTopics[] = {
      "it. Taken by a corner it has, that corner moves.</li>"
      "<li><b>a connector, a branch or a clip</b> - it moves, and its cables with it.</li>"
      "</ul>"
+     "<p>A cable keeps its length as it is moved - the length shown on it stays the same, its bends and all: the rest "
+     "of it is pulled along behind the point, its far end held, and it goes no further than it reaches. With "
+     "<b>Add loose</b> on, the point pulled goes alone instead, and the cable is made longer there.</p>"
      "<p>Each drag is one change: <i>Undo</i> takes it back. To move something the other way - nearer or further - "
      "unlock, turn the view, lock again and drag. <i>View locked</i> again, or the padlock, unlocks.</p>"},
     {"11. Full screen",
@@ -180,6 +184,12 @@ const Topic kTopics[] = {
      "never goes through a solid of the model: where a straight run would, it is laid over it instead, and its length "
      "is the length over it.</dd>"
      "<dt><i>Delete</i></dt><dd>Take away the node or cable clicked.</dd>"
+     "<dt><i>Move</i></dt><dd>Drag a node somewhere else on the model; its cables keep their lengths.</dd>"
+     "<dt><i>Stretch</i></dt><dd>Take hold of a connector and pull: the connector stays where it is, and its cable "
+     "is pulled tight through it - as far as the pointer goes, up to straight - and what comes through is cut off, "
+     "the cable that much shorter. A clip or a branch at its other end holds it.</dd>"
+     "<dt><i>Add loose</i></dt><dd>On: a cable pulled is made longer where it is pulled, the rest of it left where it "
+     "is. Off: a cable keeps its length.</dd>"
      "<dt><i>Measure</i></dt><dd>A ruler: click two points. It shows the distance straight between them, along X, Y "
      "and Z, and in the XY, YZ and XZ planes. Esc takes it away.</dd>"
      "<dt><i>&Oslash;</i></dt><dd>A cable's diameter (the table sets one cable's own).</dd>"
