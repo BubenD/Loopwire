@@ -2,6 +2,9 @@
 
 #include <BRepBndLib.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
+#include <IMeshTools_Parameters.hxx>
+#include <Message_ProgressIndicator.hxx>
+#include <Message_ProgressScope.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepBuilderAPI_GTransform.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
@@ -84,6 +87,23 @@ void appendTriangles(const TopoDS_Shape& shape, Mesh3D& m) {
 } // namespace
 
 namespace {
+// HOW FAR A LONG STEP HAS GOT - reading a file's solids, meshing them - told to the bar between two of its marks.
+class OcctProgress : public Message_ProgressIndicator {
+public:
+    OcctProgress(const Load3DProgress& f, int lo, int hi, const char* stage) : f_(f), lo_(lo), hi_(hi), stage_(QString::fromLatin1(stage)) {}
+
+protected:
+    void Show(const Message_ProgressScope&, const bool) override {
+        if (f_) f_(lo_ + static_cast<int>((hi_ - lo_) * std::clamp(GetPosition(), 0.0, 1.0)), stage_);
+    }
+    bool UserBreak() override { return false; }
+
+private:
+    Load3DProgress f_;
+    int lo_, hi_;
+    QString stage_;
+};
+
 TopoDS_Shape occtShapeOf(const OcctSolid& s) {
     const double a = std::max(0.01, s.a), b = std::max(0.01, s.b), c = std::max(0.0, s.c);
     const gp_Ax2 alongX(gp_Pnt(-a / 2.0, 0, 0), gp_Dir(1, 0, 0));
@@ -244,7 +264,8 @@ bool readStepOcct(const QString& path, std::vector<EnvPart3D>& parts, QString* h
             return false;
         }
         say(30, "Building the solids");
-        if (!reader.Transfer(doc)) {
+        Handle(OcctProgress) building = new OcctProgress(progress, 30, 50, "Building the solids");
+        if (!reader.Transfer(doc, building->Start())) {
             if (how) *how = QStringLiteral("nothing in %1 could be turned into solids").arg(file);
             app->Close(doc);
             return false;
@@ -269,7 +290,12 @@ bool readStepOcct(const QString& path, std::vector<EnvPart3D>& parts, QString* h
         const double span = std::sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0) + (z1 - z0) * (z1 - z0));
         const double deflection = std::clamp(span * 0.0008, 0.005, 5.0);
         say(50, "Meshing the surfaces");
-        BRepMesh_IncrementalMesh mesher(all, deflection, false, 0.35, true);
+        Handle(OcctProgress) meshing = new OcctProgress(progress, 50, 80, "Meshing the surfaces");
+        IMeshTools_Parameters meshWith;
+        meshWith.Deflection = deflection;
+        meshWith.Angle = 0.35;
+        meshWith.InParallel = true;
+        BRepMesh_IncrementalMesh mesher(all, meshWith, meshing->Start());
         say(80, "Collecting the solids");
         int seen = 0;
         // EVERY SOLID WHERE THE ASSEMBLY PUTS IT, with its name and colour.

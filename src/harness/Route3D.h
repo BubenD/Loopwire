@@ -5,6 +5,7 @@
 #include <QJsonObject>
 #include <QString>
 
+#include <functional>
 #include <vector>
 
 namespace Edraw_Desktop {
@@ -60,6 +61,10 @@ struct Route3D {
     double lead = 10.0;
     std::vector<RouteNode3D> nodes;
     std::vector<RouteSegment3D> segments;
+    // THE SOLIDS A BUNDLE CANNOT PASS THROUGH: where a ray from a point along a direction first meets one, within so far
+    // - set by the 3D view from the model it is routed in. A bundle's middle that would pass through one is laid over
+    // it instead, its radius off it, and its length is the length over it. Not saved.
+    std::function<bool(const V3& origin, const V3& dir, double far, V3& hit)> solids;
 
     bool empty() const { return nodes.empty() && segments.empty(); }
     const RouteNode3D* node(const QString& id) const;
@@ -96,6 +101,10 @@ struct Route3D {
 
     QJsonObject toJson() const;
     static Route3D fromJson(const QJsonObject& o);
+    // The way each corner's face looks, corner for corner with corners().
+    std::vector<V3> cornerNormals(const RouteSegment3D& s) const;
+    // The corners laid over what they would pass through (as they are, where there are no solids).
+    std::vector<V3> overSolids(const std::vector<V3>& corners, const std::vector<V3>& normals, double radius) const;
 
 private:
     QString freshId(const QString& prefix) const;

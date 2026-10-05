@@ -21,6 +21,7 @@ class QDoubleSpinBox;
 class QLabel;
 class QListWidget;
 class QSlider;
+class QDialog;
 class QProgressBar;
 class QSpinBox;
 class QTableWidget;
@@ -42,7 +43,7 @@ class NavWheel;
 // MOVE takes a node somewhere else on the model, its bundles following from where they were laid; STRETCH pulls a node -
 // an end, to make the harness shorter or longer - and the points each of its bundles was laid through go with it, the
 // nearer the more, up to the node at the bundle's other end: a clip or a branch there holds the harness where it is.
-enum class RouteTool { Select, Connector, Branch, Clip, Route, Delete, Move, Stretch };
+enum class RouteTool { Select, Connector, Branch, Clip, Route, Delete, Move, Stretch, Measure };
 
 // THE HARNESS THE ROUTE IS FOR: its name and the wizard's design of it - the one open in the wizard, or the one this
 // drawing has placed (or keeps, where it keeps one only). `ok` false: none.
@@ -91,7 +92,8 @@ public:
     // THE ENVIRONMENT from a file - read in the background, or at once where `wait` (false when there is nothing in
     // it). Asked for again while one is being read: refused.
     bool loadEnvironment(const QString& path, bool wait = false);
-    void clearEnvironment();
+    // Taken away - a change Undo takes back, where remember is set.
+    void clearEnvironment(bool remember = true);
     const Environment3D& environment() const { return env_; }
     bool loadingEnvironment() const { return loading_ != nullptr; }
 
@@ -116,6 +118,10 @@ public:
     static QString exampleResource() { return QStringLiteral(":/help3d/example.obj"); }
     // THE WHOLE SCREEN: the view, with every row and the side panel, filling it - and back.
     void setFullScreen(bool on);
+    // THE MODEL'S SOLIDS, each shown or hidden - a list of them to tick.
+    void showPartsList();
+    // THE PANE'S OWN ROWS shown, or not - the 3D Preview tab has all of them on its ribbon.
+    void setRowsShown(bool on);
     // THE VIEW LOCKED (and the button and the wheel saying so).
     void setViewLocked(bool on);
     // BUILT AGAIN A MOMENT AFTER the drawing last changed - what is put on the sheet shows in 3D without a Refresh.
@@ -149,6 +155,8 @@ signals:
     void routeChanged();
     // The route tool chosen - here, or from outside.
     void routeToolChanged(RouteTool tool);
+    // The view locked, or not.
+    void viewLockChanged(bool locked);
 
 private:
     void takeEnvironment(Environment3D env, std::shared_ptr<RayIndex3D> index);
@@ -159,6 +167,10 @@ private:
     void saveRouting();
     void refreshRoute();
     void beforeRouteChange();
+    // The route told what it cannot pass through: the model's solids, those shown.
+    void armSolids();
+    // THE LENGTHS EITHER SIDE OF THE NODE SELECTED - to the connector each way, through clips and branches.
+    QString nodeLengths() const;
     // The turn, tilt and roll boxes brought into step with the camera.
     void syncCamera();
     // The connector selected - how it points, and how it is turned - into its boxes; and the boxes into it.
@@ -222,6 +234,10 @@ private:
     // The whole screen. Not saved.
     bool fullScreen_ = false;
     QTimer* rebuildSoon_ = nullptr;
+    QWidget* topRow_ = nullptr;
+    QPointer<QDialog> partsList_;
+    bool envChoice_ = true;    // the environment's and the route's rows wanted (none in the wizard's view)
+    bool rowsShown_ = true;    // the pane's own rows shown (none while the 3D Preview tab has them on its ribbon)
     QToolButton* lockBtn_ = nullptr;
     // THE WHEEL, in the picture's corner, and how far a click on it turns the view. Not saved.
     NavWheel* wheel_ = nullptr;
@@ -316,6 +332,19 @@ public:
     // THE VIEW TURNED by so many degrees round the upright, up and over, and round the way it looks; brought nearer
     // (under 1) or further (over 1).
     void nudge(double turnDeg, double tiltDeg, double rollDeg);
+    // THE OTHER SIDE: looked at from straight opposite where it is looked at from now, through the same middle.
+    void flip();
+    // A SOLID OF THE MODEL HIDDEN, or shown again: not drawn, and a click and a bundle go through it.
+    void setEnvPartHidden(int part, bool hidden);
+    void setAllEnvPartsHidden(bool hidden);
+    bool envPartHidden(int part) const;
+    // THE RULER: its two ends, set by two clicks with the Measure tool; and taken away.
+    bool measured() const { return measureStage_ == 2; }
+    V3 measureFrom() const { return measureA_; }
+    V3 measureTo() const { return measureB_; }
+    void clearMeasure();
+    // What the ruler says: the distance straight, and along and across each axis and plane.
+    static QString measureSaid(const V3& a, const V3& b);
     void zoomBy(double factor);
     int workPlaneAxis() const { return planeAxis_; }
     double workPlaneAt() const { return planeAt_; }
@@ -395,6 +424,16 @@ private:
     Mesh3D layMesh_;
     // The release that ends a double-click is not another click.
     bool swallowRelease_ = false;
+    // The solids of the model hidden, and the ruler. Not saved.
+    std::vector<char> envHidden_;
+    int measureStage_ = 0;      // 0 none, 1 its first end set, 2 both
+    V3 measureA_, measureB_;
+    mutable Mesh3D measureMesh_;
+    mutable bool measureDirty_ = true;
+    // The section's see-through plane, over only the solids it cuts. Not saved.
+    mutable Mesh3D sectionMesh_;
+    mutable bool sectionDirty_ = true;
+    bool skipPart(int part, const V3& point) const;
     // Locked, and what a drag is moving. Not saved.
     bool viewLocked_ = false;
     // A NODE TAKEN HOLD OF WITH MOVE OR STRETCH: where it was, and - stretching - each of its bundles' laid points as

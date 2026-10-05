@@ -61,6 +61,12 @@ Mesh3D tubeMeshVar(const std::vector<V3>& path, const std::function<double(doubl
 // any other surface is filled in from its boundary. `how` says what was read, or why nothing was.
 Mesh3D loadStl(const QString& path, QString* how = nullptr);
 Mesh3D loadObj(const QString& path, QString* how = nullptr);
+// AN OBJ FILE OBJECT BY OBJECT: each "o" (or "g") in it a mesh of its own, by its name - one, named "", where it has none.
+struct NamedMesh3D {
+    QString name;
+    Mesh3D mesh;
+};
+std::vector<NamedMesh3D> loadObjObjects(const QString& path, QString* how = nullptr);
 Mesh3D loadStep(const QString& path, QString* how = nullptr);
 Mesh3D loadStepText(const QByteArray& text, QString* how = nullptr);
 // By the file's extension: .stl, .obj, .stp / .step.

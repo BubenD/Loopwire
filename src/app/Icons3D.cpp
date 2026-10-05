@@ -81,6 +81,58 @@ void draw(QPainter& p, const QString& k, const QColor& ink, const QColor& acc) {
     const QPen line(ink, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
     const QPen accLine(acc, 2.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
     p.setPen(line);
+    // ---- The ruler, the other side, the solids, the harness ----
+    if (k == QLatin1String("measure")) {
+        // A rule at a slant, its marks along it.
+        p.save();
+        p.translate(16, 16);
+        p.rotate(-35);
+        p.setPen(line);
+        p.setBrush(soft);
+        p.drawRect(QRectF(-13, -4, 26, 8));
+        for (int m = -10; m <= 10; m += 4) p.drawLine(QPointF(m, -4), QPointF(m, m % 8 == 2 ? 1.5 : -0.5));
+        p.restore();
+        return;
+    }
+    if (k == QLatin1String("flip")) {
+        // Two arrows round, each the other way: from one side to the other.
+        p.setPen(QPen(ink, 1.8, Qt::SolidLine, Qt::RoundCap));
+        p.setBrush(Qt::NoBrush);
+        p.drawArc(QRectF(6, 6, 20, 20), 30 * 16, 120 * 16);
+        p.drawArc(QRectF(6, 6, 20, 20), 210 * 16, 120 * 16);
+        p.setBrush(ink);
+        arrowHead(p, QPointF(7.5, 12), QPointF(10, 8), 5);
+        arrowHead(p, QPointF(24.5, 20), QPointF(22, 24), 5);
+        p.setPen(QPen(acc, 2.2, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(QPointF(16, 10), QPointF(16, 22));
+        return;
+    }
+    if (k == QLatin1String("parts")) {
+        // Three boxes, one of them only outlined - hidden.
+        cube(p, 10, 20, 6, ink, acc, 0);
+        cube(p, 22, 20, 6, ink, acc, 1);
+        QPen dashed(ink, 1.4, Qt::DashLine);
+        p.setPen(dashed);
+        p.setBrush(Qt::NoBrush);
+        p.drawRect(QRectF(11, 3, 10, 9));
+        return;
+    }
+    if (k == QLatin1String("harness")) {
+        // A bundle of three wires, fanning at one end.
+        const QColor wires[3] = {QColor(220, 70, 60), ink, QColor(70, 190, 110)};
+        for (int w = 0; w < 3; ++w) {
+            QPainterPath path;
+            path.moveTo(4, 16);
+            path.lineTo(16, 16);
+            path.cubicTo(20, 16, 22, 8 + w * 8, 28, 8 + w * 8);
+            p.setPen(QPen(wires[w], 2.2, Qt::SolidLine, Qt::RoundCap));
+            p.setBrush(Qt::NoBrush);
+            p.drawPath(path);
+        }
+        p.setPen(QPen(acc, 4.0, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(QPointF(5, 16), QPointF(14, 16));
+        return;
+    }
     // ---- Views ----
     if (k == QLatin1String("iso")) return cube(p, 16, 16, 12, ink, acc, 0);
     if (k == QLatin1String("top")) return cube(p, 16, 16, 12, ink, acc, 1);

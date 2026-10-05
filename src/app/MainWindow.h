@@ -14,6 +14,7 @@
 #include <QHash>
 #include <QIcon>
 #include <QPoint>
+#include <QPointer>
 #include <QSize>
 #include <QMainWindow>
 #include <QStringList>
@@ -279,6 +280,8 @@ private:
     void buildView3DTab();
     void showPreview3D(bool on);
     void restylePreview3DIcons();
+    // The ribbon's controls of the 3D view tied to the view's own, once.
+    void mirrorPreview3D();
     void setPanelsVisible(bool on);
     void applyPanelSizes();
     bool panelSizesApplied_ = false;
@@ -1025,6 +1028,9 @@ private:
     bool preview3dOn_ = false;
     bool preview3dDockWas_ = false;
     bool preview3dShownOnce_ = false;
+    // Each ribbon control and the name of the 3D view's own it stands for.
+    QList<QPair<QPointer<QWidget>, QString>> preview3dMirrors_;
+    bool preview3dMirrored_ = false;
     // The shelf, as a table: the part, and a column each for the mechanical drawing, the schematic symbol
     // and the fanout. A tree rather than a list because several libraries in view are shown under their own
     // names, and because the three drawings want columns of their own to be read down.

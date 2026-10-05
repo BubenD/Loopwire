@@ -2,6 +2,7 @@
 
 #include "app/Icons3D.h"
 #include "app/NavWheel.h"
+#include "app/Chrome.h"
 #include "app/View3DPane.h"
 #include "render/Render3D.h"
 
@@ -165,7 +166,7 @@ Part3DEditorDialog::Part3DEditorDialog(const LibraryPart& part, const PartModel3
     lay->addLayout(modRow);
     {
         // THE PICTURES, by what each button does.
-        const QColor ink = palette().color(QPalette::WindowText);
+        const QColor ink = Chrome::ink();
         const struct {
             const char* name;
             const char* icon;
@@ -234,7 +235,7 @@ Part3DEditorDialog::Part3DEditorDialog(const LibraryPart& part, const PartModel3
         sb->addWidget(back);
         auto* extrude = new QPushButton(QStringLiteral("Extrude"), sketchBar_);
         extrude->setObjectName(QStringLiteral("part3dSketchExtrude"));
-        extrude->setIcon(icon3D(QStringLiteral("extrude"), palette().color(QPalette::WindowText)));
+        extrude->setIcon(icon3D(QStringLiteral("extrude"), Chrome::ink()));
         connect(extrude, &QPushButton::clicked, this, [this] { finishSketch(sketchDepth_->value()); });
         sb->addWidget(extrude);
         auto* cancel = new QPushButton(QStringLiteral("Cancel"), sketchBar_);
@@ -370,12 +371,12 @@ Part3DEditorDialog::Part3DEditorDialog(const LibraryPart& part, const PartModel3
     lay->addWidget(said_);
     auto* bottom = new QHBoxLayout;
     auto* exportBtn = new QPushButton(QStringLiteral("Export STL / OBJ..."), this);
-    exportBtn->setIcon(icon3D(QStringLiteral("export"), palette().color(QPalette::WindowText)));
+    exportBtn->setIcon(icon3D(QStringLiteral("export"), Chrome::ink()));
     connect(exportBtn, &QPushButton::clicked, this, [this] { exportModel(); });
     bottom->addWidget(exportBtn);
     bottom->addStretch(1);
     auto* save = new QPushButton(QStringLiteral("Save to the part"), this);
-    save->setIcon(icon3D(QStringLiteral("save"), palette().color(QPalette::WindowText)));
+    save->setIcon(icon3D(QStringLiteral("save"), Chrome::ink()));
     save->setObjectName(QStringLiteral("part3dSave"));
     save->setDefault(true);
     connect(save, &QPushButton::clicked, this, [this] {

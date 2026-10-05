@@ -77,8 +77,21 @@ Environment3D loadEnvironment3D(const QString& path, const Load3DProgress& progr
 #endif
     QElapsedTimer clock;
     clock.start();
-    EnvPart3D one;
     QString how;
+    // AN OBJ FILE'S OBJECTS each a part of its own, by its name - to be shown, hidden and picked one by one.
+    if (ext == QLatin1String("obj")) {
+        std::vector<NamedMesh3D> objects = loadObjObjects(path, &how);
+        if (objects.size() > 1) {
+            for (NamedMesh3D& o : objects)
+                env.parts.push_back({o.name.isEmpty() ? QFileInfo(path).completeBaseName() : o.name, QColor(), std::move(o.mesh)});
+            env.how = QStringLiteral("%1: %2 in %3 object(s), read in %4 s")
+                          .arg(QFileInfo(path).fileName(), how)
+                          .arg(env.parts.size())
+                          .arg(clock.elapsed() / 1000.0, 0, 'f', 1);
+            return env;
+        }
+    }
+    EnvPart3D one;
     one.mesh = loadMesh3D(path, &how);
     if (one.mesh.empty()) {
         env.how = how;
@@ -160,7 +173,7 @@ void RayIndex3D::build(const std::vector<const Mesh3D*>& meshes) {
     tris_.swap(sorted);
 }
 
-Pick3D RayIndex3D::cast(const V3& origin, const V3& dirIn) const {
+Pick3D RayIndex3D::cast(const V3& origin, const V3& dirIn, const Skip3D& skip) const {
     Pick3D best;
     if (nodes_.empty()) return best;
     const V3 dir = dirIn.normalized();
@@ -213,6 +226,7 @@ Pick3D RayIndex3D::cast(const V3& origin, const V3& dirIn) const {
             if (v < -eps || u + v > 1.0 + eps) continue;
             const double d = dot3(e2, q) * id;
             if (d <= 1e-9 || d >= nearest) continue;
+            if (skip && skip(t.part, origin + dir * d)) continue;
             nearest = d;
             best.hit = true;
             best.distance = d;

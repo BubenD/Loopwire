@@ -56,8 +56,10 @@ public:
     void build(const std::vector<const Mesh3D*>& meshes);
     void clear();
     bool empty() const { return tris_.empty(); }
-    // The nearest triangle the ray from `origin` along `dir` meets in front of it.
-    Pick3D cast(const V3& origin, const V3& dir) const;
+    // The nearest triangle the ray from `origin` along `dir` meets in front of it - passing those `skip` says to (by
+    // their part and where it would be met): a solid hidden, what a section cuts away.
+    using Skip3D = std::function<bool(int part, const V3& point)>;
+    Pick3D cast(const V3& origin, const V3& dir, const Skip3D& skip = {}) const;
 
 private:
     struct Tri {

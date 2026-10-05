@@ -146,18 +146,48 @@ Mesh3D loadStl(const QString& path, QString* how) {
 
 Mesh3D loadObj(const QString& path, QString* how) {
     Mesh3D m;
+    for (NamedMesh3D& o : loadObjObjects(path, how)) {
+        const int base = static_cast<int>(m.v.size());
+        for (const V3& p : o.mesh.v) m.addVertex(p);
+        for (const auto& t : o.mesh.f) m.addTri(base + t[0], base + t[1], base + t[2]);
+    }
+    return m;
+}
+
+std::vector<NamedMesh3D> loadObjObjects(const QString& path, QString* how) {
+    std::vector<NamedMesh3D> out;
+    Mesh3D m;   // every vertex of the file, numbered as it numbers them
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         if (how) *how = QStringLiteral("cannot open %1").arg(QFileInfo(path).fileName());
-        return m;
+        return out;
     }
+    // Each object a mesh of its own: a vertex of the file taken into it the first time one of its faces uses it.
+    std::vector<int> local;
+    auto begin = [&](const QString& name) {
+        if (!out.empty() && out.back().mesh.f.empty()) out.back().name = name;
+        else out.push_back({name, {}});
+        local.assign(m.v.size(), -1);
+    };
     QTextStream in(&file);
     while (!in.atEnd()) {
         const QString line = in.readLine().trimmed();
         const QStringList w = line.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts);
         if (w.size() >= 4 && w[0] == QLatin1String("v")) {
             m.addVertex({w[1].toDouble(), w[2].toDouble(), w[3].toDouble()});
+        } else if (!w.isEmpty() && (w[0] == QLatin1String("o") || w[0] == QLatin1String("g"))) {
+            begin(line.mid(w[0].size()).trimmed());
         } else if (w.size() >= 4 && w[0] == QLatin1String("f")) {
+            if (out.empty()) begin(QString());
+            local.resize(m.v.size(), -1);
+            Mesh3D& into = out.back().mesh;
+            auto take = [&](int k) {
+                if (local[static_cast<size_t>(k)] < 0) {
+                    local[static_cast<size_t>(k)] = static_cast<int>(into.v.size());
+                    into.addVertex(m.v[static_cast<size_t>(k)]);
+                }
+                return local[static_cast<size_t>(k)];
+            };
             // "f 1 2 3", "f 1/1 2/2 3/3", "f -3 -2 -1": the corner's number first, from the end where negative.
             std::vector<int> idx;
             for (int i = 1; i < w.size(); ++i) {
@@ -167,11 +197,14 @@ Mesh3D loadObj(const QString& path, QString* how) {
             for (size_t i = 1; i + 1 < idx.size(); ++i)
                 if (idx[0] >= 0 && idx[i] >= 0 && idx[i + 1] >= 0 && idx[0] < static_cast<int>(m.v.size()) &&
                     idx[i] < static_cast<int>(m.v.size()) && idx[i + 1] < static_cast<int>(m.v.size()))
-                    m.addTri(idx[0], idx[i], idx[i + 1]);
+                    into.addTri(take(idx[0]), take(idx[i]), take(idx[i + 1]));
         }
     }
-    if (how) *how = m.empty() ? QStringLiteral("no faces in it") : QStringLiteral("OBJ, %1 triangles").arg(m.f.size());
-    return m;
+    out.erase(std::remove_if(out.begin(), out.end(), [](const NamedMesh3D& o) { return o.mesh.f.empty(); }), out.end());
+    size_t tris = 0;
+    for (const NamedMesh3D& o : out) tris += o.mesh.f.size();
+    if (how) *how = tris == 0 ? QStringLiteral("no faces in it") : QStringLiteral("OBJ, %1 triangles").arg(tris);
+    return out;
 }
 
 // ---- STEP ------------------------------------------------------------------------------------------

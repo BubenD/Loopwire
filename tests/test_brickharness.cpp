@@ -52,6 +52,7 @@
 #include <QWheelEvent>
 #include <QElapsedTimer>
 #include <QSlider>
+#include <QAbstractButton>
 #include <QProgressBar>
 #include <QVBoxLayout>
 #include <QImageReader>
@@ -7121,7 +7122,11 @@ void testRoundFortyNine() {
         while (pane.loadingEnvironment() && clock.elapsed() < 30000) QApplication::processEvents(QEventLoop::AllEvents, 20);
         QApplication::processEvents();
         check(started && showing, "progress: a bar while a model is read in the background");
-        check(!pane.loadingEnvironment() && !pane.environment().empty() && !bar->isVisible(), "progress: gone when it is read");
+        check(!pane.loadingEnvironment() && !pane.environment().empty() && bar->isVisible() && bar->value() == 100,
+              "progress: read - the bar full, at 100");
+        clock.restart();
+        while (bar->isVisible() && clock.elapsed() < 3000) QApplication::processEvents(QEventLoop::AllEvents, 20);
+        check(!bar->isVisible(), "progress: and gone a moment after");
         int last = -1;
         bool rising = true;
         const Environment3D env = loadEnvironment3D(obj, [&](int pct, const QString&) {
@@ -7681,6 +7686,294 @@ void testRoundFiftyThree() {
 #endif
 }
 
+// ROUND FIFTY-FOUR: ROUTING THROUGH A REAL MODEL - a bundle laid over a solid, not through it; a ruler; a clip put where
+// the bundle is and holding only there; the lengths either side of it; a model taken away and brought back by Undo;
+// the 3D Preview tab with every option on its ribbon.
+void testRoundFiftyFour() {
+    // ---- OVER A SOLID, NOT THROUGH IT ----
+    {
+        Route3D r;
+        const QString a = r.addNode(RouteNodeKind::Branch, {0, 0, 0}, {0, 0, 1});
+        const QString b = r.addNode(RouteNodeKind::Branch, {100, 0, 0}, {0, 0, 1});
+        const QString s = r.addSegment(a, b, {});
+        const double straight = r.length(*r.segment(s));
+        // A block 20 high across the way, from x 40 to 60.
+        const Mesh3D block = boxMesh({40, -30, 0}, {60, 30, 20});
+        RayIndex3D index;
+        index.build({&block});
+        r.solids = [&index](const V3& o, const V3& d, double far, V3& hit) {
+            const Pick3D p = index.cast(o, d);
+            if (!p.hit || p.distance > far) return false;
+            hit = p.point;
+            return true;
+        };
+        const std::vector<V3> c = r.centreline(*r.segment(s));
+        double top = 0.0;
+        bool through = false;
+        for (const V3& q : c) {
+            top = std::max(top, q.z);
+            if (q.x > 41 && q.x < 59 && q.z < 20.0) through = true;
+        }
+        const double over = r.length(*r.segment(s));
+        std::printf("  3d over: straight %.1f mm, laid over the block %.1f mm, its top at %.1f\n", straight, over, top);
+        check(!through && top >= 20.0 + r.diameter / 2.0 - 1e-6, "3d: a bundle laid over a solid in its way, its radius above it - not through it");
+        check(over > straight + 20.0, "3d: and its length the length over it");
+    }
+
+    QJsonObject stored;
+    {
+        Route3D r;
+        const QString x1 = r.addNode(RouteNodeKind::Connector, {20, 50, 0}, {0, 0, 1});
+        const QString x2 = r.addNode(RouteNodeKind::Connector, {180, 50, 0}, {0, 0, 1});
+        r.addSegment(x1, x2, {{{60, 50, 0}, {0, 0, 1}}});
+        stored = r.toJson();
+    }
+    View3DPane pane;
+    pane.setRoutingStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    pane.setEnvironmentChoice(true);
+    pane.resize(1100, 700);
+    pane.show();
+    QApplication::processEvents();
+    View3DCanvas* canvas = pane.canvas();
+    canvas->setUseGpu(false);
+    pane.reloadRouting(true);
+    // A plate with a block on it, read as the environment.
+    const QString obj = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_round52.obj"));
+    {
+        QFile f(obj);
+        f.open(QIODevice::WriteOnly);
+        QByteArray t;
+        int base = 0;
+        auto box = [&](double x0, double y0, double z0, double x1, double y1, double z1, const char* name) {
+            t += QByteArray("o ") + name + "\n";
+            const double xs[2] = {x0, x1}, ys[2] = {y0, y1}, zs[2] = {z0, z1};
+            for (int i = 0; i < 8; ++i)
+                t += "v " + QByteArray::number(xs[i & 1]) + " " + QByteArray::number(ys[(i >> 1) & 1]) + " " + QByteArray::number(zs[(i >> 2) & 1]) + "\n";
+            const int faces[6][4] = {{0, 2, 3, 1}, {4, 5, 7, 6}, {0, 1, 5, 4}, {2, 6, 7, 3}, {0, 4, 6, 2}, {1, 3, 7, 5}};
+            for (const auto& q : faces)
+                t += "f " + QByteArray::number(base + q[0] + 1) + " " + QByteArray::number(base + q[1] + 1) + " " +
+                     QByteArray::number(base + q[2] + 1) + " " + QByteArray::number(base + q[3] + 1) + "\n";
+            base += 8;
+        };
+        box(0, 0, -5, 200, 100, 0, "Plate");
+        box(90, 30, 0, 110, 70, 30, "Block");
+        f.write(t);
+    }
+    check(pane.loadEnvironment(obj, true), "3d: the model read");
+    canvas->viewFrom(QStringLiteral("top"));
+
+    // ---- THE BAR READ TO THE END ----
+    {
+        pane.loadEnvironment(obj);
+        QElapsedTimer clock;
+        clock.start();
+        while (pane.loadingEnvironment() && clock.elapsed() < 30000) QApplication::processEvents(QEventLoop::AllEvents, 20);
+        QApplication::processEvents();
+        auto* bar = pane.findChild<QProgressBar*>(QStringLiteral("view3dEnvProgress"));
+        check(bar && bar->value() == 100, "progress: the bar goes on to the end - 100 - when the model is read");
+    }
+
+    // ---- FLIP: FROM THE OTHER SIDE ----
+    {
+        canvas->viewFrom(QStringLiteral("iso"));
+        const Camera3D before = canvas->camera();
+        canvas->flip();
+        const V3 e0 = before.eye() - before.target, e1 = canvas->camera().eye() - canvas->camera().target;
+        check((e0 + e1).length() < 1e-6 * std::max(1.0, e0.length()), "flip: looked at from straight opposite, through the same middle");
+        canvas->viewFrom(QStringLiteral("top"));
+    }
+
+    // ---- A SOLID HIDDEN: CLICKS GO THROUGH IT ----
+    {
+        V3 p, n;
+        // The block's middle, from above.
+        QPointF over;
+        canvas->toScreen({100, 50, 30}, over);
+        canvas->surfaceAt(over, p, n);
+        const double onBlock = p.z;
+        int block = -1;
+        for (size_t i = 0; i < pane.environment().parts.size(); ++i)
+            if (pane.environment().parts[i].name == QLatin1String("Block")) block = static_cast<int>(i);
+        canvas->setEnvPartHidden(block, true);
+        canvas->surfaceAt(over, p, n);
+        std::printf("  3d hidden: a click on the block lands at z %.1f, with it hidden at %.1f\n", onBlock, p.z);
+        check(block >= 0 && std::abs(onBlock - 30.0) < 1e-3 && std::abs(p.z) < 1e-3, "parts: a solid hidden - a click goes through it to what is behind");
+        canvas->setEnvPartHidden(block, false);
+    }
+
+    // ---- THE RULER ----
+    {
+        pane.setRouteTool(RouteTool::Measure);
+        auto click = [&](const V3& at) {
+            QPointF s;
+            canvas->toScreen(at, s);
+            QMouseEvent down(QEvent::MouseButtonPress, s, canvas->mapToGlobal(s), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QMouseEvent up(QEvent::MouseButtonRelease, s, canvas->mapToGlobal(s), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(canvas, &down);
+            QApplication::sendEvent(canvas, &up);
+            QApplication::processEvents();
+        };
+        click({20, 20, 0});
+        click({60, 50, 0});
+        const V3 d = canvas->measureTo() - canvas->measureFrom();
+        const QString said = View3DCanvas::measureSaid(canvas->measureFrom(), canvas->measureTo());
+        std::printf("  ruler: %s\n", qPrintable(said));
+        check(canvas->measured() && std::abs(d.length() - 50.0) < 0.5 && std::abs(d.x - 40.0) < 0.5 && std::abs(d.y - 30.0) < 0.5,
+              "ruler: two clicks, the distance between them straight and along each axis");
+        check(said.contains(QStringLiteral("Direct 50.0")) && said.contains(QStringLiteral("XY plane 50.0")), "ruler: said in words");
+        QKeyEvent esc(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &esc);
+        check(!canvas->measured(), "ruler: Esc takes it away");
+    }
+
+    // ---- A CLIP WHERE THE BUNDLE IS, HOLDING ONLY THERE ----
+    {
+        auto clickAt = [&](const QPointF& s) {
+            QMouseEvent down(QEvent::MouseButtonPress, s, canvas->mapToGlobal(s), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QMouseEvent up(QEvent::MouseButtonRelease, s, canvas->mapToGlobal(s), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(canvas, &down);
+            QApplication::sendEvent(canvas, &up);
+            QApplication::processEvents();
+        };
+        auto screen = [&](const V3& p) {
+            QPointF s;
+            canvas->toScreen(p, s);
+            return s;
+        };
+        pane.reloadRouting(true);
+        std::printf("  clip: %d node(s), %d bundle(s) to start with\n", static_cast<int>(pane.route().nodes.size()),
+                    static_cast<int>(pane.route().segments.size()));
+        check(pane.route().nodes.size() == 2 && pane.route().segments.size() == 1, "clip: a bundle laid");
+        if (pane.route().nodes.size() != 2 || pane.route().segments.size() != 1) return;
+        const RouteNode3D x2 = pane.route().nodes[1];
+        // Along y 50, the block across it at x 90..110: laid over it.
+        const std::vector<V3> before = pane.route().centreline(pane.route().segments.front());
+        double top = 0.0;
+        for (const V3& q : before) top = std::max(top, q.z);
+        check(top > 30.0, "3d: the bundle laid over the block in its way");
+        // A clip on it where it is drawn, a little way along.
+        const V3 on = before[before.size() / 5];
+        pane.setRouteTool(RouteTool::Clip);
+        clickAt(screen(on));
+        const RouteNode3D* clip = nullptr;
+        for (const RouteNode3D& n : pane.route().nodes)
+            if (n.kind == RouteNodeKind::Clip) clip = &n;
+        check(clip != nullptr && pane.route().segments.size() == 2, "clip: put on the bundle, dividing it");
+        if (clip) {
+            // Where the bundle was drawn: its middle through the clip there, and nothing moved.
+            const V3 middle = clip->at + clip->normal * (pane.route().diameter / 2.0);
+            double nearest = 1e300;
+            for (size_t i = 0; i + 1 < before.size(); ++i) {
+                const V3 ab = before[i + 1] - before[i];
+                const double t = std::clamp(dot3(middle - before[i], ab) / std::max(1e-12, dot3(ab, ab)), 0.0, 1.0);
+                nearest = std::min(nearest, (before[i] + ab * t - middle).length());
+            }
+            std::printf("  clip: %.3f mm off where the bundle was drawn\n", nearest);
+            check(nearest < 0.5, "clip: put where the bundle is - the bundle does not jump to it");
+            // SELECTED: the lengths either side of it, to each end.
+            pane.setRouteTool(RouteTool::Select);
+            clickAt(screen(middle));
+            auto* status = pane.findChild<QLabel*>(QStringLiteral("view3dStatus"));
+            const QString said = status ? status->text() : QString();
+            std::printf("  clip: %s\n", qPrintable(said.section(QLatin1Char('\n'), -1)));
+            check(said.contains(clip->label + QStringLiteral(":")) && said.contains(QStringLiteral("to X1")) && said.contains(QStringLiteral("to X2")),
+                  "clip: the lengths either side of it, to each end");
+            // ONLY THERE: the bundle on one side moved, locked; the clip and the other side stay as they were.
+            const QString clipId = clip->id;
+            const V3 clipAt = clip->at;
+            QString far;
+            std::vector<RouteVia3D> farVia;
+            for (const RouteSegment3D& s : pane.route().segments)
+                if ((s.a == clipId || s.b == clipId) && (s.a == x2.id || s.b == x2.id)) {
+                    far = s.id;
+                    farVia = s.via;
+                }
+            pane.setViewLocked(true);
+            QString nearId;
+            for (const RouteSegment3D& s : pane.route().segments)
+                if (s.id != far) nearId = s.id;
+            const std::vector<V3> nc = pane.route().centreline(*pane.route().segment(nearId));
+            const QPointF grab = screen(nc[nc.size() / 2]);
+            QMouseEvent down(QEvent::MouseButtonPress, grab, canvas->mapToGlobal(grab), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(canvas, &down);
+            for (int i = 1; i <= 8; ++i) {
+                const QPointF to = grab + QPointF(0, -6.0 * i);
+                QMouseEvent move(QEvent::MouseMove, to, canvas->mapToGlobal(to), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+                QApplication::sendEvent(canvas, &move);
+            }
+            QMouseEvent up(QEvent::MouseButtonRelease, grab + QPointF(0, -48), canvas->mapToGlobal(grab + QPointF(0, -48)), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(canvas, &up);
+            QApplication::processEvents();
+            pane.setViewLocked(false);
+            const RouteNode3D* clipAfter = pane.route().node(clipId);
+            const RouteSegment3D* farAfter = pane.route().segment(far);
+            bool farSame = farAfter && farAfter->via.size() == farVia.size();
+            for (size_t i = 0; farSame && i < farVia.size(); ++i) farSame = (farAfter->via[i].at - farVia[i].at).length() < 1e-9;
+            const std::vector<V3> ncAfter = pane.route().centreline(*pane.route().segment(nearId));
+            double moved = 0.0;
+            for (const V3& q : ncAfter) {
+                double d = 1e300;
+                for (const V3& w : nc) d = std::min(d, (q - w).length());
+                moved = std::max(moved, d);
+            }
+            std::printf("  clip: the side pulled moved up to %.1f mm\n", moved);
+            check(moved > 2.0 && clipAfter && (clipAfter->at - clipAt).length() < 1e-9 && farSame,
+                  "clip: holds the bundle only where it is - the side pulled moves, the clip and the other side stay");
+        }
+    }
+
+    // ---- THE MODEL TAKEN AWAY, AND BROUGHT BACK BY UNDO ----
+    {
+        pane.clearEnvironment();
+        check(pane.environment().empty(), "undo: the model taken away");
+        pane.undoRoute();
+        QElapsedTimer clock;
+        clock.start();
+        while (pane.loadingEnvironment() && clock.elapsed() < 30000) QApplication::processEvents(QEventLoop::AllEvents, 20);
+        QApplication::processEvents();
+        check(!pane.environment().empty() && pane.environmentFile() == obj, "undo: Undo brings the model back");
+    }
+    QFile::remove(obj);
+
+    // ---- THE 3D PREVIEW TAB: EVERY OPTION ON ITS RIBBON ----
+    MainWindow win;
+    win.show();
+    QApplication::processEvents();
+    QTabWidget* ribbon = nullptr;
+    int tab = -1;
+    for (QTabWidget* t : win.findChildren<QTabWidget*>())
+        for (int i = 0; i < t->count(); ++i)
+            if (t->tabText(i) == QLatin1String("3D Preview")) {
+                ribbon = t;
+                tab = i;
+            }
+    check(ribbon && tab >= 0, "ribbon: a 3D Preview tab");
+    if (!ribbon) return;
+    auto* p3 = win.findChild<View3DPane*>(QStringLiteral("view3d"));
+    auto* paneRow = p3 ? p3->findChild<QComboBox*>(QStringLiteral("view3dWorkPlane")) : nullptr;
+    ribbon->setCurrentIndex(tab);
+    QApplication::processEvents();
+    check(p3 && paneRow && !paneRow->isVisibleTo(p3), "ribbon: the 3D view's own rows put away while the tab has them");
+    auto* ribbonDia = win.findChild<QDoubleSpinBox*>(QStringLiteral("preview3dDiameter"));
+    auto* paneDia = p3 ? p3->findChild<QDoubleSpinBox*>(QStringLiteral("view3dRouteDiameter")) : nullptr;
+    if (ribbonDia && paneDia) ribbonDia->setValue(12.5);
+    check(ribbonDia && paneDia && std::abs(paneDia->value() - 12.5) < 1e-9, "ribbon: the bundle's size set on the ribbon is the view's");
+    if (paneDia) paneDia->setValue(9.0);
+    check(ribbonDia && std::abs(ribbonDia->value() - 9.0) < 1e-9, "ribbon: and the ribbon follows the view");
+    for (const char* name : {"preview3dSection", "preview3dEnvOpacity", "preview3dWorkPlane", "preview3dLock", "preview3dFlip",
+                             "preview3dParts", "preview3dHarness", "preview3dMeasure", "preview3dTurn", "preview3dHelp"})
+        check(win.findChild<QWidget*>(QLatin1String(name)) != nullptr,
+              qPrintable(QStringLiteral("ribbon: %1 of the 3D view on it").arg(QLatin1String(name))));
+    auto* harness = win.findChild<QToolButton*>(QStringLiteral("preview3dHarness"));
+    auto* paneHarness = p3 ? p3->findChild<QAbstractButton*>(QStringLiteral("view3dHarnessShown")) : nullptr;
+    if (harness) harness->click();
+    check(harness && paneHarness && harness->isChecked() == paneHarness->isChecked() && !paneHarness->isChecked(),
+          "ribbon: Harness hides the drawn harness, as the view's own does");
+    ribbon->setCurrentIndex(tab - 1);
+    QApplication::processEvents();
+    check(paneRow && paneRow->isVisibleTo(p3), "ribbon: and the view's rows back when the tab is left");
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -7748,6 +8041,7 @@ int run_brickharness_tests() {
     testRoundFiftyOne();
     testRoundFiftyTwo();
     testRoundFiftyThree();
+    testRoundFiftyFour();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

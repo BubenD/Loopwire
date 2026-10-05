@@ -184,8 +184,75 @@ std::vector<V3> Route3D::corners(const RouteSegment3D& s) const {
     return pts;
 }
 
+std::vector<V3> Route3D::cornerNormals(const RouteSegment3D& s) const {
+    std::vector<V3> out;
+    const RouteNode3D* a = node(s.a);
+    const RouteNode3D* b = node(s.b);
+    if (!a || !b) return out;
+    // As corners() makes them, the same points dropped where two fall together.
+    const std::vector<V3> pts = corners(s);
+    std::vector<V3> all;
+    if (a->kind == RouteNodeKind::Connector) all.push_back(a->normal);
+    all.push_back(a->normal);
+    for (const RouteVia3D& v : s.via) all.push_back(v.normal);
+    all.push_back(b->normal);
+    if (b->kind == RouteNodeKind::Connector) all.push_back(b->normal);
+    for (size_t i = 0; i < pts.size(); ++i) out.push_back(all[std::min(i, all.size() - 1)]);
+    return out;
+}
+
+std::vector<V3> Route3D::overSolids(const std::vector<V3>& p, const std::vector<V3>& nrm, double r) const {
+    if (!solids || p.size() < 2) return p;
+    std::vector<V3> out{p.front()};
+    for (size_t i = 1; i < p.size(); ++i) {
+        const V3 a = p[i - 1], b = p[i];
+        const V3 d = b - a;
+        const double len = d.length();
+        if (len < 1e-6) continue;
+        const V3 u = d / len;
+        // CLEAR OF WHAT IT STARTS AND ENDS ON: a connector's own face, the face a point was laid on.
+        const double eps = std::min(len * 0.25, std::max(0.5, r));
+        V3 hit;
+        if (len <= 2.0 * eps || !solids(a + u * eps, u, len - 2.0 * eps, hit)) {
+            out.push_back(b);
+            continue;
+        }
+        // THROUGH SOMETHING: laid over it - each point along it lifted, the way the faces at its ends look, to the top
+        // of what is under it and its radius more.
+        V3 up = i < nrm.size() ? nrm[i - 1] + nrm[i] : V3{0, 0, 1};
+        if (up.length() < 1e-6) up = {0, 0, 1};
+        up = up.normalized();
+        if (std::abs(dot3(u, up)) > 0.95) {
+            out.push_back(b);   // running that way itself: nothing to be laid over
+            continue;
+        }
+        const double H = std::clamp(len, 20.0, 2000.0);
+        const double step = std::max(r, len / 160.0);
+        const int n = std::max(2, static_cast<int>(std::ceil(len / step)));
+        std::vector<V3> run;
+        std::vector<char> lifted;
+        for (int k = 1; k < n; ++k) {
+            const V3 x = a + d * (static_cast<double>(k) / n);
+            V3 q = x, top;
+            if (solids(x + up * H, up * -1.0, H + r, top)) {
+                const double rise = dot3(top + up * r - x, up);
+                if (rise > 1e-6) q = x + up * rise;
+            }
+            run.push_back(q);
+            lifted.push_back((q - x).length() > 1e-6);
+        }
+        // Only where it is lifted, and a point either side - the rest of it straight as it was.
+        for (size_t k = 0; k < run.size(); ++k) {
+            const bool keep = lifted[k] || (k + 1 < run.size() && lifted[k + 1]) || (k > 0 && lifted[k - 1]);
+            if (keep) out.push_back(run[k]);
+        }
+        out.push_back(b);
+    }
+    return out;
+}
+
 std::vector<V3> Route3D::centreline(const RouteSegment3D& s, int* tight) const {
-    const std::vector<V3> p = corners(s);
+    const std::vector<V3> p = solids ? overSolids(corners(s), cornerNormals(s), diameterOf(s) / 2.0) : corners(s);
     if (tight) *tight = 0;
     if (p.size() < 3) return p;
     const double bend = bendRadiusOf(s);
