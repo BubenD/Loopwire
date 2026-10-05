@@ -9,12 +9,18 @@
 
 #include <QJsonObject>
 #include <QPointer>
+#include <QSet>
+#include <QVariantAnimation>
+#include <QPointer>
 #include <QWidget>
 
 #include <functional>
 #include <memory>
 
 class QButtonGroup;
+class QScrollArea;
+class QTreeWidget;
+class QVBoxLayout;
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
@@ -122,6 +128,8 @@ public:
     void showPartsList();
     // THE PANE'S OWN ROWS shown, or not - the 3D Preview tab has all of them on its ribbon.
     void setRowsShown(bool on);
+    // The solids and parts in view listed again, each ticked as shown.
+    void refreshSolids();
     // THE VIEW LOCKED (and the button and the wheel saying so).
     void setViewLocked(bool on);
     // BUILT AGAIN A MOMENT AFTER the drawing last changed - what is put on the sheet shows in 3D without a Refresh.
@@ -155,6 +163,8 @@ signals:
     void routeChanged();
     // The route tool chosen - here, or from outside.
     void routeToolChanged(RouteTool tool);
+    // A MODEL BEING READ: how far (a hundredth), what it is doing, and whether it still is.
+    void loadProgress(int percent, const QString& said, bool running);
     // The view locked, or not.
     void viewLockChanged(bool locked);
 
@@ -164,6 +174,11 @@ private:
     void applySection();
     void showPick(const Pick3D& pick);
     void sayStatus();
+    void fitRows();
+    void partsShownChanged();
+    QString envPartName(int part) const;
+    QStringList harnessBricks() const;
+    QString harnessPartName(const QString& brick) const;
     void saveRouting();
     void refreshRoute();
     void beforeRouteChange();
@@ -238,6 +253,12 @@ private:
     QPointer<QDialog> partsList_;
     bool envChoice_ = true;    // the environment's and the route's rows wanted (none in the wizard's view)
     bool rowsShown_ = true;    // the pane's own rows shown (none while the 3D Preview tab has them on its ribbon)
+    QScrollArea* rowsArea_ = nullptr;   // the rows, scrolled across where the pane is narrower than they are
+    QWidget* rowsBox_ = nullptr;
+    QVBoxLayout* rowsLay_ = nullptr;
+    QWidget* solidsPanel_ = nullptr;          // what is in view, on the left (the 3D Preview tab)
+    QTreeWidget* solidsTree_ = nullptr;
+    bool fillingSolids_ = false;
     QToolButton* lockBtn_ = nullptr;
     // THE WHEEL, in the picture's corner, and how far a click on it turns the view. Not saved.
     NavWheel* wheel_ = nullptr;
@@ -336,6 +357,12 @@ public:
     void flip();
     // A SOLID OF THE MODEL HIDDEN, or shown again: not drawn, and a click and a bundle go through it.
     void setEnvPartHidden(int part, bool hidden);
+    // HARNESS PARTS HIDDEN, by the brick each is; and every solid and part shown again.
+    void setBrickHidden(const QString& brick, bool hidden);
+    bool brickHidden(const QString& brick) const { return hiddenBricks_.contains(brick); }
+    void showAllParts();
+    // Being turned round (Flip), still.
+    bool turning() const;
     void setAllEnvPartsHidden(bool hidden);
     bool envPartHidden(int part) const;
     // THE RULER: its two ends, set by two clicks with the Measure tool; and taken away.
@@ -357,6 +384,8 @@ signals:
     void undoRequested();
     // The route being moved under the pointer - not yet a change to keep.
     void routeMoving();
+    // A RIGHT CLICK on a solid of the model (its index, or -1) or a part of the harness (its brick, or empty).
+    void partMenuAsked(int envPart, const QString& brick, const QPoint& globalPos);
     // Something to tell the user.
     void message(const QString& text);
     // The camera turned, moved or zoomed.
@@ -372,6 +401,7 @@ protected:
     void mouseDoubleClickEvent(QMouseEvent* e) override;
     void wheelEvent(QWheelEvent* e) override;
     void keyPressEvent(QKeyEvent* e) override;
+    void contextMenuEvent(QContextMenuEvent* e) override;
 
 private:
     std::vector<DrawItem3D> drawItems() const;
@@ -424,6 +454,8 @@ private:
     Mesh3D layMesh_;
     // The release that ends a double-click is not another click.
     bool swallowRelease_ = false;
+    QSet<QString> hiddenBricks_;
+    QPointer<QVariantAnimation> turnAnim_;
     // The solids of the model hidden, and the ruler. Not saved.
     std::vector<char> envHidden_;
     int measureStage_ = 0;      // 0 none, 1 its first end set, 2 both

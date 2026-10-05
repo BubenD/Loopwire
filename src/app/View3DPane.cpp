@@ -23,7 +23,12 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QMessageBox>
+#include <QContextMenuEvent>
+#include <QMenu>
 #include <QMouseEvent>
+#include <QTreeWidget>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QPainter>
 #include <QSettings>
 #include <QShortcut>
@@ -67,6 +72,25 @@ public:
 View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     setObjectName(QStringLiteral("view3d"));
     auto* lay = new QVBoxLayout(this);
+    // THE ROWS OF CONTROLS, side to side in a strip of their own: never squeezed - each button its picture and its name,
+    // each box as wide as what is in it - and the strip scrolled across where the pane is narrower than they are.
+    rowsArea_ = new QScrollArea(this);
+    rowsArea_->setObjectName(QStringLiteral("view3dRows"));
+    rowsArea_->setFrameShape(QFrame::NoFrame);
+    rowsArea_->setWidgetResizable(true);
+    rowsArea_->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    rowsArea_->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    rowsArea_->horizontalScrollBar()->setStyleSheet(QStringLiteral(
+        "QScrollBar:horizontal{height:8px;background:transparent;border:none;}"
+        "QScrollBar::handle:horizontal{background:#6b7480;border-radius:3px;min-width:40px;}"
+        "QScrollBar::add-line:horizontal,QScrollBar::sub-line:horizontal{width:0;}"
+        "QScrollBar::add-page:horizontal,QScrollBar::sub-page:horizontal{background:transparent;}"));
+    rowsBox_ = new QWidget(rowsArea_);
+    rowsLay_ = new QVBoxLayout(rowsBox_);
+    rowsLay_->setContentsMargins(0, 0, 0, 0);
+    rowsLay_->setSpacing(4);
+    rowsArea_->setWidget(rowsBox_);
+    lay->addWidget(rowsArea_);
     lay->setContentsMargins(4, 4, 4, 4);
     lay->setSpacing(4);
     topRow_ = new QWidget(this);
@@ -169,7 +193,7 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     auto* f11 = new QShortcut(QKeySequence(Qt::Key_F11), this);
     f11->setContext(Qt::WidgetWithChildrenShortcut);
     connect(f11, &QShortcut::activated, this, [this] { setFullScreen(!fullScreen_); });
-    lay->addWidget(topRow_);
+    rowsLay_->addWidget(topRow_);
 
     // THE ENVIRONMENT'S ROW: the model the harness is routed in, how it shows, and a section through it.
     envRow_ = new QWidget(this);
@@ -231,7 +255,7 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     connect(sectionAt_, &QSlider::valueChanged, this, [this](int) { applySection(); });
     env->addWidget(sectionAt_);
     env->addStretch(1);
-    lay->addWidget(envRow_);
+    rowsLay_->addWidget(envRow_);
 
     // THE ROUTE'S ROW: what a click does, and the bundles' diameter, bend radius and lead out of a connector.
     routeRow_ = new QWidget(this);
@@ -340,8 +364,8 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
            [this] { showHelp(); });
     rr->addStretch(1);
     br->addStretch(1);
-    lay->addWidget(routeRow_);
-    lay->addWidget(bundleRow_);
+    rowsLay_->addWidget(routeRow_);
+    rowsLay_->addWidget(bundleRow_);
 
     // THE WORK PLANE: where a click lands. On the model's faces (and the ground where there is no model) - or on a
     // plane, level or upright, put at any height or place: how a bundle is laid through the air, up a riser, over a
@@ -385,7 +409,7 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
            });
     pr->addWidget(viewBits_);
     pr->addStretch(1);
-    lay->addWidget(planeRow_);
+    rowsLay_->addWidget(planeRow_);
     connect(plane_, &QComboBox::currentIndexChanged, this, [this](int i) {
         // A plane chosen afresh is put through the middle of the model, where it can be seen to be.
         const int axis = i - 1;
@@ -402,6 +426,56 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
 
     // THE PICTURE, and beside it the bundles with their lengths.
     auto* split = new QSplitter(Qt::Horizontal, this);
+    // ON THE LEFT, WHAT IS IN VIEW: the model's solids and the harness's parts, each ticked to show - while the 3D
+    // Preview tab is open (the panels round the drawing put away).
+    solidsPanel_ = new QWidget(split);
+    solidsPanel_->setObjectName(QStringLiteral("view3dSolidsPanel"));
+    {
+        auto* sv = new QVBoxLayout(solidsPanel_);
+        sv->setContentsMargins(0, 0, 0, 0);
+        sv->setSpacing(2);
+        auto* title = new QLabel(QStringLiteral("<b>In view</b> - tick to show; right-click a part in the picture to hide it"), solidsPanel_);
+        title->setWordWrap(true);
+        sv->addWidget(title);
+        auto* filter = new QLineEdit(solidsPanel_);
+        filter->setPlaceholderText(QStringLiteral("Filter by name"));
+        sv->addWidget(filter);
+        solidsTree_ = new QTreeWidget(solidsPanel_);
+        solidsTree_->setObjectName(QStringLiteral("view3dSolids"));
+        solidsTree_->setHeaderHidden(true);
+        solidsTree_->setColumnCount(1);
+        sv->addWidget(solidsTree_, 1);
+        auto* all = new QPushButton(QStringLiteral("Show all"), solidsPanel_);
+        all->setObjectName(QStringLiteral("view3dShowAll"));
+        sv->addWidget(all);
+        connect(filter, &QLineEdit::textChanged, this, [this](const QString& t) {
+            for (int g = 0; g < solidsTree_->topLevelItemCount(); ++g) {
+                QTreeWidgetItem* top = solidsTree_->topLevelItem(g);
+                for (int i = 0; i < top->childCount(); ++i)
+                    top->child(i)->setHidden(!t.isEmpty() && !top->child(i)->text(0).contains(t, Qt::CaseInsensitive));
+            }
+        });
+        connect(all, &QPushButton::clicked, this, [this] {
+            canvas_->showAllParts();
+            partsShownChanged();
+        });
+        // TICKED: shown. A group's tick shows or hides all of it.
+        connect(solidsTree_, &QTreeWidget::itemChanged, this, [this](QTreeWidgetItem* it, int) {
+            if (fillingSolids_) return;
+            const bool shown = it->checkState(0) == Qt::Checked;
+            const int kind = it->data(0, Qt::UserRole).toInt();
+            auto apply = [this, shown](QTreeWidgetItem* c) {
+                if (c->data(0, Qt::UserRole).toInt() == 1) canvas_->setEnvPartHidden(c->data(0, Qt::UserRole + 1).toInt(), !shown);
+                else if (c->data(0, Qt::UserRole).toInt() == 2) canvas_->setBrickHidden(c->data(0, Qt::UserRole + 1).toString(), !shown);
+            };
+            if (kind == 0)
+                for (int i = 0; i < it->childCount(); ++i) apply(it->child(i));
+            else
+                apply(it);
+            partsShownChanged();
+        });
+    }
+    solidsPanel_->hide();
     canvas_ = new View3DCanvas(split);
     canvas_->setObjectName(QStringLiteral("view3dCanvas"));
     split->addWidget(canvas_);
@@ -500,9 +574,10 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     totals_->setWordWrap(true);
     sl->addWidget(totals_);
     split->addWidget(side_);
-    split->setStretchFactor(0, 1);
-    split->setStretchFactor(1, 0);
-    split->setSizes({800, 230});
+    split->setStretchFactor(0, 0);
+    split->setStretchFactor(1, 1);
+    split->setStretchFactor(2, 0);
+    split->setSizes({230, 800, 230});
     lay->addWidget(split, 1);
     status_ = new QLabel(this);
     status_->setObjectName(QStringLiteral("view3dStatus"));
@@ -555,6 +630,34 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
         sayStatus();
     });
     applyIcons();
+    // RIGHT-CLICKED IN THE PICTURE: that solid or part hidden, the others, or all shown again.
+    connect(canvas_, &View3DCanvas::partMenuAsked, this, [this](int part, const QString& brick, const QPoint& at) {
+        QMenu menu(this);
+        const QString name = part >= 0 ? envPartName(part) : brick.isEmpty() ? QString() : harnessPartName(brick);
+        if (!name.isEmpty()) {
+            QAction* hide = menu.addAction(QStringLiteral("Hide %1").arg(name));
+            hide->setObjectName(QStringLiteral("view3dHidePart"));
+            connect(hide, &QAction::triggered, this, [this, part, brick] {
+                if (part >= 0) canvas_->setEnvPartHidden(part, true);
+                else canvas_->setBrickHidden(brick, true);
+                partsShownChanged();
+            });
+            QAction* others = menu.addAction(QStringLiteral("Hide the others"));
+            connect(others, &QAction::triggered, this, [this, part, brick] {
+                for (size_t i = 0; i < env_.parts.size(); ++i) canvas_->setEnvPartHidden(static_cast<int>(i), static_cast<int>(i) != part);
+                for (const QString& b : harnessBricks()) canvas_->setBrickHidden(b, b != brick);
+                partsShownChanged();
+            });
+            menu.addSeparator();
+        }
+        QAction* all = menu.addAction(QStringLiteral("Show all"));
+        connect(all, &QAction::triggered, this, [this] {
+            canvas_->showAllParts();
+            partsShownChanged();
+        });
+        menu.exec(at);
+    });
+    fitRows();
     connect(canvas_, &View3DCanvas::cameraChanged, this, [this] { syncCamera(); });
     connect(canvas_, &View3DCanvas::routeChanged, this, [this] { syncConnector(); });
     connect(canvas_, &View3DCanvas::selectionChanged, this, [this] {
@@ -680,9 +783,19 @@ void View3DPane::setRowsShown(bool on) {
     topRow_->setVisible(on);
     for (QWidget* w : {envRow_, routeRow_, bundleRow_, planeRow_})
         if (w) w->setVisible(on && envChoice_);
+    // The 3D Preview tab: what is in view listed on the left, the route on the right.
+    solidsPanel_->setVisible(!on && envChoice_);
+    if (!on) refreshSolids();
+    fitRows();
 }
 
 void View3DPane::showPartsList() {
+    // IN THE 3D PREVIEW TAB: the list on the left shown or put away.
+    if (!rowsShown_ && envChoice_) {
+        solidsPanel_->setVisible(!solidsPanel_->isVisible());
+        if (solidsPanel_->isVisible()) refreshSolids();
+        return;
+    }
     if (partsList_) {
         partsList_->raise();
         partsList_->activateWindow();
@@ -900,7 +1013,91 @@ void View3DPane::setEnvironmentChoice(bool shown) {
     bundleRow_->setVisible(shown && rowsShown_);
     planeRow_->setVisible(shown && rowsShown_);
     side_->setVisible(shown);
+    solidsPanel_->setVisible(shown && !rowsShown_);
     canvas_->setRoute(shown ? &route_ : nullptr);
+    fitRows();
+}
+
+void View3DPane::fitRows() {
+    bool any = false;
+    for (QWidget* w : {topRow_, envRow_, routeRow_, bundleRow_, planeRow_}) any = any || (w && !w->isHidden());
+    rowsArea_->setVisible(any);
+    if (!any) return;
+    rowsBox_->adjustSize();
+    const QSize want = rowsBox_->sizeHint();
+    rowsBox_->setMinimumWidth(want.width());
+    rowsArea_->setFixedHeight(want.height() + 10);
+}
+
+QString View3DPane::envPartName(int part) const {
+    if (part < 0 || part >= static_cast<int>(env_.parts.size())) return QString();
+    const QString name = env_.parts[static_cast<size_t>(part)].name;
+    return name.isEmpty() ? QStringLiteral("solid %1").arg(part + 1) : name;
+}
+
+QStringList View3DPane::harnessBricks() const {
+    QStringList out;
+    for (const Harness3DItem& it : scene_.items)
+        if (!it.brick.isEmpty() && !out.contains(it.brick)) out << it.brick;
+    return out;
+}
+
+QString View3DPane::harnessPartName(const QString& brick) const {
+    // A part's name where it is shown as a part; a run's where it is a run.
+    QString any;
+    for (const Harness3DItem& it : scene_.items) {
+        if (it.brick != brick) continue;
+        if ((it.model || it.cube) && !it.what.isEmpty()) return it.what;
+        if (any.isEmpty()) any = it.what;
+    }
+    return any.isEmpty() ? brick : any;
+}
+
+void View3DPane::refreshSolids() {
+    fillingSolids_ = true;
+    solidsTree_->clear();
+    if (!env_.parts.empty()) {
+        auto* top = new QTreeWidgetItem(solidsTree_, {QStringLiteral("Model - %1").arg(QFileInfo(envRef_).fileName())});
+        top->setData(0, Qt::UserRole, 0);
+        top->setFlags(top->flags() | Qt::ItemIsUserCheckable);
+        int shown = 0;
+        for (size_t i = 0; i < env_.parts.size(); ++i) {
+            auto* it = new QTreeWidgetItem(top, {envPartName(static_cast<int>(i))});
+            it->setData(0, Qt::UserRole, 1);
+            it->setData(0, Qt::UserRole + 1, static_cast<int>(i));
+            it->setFlags(it->flags() | Qt::ItemIsUserCheckable);
+            const bool on = !canvas_->envPartHidden(static_cast<int>(i));
+            it->setCheckState(0, on ? Qt::Checked : Qt::Unchecked);
+            shown += on ? 1 : 0;
+        }
+        top->setCheckState(0, shown == 0 ? Qt::Unchecked : shown == static_cast<int>(env_.parts.size()) ? Qt::Checked : Qt::PartiallyChecked);
+        top->setExpanded(true);
+    }
+    const QStringList bricks = harnessBricks();
+    if (!bricks.isEmpty()) {
+        auto* top = new QTreeWidgetItem(solidsTree_, {QStringLiteral("Harness")});
+        top->setData(0, Qt::UserRole, 0);
+        top->setFlags(top->flags() | Qt::ItemIsUserCheckable);
+        int shown = 0;
+        for (const QString& b : bricks) {
+            auto* it = new QTreeWidgetItem(top, {harnessPartName(b)});
+            it->setData(0, Qt::UserRole, 2);
+            it->setData(0, Qt::UserRole + 1, b);
+            it->setFlags(it->flags() | Qt::ItemIsUserCheckable);
+            const bool on = !canvas_->brickHidden(b);
+            it->setCheckState(0, on ? Qt::Checked : Qt::Unchecked);
+            shown += on ? 1 : 0;
+        }
+        top->setCheckState(0, shown == 0 ? Qt::Unchecked : shown == bricks.size() ? Qt::Checked : Qt::PartiallyChecked);
+        top->setExpanded(true);
+    }
+    fillingSolids_ = false;
+}
+
+void View3DPane::partsShownChanged() {
+    canvas_->routeRedraw();
+    refreshRoute();
+    refreshSolids();
 }
 
 void View3DPane::showHelp() {
@@ -964,6 +1161,7 @@ void View3DPane::rebuild(bool fit) {
     if (!scene_.notes.isEmpty()) said += QLatin1Char('\n') + scene_.notes.join(QLatin1Char('\n'));
     sceneSaid_ = said;
     sayStatus();
+    if (solidsPanel_ && solidsPanel_->isVisible()) refreshSolids();
     refreshParts();
 }
 
@@ -1021,6 +1219,7 @@ bool View3DPane::loadEnvironment(const QString& path, bool wait) {
     envProgress_->setValue(0);
     envProgress_->setFormat(QStringLiteral("%1 - starting").arg(loadingName_));
     envProgress_->show();
+    emit loadProgress(0, envProgress_->format(), true);
     auto* tick = new QTimer(this);
     auto started = std::make_shared<QElapsedTimer>();
     started->start();
@@ -1032,6 +1231,7 @@ bool View3DPane::loadEnvironment(const QString& path, bool wait) {
         }
         envProgress_->setValue(prog->pct);
         envProgress_->setFormat(QStringLiteral("%1 - %2 (%3 s)").arg(loadingName_, stage).arg(started->elapsed() / 1000.0, 0, 'f', 1));
+        emit loadProgress(prog->pct, envProgress_->format(), true);
     });
     tick->start(100);
     connect(loading_, &QThread::finished, this, [this, env, index, tick] {
@@ -1039,6 +1239,7 @@ bool View3DPane::loadEnvironment(const QString& path, bool wait) {
         tick->deleteLater();
         envProgress_->setValue(100);
         envProgress_->setFormat(QStringLiteral("%1 - read").arg(loadingName_));
+        emit loadProgress(100, envProgress_->format(), false);
         QTimer::singleShot(600, envProgress_, [bar = envProgress_] { bar->hide(); });
         loading_->deleteLater();
         loading_ = nullptr;
@@ -1055,6 +1256,7 @@ void View3DPane::takeEnvironment(Environment3D env, std::shared_ptr<RayIndex3D> 
     envIndex_ = std::move(index);
     canvas_->setAllEnvPartsHidden(false);
     armSolids();
+    if (solidsPanel_ && solidsPanel_->isVisible()) QTimer::singleShot(0, this, [this] { refreshSolids(); });
     if (partsList_) partsList_->close();
     pickSaid_.clear();
     canvas_->clearPick();
@@ -1900,6 +2102,7 @@ std::vector<DrawItem3D> View3DCanvas::drawItems() const {
     std::vector<DrawItem3D> items;
     if (scene_ && harnessShown_)
         for (const Harness3DItem& it : scene_->items) {
+            if (!it.brick.isEmpty() && hiddenBricks_.contains(it.brick)) continue;
             // PICKED: lit in the pane's highlight colour, the part still read through it.
             QColor c = it.color;
             if (!it.brick.isEmpty() && lit_.contains(it.brick))
@@ -2312,10 +2515,85 @@ void View3DCanvas::nudge(double turnDeg, double tiltDeg, double rollDeg) {
 }
 
 void View3DCanvas::flip() {
-    cam_.yawDeg = wrapDegrees(cam_.yawDeg + 180.0);
-    cam_.pitchDeg = wrapDegrees(-cam_.pitchDeg);
+    // TURNED ROUND, SEEN TURNING: half way round the upright and over to the other side of level, over half a second,
+    // easing in and out - so it is plain which way it went, and what is now in front was behind.
+    const double yaw0 = cam_.yawDeg, pitch0 = cam_.pitchDeg;
+    const double yaw1 = yaw0 + 180.0, pitch1 = -pitch0;
+    if (turnAnim_) turnAnim_->stop();
+    turnAnim_ = new QVariantAnimation(this);
+    turnAnim_->setStartValue(0.0);
+    turnAnim_->setEndValue(1.0);
+    turnAnim_->setDuration(480);
+    turnAnim_->setEasingCurve(QEasingCurve::InOutCubic);
+    connect(turnAnim_, &QVariantAnimation::valueChanged, this, [this, yaw0, pitch0, yaw1, pitch1](const QVariant& v) {
+        const double t = v.toDouble();
+        cam_.yawDeg = wrapDegrees(yaw0 + (yaw1 - yaw0) * t);
+        cam_.pitchDeg = wrapDegrees(pitch0 + (pitch1 - pitch0) * t);
+        update();
+        emit cameraChanged();
+    });
+    connect(turnAnim_, &QVariantAnimation::finished, this, [this, yaw1, pitch1] {
+        cam_.yawDeg = wrapDegrees(yaw1);
+        cam_.pitchDeg = wrapDegrees(pitch1);
+        update();
+        emit cameraChanged();
+    });
+    turnAnim_->start(QAbstractAnimation::DeleteWhenStopped);
+}
+
+bool View3DCanvas::turning() const { return turnAnim_ && turnAnim_->state() == QAbstractAnimation::Running; }
+
+void View3DCanvas::setBrickHidden(const QString& brick, bool hidden) {
+    if (brick.isEmpty()) return;
+    if (hidden) hiddenBricks_.insert(brick);
+    else hiddenBricks_.remove(brick);
     update();
-    emit cameraChanged();
+}
+
+void View3DCanvas::showAllParts() {
+    hiddenBricks_.clear();
+    setAllEnvPartsHidden(false);
+}
+
+void View3DCanvas::contextMenuEvent(QContextMenuEvent* e) {
+    // A drag with the right button moved the view: no menu at the end of it.
+    if (e->reason() == QContextMenuEvent::Mouse && moved_) return;
+    V3 origin, dir;
+    cam_.rayAt(e->pos().x(), e->pos().y(), width(), height(), origin, dir);
+    // WHAT IS UNDER IT: the nearest solid of the model left showing - or a part of the harness, if that is nearer.
+    int part = -1;
+    double nearest = std::numeric_limits<double>::max();
+    if (env_ && envIndex_ && envShown_) {
+        V3 o = origin;
+        for (int tries = 0; tries < 256; ++tries) {
+            const Pick3D p = envIndex_->cast(o, dir);
+            if (!p.hit) break;
+            if (!section_.cuts(p.point) && !envPartHidden(p.part)) {
+                part = p.part;
+                nearest = (p.point - origin).length();
+                break;
+            }
+            o = p.point + dir * std::max(1e-6, p.distance * 1e-7);
+        }
+    }
+    QString brick;
+    if (scene_ && harnessShown_) {
+        std::vector<const Mesh3D*> meshes;
+        std::vector<QString> bricks;
+        for (const Harness3DItem& it : scene_->items)
+            if (!it.brick.isEmpty() && !hiddenBricks_.contains(it.brick)) {
+                meshes.push_back(&it.mesh);
+                bricks.push_back(it.brick);
+            }
+        RayIndex3D index;
+        index.build(meshes);
+        const Pick3D p = index.cast(origin, dir);
+        if (p.hit && p.distance < nearest && p.part >= 0) {
+            brick = bricks[static_cast<size_t>(p.part)];
+            part = -1;
+        }
+    }
+    emit partMenuAsked(part, brick, e->globalPos());
 }
 
 void View3DCanvas::setEnvPartHidden(int part, bool hidden) {

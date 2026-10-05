@@ -47,6 +47,10 @@
 #include <QSplitter>
 #include <QTabWidget>
 #include <QDockWidget>
+#include <QContextMenuEvent>
+#include <QProgressBar>
+#include <QScrollArea>
+#include <QTimer>
 #include <QToolButton>
 #include <QMenu>
 #include <QWheelEvent>
@@ -7812,6 +7816,10 @@ void testRoundFiftyFour() {
         canvas->viewFrom(QStringLiteral("iso"));
         const Camera3D before = canvas->camera();
         canvas->flip();
+        // Seen turning round: done when it has come to rest.
+        QElapsedTimer turned;
+        turned.start();
+        while (canvas->turning() && turned.elapsed() < 3000) QApplication::processEvents(QEventLoop::AllEvents, 20);
         const V3 e0 = before.eye() - before.target, e1 = canvas->camera().eye() - canvas->camera().target;
         check((e0 + e1).length() < 1e-6 * std::max(1.0, e0.length()), "flip: looked at from straight opposite, through the same middle");
         canvas->viewFrom(QStringLiteral("top"));
@@ -8008,6 +8016,108 @@ void testRoundFiftyFour() {
     check(paneRow && paneRow->isVisibleTo(p3), "ribbon: and the view's rows back when the tab is left");
 }
 
+// ROUND FIFTY-FIVE: THE 3D PREVIEW TAB AS A 3D PROGRAM HAS IT - the panels round the drawing put away, what is in view
+// listed on the left (ticked to show), the route on the right; a solid right-clicked hidden, all shown again; a model
+// read with its bar at the bottom right; the ribbon never squeezed - each button its whole name.
+void testRoundFiftyFive() {
+#ifdef EDRAW_HAVE_OCCT
+    const QString dir = QDir::tempPath() + QStringLiteral("/edraw3d");
+    QDir().mkpath(dir);
+    const QString stepPath = dir + QStringLiteral("/preview.step");
+    writeTestStepAssembly(stepPath);
+    MainWindow w;
+    w.resize(1500, 900);
+    w.show();
+    QApplication::processEvents();
+    auto* view3d = w.findChild<View3DPane*>(QStringLiteral("view3d"));
+    if (!view3d) return;
+    // A panel on the screen before the tab is opened.
+    QDockWidget* panel = nullptr;
+    for (QDockWidget* d : w.findChildren<QDockWidget*>())
+        if (d->isVisible() && d->objectName() != QLatin1String("view3dDock")) panel = d;
+    QTabWidget* ribbon = nullptr;
+    int tab = -1;
+    for (QTabWidget* t : w.findChildren<QTabWidget*>())
+        for (int i = 0; i < t->count(); ++i)
+            if (t->tabText(i) == QLatin1String("3D Preview")) {
+                ribbon = t;
+                tab = i;
+            }
+    if (!ribbon) return;
+    const int was = ribbon->currentIndex();
+    ribbon->setCurrentIndex(tab);
+    QApplication::processEvents();
+    check(panel && !panel->isVisible(), "3d preview: the panels round the drawing put away while it is open");
+    auto* solids = w.findChild<QWidget*>(QStringLiteral("view3dSolidsPanel"));
+    check(solids && solids->isVisible(), "3d preview: what is in view listed on the left");
+    // READ IN THE BACKGROUND: its bar at the bottom right of the window.
+    auto* bar = w.findChild<QProgressBar*>(QStringLiteral("modelLoadBar"));
+    view3d->loadEnvironment(stepPath);
+    bool seen = false;
+    QElapsedTimer clock;
+    clock.start();
+    while (view3d->loadingEnvironment() && clock.elapsed() < 60000) {
+        seen = seen || (bar && bar->isVisible());
+        QApplication::processEvents(QEventLoop::AllEvents, 20);
+    }
+    QApplication::processEvents();
+    seen = seen || (bar && bar->isVisible());
+    check(bar && seen && bar->value() == 100, "3d preview: a model read with its bar at the bottom right, to the end");
+    auto* tree = w.findChild<QTreeWidget*>(QStringLiteral("view3dSolids"));
+    QApplication::processEvents();
+    check(tree && tree->topLevelItemCount() >= 1 && tree->topLevelItem(0)->childCount() == 3, "3d preview: the model's three solids in the list");
+    // UNTICKED: hidden. The others still shown.
+    View3DCanvas* canvas = view3d->canvas();
+    if (tree && tree->topLevelItemCount() >= 1 && tree->topLevelItem(0)->childCount() == 3) {
+        tree->topLevelItem(0)->child(1)->setCheckState(0, Qt::Unchecked);
+        check(canvas->envPartHidden(1) && !canvas->envPartHidden(0), "3d preview: a solid unticked - hidden, the others shown");
+        w.findChild<QPushButton*>(QStringLiteral("view3dShowAll"))->click();
+        check(!canvas->envPartHidden(1) && tree->topLevelItem(0)->child(1)->checkState(0) == Qt::Checked, "3d preview: Show all - shown, ticked");
+    }
+    // RIGHT-CLICKED: the solid under it hidden from its menu.
+    canvas->setUseGpu(false);
+    canvas->viewFrom(QStringLiteral("top"));
+    QApplication::processEvents();
+    QPointF over;
+    canvas->toScreen({5, 5, 10}, over);
+    int menus = 0;
+    QTimer::singleShot(50, &w, [&] {
+        if (auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget())) {
+            ++menus;
+            for (QAction* a : menu->actions())
+                if (a->objectName() == QLatin1String("view3dHidePart")) a->trigger();
+            menu->close();
+        }
+    });
+    QContextMenuEvent right(QContextMenuEvent::Mouse, over.toPoint(), canvas->mapToGlobal(over.toPoint()));
+    QApplication::sendEvent(canvas, &right);
+    QApplication::processEvents();
+    int bracket = -1;
+    for (size_t i = 0; i < view3d->environment().parts.size(); ++i)
+        if (view3d->environment().parts[i].name == QLatin1String("Bracket")) bracket = static_cast<int>(i);
+    check(menus == 1 && bracket >= 0 && canvas->envPartHidden(bracket), "3d preview: a solid right-clicked - Hide hides it");
+    QTimer::singleShot(50, &w, [&] {
+        if (auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget())) {
+            for (QAction* a : menu->actions())
+                if (a->text() == QLatin1String("Show all")) a->trigger();
+            menu->close();
+        }
+    });
+    QContextMenuEvent again(QContextMenuEvent::Mouse, over.toPoint(), canvas->mapToGlobal(over.toPoint()));
+    QApplication::sendEvent(canvas, &again);
+    QApplication::processEvents();
+    check(bracket >= 0 && !canvas->envPartHidden(bracket), "3d preview: Show all from the menu - shown again");
+    // THE RIBBON NEVER SQUEEZED: each button at least as wide as its name wants, the page scrolled across instead.
+    bool whole = true;
+    for (const char* name : {"preview3dFit", "preview3dFront", "preview3dFlip", "preview3dConnector", "preview3dStretch"})
+        if (auto* b = w.findChild<QToolButton*>(QLatin1String(name))) whole = whole && b->width() >= b->sizeHint().width();
+    check(whole && w.findChild<QScrollArea*>(QStringLiteral("preview3dScroll")), "3d preview: every button its whole name - the ribbon scrolled, not squeezed");
+    ribbon->setCurrentIndex(was);
+    QApplication::processEvents();
+    check(panel && panel->isVisible(), "3d preview: left - the panels given back");
+#endif
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -8076,6 +8186,7 @@ int run_brickharness_tests() {
     testRoundFiftyTwo();
     testRoundFiftyThree();
     testRoundFiftyFour();
+    testRoundFiftyFive();
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
 }

@@ -16678,6 +16678,21 @@ QDockWidget* MainWindow::makeView3DPanel() {
         view3dPane_->rebuild(true);
     });
     view3dPane_->reloadRouting();
+    // A MODEL BEING READ: its bar at the bottom right of the window, wherever the 3D view is - put away once read.
+    modelLoadBar_ = new QProgressBar(this);
+    modelLoadBar_->setObjectName(QStringLiteral("modelLoadBar"));
+    modelLoadBar_->setRange(0, 100);
+    modelLoadBar_->setTextVisible(true);
+    modelLoadBar_->setMinimumWidth(320);
+    modelLoadBar_->setMaximumHeight(18);
+    modelLoadBar_->hide();
+    statusBar()->addPermanentWidget(modelLoadBar_);
+    connect(view3dPane_, &View3DPane::loadProgress, this, [this](int percent, const QString& said, bool running) {
+        modelLoadBar_->setValue(percent);
+        modelLoadBar_->setFormat(said);
+        modelLoadBar_->show();
+        if (!running) QTimer::singleShot(1500, modelLoadBar_, [bar = modelLoadBar_] { bar->hide(); });
+    });
     // The 3D Preview tab's route tools say which one the 3D view has.
     connect(view3dPane_, &View3DPane::routeToolChanged, this, [this](RouteTool tool) {
         for (const auto& pair : preview3dTools_)

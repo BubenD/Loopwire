@@ -43,6 +43,7 @@ class QWidget;
 class QCloseEvent;
 class QToolButton;
 class QStackedWidget;
+class QProgressBar;
 class QPlainTextEdit;
 class QFontComboBox;
 class QDoubleSpinBox;
@@ -1028,6 +1029,8 @@ private:
     bool preview3dOn_ = false;
     bool preview3dDockWas_ = false;
     bool preview3dShownOnce_ = false;
+    QList<QPointer<QDockWidget>> preview3dDocksHidden_;   // the panels put away while the 3D Preview tab is open
+    QProgressBar* modelLoadBar_ = nullptr;          // a 3D model being read, at the bottom right
     // Each ribbon control and the name of the 3D view's own it stands for.
     QList<QPair<QPointer<QWidget>, QString>> preview3dMirrors_;
     bool preview3dMirrored_ = false;

@@ -21,6 +21,8 @@
 #include <QSpinBox>
 #include <QDockWidget>
 #include <QHBoxLayout>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QStackedWidget>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -245,7 +247,25 @@ void MainWindow::buildView3DTab() {
             QStringLiteral("How to work in the 3D view - every command, with recordings"), [this] { if (view3dPane_) view3dPane_->showHelp(); });
     });
     lay->addStretch(1);
-    ribbon_->addTab(page, QStringLiteral("3D Preview"));
+    // NEVER SQUEEZED: every button its picture and its whole name, every box as wide as what is in it - the page as
+    // wide as all of that wants, and scrolled across (a thin bar under it) where the window is narrower.
+    page->setMinimumWidth(page->sizeHint().width());
+    auto* scroll = new QScrollArea(ribbon_);
+    scroll->setObjectName(QStringLiteral("preview3dScroll"));
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setWidgetResizable(true);
+    scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    scroll->horizontalScrollBar()->setStyleSheet(QStringLiteral(
+        "QScrollBar:horizontal{height:8px;background:transparent;border:none;}"
+        "QScrollBar::handle:horizontal{background:#6b7480;border-radius:3px;min-width:40px;}"
+        "QScrollBar::add-line:horizontal,QScrollBar::sub-line:horizontal{width:0;}"
+        "QScrollBar::add-page:horizontal,QScrollBar::sub-page:horizontal{background:transparent;}"));
+    scroll->setWidget(page);
+    scroll->viewport()->setAutoFillBackground(false);
+    scroll->setStyleSheet(QStringLiteral("QScrollArea#preview3dScroll{background:transparent;}"));
+    view3dTabPage_ = scroll;
+    ribbon_->addTab(scroll, QStringLiteral("3D Preview"));
 }
 
 void MainWindow::restylePreview3DIcons() {
@@ -339,12 +359,28 @@ void MainWindow::showPreview3D(bool on) {
         // OUT OF ITS PANEL INTO THE MIDDLE: the panel put away for as long as the tab is open, and given back after.
         if (view3dPane_->fullScreenView()) view3dPane_->setFullScreen(false);
         preview3dDockWas_ = view3dDock_->isVisible();
+        // THE PANELS ROUND THE DRAWING PUT AWAY: the 3D view has its own on either side - what is in view on the left,
+        // the route on the right. Given back as they were when the tab is left.
+        preview3dDocksHidden_.clear();
+        for (QDockWidget* d : findChildren<QDockWidget*>())
+            if (d != view3dDock_ && d->isVisible() && !d->isFloating()) {
+                preview3dDocksHidden_.append(d);
+                d->hide();
+            }
         if (!preview3dStandIn_) preview3dStandIn_ = new QWidget(view3dDock_);
         view3dDock_->setWidget(preview3dStandIn_);
         view3dDock_->hide();
         preview3dHost_->layout()->addWidget(view3dPane_);
         // ALL ITS OPTIONS ON THE RIBBON: the pane's own rows put away while the tab is open.
         mirrorPreview3D();
+        // ITS BOXES AS WIDE AS WHAT IS NOW IN THEM - filled from the 3D view just now - and the page as wide as all that.
+        if (auto* scroll = qobject_cast<QScrollArea*>(view3dTabPage_))
+            if (QWidget* page = scroll->widget()) {
+                for (QComboBox* c : page->findChildren<QComboBox*>()) c->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+                page->setMinimumWidth(0);
+                page->adjustSize();
+                page->setMinimumWidth(page->sizeHint().width());
+            }
         view3dPane_->setRowsShown(false);
         view3dPane_->show();
         centralStack_->setCurrentWidget(preview3dHost_);
@@ -357,6 +393,9 @@ void MainWindow::showPreview3D(bool on) {
         preview3dHost_->layout()->removeWidget(view3dPane_);
         view3dDock_->setWidget(view3dPane_);
         view3dDock_->setVisible(preview3dDockWas_);
+        for (const QPointer<QDockWidget>& d : preview3dDocksHidden_)
+            if (d) d->show();
+        preview3dDocksHidden_.clear();
         canvas_->setFocus();
     }
 }
