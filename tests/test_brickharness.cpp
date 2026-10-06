@@ -7514,7 +7514,7 @@ void testRoundFiftyTwo() {
     check(std::abs(route.length(*route.segment(s2)) - before) < 1e-6 && std::abs(route.segment(s2)->via[0].at.y - 30.0) < 1e-6,
           "stretch: undone a pull at a time");
     // Moved alone, the cable left where it was laid: Add loose on (off, the cable keeps its length - round fifty-three).
-    pane.findChild<QAbstractButton*>(QStringLiteral("view3dAddLoose"))->setChecked(true);
+    canvas->setGrowLength(true);
     // MOVED: the clip somewhere else, its bundles' laid points left where they are.
     pane.setRouteTool(RouteTool::Move);
     drag(shown(c1), shown(c1) + (screen({0, 20, 0}) - screen({0, 0, 0})));
@@ -7617,7 +7617,7 @@ void testRoundFiftyThree() {
         const RouteNode3D* n = route.node(id);
         return screen(n->at + n->normal * (route.lead * 0.5));
     };
-    check(!pane.findChild<QAbstractButton*>(QStringLiteral("view3dAddLoose"))->isChecked() && !canvas->growLength(),
+    check(!canvas->growLength(),
           "pull: Add loose off as it starts - a cable keeps its length");
     const double drawnWas = route.length(*route.segment(s));
     const double before = laid();
@@ -7634,7 +7634,7 @@ void testRoundFiftyThree() {
     check(route.node(x2)->at.y > 20.0 && std::abs(route.length(*route.segment(s)) - drawnWas) < 0.2 && route.node(x1)->at.x == -60.0,
           "pull: moved in and across - the cable bent round, drawn as long as it was (its bends and all), its other end held");
     // ADD LOOSE: the cable longer for being pulled.
-    pane.findChild<QAbstractButton*>(QStringLiteral("view3dAddLoose"))->setChecked(true);
+    canvas->setGrowLength(true);
     const double grown = laid();
     drag(grip(x2), grip(x2) + (screen({120, 40, 0}) - screen({20, 40, 0})));
     check(canvas->growLength() && laid() > grown + 30.0, "pull: Add loose on - pulled out, the cable longer");
@@ -9010,6 +9010,141 @@ void testRoundSixtyOne() {
               qPrintable(QStringLiteral("ribbon: %1 on the 3D Preview tab").arg(QLatin1String(name))));
 }
 
+// ROUND SIXTY-TWO: STRETCH TAKES A CABLE - the one clicked, pulled through its connector, and of two cables at one
+// connector only that one; THE CABLE SELECTED'S TENSION beside the route's; the 3D Preview ribbon - Route to land beside
+// Route, the tension in a group of its own, Help never folded away, Add loose gone.
+void testRoundSixtyTwo() {
+    Route3D r;
+    r.diameter = 6.0;
+    r.lead = 10.0;
+    const QString x1 = r.addNode(RouteNodeKind::Connector, {0, 0, 0}, {0, 0, 1});
+    const QString x2 = r.addNode(RouteNodeKind::Connector, {100, 0, 0}, {0, 0, 1});
+    const QString x3 = r.addNode(RouteNodeKind::Connector, {-100, 0, 0}, {0, 0, 1});
+    // Each with slack in it, bowed out across.
+    const QString s1 = r.addSegment(x1, x2, {{{50, 40, 0}, {0, 0, 1}}});
+    const QString s2 = r.addSegment(x1, x3, {{{-50, 40, 0}, {0, 0, 1}}});
+    QJsonObject stored = r.toJson();
+    View3DPane pane;
+    pane.setRoutingStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    pane.resize(1000, 700);
+    pane.show();
+    QApplication::processEvents();
+    pane.reloadRouting(true);
+    View3DCanvas* canvas = pane.canvas();
+    canvas->setUseGpu(false);
+    canvas->viewFrom(QStringLiteral("top"));
+    const Route3D& route = pane.route();
+    auto screen = [&](const V3& p) {
+        QPointF at;
+        canvas->toScreen(p, at);
+        return at;
+    };
+    auto drag = [&](const QPointF& from, const QPointF& to) {
+        QMouseEvent press(QEvent::MouseButtonPress, from, canvas->mapToGlobal(from), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &press);
+        for (int i = 1; i <= 8; ++i) {
+            const QPointF at = from + (to - from) * (i / 8.0);
+            QMouseEvent move(QEvent::MouseMove, at, canvas->mapToGlobal(at), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(canvas, &move);
+        }
+        QMouseEvent release(QEvent::MouseButtonRelease, to, canvas->mapToGlobal(to), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &release);
+        QApplication::processEvents();
+    };
+    const double len1 = route.length(*route.segment(s1)), len2 = route.length(*route.segment(s2));
+    pane.setRouteTool(RouteTool::Stretch);
+    // X1 HAS TWO CABLES: which one is not guessed - it says to click the cable.
+    const RouteNode3D* n1 = route.node(x1);
+    const QPointF grip = screen(n1->at + n1->normal * (route.lead * 0.5));
+    drag(grip, grip + (screen({0, -10, 0}) - screen({0, 0, 0})));
+    auto* status = pane.findChild<QLabel*>(QStringLiteral("view3dStatus"));
+    check(std::abs(route.length(*route.segment(s1)) - len1) < 1e-6 && std::abs(route.length(*route.segment(s2)) - len2) < 1e-6 &&
+              status && status->text().contains(QStringLiteral("click the cable")),
+          "stretch: a connector with two cables - neither stretched, and it says to click the cable");
+    // THE CABLE CLICKED: only it, pulled through X1 (its nearer connector), X1 where it was.
+    // A third of the way along it, from X1.
+    const std::vector<V3> c1 = route.centreline(*route.segment(s1));
+    V3 third = c1.front();
+    {
+        double total = 0.0, gone = 0.0;
+        for (size_t i = 1; i < c1.size(); ++i) total += (c1[i] - c1[i - 1]).length();
+        for (size_t i = 1; i < c1.size(); ++i) {
+            const double l = (c1[i] - c1[i - 1]).length();
+            if (gone + l >= total / 3.0 && l > 0.0) {
+                third = c1[i - 1] + (c1[i] - c1[i - 1]) * ((total / 3.0 - gone) / l);
+                break;
+            }
+            gone += l;
+        }
+    }
+    const QPointF on = screen(third);
+    drag(on, on + (screen({0, -10, 0}) - screen({0, 0, 0})));
+    std::printf("  stretch: X1 - X2 %.1f mm (was %.1f), X1 - X3 %.1f mm (was %.1f)\n", route.length(*route.segment(s1)), len1,
+                route.length(*route.segment(s2)), len2);
+    check(std::abs(route.length(*route.segment(s1)) - (len1 - 10.0)) < 1.0 && std::abs(route.length(*route.segment(s2)) - len2) < 1e-6 &&
+              route.node(x1)->at.length() < 1e-9 && route.node(x2)->at.x == 100.0,
+          "stretch: the cable clicked - only it pulled tight and cut, the other cable at that connector as it was, both ends where they were");
+    pane.undoRoute();
+    check(std::abs(route.length(*route.segment(s1)) - len1) < 1e-6, "stretch: undone");
+    // A CABLE OF TWO SELECTED, THEN ITS CONNECTOR: that one.
+    canvas->selectSegment(s2);
+    drag(grip, grip + (screen({0, -10, 0}) - screen({0, 0, 0})));
+    check(std::abs(route.length(*route.segment(s2)) - (len2 - 10.0)) < 1.0 && std::abs(route.length(*route.segment(s1)) - len1) < 1e-6,
+          "stretch: one of its cables selected, the connector pulled - that cable only");
+
+    // ---- THE CABLE SELECTED: ITS TENSION ----
+    pane.setRouteTool(RouteTool::Select);
+    canvas->selectSegment(QString());
+    auto* cable = pane.findChild<QComboBox*>(QStringLiteral("view3dCableTension"));
+    check(cable && !cable->isEnabled(), "tension: the cable's own - nothing to set until a cable is selected");
+    canvas->selectSegment(s1);
+    QApplication::processEvents();
+    check(cable && cable->isEnabled() && cable->currentIndex() == 0, "tension: a cable selected - its own tension to choose, the route's as it starts");
+    if (cable) cable->setCurrentIndex(cable->findText(QStringLiteral("Taut 50 N")));
+    check(std::abs(route.segment(s1)->tension - 50.0) < 1e-9 && route.segment(s2)->tension < 0.0, "tension: set Taut - that cable's own, the other's as it was");
+    QComboBox* row = nullptr;
+    auto* table = pane.findChild<QTableWidget*>(QStringLiteral("view3dRoutes"));
+    for (int i = 0; table && i < table->rowCount(); ++i)
+        if (table->item(i, 0) && table->item(i, 0)->data(Qt::UserRole).toString() == s1) row = qobject_cast<QComboBox*>(table->cellWidget(i, 3));
+    check(row && row->currentText() == QStringLiteral("Taut 50 N"), "tension: the table says so too");
+    check(pane.findChild<QWidget*>(QStringLiteral("view3dAddLoose")) == nullptr, "add loose: no button for it");
+
+    // ---- THE 3D PREVIEW RIBBON ----
+    MainWindow win;
+    win.resize(6000, 800);
+    win.show();
+    QApplication::processEvents();
+    QTabWidget* ribbon = nullptr;
+    int tab = -1;
+    for (QTabWidget* t : win.findChildren<QTabWidget*>())
+        for (int i = 0; i < t->count(); ++i)
+            if (t->tabText(i) == QLatin1String("3D Preview")) {
+                ribbon = t;
+                tab = i;
+            }
+    if (!ribbon) return;
+    ribbon->setCurrentIndex(tab);
+    for (int i = 0; i < 5; ++i) QApplication::processEvents();
+    auto x = [&](const char* name) {
+        auto* w = win.findChild<QWidget*>(QLatin1String(name));
+        return w && w->isVisible() ? w->mapTo(&win, QPoint(0, 0)).x() : -1;
+    };
+    std::printf("  ribbon: Route at %d, Route to land at %d, Show at %d, Help at %d\n", x("preview3dRoute"), x("preview3dRouteToLand"),
+                x("preview3dHarness"), x("preview3dHelp"));
+    check(x("preview3dRoute") >= 0 && x("preview3dRouteToLand") > x("preview3dRoute") && x("preview3dRouteToLand") < x("preview3dHarness"),
+          "ribbon: Route to land next to Route");
+    check(win.findChild<QWidget*>(QStringLiteral("preview3dCableTension")) && win.findChild<QWidget*>(QStringLiteral("preview3dTension")) &&
+              win.findChild<QWidget*>(QStringLiteral("preview3dAddLoose")) == nullptr,
+          "ribbon: the route's and the cable's tension in a group of their own; no Add loose");
+    win.resize(500, 800);
+    for (int i = 0; i < 5; ++i) QApplication::processEvents();
+    auto* help = win.findChild<QToolButton*>(QStringLiteral("preview3dHelp"));
+    check(help && help->window() == &win && win.findChild<QToolButton*>(QStringLiteral("preview3dFoldHelp")) == nullptr,
+          "ribbon: Help never folded away - on the ribbon however narrow the window");
+    ribbon->setCurrentIndex(tab - 1);
+    QApplication::processEvents();
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -9095,6 +9230,7 @@ int run_brickharness_tests() {
     ROUND(testRoundFiftyNine);
     ROUND(testRoundSixty);
     ROUND(testRoundSixtyOne);
+    ROUND(testRoundSixtyTwo);
 #undef ROUND
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;

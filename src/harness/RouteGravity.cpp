@@ -7,11 +7,11 @@ namespace Edraw_Desktop {
 
 const std::vector<CableTension>& cableTensions() {
     static const std::vector<CableTension> all{
-        {QStringLiteral("Slack - hangs by its length"), 0.0},
-        {QStringLiteral("Loose - 0.5 N"), 0.5},
-        {QStringLiteral("Normal - 2 N"), 2.0},
-        {QStringLiteral("Firm - 10 N"), 10.0},
-        {QStringLiteral("Taut - 50 N"), 50.0},
+        {QStringLiteral("Slack"), 0.0},
+        {QStringLiteral("Loose 0.5 N"), 0.5},
+        {QStringLiteral("Normal 2 N"), 2.0},
+        {QStringLiteral("Firm 10 N"), 10.0},
+        {QStringLiteral("Taut 50 N"), 50.0},
     };
     return all;
 }

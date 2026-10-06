@@ -275,7 +275,9 @@ private:
     QWidget* routeRow_ = nullptr;
     QWidget* editRow_ = nullptr;
     QWidget* bundleRow_ = nullptr;
-    QToolButton* grow_ = nullptr;   // Add loose
+    // THE CABLE SELECTED: its own tension, chosen here (the route's where it gives none).
+    QComboBox* cableTension_ = nullptr;
+    void syncCableTension();
     // HOW TAUT THE BUNDLES ARE PUT IN (the route's), GRAVITY shown on them, and which way it pulls.
     QComboBox* tension_ = nullptr;
     QToolButton* gravity_ = nullptr;
@@ -633,6 +635,8 @@ private:
     // tight through it, as far as the pointer goes, and what comes through is cut off.
     bool beginNodeDrag(const QPointF& at, bool stretch);
     void tightenKept(double by);
+    // THE CABLE STRETCHED: the one clicked, or the one of a node's cables selected - pulled through its connector.
+    QString stretchSeg_;
     double stretchCut_ = 0.0;
     // PULLED, ITS LENGTH KEPT: from the point taken hold of out to the node at each bundle's far end, the points in
     // between (by their places in the bundle's laid points), the far node where it holds, and each step's length -

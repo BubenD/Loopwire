@@ -45,8 +45,8 @@ void MainWindow::buildView3DTab() {
     const QHash<QString, QPair<QString, int>> foldOf{
         {QStringLiteral("View"), {QStringLiteral("iso"), 5}},          {QStringLiteral("Route"), {QStringLiteral("route"), 6}},
         {QStringLiteral("Show"), {QStringLiteral("harness"), 4}},      {QStringLiteral("Environment"), {QStringLiteral("load"), 3}},
-        {QStringLiteral("Bundle"), {QStringLiteral("loose"), 2}},      {QStringLiteral("Route to land"), {QStringLiteral("workplane"), 1}},
-        {QStringLiteral("Harness"), {QStringLiteral("lengths"), 0}}};
+        {QStringLiteral("Bundle"), {QStringLiteral("route"), 2}},      {QStringLiteral("Route to land"), {QStringLiteral("workplane"), 7}},
+        {QStringLiteral("Tension"), {QStringLiteral("gravity"), 6}},  {QStringLiteral("Drawing"), {QStringLiteral("lengths"), 0}}};
     auto group = [&](const QString& title, auto fill) {
         auto* slot = new QWidget(page);
         auto* sl = new QHBoxLayout(slot);
@@ -225,6 +225,48 @@ void MainWindow::buildView3DTab() {
                {QStringLiteral("Surface to surface"), [this] { if (view3dPane_) view3dPane_->setMeasureMode(1); }}},
               0);
     });
+    group(QStringLiteral("Route to land"), [&](QWidget* w, QHBoxLayout* row) {
+        // ROUTE TO LAND: where the points of a route land - the model's faces, or a plane - chosen from its menu, as in the
+        // 3D view.
+        QToolButton* land = big(w, row, "preview3dRouteToLand", QStringLiteral("Route to land"), QStringLiteral("workplane"),
+                                QStringLiteral("Where the points of a route land: on the model's faces, or on a plane across X, "
+                                               "Y or Z (in the air if need be)"),
+                                [] {});
+        land->setPopupMode(QToolButton::InstantPopup);
+        auto* landMenu = new QMenu(land);
+        landMenu->setObjectName(QStringLiteral("preview3dRouteToLandMenu"));
+        land->setMenu(landMenu);
+        connect(landMenu, &QMenu::aboutToShow, this, [this, landMenu] {
+            landMenu->clear();
+            auto* box = view3dPane_ ? view3dPane_->findChild<QComboBox*>(QStringLiteral("view3dWorkPlane")) : nullptr;
+            if (!box) return;
+            for (int i = 0; i < box->count(); ++i) {
+                QAction* a = landMenu->addAction(box->itemText(i));
+                a->setCheckable(true);
+                a->setChecked(box->currentIndex() == i);
+                connect(a, &QAction::triggered, box, [box, i] { box->setCurrentIndex(i); });
+            }
+        });
+        auto* g = new QWidget(w);
+        auto* gl = new QGridLayout(g);
+        gl->setContentsMargins(4, 2, 4, 2);
+        gl->setVerticalSpacing(2);
+        auto* plane = new QComboBox(g);
+        plane->setObjectName(QStringLiteral("preview3dWorkPlane"));
+        gl->addWidget(plane, 0, 0, 1, 2);
+        preview3dMirrors_.append({plane, QStringLiteral("view3dWorkPlane")});
+        gl->addWidget(fieldLabel(QStringLiteral("at"), g), 1, 0);
+        auto* at = new QDoubleSpinBox(g);
+        at->setObjectName(QStringLiteral("preview3dWorkPlaneAt"));
+        gl->addWidget(at, 1, 1);
+        preview3dMirrors_.append({at, QStringLiteral("view3dWorkPlaneAt")});
+        row->addWidget(g);
+        big(w, row, "preview3dWorkPlaneHere", QStringLiteral("Through the point"), QStringLiteral("workplane"),
+            QStringLiteral("The plane put through the node selected, or the point last picked"), [this] {
+                if (!view3dPane_) return;
+                if (auto* b = view3dPane_->findChild<QToolButton*>(QStringLiteral("view3dWorkPlaneHere"))) b->click();
+            });
+    });
     group(QStringLiteral("Show"), [&](QWidget* w, QHBoxLayout* row) {
         auto* g = new QWidget(w);
         auto* gl = new QGridLayout(g);
@@ -306,26 +348,29 @@ void MainWindow::buildView3DTab() {
             preview3dMirrors_.append({s, QString::fromLatin1(sizes[i][2])});
         }
         row->addWidget(g);
-        QToolButton* loose = big(w, row, "preview3dAddLoose", QStringLiteral("Add loose"), QStringLiteral("loose"),
-                                 QStringLiteral("On: a cable pulled is made longer where it is pulled, the rest of it left "
-                                                "where it is. Off: a cable keeps its length"),
-                                 [] {});
-        loose->setCheckable(true);
-        preview3dMirrors_.append({loose, QStringLiteral("view3dAddLoose")});
     });
-    group(QStringLiteral("Gravity"), [&](QWidget* w, QHBoxLayout* row) {
+    // HOW TAUT THE CABLES ARE: the route's, the cable selected's own - and gravity shown on them.
+    group(QStringLiteral("Tension"), [&](QWidget* w, QHBoxLayout* row) {
         auto* g = new QWidget(w);
         auto* gl = new QGridLayout(g);
         gl->setContentsMargins(4, 2, 4, 2);
         gl->setVerticalSpacing(1);
-        gl->addWidget(new QLabel(QStringLiteral("Tension"), g), 0, 0);
+        gl->addWidget(fieldLabel(QStringLiteral("Route"), g), 0, 0);
         auto* tension = new QComboBox(g);
         tension->setObjectName(QStringLiteral("preview3dTension"));
+        tension->setToolTip(QStringLiteral("How taut the cables are put in, where one gives none of its own"));
         gl->addWidget(tension, 0, 1);
         preview3dMirrors_.append({tension, QStringLiteral("view3dTension")});
+        gl->addWidget(fieldLabel(QStringLiteral("Cable"), g), 1, 0);
+        auto* cable = new QComboBox(g);
+        cable->setObjectName(QStringLiteral("preview3dCableTension"));
+        cable->setToolTip(QStringLiteral("The tension of the cable selected - click a cable, then choose"));
+        gl->addWidget(cable, 1, 1);
+        preview3dMirrors_.append({cable, QStringLiteral("view3dCableTension")});
+        gl->addWidget(fieldLabel(QStringLiteral("Down"), g), 2, 0);
         auto* down = new QComboBox(g);
         down->setObjectName(QStringLiteral("preview3dGravityDown"));
-        gl->addWidget(down, 1, 1);
+        gl->addWidget(down, 2, 1);
         preview3dMirrors_.append({down, QStringLiteral("view3dGravityDown")});
         row->addWidget(g);
         QToolButton* gravity = big(w, row, "preview3dGravity", QStringLiteral("Gravity"), QStringLiteral("gravity"),
@@ -335,58 +380,24 @@ void MainWindow::buildView3DTab() {
         gravity->setCheckable(true);
         preview3dMirrors_.append({gravity, QStringLiteral("view3dGravity")});
     });
-    group(QStringLiteral("Route to land"), [&](QWidget* w, QHBoxLayout* row) {
-        // ROUTE TO LAND: where the points of a route land - the model's faces, or a plane - chosen from its menu, as in the
-        // 3D view.
-        QToolButton* land = big(w, row, "preview3dRouteToLand", QStringLiteral("Route to land"), QStringLiteral("workplane"),
-                                QStringLiteral("Where the points of a route land: on the model's faces, or on a plane across X, "
-                                               "Y or Z (in the air if need be)"),
-                                [] {});
-        land->setPopupMode(QToolButton::InstantPopup);
-        auto* landMenu = new QMenu(land);
-        landMenu->setObjectName(QStringLiteral("preview3dRouteToLandMenu"));
-        land->setMenu(landMenu);
-        connect(landMenu, &QMenu::aboutToShow, this, [this, landMenu] {
-            landMenu->clear();
-            auto* box = view3dPane_ ? view3dPane_->findChild<QComboBox*>(QStringLiteral("view3dWorkPlane")) : nullptr;
-            if (!box) return;
-            for (int i = 0; i < box->count(); ++i) {
-                QAction* a = landMenu->addAction(box->itemText(i));
-                a->setCheckable(true);
-                a->setChecked(box->currentIndex() == i);
-                connect(a, &QAction::triggered, box, [box, i] { box->setCurrentIndex(i); });
-            }
-        });
-        auto* g = new QWidget(w);
-        auto* gl = new QGridLayout(g);
-        gl->setContentsMargins(4, 2, 4, 2);
-        gl->setVerticalSpacing(2);
-        auto* plane = new QComboBox(g);
-        plane->setObjectName(QStringLiteral("preview3dWorkPlane"));
-        gl->addWidget(plane, 0, 0, 1, 2);
-        preview3dMirrors_.append({plane, QStringLiteral("view3dWorkPlane")});
-        gl->addWidget(fieldLabel(QStringLiteral("at"), g), 1, 0);
-        auto* at = new QDoubleSpinBox(g);
-        at->setObjectName(QStringLiteral("preview3dWorkPlaneAt"));
-        gl->addWidget(at, 1, 1);
-        preview3dMirrors_.append({at, QStringLiteral("view3dWorkPlaneAt")});
-        row->addWidget(g);
-        big(w, row, "preview3dWorkPlaneHere", QStringLiteral("Through the point"), QStringLiteral("workplane"),
-            QStringLiteral("The plane put through the node selected, or the point last picked"), [this] {
-                if (!view3dPane_) return;
-                if (auto* b = view3dPane_->findChild<QToolButton*>(QStringLiteral("view3dWorkPlaneHere"))) b->click();
-            });
-    });
-    group(QStringLiteral("Harness"), [&](QWidget* w, QHBoxLayout* row) {
+    // TO AND FROM THE DRAWING: the route's lengths given to the harness drawn, and the 3D harness built again from it.
+    group(QStringLiteral("Drawing"), [&](QWidget* w, QHBoxLayout* row) {
         big(w, row, "preview3dLengths", QStringLiteral("Lengths to harness"), QStringLiteral("lengths"),
-            QStringLiteral("Give each cable of the harness its length along the route"),
+            QStringLiteral("Give each cable of the harness drawn its length along the route"),
             [this] { if (view3dPane_) view3dPane_->applyLengths(true); });
         big(w, row, "preview3dRefresh", QStringLiteral("Refresh"), QStringLiteral("refresh"), QStringLiteral("Build the 3D harness again from the drawing"),
             [this] { if (view3dPane_) view3dPane_->rebuild(false); });
-        big(w, row, "preview3dHelp", QStringLiteral("Help"), QStringLiteral("help"),
-            QStringLiteral("How to work in the 3D view - every command explained, with recordings of it being done"),
-            [this] { if (view3dPane_) view3dPane_->showHelp(); });
     });
+    // HELP, never folded away: every command explained, with recordings of it being done.
+    {
+        auto* w = new QWidget(page);
+        auto* row = new QHBoxLayout(w);
+        row->setContentsMargins(0, 0, 0, 0);
+        big(w, row, "preview3dHelp", QStringLiteral("Help"), QStringLiteral("help"),
+            QStringLiteral("How to work in the 3D view - every command explained, with recordings and examples of it being done"),
+            [this] { if (view3dPane_) view3dPane_->showHelp(); });
+        addGroup(lay, QStringLiteral("Help"), w);
+    }
     // THE DISPLAY: the background behind the picture and how it is shaded - as on the wheel's options.
     if (auto* fit = page->findChild<QToolButton*>(QStringLiteral("preview3dFit"))) {
         auto* row = qobject_cast<QHBoxLayout*>(fit->parentWidget()->layout());

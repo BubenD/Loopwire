@@ -451,18 +451,7 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
         emit routeChanged();
     };
     for (QDoubleSpinBox* s : {diameter_, bend_, lead_}) connect(s, &QDoubleSpinBox::valueChanged, this, settings);
-    // PULLING: the bundles' lengths kept (a cable pulled along), or loose added where a point is pulled.
-    grow_ = new QToolButton(bundleRow_);
-    grow_->setObjectName(QStringLiteral("view3dAddLoose"));
-    grow_->setText(QStringLiteral("Add loose"));
-    grow_->setCheckable(true);
-    grow_->setAutoRaise(true);
-    grow_->setToolTip(QStringLiteral("On: the point pulled - a cable taken hold of with the view locked, or a node moved - goes "
-                                     "alone, and the cable is made longer there, the rest of it where it was. Off: a cable keeps "
-                                     "its length - pulled along behind the point, its far ends held, no further than it reaches"));
-    connect(grow_, &QToolButton::toggled, this, [this](bool on) { canvas_->setGrowLength(on); });
-    br->addWidget(grow_);
-    // HOW TAUT A BUNDLE IS PUT IN - the route's here, each one's own in the table.
+    // HOW TAUT A BUNDLE IS PUT IN - the route's here; the cable selected its own, beside it and in the table.
     br->addWidget(new QLabel(QStringLiteral("Tension"), bundleRow_));
     tension_ = new QComboBox(bundleRow_);
     tension_->setObjectName(QStringLiteral("view3dTension"));
@@ -478,6 +467,24 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
         emit routeChanged();
     });
     br->addWidget(tension_);
+    br->addWidget(new QLabel(QStringLiteral("Cable"), bundleRow_));
+    cableTension_ = new QComboBox(bundleRow_);
+    cableTension_->setObjectName(QStringLiteral("view3dCableTension"));
+    cableTension_->addItem(QStringLiteral("Route's"), -1.0);
+    for (const CableTension& t : cableTensions()) cableTension_->addItem(t.name, t.newtons);
+    cableTension_->setToolTip(QStringLiteral("The tension of the cable selected - select a cable (click it), then choose; Route's: "
+                                             "the route's Tension"));
+    cableTension_->setEnabled(false);
+    connect(cableTension_, &QComboBox::currentIndexChanged, this, [this](int i) {
+        const QString id = canvas_->selectedSegment();
+        if (filling_ || i < 0 || !route_.segment(id)) return;
+        beforeRouteChange();
+        route_.segment(id)->tension = cableTension_->itemData(i).toDouble();
+        saveRouting();
+        refreshRoute();
+        emit routeChanged();
+    });
+    br->addWidget(cableTension_);
     // GRAVITY: the route hung under its weight, each bundle by its tension, and where it would fall shown.
     gravity_ = new QToolButton(bundleRow_);
     gravity_->setObjectName(QStringLiteral("view3dGravity"));
@@ -1061,6 +1068,7 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
         connect(rulers, &QAction::triggered, this, [this] { canvas_->clearMeasures(); });
         menu.exec(at);
     });
+    connect(canvas_, &View3DCanvas::selectionChanged, this, [this] { syncCableTension(); });
     connect(canvas_, &View3DCanvas::selectionChanged, this, [this](const QString& id) {
         const QSignalBlocker hold(table_);
         table_->clearSelection();
@@ -1649,7 +1657,7 @@ void View3DPane::applyIcons() {
         {"view3dToolDelete", "delete"},   {"view3dRouteUndo", "undo"},    {"view3dLinkPart", "link"},
         {"view3dUnlinkPart", "unlink"},   {"view3dLengthsToHarness", "lengths"}, {"view3dWorkPlaneHere", "workplane"},
         {"view3dToolMeasure", "measure"}, {"view3dFlip", "flip"},         {"view3dParts", "parts"},
-        {"view3dAddLoose", "loose"},      {"view3dGravity", "gravity"},
+        {"view3dGravity", "gravity"},
     };
     for (const auto& i : icons)
         if (auto* b = findChild<QToolButton*>(QLatin1String(i.name))) {
@@ -2425,10 +2433,23 @@ void View3DPane::refreshRoute() {
     totals_->setText(said);
     undo_->setEnabled(!history_.empty());
     syncTension();
+    syncCableTension();
     filling_ = false;
     canvas_->routeRedraw();
     runGravity();
     sayStatus();
+}
+
+void View3DPane::syncCableTension() {
+    if (!cableTension_) return;
+    const QSignalBlocker hold(cableTension_);
+    const RouteSegment3D* s = route_.segment(canvas_->selectedSegment());
+    cableTension_->setEnabled(s != nullptr);
+    cableTension_->setItemText(0, QStringLiteral("Route's (%1)").arg(cableTensionName(route_.tension)));
+    int pick = 0;
+    for (int i = 1; s && s->tension >= 0.0 && i < cableTension_->count(); ++i)
+        if (std::abs(cableTension_->itemData(i).toDouble() - s->tension) < 1e-9) pick = i;
+    cableTension_->setCurrentIndex(pick);
 }
 
 void View3DPane::syncTension() {
@@ -2917,6 +2938,7 @@ void View3DCanvas::beginKeepLength() {
     if (!node) return;
     for (RouteSegment3D& s : route_->segments) {
         if (s.a != dragId_ && s.b != dragId_) continue;
+        if (dragKind_ == 4 && !stretchSeg_.isEmpty() && s.id != stretchSeg_) continue;   // only the cable stretched
         bendable(s);
         const RouteNode3D* far = route_->node(s.a == dragId_ ? s.b : s.a);
         if (!far) continue;
@@ -3086,26 +3108,63 @@ bool View3DCanvas::beginNodeDrag(const QPointF& at, bool stretch) {
     keptLen_.clear();
     through_.clear();
     keptBase_.clear();
+    stretchSeg_.clear();
     if (!route_) return false;
-    const QString id = nodeAt(at);
+    QString id = nodeAt(at);
+    if (stretch) {
+        // STRETCH TAKES A CABLE: the one clicked, pulled through its connector (the nearer, where it has two); or, a
+        // connector clicked, its one cable - or of its cables the one selected.
+        const RouteNode3D* on = route_->node(id);
+        if (on && on->kind == RouteNodeKind::Clip) {
+            emit message(QStringLiteral("%1 is a clip - it holds the harness only at its point. Move it to move it.").arg(on->label));
+            return false;
+        }
+        if (on) {
+            QStringList cables;
+            for (const RouteSegment3D& s : route_->segments)
+                if (s.a == id || s.b == id) cables << s.id;
+            if (cables.size() == 1) stretchSeg_ = cables.front();
+            else if (cables.contains(selSegment_)) stretchSeg_ = selSegment_;
+            else {
+                emit message(QStringLiteral("%1 has %2 cables - click the cable to stretch").arg(on->label).arg(cables.size()));
+                return false;
+            }
+        } else {
+            V3 p, n;
+            int after = 0;
+            stretchSeg_ = segmentAt(at, &p, &n, &after);
+            const RouteSegment3D* s = route_->segment(stretchSeg_);
+            if (!s) return false;
+            const RouteNode3D* a = route_->node(s->a);
+            const RouteNode3D* b = route_->node(s->b);
+            const bool ca = a && a->kind == RouteNodeKind::Connector, cb = b && b->kind == RouteNodeKind::Connector;
+            if (!ca && !cb) {
+                selSegment_ = stretchSeg_;
+                selNode_.clear();
+                routeRedraw();
+                emit selectionChanged(selSegment_);
+                emit message(QStringLiteral("%1 - %2 has no connector to be pulled through - a cable is stretched through its "
+                                            "connector").arg(a ? a->label : QString(), b ? b->label : QString()));
+                stretchSeg_.clear();
+                return false;
+            }
+            id = ca && cb ? ((p - a->at).length() <= (p - b->at).length() ? s->a : s->b) : ca ? s->a : s->b;
+        }
+    }
     const RouteNode3D* node = route_->node(id);
     if (!node) return false;
-    if (stretch && node->kind == RouteNodeKind::Clip) {
-        emit message(QStringLiteral("%1 is a clip - it holds the harness only at its point. Move it to move it.").arg(node->label));
-        return false;
-    }
     dragKind_ = stretch ? 4 : 5;
     dragId_ = id;
     dragFrom_ = node->at;
-    selNode_ = id;
-    selSegment_.clear();
+    selNode_ = stretch ? QString() : id;
+    selSegment_ = stretch ? stretchSeg_ : QString();
     // Off the model, it goes across the picture at its own depth.
     V3 right, up, forward;
     cam_.axes(right, up, forward);
     const double z = std::max(cam_.nearPlane(), dot3(node->at - cam_.eye(), forward));
     dragPerPixel_ = 2.0 * z * std::tan(cam_.fovDeg * M_PI / 360.0) / std::max(1, height());
     routeRedraw();
-    emit selectionChanged(QString());
+    emit selectionChanged(selSegment_);
     return true;
 }
 
@@ -3126,9 +3185,11 @@ void View3DCanvas::setPartToPlace(const QString& brick, const QString& designato
 }
 
 void View3DCanvas::selectSegment(const QString& id) {
+    const bool changed = id != selSegment_ || !selNode_.isEmpty();
     selSegment_ = id;
     selNode_.clear();
     routeRedraw();
+    if (changed) emit selectionChanged(selSegment_);
 }
 
 V3 View3DCanvas::nodeShown(const RouteNode3D& n) const {
