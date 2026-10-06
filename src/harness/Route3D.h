@@ -63,6 +63,8 @@ struct RouteSegment3D {
     double diameter = 0.0;
     // Its colour - none: as bundles are.
     QColor color;
+    // HOW TAUT IT IS PUT IN, in newtons - nought: slack, hanging by its length; less than nought: the route's.
+    double tension = -1.0;
 };
 
 struct Route3D {
@@ -72,6 +74,8 @@ struct Route3D {
     double bendRadius = 0.0;
     // How far a bundle comes straight out of a connector before it may turn, in mm.
     double lead = 10.0;
+    // How taut a bundle that gives none is put in, in newtons (RouteGravity).
+    double tension = 2.0;
     std::vector<RouteNode3D> nodes;
     std::vector<RouteSegment3D> segments;
     // THE SOLIDS A BUNDLE CANNOT PASS THROUGH: where a ray from a point along a direction first meets one, within so far

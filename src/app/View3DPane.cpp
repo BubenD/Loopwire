@@ -462,6 +462,45 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
                                      "its length - pulled along behind the point, its far ends held, no further than it reaches"));
     connect(grow_, &QToolButton::toggled, this, [this](bool on) { canvas_->setGrowLength(on); });
     br->addWidget(grow_);
+    // HOW TAUT A BUNDLE IS PUT IN - the route's here, each one's own in the table.
+    br->addWidget(new QLabel(QStringLiteral("Tension"), bundleRow_));
+    tension_ = new QComboBox(bundleRow_);
+    tension_->setObjectName(QStringLiteral("view3dTension"));
+    for (const CableTension& t : cableTensions()) tension_->addItem(t.name, t.newtons);
+    tension_->setToolTip(QStringLiteral("How taut a bundle is put in, where the table gives it none of its own - the less, the "
+                                        "more it sags between where it is held; Slack: it hangs by its own length"));
+    connect(tension_, &QComboBox::currentIndexChanged, this, [this](int i) {
+        if (filling_ || i < 0) return;
+        beforeRouteChange();
+        route_.tension = tension_->itemData(i).toDouble();
+        saveRouting();
+        refreshRoute();
+        emit routeChanged();
+    });
+    br->addWidget(tension_);
+    // GRAVITY: the route hung under its weight, each bundle by its tension, and where it would fall shown.
+    gravity_ = new QToolButton(bundleRow_);
+    gravity_->setObjectName(QStringLiteral("view3dGravity"));
+    gravity_->setText(QStringLiteral("Gravity"));
+    gravity_->setCheckable(true);
+    gravity_->setAutoRaise(true);
+    gravity_->setToolTip(QStringLiteral("Simulation preview: each bundle hung under its own weight, held at its nodes and out of "
+                                        "its connectors, pulled by its tension and resting on what it falls onto - drawn faint "
+                                        "in red where it would hang, each place it falls from marked with how far"));
+    connect(gravity_, &QToolButton::toggled, this, [this] {
+        runGravity();
+        sayStatus();
+    });
+    br->addWidget(gravity_);
+    down_ = new QComboBox(bundleRow_);
+    down_->setObjectName(QStringLiteral("view3dGravityDown"));
+    for (const char* d : {"Down -Z", "Down -Y", "Down -X", "Down +Z", "Down +Y", "Down +X"}) down_->addItem(QLatin1String(d));
+    down_->setToolTip(QStringLiteral("Which way gravity pulls, in the model's own axes"));
+    connect(down_, &QComboBox::currentIndexChanged, this, [this] {
+        runGravity();
+        sayStatus();
+    });
+    br->addWidget(down_);
     undo_ = button(rr2, "view3dRouteUndo", QStringLiteral("Undo"), QStringLiteral("Take back the last change to the route (Ctrl+Z)"),
                    [this] { undoRoute(); });
     // HOW IT IS DONE, SHOWN: the view itself recorded being used - the plane a click lands on, a cable routed from
@@ -797,16 +836,18 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
         if (const RouteNode3D* n = route_.node(canvas_->selectedNode())) applyAim(n->normal, v);
     });
 
-    table_ = new QTableWidget(0, 3, side_);
+    table_ = new QTableWidget(0, 4, side_);
     table_->setObjectName(QStringLiteral("view3dRoutes"));
-    table_->setHorizontalHeaderLabels({QStringLiteral("Bundle"), QStringLiteral("Length"), QStringLiteral("Ø")});
+    table_->setHorizontalHeaderLabels({QStringLiteral("Bundle"), QStringLiteral("Length"), QStringLiteral("Ø"), QStringLiteral("Tension")});
     table_->verticalHeader()->setVisible(false);
     table_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     table_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     table_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    table_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
     table_->setSelectionBehavior(QAbstractItemView::SelectRows);
     table_->setSelectionMode(QAbstractItemView::SingleSelection);
-    table_->setToolTip(QStringLiteral("Each bundle routed, its length along its path - the Ø column sets one bundle's diameter"));
+    table_->setToolTip(QStringLiteral("Each bundle routed, its length along its path - the Ø column sets one bundle's diameter, "
+                                      "the Tension column how taut it is put in"));
     sl->addWidget(table_, 1);
     totals_ = new QLabel(side_);
     totals_->setObjectName(QStringLiteral("view3dRouteTotals"));
@@ -1608,7 +1649,7 @@ void View3DPane::applyIcons() {
         {"view3dToolDelete", "delete"},   {"view3dRouteUndo", "undo"},    {"view3dLinkPart", "link"},
         {"view3dUnlinkPart", "unlink"},   {"view3dLengthsToHarness", "lengths"}, {"view3dWorkPlaneHere", "workplane"},
         {"view3dToolMeasure", "measure"}, {"view3dFlip", "flip"},         {"view3dParts", "parts"},
-        {"view3dAddLoose", "loose"},
+        {"view3dAddLoose", "loose"},      {"view3dGravity", "gravity"},
     };
     for (const auto& i : icons)
         if (auto* b = findChild<QToolButton*>(QLatin1String(i.name))) {
@@ -1895,6 +1936,7 @@ void View3DPane::sayStatus() {
     else if (!env_.parts.empty() || !env_.how.isEmpty())
         lines << QStringLiteral("Environment: %1").arg(env_.how);
     if (!pickSaid_.isEmpty()) lines << pickSaid_;
+    if (!gravitySaid_.isEmpty()) lines << gravitySaid_;
     const QString either = nodeLengths();
     if (!either.isEmpty()) lines << either;
     status_->setText(lines.join(QLatin1Char('\n')));
@@ -1993,6 +2035,7 @@ void View3DPane::takeEnvironment(Environment3D env, std::shared_ptr<RayIndex3D> 
         saveRouting();
     }
     quietLoad_ = false;
+    runGravity();
     sayStatus();
     emit environmentChanged();
 }
@@ -2320,6 +2363,33 @@ void View3DPane::refreshRoute() {
         table_->setItem(row, 0, name);
         table_->setItem(row, 1, length);
         table_->setItem(row, 2, dia);
+        // HOW TAUT THIS ONE IS PUT IN: the route's, or one of the choices.
+        auto* tension = new QComboBox(table_);
+        tension->setObjectName(QStringLiteral("view3dTension_%1").arg(s.id));
+        tension->addItem(QStringLiteral("Route's (%1)").arg(cableTensionName(route_.tension)), -1.0);
+        for (const CableTension& choice : cableTensions()) tension->addItem(choice.name, choice.newtons);
+        int pick = 0;
+        for (int i = 1; i < tension->count(); ++i)
+            if (s.tension >= 0.0 && std::abs(tension->itemData(i).toDouble() - s.tension) < 1e-9) pick = i;
+        if (s.tension >= 0.0 && pick == 0) {
+            tension->addItem(cableTensionName(s.tension), s.tension);
+            pick = tension->count() - 1;
+        }
+        tension->setCurrentIndex(pick);
+        tension->setToolTip(QStringLiteral("How taut this bundle is put in - the less, the more it sags where it hangs"));
+        const QString id = s.id;
+        connect(tension, &QComboBox::currentIndexChanged, this, [this, tension, id](int i) {
+            if (filling_ || i < 0 || !route_.segment(id)) return;
+            beforeRouteChange();
+            route_.segment(id)->tension = tension->itemData(i).toDouble();
+            saveRouting();
+            // The table built again after this choice is done with - not from under it.
+            QTimer::singleShot(0, this, [this] {
+                refreshRoute();
+                emit routeChanged();
+            });
+        });
+        table_->setCellWidget(row, 3, tension);
         if (s.id == selected) table_->selectRow(row);
     }
     // THE TOTAL, the last row, lit - every bundle's length added up.
@@ -2329,8 +2399,8 @@ void View3DPane::refreshRoute() {
         const QColor lit(47, 133, 90), ink(255, 255, 255);
         QFont bold = table_->font();
         bold.setBold(true);
-        const QString texts[3] = {QStringLiteral("Total"), QStringLiteral("%1 mm").arg(total, 0, 'f', 1), QString()};
-        for (int c = 0; c < 3; ++c) {
+        const QString texts[4] = {QStringLiteral("Total"), QStringLiteral("%1 mm").arg(total, 0, 'f', 1), QString(), QString()};
+        for (int c = 0; c < 4; ++c) {
             auto* it = new QTableWidgetItem(texts[c]);
             it->setFlags(Qt::ItemIsEnabled);
             it->setBackground(lit);
@@ -2354,8 +2424,62 @@ void View3DPane::refreshRoute() {
         said += QStringLiteral(" %1 bend(s) tighter than the bend radius - not room for it between the points laid.").arg(tight);
     totals_->setText(said);
     undo_->setEnabled(!history_.empty());
+    syncTension();
     filling_ = false;
     canvas_->routeRedraw();
+    runGravity();
+    sayStatus();
+}
+
+void View3DPane::syncTension() {
+    if (!tension_) return;
+    const QSignalBlocker hold(tension_);
+    int pick = -1;
+    for (int i = 0; i < tension_->count(); ++i)
+        if (std::abs(tension_->itemData(i).toDouble() - route_.tension) < 1e-9) pick = i;
+    if (pick < 0) {
+        tension_->addItem(cableTensionName(route_.tension), route_.tension);
+        pick = tension_->count() - 1;
+    }
+    tension_->setCurrentIndex(pick);
+}
+
+const std::vector<CableSag3D>& View3DPane::sags() const { return canvas_->sags(); }
+
+void View3DPane::runGravity() {
+    gravitySaid_.clear();
+    if (!gravity_ || !gravity_->isChecked() || route_.segments.empty()) {
+        canvas_->setSags({});
+        return;
+    }
+    static const V3 downs[6] = {{0, 0, -1}, {0, -1, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 1, 0}, {1, 0, 0}};
+    std::vector<CableSag3D> sags = hangRoute(route_, downs[std::clamp(down_->currentIndex(), 0, 5)]);
+    // WHAT IT SAYS: each bundle that falls, how far at most and where from, and what holds it.
+    QStringList falling;
+    for (const CableSag3D& g : sags) {
+        if (g.falls.empty()) continue;
+        const RouteSegment3D* s = route_.segment(g.segment);
+        const RouteNode3D* a = s ? route_.node(s->a) : nullptr;
+        const RouteNode3D* b = s ? route_.node(s->b) : nullptr;
+        const double more = g.hungLength - g.laidLength;
+        falling << QStringLiteral("%1 - %2 falls %3 mm (%4 place(s), %5)%6")
+                       .arg(a ? a->label : QString(), b ? b->label : QString())
+                       .arg(g.maxDrop, 0, 'f', 1)
+                       .arg(g.falls.size())
+                       .arg(g.byLength ? QStringLiteral("hanging by its length, %1 N").arg(g.tension, 0, 'f', 2)
+                                       : QStringLiteral("at %1").arg(cableTensionName(g.tension)))
+                       .arg(!g.byLength && std::abs(more) >= 0.5 ? QStringLiteral(", %1%2 mm of cable to hang so").arg(more > 0 ? "+" : "").arg(more, 0, 'f', 1)
+                                                                 : QString());
+    }
+    gravitySaid_ = falling.isEmpty() ? QStringLiteral("Gravity: every bundle held where it is laid - none falls.")
+                                     : QStringLiteral("Gravity: ") + falling.join(QStringLiteral("; "));
+    canvas_->setSags(std::move(sags));
+}
+
+void View3DCanvas::setSags(std::vector<CableSag3D> sags) {
+    sags_ = std::move(sags);
+    sagDirty_ = true;
+    update();
 }
 
 // ---- The picture ----------------------------------------------------------------------------------
@@ -3182,6 +3306,26 @@ std::vector<DrawItem3D> View3DCanvas::drawItems() const {
         }
     if (routeDirty_) buildRouteMeshes();
     for (const Drawn& d : routeMeshes_) items.push_back({&d.mesh, d.color, 1.0, false, d.texture});
+    // GRAVITY: each bundle as it would hang, faint, and a red line down from where it is laid to where it falls.
+    if (!sags_.empty()) {
+        if (sagDirty_) {
+            sagMesh_ = Mesh3D();
+            fallMesh_ = Mesh3D();
+            for (const CableSag3D& g : sags_) {
+                const RouteSegment3D* s = route_ ? route_->segment(g.segment) : nullptr;
+                const double r = s ? route_->diameterOf(*s) / 2.0 : 2.0;
+                if (g.hung.size() >= 2 && g.maxDrop > 1e-6) sagMesh_.append(tubeMesh(g.hung, r, 10, true));
+                for (int i : g.falls) {
+                    const V3 from = g.laid[static_cast<size_t>(i)], to = g.hung[static_cast<size_t>(i)];
+                    fallMesh_.append(tubeMesh({from, to}, std::max(0.3, r * 0.25), 8, true));
+                    fallMesh_.append(boxMesh(to - V3{r, r, r} * 0.9, to + V3{r, r, r} * 0.9));
+                }
+            }
+            sagDirty_ = false;
+        }
+        if (!sagMesh_.empty()) items.push_back({&sagMesh_, QColor(255, 80, 70), 0.45});
+        if (!fallMesh_.empty()) items.push_back({&fallMesh_, QColor(255, 60, 50)});
+    }
     if (!layMesh_.empty()) items.push_back({&layMesh_, QColor(255, 255, 255), 0.75});
     if (!marker_.empty()) items.push_back({&marker_, QColor(255, 196, 40)});
     // THE RULERS: each a thin line between its two ends and a mark at each - the one selected lit; the one being made
@@ -3625,6 +3769,17 @@ void View3DCanvas::paintEvent(QPaintEvent*) {
             p.setPen(s.id == selSegment_ ? QColor(80, 220, 255) : QColor(255, 200, 140));
             p.drawText(box, Qt::AlignCenter, text);
         }
+        // WHERE IT FALLS, by the lowest point of each stretch: how far.
+        for (const CableSag3D& g : sags_)
+            for (int i : g.falls) {
+                QPointF at;
+                if (!toScreen(g.hung[static_cast<size_t>(i)], at)) continue;
+                const QString text = QStringLiteral("%1 mm down").arg(g.drop[static_cast<size_t>(i)], 0, 'f', 1);
+                const QRectF box(at + QPointF(8, 2), QSizeF(p.fontMetrics().horizontalAdvance(text) + 8, p.fontMetrics().height() + 2));
+                p.fillRect(box, QColor(20, 24, 30, 200));
+                p.setPen(QColor(255, 110, 100));
+                p.drawText(box, Qt::AlignCenter, text);
+            }
         if (!layFrom_.isEmpty()) {
             const RouteNode3D* from = route_->node(layFrom_);
             p.setPen(QColor(255, 255, 255));

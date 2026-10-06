@@ -320,6 +320,21 @@ void draw(QPainter& p, const QString& k, const QColor& ink, const QColor& acc) {
         p.drawEllipse(QPointF(16, 16), 4, 4);
         return;
     }
+    if (k == QLatin1String("gravity")) {
+        // A cable hung between two clips, sagging, and gravity's arrow down under it.
+        p.setPen(QPen(ink, 1.4));
+        p.setBrush(QColor(70, 190, 110));
+        p.drawRect(QRectF(2, 6, 5, 6));
+        p.drawRect(QRectF(25, 6, 5, 6));
+        p.setPen(accLine);
+        p.setBrush(Qt::NoBrush);
+        QPainterPath sag(QPointF(7, 9));
+        sag.quadTo(QPointF(16, 24), QPointF(25, 9));
+        p.drawPath(sag);
+        p.setPen(QPen(ink, 2.0, Qt::SolidLine, Qt::RoundCap));
+        arrow(p, QPointF(16, 19), QPointF(16, 30), 4);
+        return;
+    }
     if (k == QLatin1String("loose")) {
         // A cable out of a connector with a loop of slack in it, a plus over it.
         p.setPen(QPen(ink, 1.4));

@@ -23,6 +23,7 @@
 #include "geometry/Mesh3D.h"
 #include "harness/Harness3D.h"
 #include "harness/Route3D.h"
+#include "harness/RouteGravity.h"
 #include "harness/RouteLink.h"
 #include "render/Render3D.h"
 #include "harness/BrickHarness.h"
@@ -8888,6 +8889,127 @@ void testRoundSixty() {
     QApplication::processEvents();
 }
 
+// ROUND SIXTY-ONE: A CABLE'S TENSION AND GRAVITY - each bundle put in with a tension (the route's, or its own from the
+// table's fall menu), hung under its own weight by it: sagging as a cable under tension does between where it is held,
+// slack hanging by its own length, resting on what it falls onto; the Gravity preview showing where it falls.
+void testRoundSixtyOne() {
+    // ---- HUNG BY ITS TENSION: w s^2 / 8T at the middle ----
+    Route3D r;
+    r.diameter = 8.0;
+    const QString c1 = r.addNode(RouteNodeKind::Clip, {0, 0, 100}, {0, 0, 1});
+    const QString c2 = r.addNode(RouteNodeKind::Clip, {300, 0, 100}, {0, 0, 1});
+    const QString s = r.addSegment(c1, c2, {});
+    const double w = kCableDensity * (M_PI * 8.0 * 8.0 / 4.0) * 1e-6 * 9.81;
+    {
+        const CableSag3D g = hangCable(r, *r.segment(s), {0, 0, -1});
+        const double expect = w * 300.0 * 300.0 / (8.0 * 2.0);
+        std::printf("  gravity: normal (2 N) - sags %.2f mm (a cable under tension: %.2f), at x %.1f, %d place(s) falling\n", g.maxDrop,
+                    expect, g.maxAt.x, static_cast<int>(g.falls.size()));
+        check(std::abs(g.maxDrop - expect) < 0.3 && std::abs(g.maxAt.x - 150.0) < 10.0 && g.falls.size() == 1 && !g.byLength,
+              "gravity: a cable held at two clips sags at its middle as a cable under its tension does");
+    }
+    r.segment(s)->tension = 50.0;
+    {
+        const CableSag3D g = hangCable(r, *r.segment(s), {0, 0, -1});
+        check(g.maxDrop < 0.5 && g.falls.empty(), "gravity: put in taut - it hardly sags, and nothing is shown falling");
+    }
+    // SLACK: an arch laid up over the clips falls, hanging by its own length.
+    r.segment(s)->tension = 0.0;
+    r.segment(s)->via = {{{150, 0, 160}, {0, 0, 1}}};
+    {
+        const CableSag3D g = hangCable(r, *r.segment(s), {0, 0, -1});
+        std::printf("  gravity: slack - falls %.1f mm, laid %.1f mm, hung %.1f mm, by %.4f N\n", g.maxDrop, g.laidLength, g.hungLength, g.tension);
+        check(g.byLength && g.maxDrop > 60.0 && std::abs(g.hungLength - g.laidLength) < g.laidLength * 0.01,
+              "gravity: slack - it falls and hangs by its own length, as long as it was laid");
+    }
+    // ON WHAT IT FALLS ONTO: a plate under it holds it up.
+    r.segment(s)->via.clear();
+    r.segment(s)->tension = 0.5;
+    const Mesh3D plate = boxMesh({-50, -50, 90}, {350, 50, 95});
+    RayIndex3D index;
+    index.build({&plate});
+    r.solids = [&index](const V3& o, const V3& d, double far, V3& hit) {
+        const Pick3D p = index.cast(o, d);
+        if (!p.hit || p.distance > far) return false;
+        hit = p.point;
+        return true;
+    };
+    {
+        const CableSag3D g = hangCable(r, *r.segment(s), {0, 0, -1});
+        double lowest = 1e9;
+        for (const V3& q : g.hung) lowest = std::min(lowest, q.z);
+        std::printf("  gravity: loose over a plate - its lowest at %.2f (the plate's top 95, its radius 4)\n", lowest);
+        check(lowest > 95.0 + 4.0 - 0.05 && lowest < 100.0, "gravity: it falls onto the plate under it and rests there, not through it");
+    }
+    r.solids = nullptr;
+    // SAVED: the route's tension and a bundle's own; none written where it is the route's.
+    r.tension = 10.0;
+    r.segment(s)->tension = -1.0;
+    {
+        const QJsonObject o = r.toJson();
+        const Route3D back = Route3D::fromJson(o);
+        check(std::abs(back.tension - 10.0) < 1e-9 && back.segments.front().tension < 0.0 &&
+                  !o.value(QStringLiteral("segments")).toArray().first().toObject().contains(QStringLiteral("tension")),
+              "gravity: the route's tension saved; a bundle with none of its own saves none");
+        r.segment(s)->tension = 0.5;
+        check(std::abs(Route3D::fromJson(r.toJson()).segments.front().tension - 0.5) < 1e-9, "gravity: a bundle's own tension saved");
+        check(std::abs(tensionOf(Route3D::fromJson(QJsonObject{}), RouteSegment3D{}) - 2.0) < 1e-9,
+              "gravity: an old route, saved before tension - Normal");
+    }
+
+    // ---- IN THE 3D VIEW: the fall menu in the table, the Gravity preview ----
+    r.tension = 2.0;
+    r.segment(s)->tension = -1.0;
+    QJsonObject stored = r.toJson();
+    View3DPane pane;
+    pane.setRoutingStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    pane.resize(1100, 700);
+    pane.show();
+    QApplication::processEvents();
+    pane.reloadRouting(true);
+    pane.canvas()->setUseGpu(false);
+    auto* menu = pane.findChild<QComboBox*>(QStringLiteral("view3dTension_%1").arg(s));
+    check(menu && menu->count() == static_cast<int>(cableTensions().size()) + 1 && menu->currentIndex() == 0,
+          "tension: each bundle's own fall menu in the table - the route's, then each choice");
+    auto* gravity = pane.findChild<QToolButton*>(QStringLiteral("view3dGravity"));
+    check(gravity && gravity->isCheckable() && pane.sags().empty(), "gravity: a Gravity button, off as it starts - nothing shown");
+    if (!menu || !gravity) return;
+    gravity->setChecked(true);
+    QApplication::processEvents();
+    auto* status = pane.findChild<QLabel*>(QStringLiteral("view3dStatus"));
+    const double normal = pane.sags().empty() ? 0.0 : pane.sags().front().maxDrop;
+    std::printf("  gravity: %s\n", qPrintable(status ? status->text().section(QLatin1Char('\n'), -1) : QString()));
+    check(pane.sags().size() == 1 && normal > 4.0 && status && status->text().contains(QStringLiteral("Gravity:")) &&
+              status->text().contains(QStringLiteral("falls")),
+          "gravity: on - the route hung, and it says where it falls and how far");
+    // LOOSER, IT FALLS FURTHER: the bundle's own tension from its menu.
+    menu->setCurrentIndex(2);   // Loose - 0.5 N
+    QApplication::processEvents();
+    QApplication::processEvents();
+    check(std::abs(pane.route().segment(s)->tension - 0.5) < 1e-9 && !pane.sags().empty() && pane.sags().front().maxDrop > normal * 3.0,
+          "tension: set loose from its menu - the bundle's own, and it sags further");
+    pane.undoRoute();
+    QApplication::processEvents();
+    check(pane.route().segment(s)->tension < 0.0, "tension: undone");
+    // THE ROUTE'S, from the row: Taut - it hardly sags.
+    auto* routeTension = pane.findChild<QComboBox*>(QStringLiteral("view3dTension"));
+    if (routeTension) routeTension->setCurrentIndex(4);
+    QApplication::processEvents();
+    check(routeTension && std::abs(pane.route().tension - 50.0) < 1e-9 && !pane.sags().empty() && pane.sags().front().falls.empty(),
+          "tension: the route's set Taut - its bundles hardly sag, none shown falling");
+    // GRAVITY ANOTHER WAY: up - it falls up, out of the ground's way.
+    gravity->setChecked(false);
+    check(pane.sags().empty(), "gravity: off - the preview taken away");
+
+    // ---- ON THE RIBBON ----
+    MainWindow win;
+    win.show();
+    QApplication::processEvents();
+    for (const char* name : {"preview3dGravity", "preview3dTension", "preview3dGravityDown"})
+        check(win.findChild<QWidget*>(QLatin1String(name)) != nullptr,
+              qPrintable(QStringLiteral("ribbon: %1 on the 3D Preview tab").arg(QLatin1String(name))));
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -8972,6 +9094,7 @@ int run_brickharness_tests() {
     ROUND(testRoundFiftyEight);
     ROUND(testRoundFiftyNine);
     ROUND(testRoundSixty);
+    ROUND(testRoundSixtyOne);
 #undef ROUND
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;

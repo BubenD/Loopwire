@@ -4,6 +4,7 @@
 #include "geometry/Environment3D.h"
 #include "harness/Harness3D.h"
 #include "harness/Route3D.h"
+#include "harness/RouteGravity.h"
 #include "harness/RouteLink.h"
 #include "render/GlRender3D.h"
 #include "render/Render3D.h"
@@ -275,6 +276,18 @@ private:
     QWidget* editRow_ = nullptr;
     QWidget* bundleRow_ = nullptr;
     QToolButton* grow_ = nullptr;   // Add loose
+    // HOW TAUT THE BUNDLES ARE PUT IN (the route's), GRAVITY shown on them, and which way it pulls.
+    QComboBox* tension_ = nullptr;
+    QToolButton* gravity_ = nullptr;
+    QComboBox* down_ = nullptr;
+    QString gravitySaid_;
+    void syncTension();
+public:
+    // THE ROUTE HUNG UNDER GRAVITY - each bundle by the tension it is put in with - and shown where it falls, while
+    // Gravity is on; taken away when it is off.
+    void runGravity();
+    const std::vector<CableSag3D>& sags() const;
+private:
     QButtonGroup* tools_ = nullptr;
     QDoubleSpinBox* diameter_ = nullptr;
     QDoubleSpinBox* bend_ = nullptr;
@@ -445,6 +458,9 @@ public:
     int measureCount() const { return static_cast<int>(measures_.size()); }
     void clearMeasure();
     void clearMeasures();
+    // GRAVITY'S PREVIEW: each bundle as it hangs, drawn faint over it, and each place it falls from marked with how far.
+    void setSags(std::vector<CableSag3D> sags);
+    const std::vector<CableSag3D>& sags() const { return sags_; }
     void removeMeasure(int index);
     int selectedMeasure() const { return selMeasure_; }
     void selectMeasure(int index);
@@ -607,6 +623,9 @@ private:
     // The section's see-through plane, over only the solids it cuts. Not saved.
     mutable Mesh3D sectionMesh_;
     mutable bool sectionDirty_ = true;
+    std::vector<CableSag3D> sags_;
+    mutable Mesh3D sagMesh_, fallMesh_;
+    mutable bool sagDirty_ = true;
     bool skipPart(int part, const V3& point) const;
     // Locked, and what a drag is moving. Not saved.
     bool viewLocked_ = false;

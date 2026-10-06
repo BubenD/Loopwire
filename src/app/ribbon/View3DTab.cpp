@@ -313,6 +313,28 @@ void MainWindow::buildView3DTab() {
         loose->setCheckable(true);
         preview3dMirrors_.append({loose, QStringLiteral("view3dAddLoose")});
     });
+    group(QStringLiteral("Gravity"), [&](QWidget* w, QHBoxLayout* row) {
+        auto* g = new QWidget(w);
+        auto* gl = new QGridLayout(g);
+        gl->setContentsMargins(4, 2, 4, 2);
+        gl->setVerticalSpacing(1);
+        gl->addWidget(new QLabel(QStringLiteral("Tension"), g), 0, 0);
+        auto* tension = new QComboBox(g);
+        tension->setObjectName(QStringLiteral("preview3dTension"));
+        gl->addWidget(tension, 0, 1);
+        preview3dMirrors_.append({tension, QStringLiteral("view3dTension")});
+        auto* down = new QComboBox(g);
+        down->setObjectName(QStringLiteral("preview3dGravityDown"));
+        gl->addWidget(down, 1, 1);
+        preview3dMirrors_.append({down, QStringLiteral("view3dGravityDown")});
+        row->addWidget(g);
+        QToolButton* gravity = big(w, row, "preview3dGravity", QStringLiteral("Gravity"), QStringLiteral("gravity"),
+                                   QStringLiteral("Simulation preview: each cable hung under its weight by its tension, "
+                                                  "and where it would fall shown"),
+                                   [] {});
+        gravity->setCheckable(true);
+        preview3dMirrors_.append({gravity, QStringLiteral("view3dGravity")});
+    });
     group(QStringLiteral("Route to land"), [&](QWidget* w, QHBoxLayout* row) {
         // ROUTE TO LAND: where the points of a route land - the model's faces, or a plane - chosen from its menu, as in the
         // 3D view.

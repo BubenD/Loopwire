@@ -184,6 +184,8 @@ add_library(edraw_core STATIC
     src/harness/Route3D.h
     src/harness/Route3D.cpp
     src/harness/RouteLink.h
+    src/harness/RouteGravity.h
+    src/harness/RouteGravity.cpp
     src/harness/RouteLink.cpp
     src/app/BlockDialog.h
     src/app/BlockDialog.cpp

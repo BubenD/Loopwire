@@ -538,6 +538,7 @@ QJsonObject Route3D::toJson() const {
     o[QStringLiteral("diameter")] = diameter;
     o[QStringLiteral("bendRadius")] = bendRadius;
     o[QStringLiteral("lead")] = lead;
+    if (std::abs(tension - 2.0) > 1e-9) o[QStringLiteral("tension")] = tension;
     QJsonArray ns;
     for (const RouteNode3D& n : nodes) {
         QJsonObject j;
@@ -570,6 +571,7 @@ QJsonObject Route3D::toJson() const {
         j[QStringLiteral("b")] = s.b;
         if (s.diameter > 0.0) j[QStringLiteral("diameter")] = s.diameter;
         if (s.color.isValid()) j[QStringLiteral("color")] = s.color.name();
+        if (s.tension >= 0.0) j[QStringLiteral("tension")] = s.tension;
         QJsonArray via;
         for (const RouteVia3D& v : s.via) via.append(QJsonObject{{QStringLiteral("at"), v3Json(v.at)}, {QStringLiteral("normal"), v3Json(v.normal)}});
         j[QStringLiteral("via")] = via;
@@ -584,6 +586,7 @@ Route3D Route3D::fromJson(const QJsonObject& o) {
     r.diameter = o.value(QStringLiteral("diameter")).toDouble(8.0);
     r.bendRadius = o.value(QStringLiteral("bendRadius")).toDouble(0.0);
     r.lead = o.value(QStringLiteral("lead")).toDouble(10.0);
+    r.tension = o.value(QStringLiteral("tension")).toDouble(2.0);
     for (const QJsonValue& v : o.value(QStringLiteral("nodes")).toArray()) {
         const QJsonObject j = v.toObject();
         RouteNode3D n;
@@ -612,6 +615,7 @@ Route3D Route3D::fromJson(const QJsonObject& o) {
         s.b = j.value(QStringLiteral("b")).toString();
         s.diameter = j.value(QStringLiteral("diameter")).toDouble(0.0);
         if (j.contains(QStringLiteral("color"))) s.color = QColor(j.value(QStringLiteral("color")).toString());
+        s.tension = j.value(QStringLiteral("tension")).toDouble(-1.0);
         for (const QJsonValue& w : j.value(QStringLiteral("via")).toArray()) {
             const QJsonObject k = w.toObject();
             s.via.push_back({v3From(k.value(QStringLiteral("at"))), unitOr(v3From(k.value(QStringLiteral("normal")), {0, 0, 1}), {0, 0, 1})});
