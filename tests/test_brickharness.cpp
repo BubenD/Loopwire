@@ -72,6 +72,7 @@ bool writeTestStepAssembly(const QString& path);
 #include "harness/Bom.h"
 #include "io/Dwx.h"
 #include <QDir>
+#include <QSettings>
 #include <QFile>
 #include <QJsonObject>
 #include <QKeyEvent>
@@ -9262,6 +9263,203 @@ void testRoundSixtyThree() {
           "stiff: a taut cable pushed in bows round smoothly, stopping where it will bend no further - no kink or loop where a slack one has one");
 }
 
+// ROUND SIXTY-FOUR: A BUNDLE OF WIRES - so many, so thick, drawn wire by wire, its diameter what they pack to; UNDO AND
+// REDO; A CLICK SELECTS what it lands on, the view locked or not; ATTACH TO SURFACE - a cable laid on the face under it;
+// A TAUT CABLE pulled along, stiff, rather than not at all; THE HELP WINDOW fitted to its recording and its words; THE
+// FIRST TIME, Properties and Parts at the sides.
+void testRoundSixtyFour() {
+    // ---- WIRES ----
+    {
+        check(std::abs(Route3D::packedDiameter(7, 0.6) - std::sqrt(7.0 / 0.75) * 0.6) < 1e-9 && Route3D::packedDiameter(1, 0.6) == 0.6,
+              "wires: seven of 0.6 mm pack to about 1.8 mm; one is its own");
+        const auto lay = Route3D::wireLayout(7, 1.0);
+        bool apart = lay.size() == 7;
+        double outer = 0.0;
+        for (size_t i = 0; i < lay.size(); ++i) {
+            outer = std::max(outer, std::hypot(lay[i].first, lay[i].second) + 0.5);
+            for (size_t j = i + 1; j < lay.size(); ++j)
+                apart = apart && std::hypot(lay[i].first - lay[j].first, lay[i].second - lay[j].second) > 0.95;
+        }
+        check(apart && outer <= Route3D::packedDiameter(7, 1.0) / 2.0 + 0.1, "wires: laid ring by ring, none over another, inside the bundle");
+        Route3D r;
+        r.wires = 7;
+        r.wireD = 0.6;
+        const QString a = r.addNode(RouteNodeKind::Branch, {0, 0, 0}, {0, 0, 1});
+        const QString b = r.addNode(RouteNodeKind::Branch, {100, 0, 0}, {0, 0, 1});
+        const QString s = r.addSegment(a, b, {});
+        const QString s2 = r.addSegment(a, b, {{{50, 50, 0}, {0, 0, 1}}});
+        r.segment(s2)->wires = 19;
+        r.segment(s2)->wireD = 1.0;
+        check(std::abs(r.diameterOf(*r.segment(s)) - Route3D::packedDiameter(7, 0.6)) < 1e-9 &&
+                  std::abs(r.diameterOf(*r.segment(s2)) - Route3D::packedDiameter(19, 1.0)) < 1e-9,
+              "wires: a bundle as thick as its wires - the route's, or its own");
+        const Route3D back = Route3D::fromJson(r.toJson());
+        check(back.wires == 7 && back.segment(s2)->wires == 19 && back.segment(s2)->wireD == 1.0 && back.segment(s)->wires == 0,
+              "wires: saved with the route - and none said for a bundle that gives none");
+        check(Route3D::fromJson(Route3D().toJson()).wires == 0, "wires: an old route a plain bundle still");
+    }
+
+    // ---- THE PANE: undo and redo, a click selects, attach ----
+    const QString obj = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_attach_test.obj"));
+    {
+        QFile f(obj);
+        f.open(QIODevice::WriteOnly);
+        f.write("v -200 -200 -2\nv 200 -200 -2\nv 200 200 -2\nv -200 200 -2\nv -200 -200 0\nv 200 -200 0\nv 200 200 0\nv -200 200 0\n"
+                "f 1 4 3 2\nf 5 6 7 8\nf 1 2 6 5\nf 2 3 7 6\nf 3 4 8 7\nf 4 1 5 8\n");
+    }
+    Route3D route;
+    route.diameter = 6.0;
+    const QString x1 = route.addNode(RouteNodeKind::Branch, {-80, 0, 40}, {0, 0, 1});
+    const QString x2 = route.addNode(RouteNodeKind::Branch, {80, 0, 40}, {0, 0, 1});
+    const QString seg = route.addSegment(x1, x2, {});
+    QJsonObject stored = route.toJson();
+    View3DPane pane;
+    pane.setRoutingStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    pane.resize(1100, 760);
+    pane.show();
+    QApplication::processEvents();
+    pane.reloadRouting(true);
+    pane.loadEnvironment(obj, true);
+    pane.reloadRouting(true);
+    View3DCanvas* canvas = pane.canvas();
+    canvas->setUseGpu(false);
+    canvas->viewFrom(QStringLiteral("top"));
+    QApplication::processEvents();
+    const Route3D& r = pane.route();
+    // Undo and redo.
+    pane.setWires(QString(), 7, 0.6);
+    check(r.wires == 7, "wires: set for the route from the pane");
+    pane.undoRoute();
+    check(r.wires == 0 && pane.canRedo(), "undo: taken back - and it can be put back");
+    pane.redoRoute();
+    check(r.wires == 7 && !pane.canRedo(), "redo: put back again");
+    pane.undoRoute();
+    pane.setWires(seg, 3, 1.0);
+    check(!pane.canRedo(), "redo: nothing to put back once something else is done");
+    pane.undoRoute();
+    // A click on the cable, the view locked - selected, not merely taken hold of.
+    auto screen = [&](const V3& p) {
+        QPointF at;
+        canvas->toScreen(p, at);
+        return at;
+    };
+    auto click = [&](const QPointF& at) {
+        QMouseEvent press(QEvent::MouseButtonPress, at, canvas->mapToGlobal(at), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent release(QEvent::MouseButtonRelease, at, canvas->mapToGlobal(at), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &press);
+        QApplication::sendEvent(canvas, &release);
+        QApplication::processEvents();
+    };
+    canvas->selectSegment(QString());
+    pane.setViewLocked(true);
+    click(screen({10, 0, 40 + 3}));
+    check(canvas->selectedSegment() == seg, "select: a cable clicked with the view locked - selected");
+    pane.setViewLocked(false);
+    canvas->selectSegment(QString());
+    click(screen({-30, 0, 40 + 3}));
+    check(canvas->selectedSegment() == seg, "select: and with it free");
+    // Attach to surface: the cable in the air laid on the floor under it.
+    canvas->selectSegment(seg);
+    const int laid = pane.attachToSurface();
+    double highest = -1e9;
+    for (const RouteVia3D& v : r.segment(seg)->via) highest = std::max(highest, v.at.z);
+    std::printf("  attach: %d cable(s), %zu point(s), the highest at z %.2f\n", laid, r.segment(seg)->via.size(), highest);
+    check(laid == 1 && r.segment(seg)->via.size() >= 3 && std::abs(highest) < 0.5, "attach: the cable laid on the floor under it");
+    pane.undoRoute();
+    check(r.segment(seg)->via.empty(), "attach: and Undo takes it back");
+    QFile::remove(obj);
+
+    // ---- A TAUT CABLE PULLED: it follows, stiffly ----
+    {
+        Route3D t;
+        t.diameter = 6.0;
+        t.tension = 10.0;
+        const QString c1 = t.addNode(RouteNodeKind::Connector, {-60, 0, 0}, {0, 0, 1});
+        const QString c2 = t.addNode(RouteNodeKind::Clip, {80, 0, 0}, {0, 0, 1});
+        t.addSegment(c1, c2, {{{-20, 30, 0}, {0, 0, 1}}, {{20, 40, 0}, {0, 0, 1}}, {{50, 20, 0}, {0, 0, 1}}});
+        QJsonObject kept = t.toJson();
+        View3DPane p2;
+        p2.setRoutingStore([&] { return kept; }, [&](const QJsonObject& o) { kept = o; });
+        p2.resize(1000, 700);
+        p2.show();
+        QApplication::processEvents();
+        p2.reloadRouting(true);
+        View3DCanvas* c = p2.canvas();
+        c->setUseGpu(false);
+        c->viewFrom(QStringLiteral("top"));
+        QApplication::processEvents();
+        p2.setRouteTool(RouteTool::Move);
+        auto at = [&](const V3& q) {
+            QPointF s;
+            c->toScreen(q, s);
+            return s;
+        };
+        const RouteNode3D* n = p2.route().node(c1);
+        const QPointF from = at(n->at + n->normal * (p2.route().housingLength(*n) * 0.9));
+        const QPointF to = from + (at({-60, -25, 0}) - at({-60, 0, 0}));
+        QMouseEvent press(QEvent::MouseButtonPress, from, c->mapToGlobal(from), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(c, &press);
+        for (int i = 1; i <= 12; ++i) {
+            const QPointF q = from + (to - from) * (i / 12.0);
+            QMouseEvent move(QEvent::MouseMove, q, c->mapToGlobal(q), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(c, &move);
+        }
+        QMouseEvent release(QEvent::MouseButtonRelease, to, c->mapToGlobal(to), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(c, &release);
+        QApplication::processEvents();
+        std::printf("  taut: X1 pulled 25 across - at y %.1f\n", p2.route().node(c1)->at.y);
+        check(p2.route().node(c1)->at.y < -15.0, "tension: a cable put in at 10 N pulled along with its connector, stiffly - not held still");
+    }
+
+    // ---- THE HELP WINDOW: the recording whole, the words all there ----
+    {
+        View3DHelpDialog help;
+        help.show();
+        QApplication::processEvents();
+        int recorded = -1;
+        for (int i = 0; i < help.topicCount() && recorded < 0; ++i) {
+            help.showTopic(i);
+            if (help.movie() && !help.movie()->fileName().isEmpty()) recorded = i;
+        }
+        QApplication::processEvents();
+        const QSize native = help.movie() ? QImageReader(help.movie()->fileName()).size() : QSize();
+        auto* picture = help.findChild<QLabel*>(QStringLiteral("help3dPicture"));
+        auto* words = help.findChild<QLabel*>(QStringLiteral("help3dSteps"));
+        auto* area = help.findChild<QScrollArea*>(QStringLiteral("help3dStepsArea"));
+        const QSize shown = help.movie() ? help.movie()->scaledSize() : QSize();
+        std::printf("  help: recording %dx%d shown %dx%d in %dx%d\n", native.width(), native.height(), shown.width(), shown.height(),
+                    picture ? picture->width() : 0, picture ? picture->height() : 0);
+        check(recorded >= 0 && picture && shown.isValid() && shown.width() <= native.width() && shown.width() <= picture->width() + 1 &&
+                  shown.height() <= picture->height() + 1,
+              "help: the recording whole in its window - never cut off, never bigger than it was made");
+        check(area && words && area->minimumHeight() >= std::min(words->heightForWidth(area->viewport()->width()), 400),
+              "help: the words never squeezed out - the window no smaller than they need");
+    }
+
+    // ---- THE FIRST TIME: Properties and Parts at the sides ----
+    {
+        QSettings settings;
+        const QVariant was = settings.value(QStringLiteral("panels/state"));
+        settings.remove(QStringLiteral("panels/state"));
+        {
+            MainWindow w;
+            w.show();
+            QApplication::processEvents();
+            QDockWidget* props = nullptr;
+            QDockWidget* parts = nullptr;
+            for (QDockWidget* d : w.findChildren<QDockWidget*>()) {
+                if (d->windowTitle() == QLatin1String("PROPERTIES")) props = d;
+                if (d->windowTitle() == QLatin1String("PARTS")) parts = d;
+            }
+            check(props && parts && props->isVisible() && parts->isVisible() && w.dockWidgetArea(props) == Qt::LeftDockWidgetArea &&
+                      w.dockWidgetArea(parts) == Qt::RightDockWidgetArea,
+                  "first time: Properties open on the left, Parts on the right");
+        }
+        if (was.isValid()) settings.setValue(QStringLiteral("panels/state"), was);
+        else settings.remove(QStringLiteral("panels/state"));
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -9349,6 +9547,7 @@ int run_brickharness_tests() {
     ROUND(testRoundSixtyOne);
     ROUND(testRoundSixtyTwo);
     ROUND(testRoundSixtyThree);
+    ROUND(testRoundSixtyFour);
 #undef ROUND
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;

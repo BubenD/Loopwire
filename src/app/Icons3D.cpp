@@ -335,6 +335,26 @@ void draw(QPainter& p, const QString& k, const QColor& ink, const QColor& acc) {
         arrow(p, QPointF(16, 19), QPointF(16, 30), 4);
         return;
     }
+    if (k == QLatin1String("attach")) {
+        // A face, a cable lying along it held by two small clips, and an arrow down onto it.
+        p.setPen(QPen(ink, 1.4));
+        p.setBrush(QColor(150, 158, 170));
+        p.drawRect(QRectF(2, 24, 28, 4));
+        p.setPen(accLine);
+        p.setBrush(Qt::NoBrush);
+        QPainterPath lying(QPointF(3, 21.5));
+        lying.lineTo(QPointF(29, 21.5));
+        p.drawPath(lying);
+        p.setPen(QPen(ink, 1.4));
+        p.setBrush(QColor(70, 190, 110));
+        p.drawRect(QRectF(8, 19, 3, 5));
+        p.drawRect(QRectF(21, 19, 3, 5));
+        p.setPen(QPen(ink, 2.0, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(QPointF(16, 3), QPointF(16, 14));
+        p.drawLine(QPointF(12, 10), QPointF(16, 14));
+        p.drawLine(QPointF(20, 10), QPointF(16, 14));
+        return;
+    }
     if (k == QLatin1String("loose")) {
         // A cable out of a connector with a loop of slack in it, a plus over it.
         p.setPen(QPen(ink, 1.4));

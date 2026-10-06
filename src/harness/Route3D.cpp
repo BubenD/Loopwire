@@ -230,7 +230,45 @@ int Route3D::degree(const QString& id) const {
     return n;
 }
 
-double Route3D::diameterOf(const RouteSegment3D& s) const { return s.diameter > 0.0 ? s.diameter : std::max(0.1, diameter); }
+double Route3D::diameterOf(const RouteSegment3D& s) const {
+    if (s.diameter > 0.0) return s.diameter;
+    if (const int n = wiresOf(s); n > 0) return packedDiameter(n, wireDOf(s));
+    return std::max(0.1, diameter);
+}
+
+int Route3D::wiresOf(const RouteSegment3D& s) const {
+    if (s.wires > 0) return s.wires;
+    return s.diameter > 0.0 ? 0 : std::max(0, wires);
+}
+
+double Route3D::wireDOf(const RouteSegment3D& s) const { return s.wireD > 0.0 ? s.wireD : std::max(0.05, wireD); }
+
+double Route3D::packedDiameter(int n, double d) {
+    if (n <= 1) return d;
+    // Round, about three quarters full; two or three wires side by side at the least.
+    return std::max(std::sqrt(n / 0.75) * d, n <= 3 ? 2.0 * d : 0.0);
+}
+
+std::vector<std::pair<double, double>> Route3D::wireLayout(int n, double d) {
+    std::vector<std::pair<double, double>> out;
+    if (n <= 0) return out;
+    if (n == 1) return {{0.0, 0.0}};
+    // RING BY RING ROUND THE MIDDLE: one in the middle where that packs better, then as many to a ring as fit round it -
+    // each ring a wire's width further out.
+    const bool middle = n >= 7 || n == 1;
+    if (middle) out.push_back({0.0, 0.0});
+    double radius = middle ? d : (n <= 3 ? d / (2.0 * std::sin(kPi / n)) : d * 0.8);
+    while (static_cast<int>(out.size()) < n) {
+        const int fit = std::max(3, static_cast<int>(std::floor(2.0 * kPi * radius / d)));
+        const int here = std::min(fit, n - static_cast<int>(out.size()));
+        for (int k = 0; k < here; ++k) {
+            const double a = 2.0 * kPi * k / here;
+            out.push_back({radius * std::cos(a), radius * std::sin(a)});
+        }
+        radius += d * 0.87;
+    }
+    return out;
+}
 
 double Route3D::bendRadiusOf(const RouteSegment3D& s) const { return bendRadius > 0.0 ? bendRadius : 6.0 * diameterOf(s); }
 
@@ -539,6 +577,10 @@ QJsonObject Route3D::toJson() const {
     o[QStringLiteral("bendRadius")] = bendRadius;
     o[QStringLiteral("lead")] = lead;
     if (std::abs(tension - 2.0) > 1e-9) o[QStringLiteral("tension")] = tension;
+    if (wires > 0) {
+        o[QStringLiteral("wires")] = wires;
+        o[QStringLiteral("wireD")] = wireD;
+    }
     QJsonArray ns;
     for (const RouteNode3D& n : nodes) {
         QJsonObject j;
@@ -572,6 +614,8 @@ QJsonObject Route3D::toJson() const {
         if (s.diameter > 0.0) j[QStringLiteral("diameter")] = s.diameter;
         if (s.color.isValid()) j[QStringLiteral("color")] = s.color.name();
         if (s.tension >= 0.0) j[QStringLiteral("tension")] = s.tension;
+        if (s.wires > 0) j[QStringLiteral("wires")] = s.wires;
+        if (s.wireD > 0.0) j[QStringLiteral("wireD")] = s.wireD;
         QJsonArray via;
         for (const RouteVia3D& v : s.via) via.append(QJsonObject{{QStringLiteral("at"), v3Json(v.at)}, {QStringLiteral("normal"), v3Json(v.normal)}});
         j[QStringLiteral("via")] = via;
@@ -587,6 +631,8 @@ Route3D Route3D::fromJson(const QJsonObject& o) {
     r.bendRadius = o.value(QStringLiteral("bendRadius")).toDouble(0.0);
     r.lead = o.value(QStringLiteral("lead")).toDouble(10.0);
     r.tension = o.value(QStringLiteral("tension")).toDouble(2.0);
+    r.wires = o.value(QStringLiteral("wires")).toInt(0);
+    r.wireD = o.value(QStringLiteral("wireD")).toDouble(0.6);
     for (const QJsonValue& v : o.value(QStringLiteral("nodes")).toArray()) {
         const QJsonObject j = v.toObject();
         RouteNode3D n;
@@ -616,6 +662,8 @@ Route3D Route3D::fromJson(const QJsonObject& o) {
         s.diameter = j.value(QStringLiteral("diameter")).toDouble(0.0);
         if (j.contains(QStringLiteral("color"))) s.color = QColor(j.value(QStringLiteral("color")).toString());
         s.tension = j.value(QStringLiteral("tension")).toDouble(-1.0);
+        s.wires = j.value(QStringLiteral("wires")).toInt(0);
+        s.wireD = j.value(QStringLiteral("wireD")).toDouble(0.0);
         for (const QJsonValue& w : j.value(QStringLiteral("via")).toArray()) {
             const QJsonObject k = w.toObject();
             s.via.push_back({v3From(k.value(QStringLiteral("at"))), unitOr(v3From(k.value(QStringLiteral("normal")), {0, 0, 1}), {0, 0, 1})});

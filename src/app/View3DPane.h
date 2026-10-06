@@ -117,6 +117,16 @@ public:
     void setRouteTool(RouteTool tool);
     // The last change to the route taken back.
     void undoRoute();
+    // TAKEN BACK, PUT BACK AGAIN: what Undo took back, in turn (Ctrl+Y); none once anything else is changed.
+    void redoRoute();
+    bool canRedo() const { return !future_.empty(); }
+    // LAID ON THE FACES UNDER IT: the bundle selected (every bundle, where none is) dropped the way gravity pulls onto the
+    // face under each point of it - onto a wall beside it where there is nothing under it near - and held there.
+    // How many bundles were laid.
+    int attachToSurface();
+    // A BUNDLE OF SO MANY WIRES, each so thick: the bundle given (none: the route's own, for every bundle that gives none);
+    // nought wires - a plain bundle again.
+    void setWires(const QString& seg, int wires, double wireD);
     // An environment chosen from a file dialog and read.
     void chooseEnvironment();
     RouteTool routeTool() const;
@@ -269,6 +279,9 @@ private:
     // The route.
     Route3D route_;
     std::vector<QJsonObject> history_;
+    std::vector<QJsonObject> future_;   // what Undo took back, the last on top. Not saved.
+    void restoreRoute(const QJsonObject& state);
+    QJsonObject routeState() const;
     std::function<QJsonObject()> loadRouting_;
     std::function<void(const QJsonObject&)> saveRouting_;
     std::function<QString()> drawingDir_;
@@ -292,6 +305,10 @@ public:
 private:
     QButtonGroup* tools_ = nullptr;
     QDoubleSpinBox* diameter_ = nullptr;
+    QToolButton* diameterAuto_ = nullptr;
+    QSpinBox* wires_ = nullptr;
+    QDoubleSpinBox* wireD_ = nullptr;
+    QToolButton* redo_ = nullptr;
     QDoubleSpinBox* bend_ = nullptr;
     QDoubleSpinBox* lead_ = nullptr;
     QToolButton* undo_ = nullptr;
@@ -513,6 +530,7 @@ signals:
     void routeChanged();
     void selectionChanged(const QString& segment);
     void undoRequested();
+    void redoRequested();
     // The route being moved under the pointer - not yet a change to keep.
     void routeMoving();
     // A RIGHT CLICK on a solid of the model (its index, or -1) or a part of the harness (its brick, or empty).
@@ -589,7 +607,10 @@ private:
         QColor color;
         int texture = Texture3D::None;
         QString node;   // the node it is the body of - clicked anywhere on it, it is that node
+        QString segment;   // the bundle it is (or a wire of) - clicked anywhere on it, it is that bundle
     };
+    // The bundle whose drawn body the ray through a point of the picture meets first (empty: none), and where.
+    QString segmentUnder(const QPointF& at, V3* hit = nullptr) const;
     mutable std::vector<Drawn> routeMeshes_;
     mutable bool routeDirty_ = true;
     Mesh3D layMesh_;

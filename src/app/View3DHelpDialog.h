@@ -5,6 +5,7 @@
 class QLabel;
 class QListWidget;
 class QMovie;
+class QScrollArea;
 class QToolButton;
 
 namespace Edraw_Desktop {
@@ -30,7 +31,18 @@ signals:
     // The example model asked for, to try the steps on.
     void exampleRequested();
 
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
 private:
+    // THE RECORDING WHOLE, as big as there is room for and never bigger than it was recorded; the words all there, the
+    // window never smaller than they need; the window opened to the recording's own size where the screen allows.
+    void fitPicture();
+    void fitText();
+    void fitWindow();
+    QSize native_;
+    QScrollArea* stepsArea_ = nullptr;
+    bool fitting_ = false;
     QListWidget* topics_ = nullptr;
     QLabel* picture_ = nullptr;
     QLabel* steps_ = nullptr;

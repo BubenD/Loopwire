@@ -195,6 +195,15 @@ void MainWindow::buildView3DTab() {
         if (QAbstractButton* first = tools->button(static_cast<int>(RouteTool::Select))) first->setChecked(true);
         big(w, row, "preview3dUndo", QStringLiteral("Undo"), QStringLiteral("undo"), QStringLiteral("Take back the last change to the route"),
             [this] { if (view3dPane_) view3dPane_->undoRoute(); });
+        big(w, row, "preview3dRedo", QStringLiteral("Redo"), QStringLiteral("redo"), QStringLiteral("Put back what Undo took back (Ctrl+Y)"),
+            [this] { if (view3dPane_) view3dPane_->redoRoute(); });
+        big(w, row, "preview3dAttach", QStringLiteral("Attach"), QStringLiteral("attach"),
+            QStringLiteral("Attach to surface: lay the cable selected (every cable, where none is) on the faces under it, the way "
+                           "gravity pulls - onto a wall beside it where nothing is under it - and hold it there"),
+            [this] {
+                if (!view3dPane_) return;
+                if (auto* b = view3dPane_->findChild<QToolButton*>(QStringLiteral("view3dAttach"))) b->click();
+            });
         // THEIR ARROWS: the form a connector is put in, and how the ruler measures.
         auto popup = [&](const char* name, const QList<QPair<QString, std::function<void()>>>& choices, int on) {
             auto* b = page->findChild<QToolButton*>(QLatin1String(name));
@@ -347,6 +356,30 @@ void MainWindow::buildView3DTab() {
             gl->addWidget(s, i, 1);
             preview3dMirrors_.append({s, QString::fromLatin1(sizes[i][2])});
         }
+        // Ø's "A": a bundle of wires, as thick as they pack to.
+        auto* diaAuto = new QToolButton(g);
+        diaAuto->setObjectName(QStringLiteral("preview3dDiameterAuto"));
+        diaAuto->setText(QStringLiteral("A"));
+        diaAuto->setCheckable(true);
+        diaAuto->setFixedWidth(22);
+        diaAuto->setToolTip(QStringLiteral("Auto: a bundle of wires - as thick as its wires pack to"));
+        diaAuto->setStyleSheet(QStringLiteral("QToolButton{font-weight:bold;color:#e6ecf4;background:#3a4656;border:1px solid #5a6878;"
+                                              "border-radius:3px;}QToolButton:checked{background:#2f855a;border-color:#3fa36f;color:white;}"));
+        gl->addWidget(diaAuto, 0, 2);
+        preview3dMirrors_.append({diaAuto, QStringLiteral("view3dRouteDiameterAuto")});
+        // A BUNDLE OF WIRES: how many, how thick each.
+        gl->addWidget(fieldLabel(QStringLiteral("Wires"), g), 0, 3);
+        auto* wires = new QSpinBox(g);
+        wires->setObjectName(QStringLiteral("preview3dWires"));
+        wires->setToolTip(QStringLiteral("A bundle of so many wires, drawn wire by wire (0: a plain bundle)"));
+        gl->addWidget(wires, 0, 4);
+        preview3dMirrors_.append({wires, QStringLiteral("view3dRouteWires")});
+        gl->addWidget(fieldLabel(QString::fromUtf8("Wire Ø"), g), 1, 3);
+        auto* wireD = new QDoubleSpinBox(g);
+        wireD->setObjectName(QStringLiteral("preview3dWireD"));
+        wireD->setToolTip(QStringLiteral("Each wire's diameter"));
+        gl->addWidget(wireD, 1, 4);
+        preview3dMirrors_.append({wireD, QStringLiteral("view3dRouteWireD")});
         row->addWidget(g);
     });
     // HOW TAUT THE CABLES ARE: the route's, the cable selected's own - and gravity shown on them.
@@ -355,13 +388,13 @@ void MainWindow::buildView3DTab() {
         auto* gl = new QGridLayout(g);
         gl->setContentsMargins(4, 2, 4, 2);
         gl->setVerticalSpacing(1);
-        gl->addWidget(fieldLabel(QStringLiteral("Route"), g), 0, 0);
+        gl->addWidget(fieldLabel(QStringLiteral("All cables"), g), 0, 0);
         auto* tension = new QComboBox(g);
         tension->setObjectName(QStringLiteral("preview3dTension"));
         tension->setToolTip(QStringLiteral("How taut the cables are put in, where one gives none of its own"));
         gl->addWidget(tension, 0, 1);
         preview3dMirrors_.append({tension, QStringLiteral("view3dTension")});
-        gl->addWidget(fieldLabel(QStringLiteral("Cable"), g), 1, 0);
+        gl->addWidget(fieldLabel(QStringLiteral("Selected"), g), 1, 0);
         auto* cable = new QComboBox(g);
         cable->setObjectName(QStringLiteral("preview3dCableTension"));
         cable->setToolTip(QStringLiteral("The tension of the cable selected - click a cable, then choose"));
@@ -465,7 +498,8 @@ void MainWindow::buildView3DTab() {
     stack({QStringLiteral("preview3dHarness"), QStringLiteral("preview3dParts")});
     stack({QStringLiteral("preview3dEnvClear")});
     stack({QStringLiteral("preview3dBranch"), QStringLiteral("preview3dClip"), QStringLiteral("preview3dMove"), QStringLiteral("preview3dStretch"),
-           QStringLiteral("preview3dDelete"), QStringLiteral("preview3dUndo")});
+           QStringLiteral("preview3dDelete"), QStringLiteral("preview3dUndo"), QStringLiteral("preview3dRedo"),
+           QStringLiteral("preview3dAttach")});
     stack({QStringLiteral("preview3dAddLoose"), QStringLiteral("preview3dAddLength")});
     stack({QStringLiteral("preview3dWorkPlaneHere")});
     stack({QStringLiteral("preview3dRefresh")});

@@ -65,6 +65,10 @@ struct RouteSegment3D {
     QColor color;
     // HOW TAUT IT IS PUT IN, in newtons - nought: slack, hanging by its length; less than nought: the route's.
     double tension = -1.0;
+    // A BUNDLE OF SO MANY WIRES, each so thick (mm) - drawn wire by wire, its diameter what they pack to. Nought: the
+    // route's (or a plain bundle, where it gives its own diameter).
+    int wires = 0;
+    double wireD = 0.0;
 };
 
 struct Route3D {
@@ -76,6 +80,10 @@ struct Route3D {
     double lead = 10.0;
     // How taut a bundle that gives none is put in, in newtons (RouteGravity).
     double tension = 2.0;
+    // A BUNDLE OF SO MANY WIRES, each so thick, where one gives none of its own - and its diameter what they pack to.
+    // Nought wires: a plain bundle of the diameter above.
+    int wires = 0;
+    double wireD = 0.6;
     std::vector<RouteNode3D> nodes;
     std::vector<RouteSegment3D> segments;
     // THE SOLIDS A BUNDLE CANNOT PASS THROUGH: where a ray from a point along a direction first meets one, within so far
@@ -110,6 +118,14 @@ struct Route3D {
     // How many bundles meet at a node.
     int degree(const QString& id) const;
     double diameterOf(const RouteSegment3D& s) const;
+    // HOW MANY WIRES A BUNDLE IS DRAWN AS, and how thick each - its own, or the route's (none for a bundle given its own
+    // diameter). Nought: a plain bundle.
+    int wiresOf(const RouteSegment3D& s) const;
+    double wireDOf(const RouteSegment3D& s) const;
+    // THE DIAMETER SO MANY WIRES PACK TO, round, about three quarters full (seven of them: three across).
+    static double packedDiameter(int wires, double wireD);
+    // Where each wire lies across a bundle, from its middle (mm), ring by ring.
+    static std::vector<std::pair<double, double>> wireLayout(int wires, double wireD);
     double bendRadiusOf(const RouteSegment3D& s) const;
     // HOW FAR A CONNECTOR'S HOUSING STANDS OUT OF ITS FACE: its own length, or (Auto) from the lead and the diameter.
     double housingLength(const RouteNode3D& n) const;

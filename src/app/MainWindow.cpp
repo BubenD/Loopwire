@@ -17016,6 +17016,17 @@ void MainWindow::restorePanelLayout() {
     // there is no telling which width is a panel's until it is standing where it was left.
     const QByteArray state = s.value(QStringLiteral("panels/state")).toByteArray();
     if (!state.isEmpty()) restoreState(state);
+    // THE FIRST TIME, nothing remembered: Properties on the left and Parts on the right, both open at the sides.
+    if (state.isEmpty()) {
+        if (propsDock_) {
+            addDockWidget(Qt::LeftDockWidgetArea, propsDock_);
+            propsDock_->show();
+        }
+        if (partsDock_) {
+            addDockWidget(Qt::RightDockWidgetArea, partsDock_);
+            partsDock_->show();
+        }
+    }
     // Then the widths, one to a side: the widest of what the panels standing on it remember. Panels on one
     // side opening at three different widths is not an arrangement, and whichever was read last winning is
     // not a rule anybody could predict.

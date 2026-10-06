@@ -422,6 +422,40 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     };
     diameter_ = spin("view3dRouteDiameter", QStringLiteral("Ø"), 0.5, 200.0, route_.diameter,
                      QStringLiteral("A bundle's diameter, where it is given none of its own (the table sets one bundle's)"));
+    // AUTO, BY ITS "A": the diameter the wires below pack to - the field showing it. Off: a plain bundle of the Ø typed.
+    diameterAuto_ = autoButton(bundleRow_, "view3dRouteDiameterAuto",
+                               QStringLiteral("Auto: a bundle of wires - as thick as its wires pack to; the field shows it"));
+    br->addWidget(diameterAuto_);
+    connect(diameterAuto_, &QToolButton::toggled, this, [this](bool on) {
+        if (filling_) return;
+        setWires(QString(), on ? std::max(2, wires_->value() > 0 ? wires_->value() : 7) : 0, wireD_->value());
+    });
+    // A BUNDLE OF WIRES: how many, how thick each - drawn wire by wire, its diameter what they pack to.
+    br->addWidget(new QLabel(QStringLiteral("Wires"), bundleRow_));
+    wires_ = new QSpinBox(bundleRow_);
+    wires_->setObjectName(QStringLiteral("view3dRouteWires"));
+    wires_->setRange(0, 999);
+    wires_->setKeyboardTracking(false);
+    wires_->setToolTip(QStringLiteral("A bundle of so many wires, drawn wire by wire, as thick as they pack to (Ø's A on); 0: a "
+                                      "plain bundle of the Ø typed. One cable's own: right-click it, Wires in it..."));
+    br->addWidget(wires_);
+    br->addWidget(new QLabel(QStringLiteral("Wire Ø"), bundleRow_));
+    wireD_ = new QDoubleSpinBox(bundleRow_);
+    wireD_->setObjectName(QStringLiteral("view3dRouteWireD"));
+    wireD_->setRange(0.05, 50.0);
+    wireD_->setDecimals(2);
+    wireD_->setSingleStep(0.1);
+    wireD_->setValue(route_.wireD);
+    wireD_->setSuffix(QStringLiteral(" mm"));
+    wireD_->setKeyboardTracking(false);
+    wireD_->setToolTip(QStringLiteral("Each wire's diameter, over its insulation"));
+    br->addWidget(wireD_);
+    connect(wires_, &QSpinBox::valueChanged, this, [this](int n) {
+        if (!filling_) setWires(QString(), n, wireD_->value());
+    });
+    connect(wireD_, &QDoubleSpinBox::valueChanged, this, [this](double d) {
+        if (!filling_) setWires(QString(), wires_->value(), d);
+    });
     bend_ = spin("view3dRouteBend", QStringLiteral("Bend R"), 0.0, 2000.0, route_.bendRadius,
                  QStringLiteral("The tightest a bundle may be bent - Auto: six times its diameter"));
     // AUTO, BY ITS "A": six times the bundle's diameter - the field showing that, and not to be typed in while it is on.
@@ -441,7 +475,8 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     auto settings = [this] {
         if (filling_) return;
         beforeRouteChange();
-        route_.diameter = diameter_->value();
+        // While the wires make it, the field shows what they pack to - not a diameter of its own.
+        if (route_.wires <= 0) route_.diameter = diameter_->value();
         route_.bendRadius = bendAuto_->isChecked() ? 0.0 : bend_->value();
         route_.lead = lead_->value();
         saveRouting();
@@ -452,7 +487,7 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     };
     for (QDoubleSpinBox* s : {diameter_, bend_, lead_}) connect(s, &QDoubleSpinBox::valueChanged, this, settings);
     // HOW TAUT A BUNDLE IS PUT IN - the route's here; the cable selected its own, beside it and in the table.
-    br->addWidget(new QLabel(QStringLiteral("Tension"), bundleRow_));
+    br->addWidget(new QLabel(QStringLiteral("Tension, all cables"), bundleRow_));
     tension_ = new QComboBox(bundleRow_);
     tension_->setObjectName(QStringLiteral("view3dTension"));
     for (const CableTension& t : cableTensions()) tension_->addItem(t.name, t.newtons);
@@ -467,10 +502,10 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
         emit routeChanged();
     });
     br->addWidget(tension_);
-    br->addWidget(new QLabel(QStringLiteral("Cable"), bundleRow_));
+    br->addWidget(new QLabel(QStringLiteral("Selected cable"), bundleRow_));
     cableTension_ = new QComboBox(bundleRow_);
     cableTension_->setObjectName(QStringLiteral("view3dCableTension"));
-    cableTension_->addItem(QStringLiteral("Route's"), -1.0);
+    cableTension_->addItem(QStringLiteral("As all cables"), -1.0);
     for (const CableTension& t : cableTensions()) cableTension_->addItem(t.name, t.newtons);
     cableTension_->setToolTip(QStringLiteral("The tension of the cable selected - select a cable (click it), then choose; Route's: "
                                              "the route's Tension"));
@@ -510,6 +545,17 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     br->addWidget(down_);
     undo_ = button(rr2, "view3dRouteUndo", QStringLiteral("Undo"), QStringLiteral("Take back the last change to the route (Ctrl+Z)"),
                    [this] { undoRoute(); });
+    redo_ = button(rr2, "view3dRouteRedo", QStringLiteral("Redo"), QStringLiteral("Put back what Undo took back (Ctrl+Y)"),
+                   [this] { redoRoute(); });
+    // LAID ON THE FACES UNDER IT, the way gravity pulls - the cable selected, or all of them.
+    button(rr2, "view3dAttach", QStringLiteral("Attach to surface"),
+           QStringLiteral("Lay the cable selected (every cable, where none is) on the faces under it, the way gravity pulls "
+                          "(Down) - onto a wall beside it where nothing is under it - and hold it there"),
+           [this] {
+               const int n = attachToSurface();
+               emit canvas_->message(n > 0 ? QStringLiteral("%1 cable(s) laid on the faces under them (Undo takes it back)").arg(n)
+                                           : QStringLiteral("Attach to surface: no model to lay the cables on"));
+           });
     // HOW IT IS DONE, SHOWN: the view itself recorded being used - the plane a click lands on, a cable routed from
     // one connector to the next, and how it bends - beside the same steps in words.
     button(rr2, "view3dHelp", QStringLiteral("Help"),
@@ -911,6 +957,7 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
         setPartToPlace(it ? it->data(Qt::UserRole).toString() : QString());
     });
     connect(canvas_, &View3DCanvas::undoRequested, this, [this] { undoRoute(); });
+    connect(canvas_, &View3DCanvas::redoRequested, this, [this] { redoRoute(); });
     // STRETCHED OR MOVED, under the pointer: the lengths as they are now - kept when it is let go.
     connect(canvas_, &View3DCanvas::routeMoving, this, [this] { refreshRoute(); });
     connect(canvas_, &View3DCanvas::message, this, [this](const QString& text) {
@@ -1051,6 +1098,24 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
                 const RouteSegment3D* t = route_.segment(seg);
                 const QColor c = QColorDialog::getColor(t && t->color.isValid() ? t->color : QColor(235, 140, 40), this, QStringLiteral("The bundle's colour"));
                 if (c.isValid()) setSegmentColour(seg, c);
+            });
+            // A BUNDLE OF WIRES: how many, how thick - or a plain bundle again.
+            QAction* wired = menu.addAction(QStringLiteral("Wires in it..."));
+            wired->setObjectName(QStringLiteral("view3dSegmentWires"));
+            connect(wired, &QAction::triggered, this, [this, seg] {
+                const RouteSegment3D* t = route_.segment(seg);
+                if (!t) return;
+                bool ok = false;
+                const int n = QInputDialog::getInt(this, QStringLiteral("Wires in it"), QStringLiteral("How many wires (0: a plain bundle)"),
+                                                   std::max(route_.wiresOf(*t), 7), 0, 999, 1, &ok);
+                if (!ok) return;
+                double d = route_.wireDOf(*t);
+                if (n > 0) {
+                    d = QInputDialog::getDouble(this, QStringLiteral("Wires in it"), QStringLiteral("Each wire's diameter (mm)"), d, 0.05,
+                                                50.0, 2, &ok);
+                    if (!ok) return;
+                }
+                setWires(seg, n, d);
             });
             QAction* longer = menu.addAction(QStringLiteral("Add length..."));
             longer->setObjectName(QStringLiteral("view3dAddLength"));
@@ -1412,7 +1477,17 @@ void View3DPane::syncBend() {
     const QSignalBlocker a(bendAuto_), b(bend_);
     bendAuto_->setChecked(automatic);
     bend_->setEnabled(!automatic);
-    bend_->setValue(automatic ? route_.diameter * 6.0 : route_.bendRadius);
+    const double across = route_.wires > 0 ? Route3D::packedDiameter(route_.wires, route_.wireD) : route_.diameter;
+    bend_->setValue(automatic ? across * 6.0 : route_.bendRadius);
+    // THE DIAMETER: the wires' (its A on, the field showing what they pack to), or its own.
+    if (diameterAuto_ && wires_ && wireD_) {
+        const QSignalBlocker c(diameterAuto_), d(diameter_), e(wires_), f(wireD_);
+        diameterAuto_->setChecked(route_.wires > 0);
+        diameter_->setEnabled(route_.wires <= 0);
+        diameter_->setValue(across);
+        wires_->setValue(route_.wires);
+        wireD_->setValue(route_.wireD);
+    }
 }
 
 void View3DPane::editSelectedNode(const std::function<void(RouteNode3D&)>& change) {
@@ -1655,6 +1730,7 @@ void View3DPane::applyIcons() {
         {"view3dToolConnector", "connector"}, {"view3dToolBranch", "branch"}, {"view3dToolClip", "clip"},
         {"view3dToolRoute", "route"},     {"view3dToolMove", "move"},     {"view3dToolStretch", "stretch"},
         {"view3dToolDelete", "delete"},   {"view3dRouteUndo", "undo"},    {"view3dLinkPart", "link"},
+        {"view3dRouteRedo", "redo"},      {"view3dAttach", "attach"},
         {"view3dUnlinkPart", "unlink"},   {"view3dLengthsToHarness", "lengths"}, {"view3dWorkPlaneHere", "workplane"},
         {"view3dToolMeasure", "measure"}, {"view3dFlip", "flip"},         {"view3dParts", "parts"},
         {"view3dGravity", "gravity"},
@@ -1670,7 +1746,7 @@ void View3DPane::applyIcons() {
                                      name == QLatin1String("view3dIso") || name == QLatin1String("view3dTop") ||
                                      name == QLatin1String("view3dFront") || name == QLatin1String("view3dSide") ||
                                      name == QLatin1String("view3dFlip") || name == QLatin1String("view3dFullScreen") ||
-                                     name == QLatin1String("view3dEnvClear") || name == QLatin1String("view3dRouteUndo") ||
+                                     name == QLatin1String("view3dEnvClear") || name == QLatin1String("view3dRouteUndo") || name == QLatin1String("view3dRouteRedo") ||
                                      name == QLatin1String("view3dHelp");
             b->setToolButtonStyle(pictureOnly ? Qt::ToolButtonIconOnly : Qt::ToolButtonTextBesideIcon);
             if (pictureOnly && !b->toolTip().startsWith(QLatin1String("<b>"))) b->setToolTip(QStringLiteral("<b>%1</b> - %2").arg(b->text(), b->toolTip()));
@@ -1816,6 +1892,90 @@ void View3DPane::refreshSolids() {
         top->setExpanded(true);
     }
     fillingSolids_ = false;
+}
+
+void View3DPane::setWires(const QString& seg, int wires, double wireD) {
+    beforeRouteChange();
+    if (RouteSegment3D* s = route_.segment(seg)) {
+        s->wires = std::max(0, wires);
+        s->wireD = wires > 0 ? std::max(0.05, wireD) : 0.0;
+        if (wires > 0) s->diameter = 0.0;   // the wires make it
+    } else {
+        route_.wires = std::max(0, wires);
+        route_.wireD = std::max(0.05, wireD);
+    }
+    route_.solidsChanged();
+    saveRouting();
+    refreshRoute();
+    syncBend();
+    emit routeChanged();
+}
+
+int View3DPane::attachToSurface() {
+    if (!envIndex_ || envIndex_->empty()) return 0;
+    static const V3 downs[6] = {{0, 0, -1}, {0, -1, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 1, 0}, {1, 0, 0}};
+    const V3 down = downs[std::clamp(down_ ? down_->currentIndex() : 0, 0, 5)];
+    auto cast = [this](const V3& from, const V3& dir) {
+        return envIndex_->cast(from, dir, [this](int part, const V3&) { return canvas_->envPartHidden(part); });
+    };
+    std::vector<QString> which;
+    if (route_.segment(canvas_->selectedSegment())) which.push_back(canvas_->selectedSegment());
+    else
+        for (const RouteSegment3D& s : route_.segments) which.push_back(s.id);
+    if (which.empty()) return 0;
+    beforeRouteChange();
+    int laid = 0;
+    for (const QString& id : which) {
+        const RouteSegment3D* s = route_.segment(id);
+        if (!s) continue;
+        const double r = route_.diameterOf(*s) / 2.0;
+        const std::vector<V3> path = route_.centreline(*s);
+        if (path.size() < 2) continue;
+        // ALONG IT, A POINT EVERY SO OFTEN - clear of its two ends (held by their nodes, straight out of a connector).
+        const RouteNode3D* na = route_.node(s->a);
+        const RouteNode3D* nb = route_.node(s->b);
+        const double skipA = na && na->kind == RouteNodeKind::Connector ? route_.leadOf(*na, r) : r * 2.0;
+        const double skipB = nb && nb->kind == RouteNodeKind::Connector ? route_.leadOf(*nb, r) : r * 2.0;
+        double total = 0.0;
+        for (size_t i = 1; i < path.size(); ++i) total += (path[i] - path[i - 1]).length();
+        const double step = std::max({4.0 * r, route_.bendRadiusOf(*s) * 0.5, total / 60.0});
+        std::vector<RouteVia3D> via;
+        double along = 0.0, next = skipA + step * 0.5;
+        for (size_t i = 1; i < path.size(); ++i) {
+            const V3 a = path[i - 1], b = path[i];
+            const double l = (b - a).length();
+            while (l > 1e-9 && next <= along + l && next < total - skipB) {
+                const V3 p = a + (b - a) * ((next - along) / l);
+                next += step;
+                // UNDER IT, the way gravity pulls; or the nearest wall beside it, within a few of its diameters; or, with
+                // nothing near, where it is.
+                Pick3D hit = cast(p - down * r, down);
+                if (!hit.hit || hit.distance > std::max(300.0, total)) {
+                    hit = Pick3D();
+                    for (const V3& side : {V3{1, 0, 0}, V3{-1, 0, 0}, V3{0, 1, 0}, V3{0, -1, 0}, V3{0, 0, 1}, V3{0, 0, -1}}) {
+                        if (std::abs(dot3(side, down)) > 0.5) continue;
+                        const Pick3D w = cast(p, side);
+                        if (w.hit && w.distance < r * 8.0 && (!hit.hit || w.distance < hit.distance)) hit = w;
+                    }
+                }
+                if (hit.hit) via.push_back({hit.point, hit.normal.normalized()});
+                else via.push_back({p + down * r, down * -1.0});
+            }
+            along += l;
+        }
+        if (via.empty()) continue;
+        route_.segment(id)->via = via;
+        ++laid;
+    }
+    if (laid == 0) {
+        history_.pop_back();
+        return 0;
+    }
+    route_.solidsChanged();
+    saveRouting();
+    refreshRoute();
+    emit routeChanged();
+    return laid;
 }
 
 void View3DPane::startBranchFrom(const QString& node, bool back) {
@@ -2166,19 +2326,38 @@ void View3DPane::saveRouting() {
     saveRouting_(o);
 }
 
-void View3DPane::beforeRouteChange() {
+QJsonObject View3DPane::routeState() const {
     QJsonObject was = route_.toJson();
     was.insert(QStringLiteral("environmentWas"), envRef_);   // what Undo reads the model back from
-    history_.push_back(was);
+    return was;
+}
+
+void View3DPane::beforeRouteChange() {
+    history_.push_back(routeState());
     if (history_.size() > 100) history_.erase(history_.begin());
+    // Something new done: what Undo took back cannot be put back over it.
+    future_.clear();
 }
 
 void View3DPane::undoRoute() {
     if (history_.empty()) return;
     const QJsonObject back = history_.back();
+    history_.pop_back();
+    future_.push_back(routeState());
+    restoreRoute(back);
+}
+
+void View3DPane::redoRoute() {
+    if (future_.empty()) return;
+    const QJsonObject again = future_.back();
+    future_.pop_back();
+    history_.push_back(routeState());
+    restoreRoute(again);
+}
+
+void View3DPane::restoreRoute(const QJsonObject& back) {
     route_ = Route3D::fromJson(back);
     armSolids();
-    history_.pop_back();
     // THE MODEL AS IT WAS: read again where it has gone, taken away where it was not there.
     const QString envWas = back.value(QStringLiteral("environmentWas")).toString();
     if (back.contains(QStringLiteral("environmentWas")) && envWas != envRef_) {
@@ -2365,16 +2544,21 @@ void View3DPane::refreshRoute() {
         auto* length = new QTableWidgetItem(QStringLiteral("%1 mm").arg(len, 0, 'f', 1));
         length->setFlags(length->flags() & ~Qt::ItemIsEditable);
         length->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        auto* dia = new QTableWidgetItem(s.diameter > 0.0 ? QString::number(s.diameter, 'f', 1)
-                                                          : QStringLiteral("%1 (route)").arg(route_.diameter, 0, 'f', 1));
-        dia->setToolTip(QStringLiteral("This bundle's diameter - empty for the route's"));
+        // ITS DIAMETER: its own, its wires' (so many of so thick, and what they pack to), or the route's.
+        const int nw = route_.wiresOf(s);
+        const QString diaText = s.diameter > 0.0 ? QString::number(s.diameter, 'f', 1)
+                                : nw > 0         ? QStringLiteral("%1×%2 → %3").arg(nw).arg(route_.wireDOf(s), 0, 'g', 3)
+                                                       .arg(route_.diameterOf(s), 0, 'f', 1)
+                                                 : QStringLiteral("%1 (route)").arg(route_.diameter, 0, 'f', 1);
+        auto* dia = new QTableWidgetItem(diaText);
+        dia->setToolTip(QStringLiteral("This bundle's diameter - empty for the route's; a bundle of wires: right-click it, Wires in it..."));
         table_->setItem(row, 0, name);
         table_->setItem(row, 1, length);
         table_->setItem(row, 2, dia);
         // HOW TAUT THIS ONE IS PUT IN: the route's, or one of the choices.
         auto* tension = new QComboBox(table_);
         tension->setObjectName(QStringLiteral("view3dTension_%1").arg(s.id));
-        tension->addItem(QStringLiteral("Route's (%1)").arg(cableTensionName(route_.tension)), -1.0);
+        tension->addItem(QStringLiteral("As all (%1)").arg(cableTensionName(route_.tension)), -1.0);
         for (const CableTension& choice : cableTensions()) tension->addItem(choice.name, choice.newtons);
         int pick = 0;
         for (int i = 1; i < tension->count(); ++i)
@@ -2445,7 +2629,7 @@ void View3DPane::syncCableTension() {
     const QSignalBlocker hold(cableTension_);
     const RouteSegment3D* s = route_.segment(canvas_->selectedSegment());
     cableTension_->setEnabled(s != nullptr);
-    cableTension_->setItemText(0, QStringLiteral("Route's (%1)").arg(cableTensionName(route_.tension)));
+    cableTension_->setItemText(0, QStringLiteral("As all cables (%1)").arg(cableTensionName(route_.tension)));
     int pick = 0;
     for (int i = 1; s && s->tension >= 0.0 && i < cableTension_->count(); ++i)
         if (std::abs(cableTension_->itemData(i).toDouble() - s->tension) < 1e-9) pick = i;
@@ -2854,7 +3038,7 @@ void View3DCanvas::setRouteTool(RouteTool tool) {
     }
     if (tool != RouteTool::Measure && measureStage_ == 1) clearMeasure();
     tool_ = tool;
-    setMouseTracking(tool == RouteTool::Route || tool == RouteTool::Measure || tool == RouteTool::Connector);
+    setMouseTracking(tool == RouteTool::Route || tool == RouteTool::Measure || tool == RouteTool::Connector || tool == RouteTool::Select);
     setCursor(tool == RouteTool::Select                                    ? Qt::ArrowCursor
               : tool == RouteTool::Move || tool == RouteTool::Stretch ? Qt::SizeAllCursor
                                                                            : Qt::CrossCursor);
@@ -3007,7 +3191,7 @@ V3 View3DCanvas::layKept(const Kept& k, const V3& start, double scale) {
     // from the one before by no more than it bends (Loose 60 degrees, Normal 30, Taut 10; slack, as far as it likes) or
     // than it was bent there already, every step as long as it was.
     const int stiff = stiffnessOf(tensionOf(*route_, *s));
-    const double limit = stiff > 0 ? std::max(10.0, 60.0 / stiff) * M_PI / 180.0 : M_PI;
+    double limit = stiff > 0 ? std::max(10.0, 60.0 / stiff) * M_PI / 180.0 : M_PI;
     auto toward = [&](const V3& from, const V3& to, double d, const V3* before, size_t joint) {
         V3 dir = to - from;
         if (dir.length() < 1e-12) return from;
@@ -3032,20 +3216,42 @@ V3 View3DCanvas::layKept(const Kept& k, const V3& start, double scale) {
         out = d.normalized();
         return true;
     };
-    for (int iter = 0; iter < (stiff > 0 ? 24 : 12); ++iter) {
-        p[0] = start;
-        for (size_t i = 1; i <= n; ++i) {
-            V3 h;
-            const bool has = i >= 2 && heading(p[i - 2], p[i - 1], h);
-            p[i] = toward(p[i - 1], p[i], k.step[i - 1] * scale, has ? &h : nullptr, i - 1);
+    // ITS SHAPE CARRIED ALONG FIRST: each point moved with the end pulled by as much as it lies near it (all of it at the
+    // end, none at the far end) - a taut cable keeps its form as it is pulled, and is laid from there.
+    if (stiff > 0 && n >= 2) {
+        const V3 moved = start - p[0];
+        double whole = 0.0;
+        for (size_t i = 0; i < n; ++i) whole += k.step[i];
+        double far = whole;
+        for (size_t i = 1; i < n; ++i) {
+            far -= k.step[i - 1];
+            p[i] = p[i] + moved * (whole > 1e-9 ? far / whole : 0.0);
         }
-        p[n] = k.anchor;
-        for (size_t i = n; i-- > 0;) {
-            V3 h;
-            const bool has = i + 2 <= n && heading(p[i + 2], p[i + 1], h);
-            p[i] = toward(p[i + 1], p[i], k.step[i] * scale, has ? &h : nullptr, i + 1);
+    }
+    const std::vector<V3> from = p;
+    auto solve = [&] {
+        for (int iter = 0; iter < (stiff > 0 ? 24 : 12); ++iter) {
+            p[0] = start;
+            for (size_t i = 1; i <= n; ++i) {
+                V3 h;
+                const bool has = i >= 2 && heading(p[i - 2], p[i - 1], h);
+                p[i] = toward(p[i - 1], p[i], k.step[i - 1] * scale, has ? &h : nullptr, i - 1);
+            }
+            p[n] = k.anchor;
+            for (size_t i = n; i-- > 0;) {
+                V3 h;
+                const bool has = i + 2 <= n && heading(p[i + 2], p[i + 1], h);
+                p[i] = toward(p[i + 1], p[i], k.step[i] * scale, has ? &h : nullptr, i + 1);
+            }
+            if ((p[0] - start).length() < 1e-4) break;
         }
-        if ((p[0] - start).length() < 1e-4) break;
+        return (p[0] - start).length();
+    };
+    // AS STIFF AS IT IS, AS FAR AS THAT LETS IT FOLLOW: where it cannot reach the pointer bending no more than its tension
+    // allows, it is let bend a little more, and again - so a taut cable is pulled along, stiffly, rather than not at all.
+    for (int loosen = 0; solve() > 0.05 && limit < M_PI && loosen < 6; ++loosen) {
+        limit = std::min(M_PI, limit * 1.6);
+        p = from;
     }
     for (size_t j = 0; j < k.via.size(); ++j) s->via[static_cast<size_t>(k.via[j])].at = p[j + 1];
     return p[0];
@@ -3315,8 +3521,40 @@ void View3DCanvas::buildRouteMeshes() const {
     for (const RouteSegment3D& s : route_->segments) {
         const std::vector<V3> c = route_->centreline(s);
         if (c.size() < 2) continue;
-        routeMeshes_.push_back({tubeMesh(c, route_->diameterOf(s) / 2.0, 14, true),
-                                s.id == selSegment_ ? lit : s.color.isValid() ? s.color : QColor(235, 140, 40), Texture3D::Plastic});
+        const QColor own = s.id == selSegment_ ? lit : s.color.isValid() ? s.color : QColor(235, 140, 40);
+        const int nw = route_->wiresOf(s);
+        if (nw <= 1) {
+            routeMeshes_.push_back({tubeMesh(c, route_->diameterOf(s) / 2.0, 14, true), own, Texture3D::Plastic, QString(), s.id});
+            continue;
+        }
+        // A BUNDLE OF WIRES, WIRE BY WIRE: each where it lies across the bundle, carried along its middle without twisting
+        // (each step's frame turned from the one before only as far as the bundle turns).
+        const double wd = route_->wireDOf(s);
+        const std::vector<std::pair<double, double>> lay = Route3D::wireLayout(nw, wd);
+        std::vector<V3> us, vs;
+        for (size_t i = 0; i < c.size(); ++i) {
+            const V3 t = (c[std::min(i + 1, c.size() - 1)] - c[i > 0 ? i - 1 : 0]).normalized();
+            V3 u;
+            if (us.empty()) {
+                u = cross3(t, V3{0, 0, 1});
+                if (u.length() < 1e-6) u = cross3(t, V3{1, 0, 0});
+            } else {
+                u = us.back() - t * dot3(us.back(), t);
+                if (u.length() < 1e-9) u = cross3(t, vs.back());
+            }
+            u = u.normalized();
+            us.push_back(u);
+            vs.push_back(cross3(t, u).normalized());
+        }
+        static const QColor palette[] = {QColor(200, 40, 40), QColor(40, 90, 200), QColor(40, 150, 60), QColor(230, 200, 40),
+                                         QColor(30, 30, 34), QColor(235, 235, 235), QColor(150, 80, 30), QColor(240, 130, 30),
+                                         QColor(140, 60, 170), QColor(120, 120, 130)};
+        for (size_t w = 0; w < lay.size(); ++w) {
+            std::vector<V3> path;
+            for (size_t i = 0; i < c.size(); ++i) path.push_back(c[i] + us[i] * lay[w].first + vs[i] * lay[w].second);
+            const QColor wc = s.id == selSegment_ ? lit : s.color.isValid() ? s.color : palette[w % std::size(palette)];
+            routeMeshes_.push_back({tubeMesh(path, wd * 0.48, 8, true), wc, Texture3D::Plastic, QString(), s.id});
+        }
     }
     const double d = std::max(0.5, route_->diameter);
     for (const RouteNode3D& n : route_->nodes) {
@@ -3583,11 +3821,55 @@ QString View3DCanvas::nodeAt(const QPointF& at) const {
     return best;
 }
 
+QString View3DCanvas::segmentUnder(const QPointF& at, V3* where) const {
+    if (!route_) return QString();
+    if (routeDirty_) buildRouteMeshes();
+    V3 origin, dir;
+    cam_.rayAt(at.x(), at.y(), width(), height(), origin, dir);
+    QString hit;
+    double first = std::numeric_limits<double>::max();
+    for (const Drawn& d : routeMeshes_) {
+        if (d.segment.isEmpty()) continue;
+        RayIndex3D index;
+        index.build({&d.mesh});
+        const Pick3D p = index.cast(origin, dir);
+        if (p.hit && p.distance < first) {
+            first = p.distance;
+            hit = d.segment;
+            if (where) *where = p.point;
+        }
+    }
+    return hit;
+}
+
 QString View3DCanvas::segmentAt(const QPointF& at, V3* point, V3* normal, int* afterVia) const {
     if (!route_) return QString();
+    // WHICH BUNDLE: the one whose drawn body is under the pointer - or, a thin one from far off, the one whose drawn
+    // middle passes nearest on the screen. Then where on it, from the points it was laid through.
+    QString picked = segmentUnder(at);
+    if (picked.isEmpty()) {
+        double closest = 8.0;
+        for (const RouteSegment3D& s : route_->segments) {
+            const std::vector<V3> drawn = route_->centreline(s);
+            for (size_t j = 0; j + 1 < drawn.size(); ++j) {
+                QPointF dp, dq;
+                if (!toScreen(drawn[j], dp) || !toScreen(drawn[j + 1], dq)) continue;
+                const QPointF de = dq - dp;
+                const double dl = de.x() * de.x() + de.y() * de.y();
+                const double dt = dl < 1e-9 ? 0.0 : std::clamp(((at.x() - dp.x()) * de.x() + (at.y() - dp.y()) * de.y()) / dl, 0.0, 1.0);
+                const double dd = std::hypot(dp.x() + de.x() * dt - at.x(), dp.y() + de.y() * dt - at.y());
+                if (dd < closest) {
+                    closest = dd;
+                    picked = s.id;
+                }
+            }
+        }
+    }
+    if (picked.isEmpty()) return QString();
     QString best;
-    double nearest = 8.0;
+    double nearest = std::numeric_limits<double>::max();
     for (const RouteSegment3D& s : route_->segments) {
+        if (s.id != picked) continue;
         const std::vector<V3> c = route_->corners(s);
         const RouteNode3D* a = route_->node(s.a);
         const RouteNode3D* b = route_->node(s.b);
@@ -4281,6 +4563,12 @@ void View3DCanvas::mouseMoveEvent(QMouseEvent* e) {
         update();
         return;
     }
+    // SELECTING: a hand over what a click would select - a connector, a clip, a cable.
+    if (dragging_ == Qt::NoButton && tool_ == RouteTool::Select && route_) {
+        const bool over = !nodeAt(e->position()).isEmpty() || !segmentUnder(e->position()).isEmpty();
+        setCursor(over ? Qt::PointingHandCursor : Qt::ArrowCursor);
+        return;
+    }
     if (dragging_ == Qt::NoButton) {
         // LAYING A BUNDLE: where it would go next, under the pointer.
         if (route_ && !layFrom_.isEmpty()) {
@@ -4418,6 +4706,18 @@ void View3DCanvas::mouseReleaseEvent(QMouseEvent* e) {
     // SOMETHING HELD, LET GO: moved - one change made; not moved - it is selected, and that is all.
     if (dragKind_ != 0) {
         const bool changed = dragStarted_;
+        // TAKEN HOLD OF AND LET GO WITHOUT MOVING: a click - what was under it selected.
+        if (!changed && route_) {
+            const QString node = nodeAt(e->position());
+            const QString seg = node.isEmpty() ? segmentAt(e->position()) : QString();
+            if (!node.isEmpty() || !seg.isEmpty()) {
+                selNode_ = node;
+                selSegment_ = seg;
+                routeRedraw();
+                setFocus();
+                emit selectionChanged(selSegment_);
+            }
+        }
         dragKind_ = 0;
         dragStarted_ = false;
         dragging_ = Qt::NoButton;
@@ -4527,6 +4827,10 @@ void View3DCanvas::mouseDoubleClickEvent(QMouseEvent* e) {
 void View3DCanvas::keyPressEvent(QKeyEvent* e) {
     if (e->matches(QKeySequence::Undo)) {
         emit undoRequested();
+        return;
+    }
+    if (e->matches(QKeySequence::Redo) || (e->key() == Qt::Key_Y && (e->modifiers() & Qt::ControlModifier))) {
+        emit redoRequested();
         return;
     }
     if (!route_) {

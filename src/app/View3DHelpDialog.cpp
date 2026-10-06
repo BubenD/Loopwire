@@ -1,13 +1,18 @@
 #include "app/View3DHelpDialog.h"
 
+#include <QEvent>
 #include <QHBoxLayout>
+#include <QImageReader>
 #include <QLabel>
 #include <QListWidget>
 #include <QMovie>
 #include <QPushButton>
+#include <QScreen>
 #include <QScrollArea>
 #include <QToolButton>
 #include <QVBoxLayout>
+
+#include <algorithm>
 
 namespace Edraw_Desktop {
 
@@ -214,9 +219,16 @@ const Topic kTopics[] = {
     {"16. Tension and gravity - where a cable falls",
      ":/help3d/gravity.gif",
      "<p><b>Tension</b> is how taut a cable is put in: Slack, Loose (0.5 N), Normal (2 N), Firm (10 N) or Taut (50 N). "
-     "<i>Tension</i> is the route's, for every cable with none of its own; click a cable and choose in <i>Cable</i> to "
-     "give it its own (or in the table's <i>Tension</i> column). A taut cable is stiff: pulled or moved, it bows round "
-     "smoothly instead of kinking or looping; a slack one follows the pointer as it is pulled.</p>"
+     "<i>All cables</i> sets it for every cable with none of its own; <i>Selected</i> (click a cable first) gives the "
+     "one cable its own - or choose in the table's <i>Tension</i> column; <i>As all cables</i> takes it back to the "
+     "common one. A taut cable is stiff: pulled or moved, it keeps its form and bows round smoothly instead of kinking "
+     "or looping - and still follows the pointer; a slack one follows it loosely.</p>"
+     "<p><b>Attach to surface</b> lays the cable selected (every cable, where none is) on the faces under it, the way "
+     "gravity pulls (<i>Down</i>) - onto a wall beside it where there is nothing under it near - and holds it there. "
+     "<i>Undo</i> takes it back, <i>Redo</i> (Ctrl+Y) puts it back.</p>"
+     "<p><b>A bundle of wires:</b> set <i>Wires</i> and <i>Wire &Oslash;</i> (the Bundle settings) and the cables are "
+     "drawn wire by wire, as thick as the wires pack to - <i>&Oslash;</i>'s <b>A</b> on, showing it (seven wires of "
+     "0.6 mm: about 1.8 mm). One cable's own: right-click it, <i>Wires in it...</i>.</p>"
      "<p><b>Gravity</b> (the button by them) is a simulation preview: each cable hung under its own weight - worked out "
      "from its diameter, a bundle of wires being about 1.8 g/cm3. A cable is held at its connectors (straight out for "
      "the lead), its clips and branches, and wherever it lies on something - a face right under it. A cable laid along a "
@@ -273,10 +285,13 @@ const Topic kTopics[] = {
      "connector with only one cable can be taken hold of itself; where it has two or more, click the cable, or select "
      "it first. A clip or a branch at the cable's other end holds it.</dd>"
      "<dt><i>Tension</i></dt><dd>How taut the cables are put in - Slack, Loose (0.5 N), Normal (2 N), Firm (10 N), "
-     "Taut (50 N). <i>Tension</i> (the route's) is for every cable that has none of its own. To give one cable its "
-     "own, click it and choose in <i>Cable</i> (on the 3D Preview ribbon, the Tension group's <i>Cable</i>), or in the "
-     "table's <i>Tension</i> column. The less tension, the more a cable sags between where it is held; Slack, it hangs "
-     "by its own length.</dd>"
+     "Taut (50 N). <i>All cables</i> is for every cable that has none of its own. To give one cable its own, click it "
+     "and choose in <i>Selected</i> (the 3D view: <i>Selected cable</i>), or in the table's <i>Tension</i> column. The "
+     "less tension, the more a cable sags between where it is held; Slack, it hangs by its own length.</dd>"
+     "<dt><i>Attach</i></dt><dd>Attach to surface: lay the cable selected (all of them, where none is) on the faces "
+     "under it, the way gravity pulls, and hold it there.</dd>"
+     "<dt><i>Wires / Wire &Oslash;</i></dt><dd>A bundle of so many wires, each so thick - drawn wire by wire; "
+     "&Oslash;'s A on, it is as thick as they pack to. Right-click a cable: <i>Wires in it...</i> for its own.</dd>"
      "<dt><i>Gravity</i></dt><dd>A simulation preview: each cable hung under its own weight - held at its connectors "
      "(straight out for the lead), clips and branches, pulled by its tension, resting on whatever it falls onto. Where "
      "it would hang is drawn faint red over it, and each place it falls from is marked with how far down; the status "
@@ -288,6 +303,7 @@ const Topic kTopics[] = {
      "<dt><i>Bend R</i></dt><dd>The tightest a cable may bend; Auto, six times its diameter.</dd>"
      "<dt><i>Lead</i></dt><dd>How far a cable comes straight out of a connector before it may turn.</dd>"
      "<dt><i>Undo</i></dt><dd>Take back the last change to the route (Ctrl+Z).</dd>"
+     "<dt><i>Redo</i></dt><dd>Put back what Undo took back (Ctrl+Y or Ctrl+Shift+Z).</dd>"
      "<dt><i>Help</i></dt><dd>This.</dd>"
      "<dt><i>Route to land / at / Through point</i></dt><dd>Where a click lands: the model's faces, or a "
      "level or upright plane at the place given - to lay a cable through the air.</dd>"
@@ -304,6 +320,7 @@ const Topic kTopics[] = {
      "<dt>Delete</dt><dd>Delete the node or cable selected.</dd>"
      "<dt>R</dt><dd>Spin the connector selected a quarter turn.</dd>"
      "<dt>Ctrl+Z</dt><dd>Undo.</dd>"
+     "<dt>Ctrl+Y</dt><dd>Redo.</dd>"
      "<dt>F11</dt><dd>Full screen, and back.</dd>"
      "</dl>"},
     {"18. Words used here",
@@ -358,9 +375,11 @@ View3DHelpDialog::View3DHelpDialog(QWidget* parent) : QDialog(parent) {
     picture_ = new QLabel(this);
     picture_->setObjectName(QStringLiteral("help3dPicture"));
     picture_->setAlignment(Qt::AlignCenter);
-    picture_->setMinimumSize(640, 420);
+    picture_->setMinimumSize(320, 200);
+    picture_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
     picture_->setStyleSheet(QStringLiteral("QLabel{background:#1e2228;color:#8fa2b8;}"));
-    right->addWidget(picture_, 3);
+    picture_->installEventFilter(this);
+    right->addWidget(picture_, 1);
     auto* controls = new QHBoxLayout;
     pause_ = new QToolButton(this);
     pause_->setObjectName(QStringLiteral("help3dPause"));
@@ -379,10 +398,13 @@ View3DHelpDialog::View3DHelpDialog(QWidget* parent) : QDialog(parent) {
     steps_->setTextFormat(Qt::RichText);
     steps_->setAlignment(Qt::AlignTop | Qt::AlignLeft);
     auto* scroll = new QScrollArea(this);
+    scroll->setObjectName(QStringLiteral("help3dStepsArea"));
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
     scroll->setWidget(steps_);
-    right->addWidget(scroll, 2);
+    scroll->viewport()->installEventFilter(this);
+    stepsArea_ = scroll;
+    right->addWidget(scroll, 0);
     lay->addLayout(right, 1);
 
     movie_ = new QMovie(this);
@@ -415,9 +437,12 @@ void View3DHelpDialog::showTopic(int index) {
     const bool recorded = *t.gif;
     pause_->setVisible(recorded);
     again_->setVisible(recorded);
+    native_ = QSize();
     if (recorded) {
         movie_->setFileName(QString::fromLatin1(t.gif));
+        native_ = QImageReader(QString::fromLatin1(t.gif)).size();
         picture_->setMovie(movie_);
+        fitPicture();
         movie_->start();
         if (pause_->isChecked()) pause_->setChecked(false);
     } else {
@@ -425,6 +450,51 @@ void View3DHelpDialog::showTopic(int index) {
         picture_->setText(QString::fromLatin1(t.title).section(QLatin1Char(' '), 1));
     }
     steps_->setText(QString::fromUtf8(t.steps));
+    fitWindow();
+}
+
+bool View3DHelpDialog::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::Resize) {
+        if (watched == picture_) fitPicture();
+        else if (stepsArea_ && watched == stepsArea_->viewport()) fitText();
+    }
+    return QDialog::eventFilter(watched, event);
+}
+
+void View3DHelpDialog::fitPicture() {
+    if (!native_.isValid() || !movie_) return;
+    const QSize room = picture_->size();
+    QSize s = native_;
+    if (s.width() > room.width() || s.height() > room.height()) s = native_.scaled(room, Qt::KeepAspectRatio);
+    if (s.isValid() && s != movie_->scaledSize()) movie_->setScaledSize(s);
+}
+
+void View3DHelpDialog::fitText() {
+    if (!stepsArea_ || fitting_) return;
+    fitting_ = true;
+    // AS TALL AS ALL ITS WORDS at the width there is - the window cannot be made smaller than that - up to most of the
+    // screen, past which it scrolls.
+    const int width = std::max(200, stepsArea_->viewport()->width());
+    const int words = steps_->heightForWidth(width) + 6;
+    const QRect screen = this->screen() ? this->screen()->availableGeometry() : QRect(0, 0, 1600, 1000);
+    stepsArea_->setMinimumHeight(std::min(words, screen.height() * 55 / 100));
+    fitting_ = false;
+}
+
+void View3DHelpDialog::fitWindow() {
+    // THE WINDOW TO THE RECORDING: wide and tall enough for it whole at its own size, and for every word under it - as
+    // far as the screen goes.
+    const QRect screen = this->screen() ? this->screen()->availableGeometry() : QRect(0, 0, 1600, 1000);
+    const int column = std::max(560, native_.isValid() ? native_.width() : 640);
+    const int words = steps_->heightForWidth(column) + 6;
+    const int side = topics_->width() + 40;
+    const int controls = pause_->sizeHint().height() + 12;
+    QSize want(side + column, (native_.isValid() ? native_.height() : 420) + controls + std::min(words, screen.height() * 55 / 100) + 40);
+    want = want.boundedTo(screen.size() - QSize(20, 40));
+    setMinimumSize(std::min(side + 560, want.width()), std::min(200 + controls + std::min(words, screen.height() * 55 / 100) + 40, want.height()));
+    resize(want.expandedTo(minimumSize()));
+    fitText();
+    fitPicture();
 }
 
 } // namespace Edraw_Desktop
