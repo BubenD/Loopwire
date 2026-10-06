@@ -141,13 +141,13 @@ const Topic kTopics[] = {
      "<p>Each drag is one change: <i>Undo</i> takes it back. To move something the other way - nearer or further - "
      "unlock, turn the view, lock again and drag. <i>View locked</i> again, or the padlock, unlocks.</p>"},
     {"11. Full screen",
-     "",
+     ":/help3d/fullscreen.gif",
      "<p><i>Full screen</i> (top right of the view), or <b>F11</b>, opens the 3D view in a window of its own, filling "
      "the screen - with every row and the panel on the right, so nothing is lost. It is a window still: drag it by its "
      "title bar, make it smaller, or put it on another screen. <b>F11</b>, <i>Back</i> or closing the window "
      "returns it to where it was.</p>"},
     {"12. Measuring - point to point, surface to surface",
-     "",
+     ":/help3d/measure.gif",
      "<p>Choose <i>Measure</i>, click one end, then the other. The distance is written by the ruler, and in full at the "
      "foot of the picture: straight, along X, Y and Z, and across each plane.</p>"
      "<p><b>Surface to surface</b> (the arrow on <i>Measure</i>, or the box beside the tools): click a face, then the "
@@ -158,7 +158,7 @@ const Topic kTopics[] = {
      "and <i>Delete this measure</i>. <i>Remove all measures</i> on any right-click menu takes every one away (it is "
      "greyed while there are none). <i>Esc</i> gives up only a ruler you are in the middle of making.</p>"},
     {"13. Moving and pulling a cable - its length kept",
-     "",
+     ":/help3d/pull.gif",
      "<p><b>Move:</b> choose <i>Move</i> - the wheel turns into arrows along X, Y and Z (red, green, blue) and turns "
      "round each, each arrow the way its axis runs on the screen - and click a connector, branch or clip. On the right: "
      "where it is (X, Y, Z), a step, its colour and turns of 15&deg; round each axis. The wheel's middle, or another "
@@ -176,9 +176,11 @@ const Topic kTopics[] = {
      "<p><b>Which way a drag goes:</b> across the view - right, left, up, down as the pointer goes. Hold <i>Ctrl</i> and "
      "move the pointer up or down to push it away from you or pull it toward you; hold <i>Shift</i> to slide a node "
      "over the model's faces. <i>Esc</i> gives up what is half done, then puts the tool down (Select again).</p>"
-     "<p><b>Stretch</b> pulls a connector: it stays, its cable pulled tight through it and the rest cut off.</p>"},
+     "<p><b>Stretch:</b> take hold of a cable and pull - it is pulled tight through its connector, which stays where "
+     "it is, and the rest is cut off; every other cable stays as it was. A cable put in taut is stiff as it is pulled: "
+     "it bows round smoothly and does not kink or loop (see Tension and gravity).</p>"},
     {"14. Connectors - forms, Tab, Same as, colours",
-     "",
+     ":/help3d/connforms.gif",
      "<p><b>Its form:</b> the arrow on <i>Connector</i> chooses the form the next ones are put in - rectangular, "
      "cylindrical, T (a flange and a body), right angle, or a D-sub shell. Select one put already and change its form and "
      "size on the right. Each size has an <b>A</b> beside it: on, it is Auto (from the cable's diameter and the lead) "
@@ -200,7 +202,7 @@ const Topic kTopics[] = {
      "branch it was started from. A <b>branch</b> gets heatshrink: a sleeve over the cable either side of it, and one on "
      "each leg out of it. The table's last row is the <b>total</b> of every cable's length.</p>"},
     {"15. Display - background and shading",
-     "",
+     ":/help3d/display.gif",
      "<p><i>Display</i> (on the ribbon, or <i>Options</i> on the wheel) sets what is behind the picture - dark, light, "
      "a gradient either way, or a colour of your own (kept for next time) - and how it is shaded: shaded, wireframe, "
      "and the model see-through so the harness shows in it. The <i>Opacity</i> slider sets the whole model; for one "
@@ -209,7 +211,25 @@ const Topic kTopics[] = {
      "once it is turned away from those.</p>"
      "<p>At the side of the window the 3D view is the picture alone; <i>Open below</i> puts it under the drawing with "
      "everything, and <i>To the side</i> puts it back.</p>"},
-    {"16. What every command does",
+    {"16. Tension and gravity - where a cable falls",
+     ":/help3d/gravity.gif",
+     "<p><b>Tension</b> is how taut a cable is put in: Slack, Loose (0.5 N), Normal (2 N), Firm (10 N) or Taut (50 N). "
+     "<i>Tension</i> is the route's, for every cable with none of its own; click a cable and choose in <i>Cable</i> to "
+     "give it its own (or in the table's <i>Tension</i> column). A taut cable is stiff: pulled or moved, it bows round "
+     "smoothly instead of kinking or looping; a slack one follows the pointer as it is pulled.</p>"
+     "<p><b>Gravity</b> (the button by them) is a simulation preview: each cable hung under its own weight - worked out "
+     "from its diameter, a bundle of wires being about 1.8 g/cm3. A cable is held at its connectors (straight out for "
+     "the lead), its clips and branches, and wherever it lies on something - a face right under it. A cable laid along a "
+     "floor therefore stays exactly as it is laid. Where a stretch of it has nothing under it - laid through the air on a "
+     "work plane, or up a wall with nothing holding it - it falls: under tension it sags between where it is held "
+     "(w s&sup2; / 8T at the middle of a span s - <i>example:</i> an 8 mm cable over 300 mm at Normal sags 5 mm, at Loose "
+     "20 mm), slack it hangs by its own length, and it comes to rest on whatever it falls onto.</p>"
+     "<p>What falls is drawn faint red where it would hang, with a red line straight down at its lowest point and how "
+     "far (\"5.0 mm down\"). The status line names each cable that falls, how far, and - put in with a tension - how "
+     "much more cable it needs to hang so. <i>Down</i> is the way gravity pulls in the model's axes: -Z, unless the "
+     "model was drawn another way up. Nothing falls? Every cable is held or lies on something - add a clip where one "
+     "does fall.</p>"},
+    {"17. What every command does",
      "",
      "<p><b>The top row - what is shown, and the view</b></p><dl>"
      "<dt><i>The drawing / The harness wizard</i></dt><dd>Which harness to show: the one on the sheet, or the one open in "
@@ -286,7 +306,7 @@ const Topic kTopics[] = {
      "<dt>Ctrl+Z</dt><dd>Undo.</dd>"
      "<dt>F11</dt><dd>Full screen, and back.</dd>"
      "</dl>"},
-    {"17. Words used here",
+    {"18. Words used here",
      "",
      "<dl>"
      "<dt><b>Environment</b></dt><dd>The CAD model the harness is routed in (STEP, STL or OBJ).</dd>"

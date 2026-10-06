@@ -19,6 +19,7 @@
 #include <QDoubleSpinBox>
 #include <QFile>
 #include <QKeyEvent>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -30,6 +31,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <functional>
 #include <iterator>
 
 using namespace Edraw_Desktop;
@@ -281,7 +283,9 @@ private:
         p.setPen(QPen(Qt::black, 1.5));
         p.drawPath(arrow);
         p.end();
-        frames_.push_back({img.scaled(img.size() * scale_, Qt::KeepAspectRatio, Qt::SmoothTransformation), delayCs});
+        // EVERY PICTURE THE SIZE OF THE FIRST: a view gone full screen is shown in the same frame.
+        if (frames_.empty()) size_ = img.size() * scale_;
+        frames_.push_back({img.scaled(size_, Qt::IgnoreAspectRatio, Qt::SmoothTransformation), delayCs});
     }
 
     View3DPane* pane_;
@@ -293,6 +297,7 @@ private:
     int keyFor_ = 0;
     int ripple_ = 0;
     bool recording_ = true;
+    QSize size_;
     std::vector<gif::Frame> frames_;
 };
 
@@ -377,9 +382,9 @@ int main(int argc, char** argv) {
         Scene s(model);
         Recorder r(&s.pane, scale);
         r.moveTo(r.at({300, 200, 40}), 6);
-        r.say(QStringLiteral("Left-drag turns the view"));
-        r.drag(Qt::LeftButton, QPointF(150, 30));
-        r.drag(Qt::LeftButton, QPointF(-150, -30));
+        r.say(QStringLiteral("Hold the wheel button and drag: the view turns"));
+        r.drag(Qt::MiddleButton, QPointF(150, 30));
+        r.drag(Qt::MiddleButton, QPointF(-150, -30));
         r.say(QStringLiteral("Right-drag moves it - the wheel zooms"));
         r.drag(Qt::RightButton, QPointF(-90, 40), 18);
         r.wheel(-2);
@@ -487,22 +492,22 @@ int main(int argc, char** argv) {
         Scene s(model);
         Recorder r(&s.pane, scale);
         r.moveTo(r.at({300, 200, 40}), 6);
-        r.say(QStringLiteral("Drag left and right: it turns - all the way round"));
+        r.say(QStringLiteral("Wheel button held, drag left and right: it turns - all the way round"));
         for (int i = 0; i < 3; ++i) {
-            r.drag(Qt::LeftButton, QPointF(300, 0), 20);
+            r.drag(Qt::MiddleButton, QPointF(300, 0), 20);
             r.moveTo(r.at({300, 200, 40}) - QPointF(150, 0), 6);
         }
         r.say(QStringLiteral("Drag up and down: it tilts - over the top and underneath"));
         r.moveTo(r.at({300, 200, 40}) - QPointF(0, 150), 8);
         for (int i = 0; i < 3; ++i) {
-            r.drag(Qt::LeftButton, QPointF(0, 300), 20);
+            r.drag(Qt::MiddleButton, QPointF(0, 300), 20);
             r.moveTo(r.at({300, 200, 40}) - QPointF(0, 150), 6);
         }
         r.press(s.child<QAbstractButton>("view3dIso"));
-        r.say(QStringLiteral("Shift + drag: it rolls round the way it looks"));
+        r.say(QStringLiteral("Shift + wheel-button drag: it rolls round the way it looks"));
         r.moveTo(r.at({300, 200, 40}) - QPointF(150, 0), 8);
         r.showKey(QStringLiteral("Shift"), 26);
-        r.drag(Qt::LeftButton, QPointF(300, 0), 24, Qt::ShiftModifier);
+        r.drag(Qt::MiddleButton, QPointF(300, 0), 24, Qt::ShiftModifier);
         r.say(QStringLiteral("Turn, Tilt and Roll: the same, in degrees"));
         r.spinTo(s.child<QSpinBox>("view3dRoll"), 0, 6);
         r.spinTo(s.child<QSpinBox>("view3dTurn"), 120, 10);
@@ -635,6 +640,143 @@ int main(int argc, char** argv) {
         r.clickWheel(wheel, 5);
         r.hold(16);
         failed += !r.save(QDir(outDir).filePath(QStringLiteral("lock.gif")));
+    }
+
+    // ---- FULL SCREEN ---------------------------------------------------------------------------------------------------
+    {
+        Scene s(model);
+        Recorder r(&s.pane, scale);
+        quickRoute(r, s, true);
+        r.say(QStringLiteral("Full screen: the view in a window of its own, filling the screen"));
+        r.press(s.child<QAbstractButton>("view3dFullScreen"));
+        r.hold(24);
+        r.say(QStringLiteral("Every row and the panel are there - Back (or F11) returns it"));
+        r.press(s.child<QAbstractButton>("view3dFullScreen"));
+        r.hold(16);
+        failed += !r.save(QDir(outDir).filePath(QStringLiteral("fullscreen.gif")));
+    }
+
+    // ---- MEASURING ----------------------------------------------------------------------------------------------------
+    {
+        Scene s(model);
+        Recorder r(&s.pane, scale);
+        r.say(QStringLiteral("Measure: click one end, then the other"));
+        r.press(s.child<QAbstractButton>("view3dToolMeasure"));
+        r.clickAt({100, 210, 100});
+        r.clickAt({500, 170, 70}, 16);
+        r.say(QStringLiteral("Straight, along X, Y, Z and across each plane - at the foot"));
+        r.hold(26);
+        r.say(QStringLiteral("Surface to surface: a face, then the face opposite"));
+        r.choose(s.child<QComboBox>("view3dMeasureMode"), 1);
+        r.clickAt({350, 330, 0});
+        r.clickAt({120, 200, 100}, 16);
+        r.say(QStringLiteral("The gap between them, square to the faces - 100 mm"));
+        r.hold(30);
+        failed += !r.save(QDir(outDir).filePath(QStringLiteral("measure.gif")));
+    }
+
+    // ---- MOVING AND PULLING: THE LENGTH KEPT; STRETCH ----------------------------------------------------------------
+    {
+        Scene s(model);
+        Recorder r(&s.pane, scale);
+        quickRoute(r, s, true);
+        r.say(QStringLiteral("Move: drag a connector - its cable keeps its length"));
+        r.press(s.child<QAbstractButton>("view3dToolMove"));
+        r.moveTo(r.at(nodePoint(s.pane, QStringLiteral("X2"))), 14);
+        r.drag(Qt::LeftButton, QPointF(-60, 50), 26);
+        r.hold(10);
+        r.say(QStringLiteral("Stretch: take hold of the cable and pull"));
+        r.press(s.child<QAbstractButton>("view3dToolStretch"));
+        r.moveTo(r.at(cablePoint(s.pane, 0.8)), 14);
+        r.drag(Qt::LeftButton, QPointF(40, -30), 26);
+        r.say(QStringLiteral("Pulled tight through its connector - the rest cut off"));
+        r.hold(20);
+        r.say(QStringLiteral("Undo takes each pull back"));
+        r.press(s.child<QAbstractButton>("view3dRouteUndo"));
+        r.hold(16);
+        failed += !r.save(QDir(outDir).filePath(QStringLiteral("pull.gif")));
+    }
+
+    // ---- CONNECTORS: FORMS ------------------------------------------------------------------------------------------
+    {
+        Scene s(model);
+        Recorder r(&s.pane, scale);
+        r.say(QStringLiteral("The arrow on Connector chooses the form - here, cylindrical"));
+        s.pane.setPlaceForm(QStringLiteral("round"));
+        r.press(s.child<QAbstractButton>("view3dToolConnector"));
+        r.clickAt(kOnDevice);
+        r.say(QStringLiteral("A D-sub shell"));
+        s.pane.setPlaceForm(QStringLiteral("dsub"));
+        r.clickAt(kOnBox, 16);
+        r.hold(8);
+        s.pane.canvas()->fitBox({90, 150, 0}, {300, 290, 90});
+        r.say(QStringLiteral("Select one put already: its form on the right"));
+        r.press(s.child<QAbstractButton>("view3dToolSelect"));
+        r.clickAt(nodePoint(s.pane, QStringLiteral("X1")));
+        r.choose(s.child<QComboBox>("view3dConnForm"), 2);
+        r.hold(10);
+        r.choose(s.child<QComboBox>("view3dConnForm"), 3);
+        r.hold(20);
+        failed += !r.save(QDir(outDir).filePath(QStringLiteral("connforms.gif")));
+    }
+
+    // ---- DISPLAY: BACKGROUND AND SHADING -----------------------------------------------------------------------------
+    {
+        Scene s(model);
+        Recorder r(&s.pane, scale);
+        quickRoute(r, s, true);
+        QMenu menu;
+        s.pane.fillDisplayMenu(&menu);
+        // Each choice, in the menu and its submenus - all but one asking for a colour.
+        std::vector<QAction*> shown;
+        std::function<void(QMenu*)> walk = [&](QMenu* m) {
+            for (QAction* a : m->actions()) {
+                if (a->menu()) walk(a->menu());
+                else if (!a->isSeparator() && !a->text().contains(QLatin1String("..."))) shown.push_back(a);
+            }
+        };
+        walk(&menu);
+        for (QAction* a : shown) {
+            r.say(QStringLiteral("Display: ") + QString(a->text()).remove(QLatin1Char('&')));
+            a->trigger();
+            r.hold(10);
+        }
+        if (!shown.empty()) shown.front()->trigger();
+        r.hold(8);
+        failed += !r.save(QDir(outDir).filePath(QStringLiteral("display.gif")));
+    }
+
+    // ---- TENSION AND GRAVITY ----------------------------------------------------------------------------------------
+    {
+        Scene s(model);
+        Recorder r(&s.pane, scale);
+        quickRoute(r, s, false);
+        // A cable through the air, from the device to the box, at a height.
+        r.recording(false);
+        r.press(s.child<QAbstractButton>("view3dToolRoute"));
+        r.clickAt(kOnDevice, 2);
+        r.choose(s.child<QComboBox>("view3dWorkPlane"), 3);
+        s.child<QDoubleSpinBox>("view3dWorkPlaneAt")->setValue(120.0);
+        r.clickAt({220, 210, 120}, 2);
+        r.clickAt({470, 170, 120}, 2);
+        r.choose(s.child<QComboBox>("view3dWorkPlane"), 0);
+        r.clickAt(kOnBox, 2);
+        r.press(s.child<QAbstractButton>("view3dToolSelect"));
+        r.recording(true);
+        r.say(QStringLiteral("Gravity: each cable hung under its weight - where it falls, in red"));
+        r.press(s.child<QAbstractButton>("view3dGravity"));
+        r.hold(20);
+        r.say(QStringLiteral("Click the cable, then its own Tension: Loose - it sags more"));
+        r.clickAt(cablePoint(s.pane, 0.5));
+        r.choose(s.child<QComboBox>("view3dCableTension"), 2);
+        r.hold(20);
+        r.say(QStringLiteral("Taut - it hardly sags"));
+        r.choose(s.child<QComboBox>("view3dCableTension"), 5);
+        r.hold(20);
+        r.say(QStringLiteral("On the floor a cable stays as it is laid - only what is in the air falls"));
+        r.choose(s.child<QComboBox>("view3dCableTension"), 1);
+        r.hold(26);
+        failed += !r.save(QDir(outDir).filePath(QStringLiteral("gravity.gif")));
     }
 
     // THE EXAMPLE, for the help's "Open the example": the model all of the above were recorded on.

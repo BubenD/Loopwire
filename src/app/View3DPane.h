@@ -646,6 +646,7 @@ private:
         std::vector<int> via;   // outward from the point held
         V3 anchor;
         std::vector<double> step;   // from the point held to via[0], ..., to the anchor
+        std::vector<double> bend;   // how far it turned at each point as it was taken hold of, in radians (point held first)
     };
     std::vector<Kept> kept_;
     // EACH BUNDLE'S LENGTH AS DRAWN when it was taken hold of - with its bends and what it is laid over - and how much
@@ -671,7 +672,8 @@ private:
     bool keepLength() const;
     void beginKeepLength();
     void pullKept(V3 target);
-    void layKept(const Kept& k, const V3& start, double scale);
+    // Where the point pulled is reached to - `start`, or as near it as a stiff cable bends.
+    V3 layKept(const Kept& k, const V3& start, double scale);
     bool grow_ = false;
 public:
     // ADD LOOSE: on, the point pulled (a corner of a cable, a node moved) goes alone - the cable is made longer there,

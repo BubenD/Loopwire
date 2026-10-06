@@ -23,6 +23,12 @@
     <file alias="branch.gif">help3d/branch.gif</file>
     <file alias="clip.gif">help3d/clip.gif</file>
     <file alias="lock.gif">help3d/lock.gif</file>
+    <file alias="fullscreen.gif">help3d/fullscreen.gif</file>
+    <file alias="measure.gif">help3d/measure.gif</file>
+    <file alias="pull.gif">help3d/pull.gif</file>
+    <file alias="connforms.gif">help3d/connforms.gif</file>
+    <file alias="display.gif">help3d/display.gif</file>
+    <file alias="gravity.gif">help3d/gravity.gif</file>
     <file alias="example.obj">help3d/example.obj</file>
   </qresource>
   <!--

@@ -26,6 +26,10 @@ double tensionOf(const Route3D& r, const RouteSegment3D& s) { return s.tension >
 
 double fallShown(double diameter) { return std::max(1.0, diameter * 0.25); }
 
+int stiffnessOf(double tension) {
+    return tension <= 0.0 ? 0 : std::clamp(static_cast<int>(std::lround(std::log2(1.0 + tension / 0.5))), 1, 6);
+}
+
 namespace {
 
 double pathLength(const std::vector<V3>& p) {
@@ -81,13 +85,16 @@ struct Hanger {
         return true;
     }
 
-    // HUNG BY A TENSION: between each two points held, a straight line and the parabola a cable under tension makes
-    // under its weight (sagging w s^2 / 8T at the middle of a span s) - and where that would take a point into a solid,
-    // the point rests on it instead, held there, and the cable either side is hung again from it.
-    std::vector<V3> hang(double tension) const {
-        const size_t n = laid.size();
-        std::vector<char> fixed = held;
-        std::vector<V3> at = laid;
+    // ONE STRETCH IN THE AIR HUNG BY A TENSION, from point `a` to point `b` (both held): between each two points held,
+    // the parabola a cable under tension makes under its weight (sagging w s^2 / 8T at the middle of a span s) - from
+    // the way it is laid (`asLaid`: a cable put in with a tension keeps its shape and sags from it), or from a straight
+    // line between them (a slack one hangs free) - and where that would take a point into a solid, the point rests on it
+    // instead, held there, and the cable either side is hung again from it. Its points from `a` to `b`.
+    std::vector<V3> hangSpan(size_t a0, size_t b0, double tension, bool asLaid) const {
+        const size_t n = b0 - a0 + 1;
+        std::vector<char> fixed(n, 0);
+        fixed.front() = fixed.back() = 1;
+        std::vector<V3> at(laid.begin() + static_cast<long>(a0), laid.begin() + static_cast<long>(b0) + 1);
         const double k = perMm * spacing * spacing / (2.0 * std::max(1e-9, tension));
         std::vector<V3> p(n);
         for (int round = 0; round < 24; ++round) {
@@ -98,7 +105,9 @@ struct Hanger {
                 const double m = static_cast<double>(b - a);
                 for (size_t i = a + 1; i < b; ++i) {
                     const double j = static_cast<double>(i - a);
-                    p[i] = at[a] + (at[b] - at[a]) * (j / m) + down * (k * j * (m - j));
+                    const V3 from = asLaid ? laid[a0 + i] + ((at[a] - laid[a0 + a]) * (1.0 - j / m) + (at[b] - laid[a0 + b]) * (j / m))
+                                           : at[a] + (at[b] - at[a]) * (j / m);
+                    p[i] = from + down * (k * j * (m - j));
                 }
                 a = b;
             }
@@ -106,7 +115,7 @@ struct Hanger {
             for (size_t i = 0; i < n; ++i) {
                 if (fixed[i]) continue;
                 V3 q;
-                if (settle(laid[i], p[i], q)) {
+                if (settle(laid[a0 + i], p[i], q)) {
                     fixed[i] = 1;
                     at[i] = q;
                     p[i] = q;
@@ -147,29 +156,57 @@ CableSag3D hangCable(const Route3D& r, const RouteSegment3D& s, const V3& downIn
     const double leadB = b && b->kind == RouteNodeKind::Connector ? r.leadOf(*b, d / 2.0) : 0.0;
     for (size_t i = 0; i < n; ++i)
         if (along[i] <= leadA + 1e-9 || along[i] >= total - leadB - 1e-9) h.held[i] = 1;
+    // LYING ON SOMETHING: a face right under it, the way gravity pulls - within its radius and a little more. There it
+    // stays as it is laid.
+    if (r.solids) {
+        const double near = d / 2.0 + std::max(1.0, d * 0.25);
+        for (size_t i = 0; i < n; ++i) {
+            V3 hit;
+            if (!h.held[i] && r.solids(h.laid[i], down, near, hit)) h.held[i] = 1;
+        }
+    }
 
     const double asked = tensionOf(r, s);
-    std::vector<V3> hung;
+    std::vector<V3> hung = h.laid;
     double used = asked;
-    bool byLength = asked <= 0.0;
-    // PUT IN WITH A TENSION: it hangs as that tension holds it - and is cut to the length that makes (longer or
-    // shorter than it was laid; hungLength says by how much). SLACK: it hangs by the length it was laid.
-    if (!byLength) hung = h.hang(asked);
-    if (byLength) {
-        // THE PULL ITS LENGTH LEAVES IT: as slack as the cable is long - found by halves, between a breath and a lot.
-        double lo = std::log(1e-5), hi = std::log(1e5);
-        for (int i = 0; i < 48; ++i) {
-            const double mid = (lo + hi) / 2.0;
-            if (pathLength(h.hang(std::exp(mid))) > total) lo = mid;
-            else hi = mid;
+    const bool byLength = asked <= 0.0;
+    // EACH STRETCH IN THE AIR, from where it is held to where it is held next. PUT IN WITH A TENSION: it hangs as that
+    // tension holds it - and is as long as that makes it (hungLength against laidLength says by how much). SLACK: it
+    // hangs by the length it was laid, the pull that leaves it found by halves, between a breath and a lot.
+    // HELD UP BY ITS OWN STIFFNESS: a stretch in the air no longer than two of its bend radii - the bend down from a
+    // connector to the floor, say - stays as it is laid.
+    const double stiff = 2.0 * r.bendRadiusOf(s);
+    for (size_t a0 = 0; a0 + 1 < n;) {
+        size_t b0 = a0 + 1;
+        while (b0 < n - 1 && !h.held[b0]) ++b0;
+        if (b0 > a0 + 1 && along[b0] - along[a0] > stiff) {
+            out.spans.push_back({static_cast<int>(a0), static_cast<int>(b0)});
+            std::vector<V3> span;
+            if (!byLength) {
+                span = h.hangSpan(a0, b0, asked, true);
+            } else {
+                const std::vector<V3> was(h.laid.begin() + static_cast<long>(a0), h.laid.begin() + static_cast<long>(b0) + 1);
+                const double length = pathLength(was);
+                double lo = std::log(1e-5), hi = std::log(1e5);
+                for (int i = 0; i < 48; ++i) {
+                    const double mid = (lo + hi) / 2.0;
+                    if (pathLength(h.hangSpan(a0, b0, std::exp(mid), false)) > length) lo = mid;
+                    else hi = mid;
+                }
+                used = std::exp(hi);
+                span = h.hangSpan(a0, b0, used, false);
+            }
+            for (size_t i = 0; i < span.size(); ++i) hung[a0 + i] = span[i];
         }
-        used = std::exp(hi);
-        hung = h.hang(used);
+        a0 = b0;
     }
+    out.down = down;
     out.hung = hung;
     out.laid = h.laid;
     out.tension = used;
     out.byLength = byLength;
+    // Both measured through the same points, so what one has more than the other is what hanging takes.
+    out.laidLength = pathLength(h.laid);
     out.hungLength = pathLength(hung);
     out.drop.resize(n);
     for (size_t i = 0; i < n; ++i) {

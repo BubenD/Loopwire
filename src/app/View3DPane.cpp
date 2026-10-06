@@ -2509,7 +2509,7 @@ View3DCanvas::View3DCanvas(QWidget* parent) : QWidget(parent) {
     setMinimumSize(200, 160);
     setMouseTracking(false);
     setFocusPolicy(Qt::StrongFocus);
-    setToolTip(QStringLiteral("Left drag: turn - right or middle drag: move - wheel: zoom - double-click: fit - click on the "
+    setToolTip(QStringLiteral("Wheel-button drag: turn (Shift: roll) - right drag: move - wheel: zoom - double-click: fit - click on the "
                               "environment: pick a point on it, or use the route tool chosen"));
 }
 
@@ -2891,12 +2891,21 @@ void View3DCanvas::beginKeepLength() {
         k.segment = s.id;
         k.via = std::move(order);
         k.anchor = anchor;
+        std::vector<V3> pts{from};
         for (int i : k.via) {
             const V3 p = s.via[static_cast<size_t>(i)].at;
             k.step.push_back((p - from).length());
             from = p;
+            pts.push_back(p);
         }
         k.step.push_back((anchor - from).length());
+        pts.push_back(anchor);
+        k.bend.assign(pts.size(), 0.0);
+        for (size_t i = 1; i + 1 < pts.size(); ++i) {
+            const V3 u = pts[i] - pts[i - 1], v = pts[i + 1] - pts[i];
+            if (u.length() > 1e-9 && v.length() > 1e-9)
+                k.bend[i] = std::acos(std::clamp(dot3(u.normalized(), v.normalized()), -1.0, 1.0));
+        }
         kept_.push_back(std::move(k));
     };
     // EACH BUNDLE PULLED, the length it is to keep: as it was drawn when taken hold of - a corner's bundle as well as a
@@ -2986,26 +2995,60 @@ double View3DCanvas::slideThroughClips(const QString& segment, double take) {
     return std::max(0.0, take) - left;
 }
 
-void View3DCanvas::layKept(const Kept& k, const V3& start, double scale) {
+V3 View3DCanvas::layKept(const Kept& k, const V3& start, double scale) {
     // EACH BUNDLE PULLED ALONG BEHIND IT, every step as long as it was (times `scale`), its far end where it holds (FABRIK).
     RouteSegment3D* s = route_->segment(k.segment);
-    if (!s) return;
+    if (!s) return start;
     std::vector<V3> p{start};
     for (int i : k.via) p.push_back(s->via[static_cast<size_t>(i)].at);
     p.push_back(k.anchor);
     const size_t n = p.size() - 1;
-    auto toward = [](const V3& from, const V3& to, double d) {
-        const V3 dir = to - from;
-        return dir.length() < 1e-12 ? from : from + dir.normalized() * d;
+    // STIFFER THE TAUTER IT IS PUT IN: a cable under tension does not kink or loop as it is pulled - each step turns
+    // from the one before by no more than it bends (Loose 60 degrees, Normal 30, Taut 10; slack, as far as it likes) or
+    // than it was bent there already, every step as long as it was.
+    const int stiff = stiffnessOf(tensionOf(*route_, *s));
+    const double limit = stiff > 0 ? std::max(10.0, 60.0 / stiff) * M_PI / 180.0 : M_PI;
+    auto toward = [&](const V3& from, const V3& to, double d, const V3* before, size_t joint) {
+        V3 dir = to - from;
+        if (dir.length() < 1e-12) return from;
+        dir = dir.normalized();
+        const double most = joint < k.bend.size() ? std::max(limit, k.bend[joint] + 1e-3) : limit;
+        if (before && most < M_PI) {
+            const double c = std::clamp(dot3(*before, dir), -1.0, 1.0);
+            if (std::acos(c) > most) {
+                V3 side = dir - *before * c;
+                if (side.length() < 1e-9) {
+                    side = cross3(*before, V3{0, 0, 1});
+                    if (side.length() < 1e-9) side = cross3(*before, V3{1, 0, 0});
+                }
+                dir = *before * std::cos(most) + side.normalized() * std::sin(most);
+            }
+        }
+        return from + dir * d;
     };
-    for (int iter = 0; iter < 12; ++iter) {
+    auto heading = [](const V3& a, const V3& b, V3& out) {
+        const V3 d = b - a;
+        if (d.length() < 1e-12) return false;
+        out = d.normalized();
+        return true;
+    };
+    for (int iter = 0; iter < (stiff > 0 ? 24 : 12); ++iter) {
         p[0] = start;
-        for (size_t i = 1; i <= n; ++i) p[i] = toward(p[i - 1], p[i], k.step[i - 1] * scale);
+        for (size_t i = 1; i <= n; ++i) {
+            V3 h;
+            const bool has = i >= 2 && heading(p[i - 2], p[i - 1], h);
+            p[i] = toward(p[i - 1], p[i], k.step[i - 1] * scale, has ? &h : nullptr, i - 1);
+        }
         p[n] = k.anchor;
-        for (size_t i = n; i-- > 0;) p[i] = toward(p[i + 1], p[i], k.step[i] * scale);
+        for (size_t i = n; i-- > 0;) {
+            V3 h;
+            const bool has = i + 2 <= n && heading(p[i + 2], p[i + 1], h);
+            p[i] = toward(p[i + 1], p[i], k.step[i] * scale, has ? &h : nullptr, i + 1);
+        }
         if ((p[0] - start).length() < 1e-4) break;
     }
     for (size_t j = 0; j < k.via.size(); ++j) s->via[static_cast<size_t>(k.via[j])].at = p[j + 1];
+    return p[0];
 }
 
 void View3DCanvas::tightenKept(double by) {
@@ -3026,7 +3069,8 @@ void View3DCanvas::tightenKept(double by) {
         // taken from the last two tries (secant).
         double slope = l.steps, lastScale = -1.0, lastNow = 0.0;
         for (int fit = 0; fit < 10; ++fit) {
-            l.scale = std::clamp(l.scale, tight, 1.0);
+            // Up to twice as long a step: a stiff cable smoothed round as it is laid is shorter for it.
+            l.scale = std::clamp(l.scale, tight, 2.0);
             for (const Kept& k : kept_)
                 if (k.segment == l.segment) layKept(k, start, l.scale);
             const double now = route_->length(*s);
@@ -3035,7 +3079,7 @@ void View3DCanvas::tightenKept(double by) {
                 const double measured = (now - lastNow) / (l.scale - lastScale);
                 if (measured > l.steps * 0.02) slope = measured;
             }
-            if ((l.scale <= tight && now > goal) || (l.scale >= 1.0 && now < goal)) break;   // as far as it goes
+            if ((l.scale <= tight && now > goal) || (l.scale >= 2.0 && now < goal)) break;   // as far as it goes
             lastScale = l.scale;
             lastNow = now;
             l.scale += (goal - now) / slope;
@@ -3055,6 +3099,7 @@ void View3DCanvas::pullKept(V3 target) {
             if (l.segment == id) return l.scale;
         return 1.0;
     };
+    const bool slides = std::any_of(through_.begin(), through_.end(), [](const auto& t) { return !t.second.empty(); });
     // PULLED FURTHER THAN IT REACHES, THROUGH ITS CLIPS: the cable slides through each clip it runs through, the stretch
     // beyond giving it length - down to straight - the cable as a whole as long as it was.
     for (KeptLength& l : keptLen_) {
@@ -3082,7 +3127,20 @@ void View3DCanvas::pullKept(V3 target) {
                 const V3 off = t - k.anchor;
                 if (off.length() > reach && off.length() > 1e-9) t = k.anchor + off.normalized() * reach;
             }
-        for (const Kept& k : kept_) layKept(k, t, scaleOf(k.segment));
+        // A STIFF CABLE THAT DOES NOT REACH at these steps: the last that did is kept, its steps as they were - a gap
+        // between the point and the cable is not length to be taken out of it.
+        const std::vector<RouteSegment3D> lastFit = route_->segments;
+        const std::vector<KeptLength> lastLen = keptLen_;
+        bool reachedAll = true;
+        for (const Kept& k : kept_)
+            if ((layKept(k, t, scaleOf(k.segment)) - t).length() > 0.5) reachedAll = false;
+        // A STIFF CABLE STOPS IT: pushed where it will not bend to, the point stays where it last could go - the
+        // cable as it was, no shorter and no kink - unless it slides through its clips.
+        if (!reachedAll && (fit > 0 || !slides)) {
+            route_->segments = lastFit;
+            keptLen_ = lastLen;
+            break;
+        }
         if (dragKind_ == 2) {
             if (RouteSegment3D* s = route_->segment(dragId_))
                 if (dragVia_ >= 0 && dragVia_ < static_cast<int>(s->via.size())) s->via[static_cast<size_t>(dragVia_)].at = t;
@@ -3095,11 +3153,11 @@ void View3DCanvas::pullKept(V3 target) {
             if (!s || l.steps < 1e-9) continue;
             const double now = route_->length(*s);
             if (std::abs(now - l.length) > 0.05) close = false;
+            // Bends and drapes make up only so much; a cable sliding through its clips, more.
             l.scale = std::clamp(l.scale + (l.length - now) / l.steps, 0.3, 3.0);
         }
         if (close) break;
-    }
-}
+    }}
 
 bool View3DCanvas::beginNodeDrag(const QPointF& at, bool stretch) {
     dragKind_ = 0;
@@ -3375,9 +3433,17 @@ std::vector<DrawItem3D> View3DCanvas::drawItems() const {
             for (const CableSag3D& g : sags_) {
                 const RouteSegment3D* s = route_ ? route_->segment(g.segment) : nullptr;
                 const double r = s ? route_->diameterOf(*s) / 2.0 : 2.0;
-                if (g.hung.size() >= 2 && g.maxDrop > 1e-6) sagMesh_.append(tubeMesh(g.hung, r, 10, true));
+                // Only the stretches in the air that fall - the rest of it lies as it is laid.
+                for (const auto& [a, b] : g.spans) {
+                    double most = 0.0;
+                    for (int i = a; i <= b; ++i) most = std::max(most, g.drop[static_cast<size_t>(i)]);
+                    if (most < 0.1) continue;
+                    sagMesh_.append(tubeMesh(std::vector<V3>(g.hung.begin() + a, g.hung.begin() + b + 1), r, 10, true));
+                }
+                // HOW FAR IT FALLS: a line straight down, from where it is laid to where it hangs, and a mark there.
                 for (int i : g.falls) {
-                    const V3 from = g.laid[static_cast<size_t>(i)], to = g.hung[static_cast<size_t>(i)];
+                    const V3 to = g.hung[static_cast<size_t>(i)];
+                    const V3 from = to - g.down * g.drop[static_cast<size_t>(i)];
                     fallMesh_.append(tubeMesh({from, to}, std::max(0.3, r * 0.25), 8, true));
                     fallMesh_.append(boxMesh(to - V3{r, r, r} * 0.9, to + V3{r, r, r} * 0.9));
                 }

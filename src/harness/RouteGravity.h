@@ -8,10 +8,12 @@
 
 namespace Edraw_Desktop {
 
-// A CABLE HUNG UNDER ITS OWN WEIGHT: each bundle of a route, held where it is held - at its two nodes, and straight out
-// of a connector for its lead - pulled by the tension it is put in with and by gravity, and resting on whatever solid
-// of the model it falls onto. Where a stretch of it hangs in the air it sags; a cable put in with less tension sags
-// more, and one put in slack hangs by its own length. What it shows is where the cable will fall to.
+// A CABLE HUNG UNDER ITS OWN WEIGHT: each bundle of a route, held where it is held - at its two nodes, straight out of
+// a connector for its lead, and wherever it lies on something (a face right under it, the way gravity pulls) - and
+// between those, where it is in the air, pulled down by its weight against the tension it is put in with: it sags, a
+// cable put in with less tension more, and one put in slack hangs by its own length; and it rests on whatever solid it
+// falls onto. A cable laid along a floor stays as it is laid; a stretch laid through the air, or up a wall with nothing
+// holding it, falls. What it shows is where the cable will fall to.
 
 // HOW TAUT A CABLE IS PUT IN: the choices of the fall menu, each with its pull in newtons. Nought: slack - it hangs by
 // its own length.
@@ -41,6 +43,10 @@ struct CableSag3D {
     double hungLength = 0.0;
     // WHERE IT FALLS: the lowest point of each stretch that falls further than a cable's sag is worth showing.
     std::vector<int> falls;
+    // THE STRETCHES IN THE AIR - nothing under them - by their first and last points (held, or lying on something).
+    std::vector<std::pair<int, int>> spans;
+    // The way gravity pulled.
+    V3 down{0.0, 0.0, -1.0};
 };
 
 // The tension a bundle is put in with: its own, or the route's.
@@ -50,5 +56,8 @@ CableSag3D hangCable(const Route3D& r, const RouteSegment3D& s, const V3& down, 
 std::vector<CableSag3D> hangRoute(const Route3D& r, const V3& down, double density = kCableDensity);
 // How far a point must fall to be shown falling: a millimetre, or a quarter of the bundle's diameter.
 double fallShown(double diameter);
+// HOW STIFF A CABLE IS PULLED, by its tension: how many times it is smoothed round between its steps as it is pulled -
+// none slack, more the tauter.
+int stiffnessOf(double tension);
 
 } // namespace Edraw_Desktop

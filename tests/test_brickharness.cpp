@@ -9145,6 +9145,123 @@ void testRoundSixtyTwo() {
     QApplication::processEvents();
 }
 
+// ROUND SIXTY-THREE: GRAVITY ON WHAT A CABLE LIES ON - a cable laid along a floor stays as it is laid, however it
+// winds; only a stretch with nothing under it falls, up a wall or through the air; A TAUT CABLE IS STIFF - pulled, it
+// bows round smoothly where a slack one kinks.
+void testRoundSixtyThree() {
+    const Mesh3D floor = boxMesh({-200, -200, -10}, {400, 200, 0});
+    const Mesh3D wall = boxMesh({200, -200, 0}, {210, 200, 150});
+    RayIndex3D index;
+    index.build({&floor, &wall});
+    auto solids = [&index](const V3& o, const V3& d, double far, V3& hit) {
+        const Pick3D p = index.cast(o, d);
+        if (!p.hit || p.distance > far) return false;
+        hit = p.point;
+        return true;
+    };
+    // ---- ON THE FLOOR, WINDING ROUND: NOTHING FALLS ----
+    {
+        Route3D r;
+        r.diameter = 8.0;
+        r.solids = solids;
+        const QString a = r.addNode(RouteNodeKind::Connector, {-150, 0, 0}, {0, 0, 1});
+        const QString b = r.addNode(RouteNodeKind::Connector, {150, 0, 0}, {0, 0, 1});
+        const QString s = r.addSegment(a, b, {{{-100, 120, 0}, {0, 0, 1}}, {{0, 150, 0}, {0, 0, 1}}, {{100, 120, 0}, {0, 0, 1}}});
+        for (double t : {0.0, 0.5, 2.0, 50.0}) {
+            r.segment(s)->tension = t;
+            const CableSag3D g = hangCable(r, *r.segment(s), {0, 0, -1});
+            double moved = 0.0;
+            for (size_t i = 0; i < g.hung.size(); ++i) moved = std::max(moved, (g.hung[i] - g.laid[i]).length());
+            std::printf("  gravity: on the floor at %s - moved up to %.2f mm, %d place(s) falling, %d stretch(es) in the air\n",
+                        qPrintable(cableTensionName(t)), moved, static_cast<int>(g.falls.size()), static_cast<int>(g.spans.size()));
+            check(g.falls.empty() && moved < 0.5,
+                  qPrintable(QStringLiteral("gravity: a cable winding along the floor stays as it is laid - %1").arg(cableTensionName(t))));
+        }
+    }
+    // ---- UP A WALL, NOTHING HOLDING IT: IT FALLS ----
+    {
+        Route3D r;
+        r.diameter = 8.0;
+        r.solids = solids;
+        const QString a = r.addNode(RouteNodeKind::Connector, {0, 0, 0}, {0, 0, 1});
+        const QString c = r.addNode(RouteNodeKind::Clip, {200, 0, 140}, {-1, 0, 0});
+        // Along the floor to the wall, then up its face to a clip high on it, across it the way it runs.
+        const QString s = r.addSegment(a, c, {{{180, 60, 0}, {0, 0, 1}}, {{200, 60, 20}, {-1, 0, 0}}, {{200, 60, 120}, {-1, 0, 0}}});
+        r.segment(s)->tension = 0.5;
+        const CableSag3D g = hangCable(r, *r.segment(s), {0, 0, -1});
+        std::printf("  gravity: up a wall - falls %.1f mm, %d place(s)\n", g.maxDrop, static_cast<int>(g.falls.size()));
+        check(!g.falls.empty() && g.maxDrop > 2.0, "gravity: laid up a wall with nothing holding it there - it falls");
+        double lowest = 1e9;
+        for (size_t i = 0; i < g.hung.size(); ++i)
+            if (g.drop[i] > 0.0) lowest = std::min(lowest, g.hung[i].z);
+        check(lowest > 4.0 - 0.05, "gravity: and not through the floor");
+    }
+
+    // ---- A TAUT CABLE IS STIFF ----
+    auto kinkAfterPush = [](double tension) {
+        Route3D r;
+        r.diameter = 6.0;
+        r.lead = 10.0;
+        const QString x1 = r.addNode(RouteNodeKind::Connector, {-60, 0, 0}, {0, 0, 1});
+        const QString x2 = r.addNode(RouteNodeKind::Connector, {60, 0, 0}, {0, 0, 1});
+        const QString s = r.addSegment(x1, x2, {{{0, 8, 0}, {0, 0, 1}}});
+        r.segment(s)->tension = tension;
+        QJsonObject stored = r.toJson();
+        View3DPane pane;
+        pane.setRoutingStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+        pane.resize(1000, 700);
+        pane.show();
+        QApplication::processEvents();
+        pane.reloadRouting(true);
+        View3DCanvas* canvas = pane.canvas();
+        canvas->setUseGpu(false);
+        canvas->viewFrom(QStringLiteral("top"));
+        auto screen = [&](const V3& p) {
+            QPointF at;
+            canvas->toScreen(p, at);
+            return at;
+        };
+        const Route3D& route = pane.route();
+        const double before = route.length(*route.segment(s));
+        const RouteNode3D* n = route.node(x2);
+        const QPointF from = screen(n->at + n->normal * (route.lead * 0.5));
+        const QPointF to = from + (screen({-10, 0, 0}) - screen({60, 0, 0}));
+        pane.setRouteTool(RouteTool::Move);
+        QMouseEvent press(QEvent::MouseButtonPress, from, canvas->mapToGlobal(from), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &press);
+        for (int i = 1; i <= 14; ++i) {
+            const QPointF at = from + (to - from) * (i / 14.0);
+            QMouseEvent move(QEvent::MouseMove, at, canvas->mapToGlobal(at), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(canvas, &move);
+        }
+        QMouseEvent release(QEvent::MouseButtonRelease, to, canvas->mapToGlobal(to), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &release);
+        QApplication::processEvents();
+        // The sharpest turn between two steps of the points it is laid through.
+        const RouteSegment3D* g = route.segment(s);
+        std::vector<V3> pts{route.node(g->a)->at};
+        for (const RouteVia3D& v : g->via) pts.push_back(v.at);
+        pts.push_back(route.node(g->b)->at);
+        double sharpest = 0.0;
+        for (size_t i = 1; i + 1 < pts.size(); ++i) {
+            const V3 u = pts[i] - pts[i - 1], v = pts[i + 1] - pts[i];
+            if (u.length() < 1e-6 || v.length() < 1e-6) continue;
+            sharpest = std::max(sharpest, std::acos(std::clamp(dot3(u.normalized(), v.normalized()), -1.0, 1.0)) * 180.0 / M_PI);
+        }
+        std::printf("  stiff: %s, pushed in - X2 at %.1f, its sharpest turn %.0f deg, %.1f mm long\n", qPrintable(cableTensionName(tension)),
+                    route.node(x2)->at.x, sharpest, route.length(*g));
+        if (tension > 0.0)
+            check(route.node(x2)->at.x > -10.5 && route.node(x2)->at.x < 60.5 && std::abs(route.length(*g) - before) < before * 0.03,
+                  "stiff: pushed further than it bends, the connector stops on the way - not flung past, the cable as long as it was");
+        return sharpest;
+    };
+    const double slack = kinkAfterPush(0.0), taut = kinkAfterPush(50.0);
+    check(stiffnessOf(0.0) == 0 && stiffnessOf(0.5) < stiffnessOf(2.0) && stiffnessOf(2.0) < stiffnessOf(50.0),
+          "stiff: the tauter, the stiffer - none slack");
+    check(taut < slack && taut < 50.0,
+          "stiff: a taut cable pushed in bows round smoothly, stopping where it will bend no further - no kink or loop where a slack one has one");
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -9231,6 +9348,7 @@ int run_brickharness_tests() {
     ROUND(testRoundSixty);
     ROUND(testRoundSixtyOne);
     ROUND(testRoundSixtyTwo);
+    ROUND(testRoundSixtyThree);
 #undef ROUND
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
