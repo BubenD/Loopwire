@@ -26,6 +26,7 @@
 #include "app/MechanicalValidationDialog.h"
 #include "app/RuleExplainer.h"
 #include "app/View3DPane.h"
+#include "app/SystemDesignView.h"
 #include "harness/Datasheet.h"
 #include "app/TemplateDialog.h"
 #include "app/ScientificCalculatorDialog.h"
@@ -4667,8 +4668,13 @@ void MainWindow::buildRibbon() {
     // runs after this - so its buttons are wired by name and switched on later by syncViewPanelButtons().
     buildViewTab();
     buildView3DTab();
-    // THE 3D PREVIEW TAB OPEN: the 3D view where the drawing is; any other tab, the drawing back.
-    connect(ribbon_, &QTabWidget::currentChanged, this, [this](int i) { showPreview3D(ribbon_->widget(i) == view3dTabPage_); });
+    buildSystemTab();
+    // THE 3D PREVIEW TAB OPEN: the 3D view where the drawing is; any other tab, the drawing back. THE SYSTEM DESIGN TAB:
+    // the system diagram there instead.
+    connect(ribbon_, &QTabWidget::currentChanged, this, [this](int i) {
+        showPreview3D(ribbon_->widget(i) == view3dTabPage_);
+        showSystemDesign(ribbon_->widget(i) == systemTabPage_);
+    });
 
     // (Parametric and Output ribbon tabs were removed — file New/Open/Save and the
     //  DXF/PDF/CSV exports live on the E (application) menu and the command line.)
@@ -15518,6 +15524,8 @@ void MainWindow::activateIndex(int index) {
     doc_ = docs_[index].get();
     canvas_->setDocument(doc_);
     editor_->setDocument(doc_); // resets selection/undo for this drawing
+    // ITS SYSTEM DIAGRAM.
+    if (systemView_) systemView_->reload();
     // The 3D routing of this drawing, and the environment it is routed in.
     if (view3dPane_) {
         view3dPane_->reloadRouting();

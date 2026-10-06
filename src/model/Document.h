@@ -119,6 +119,9 @@ public:
     // connectors, branches, clips and bundles (Route3D). With the drawing, so the routing opens with it.
     QJsonObject& routing3d() { return routing3d_; }
     const QJsonObject& routing3d() const { return routing3d_; }
+    // THE SYSTEM DIAGRAM: its units, their ports and the cables between them (SystemDesign) - empty where there is none.
+    QJsonObject& systemDesign() { return systemDesign_; }
+    const QJsonObject& systemDesign() const { return systemDesign_; }
 
     bool dirty() const { return dirty_; }
     void setDirty(bool d) { dirty_ = d; }
@@ -141,6 +144,7 @@ private:
     QJsonObject bom_;
     QJsonObject wizards_;
     QJsonObject routing3d_;
+    QJsonObject systemDesign_;
     QJsonObject harnessPresets_;
     QJsonObject bundlePresets_;
     std::vector<DrawingLayout> layouts_;

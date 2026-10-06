@@ -279,6 +279,9 @@ private:
     void buildViewTab();
     // THE 3D PREVIEW TAB: the 3D view's commands, and the 3D view in the drawing's place while the tab is open.
     void buildView3DTab();
+    // THE SYSTEM DESIGN TAB: the system diagram where the drawing is while it is open (SystemDesignView).
+    void buildSystemTab();
+    void showSystemDesign(bool on);
     void showPreview3D(bool on);
     void restylePreview3DIcons();
     // THE 3D VIEW'S PANEL PUT AT A SIDE (the picture alone) or below (everything).
@@ -1043,6 +1046,8 @@ private:
     QList<QPair<int, QToolButton*>> preview3dTools_;
     QStackedWidget* centralStack_ = nullptr;
     QWidget* preview3dHost_ = nullptr;
+    QWidget* systemTabPage_ = nullptr;
+    class SystemDesignView* systemView_ = nullptr;
     QWidget* preview3dStandIn_ = nullptr;
     bool preview3dOn_ = false;
     bool preview3dDockWas_ = false;

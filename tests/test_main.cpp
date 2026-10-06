@@ -87,6 +87,7 @@ int run_odaexport_tests();
 int run_mechscript_tests();
 int run_mechwizard_tests();
 int run_brickharness_tests();
+int run_systemdesign_tests();
 
 int main(int argc, char** argv) {
     // UNBUFFERED: a run that dies leaves its log up to the line it died after, not a page short of it.
@@ -152,6 +153,7 @@ int main(int argc, char** argv) {
     if (only("mechscript")) failures += run_mechscript_tests();
     if (only("mechwizard")) failures += run_mechwizard_tests();
     if (only("brickharness")) failures += run_brickharness_tests();
+    if (only("systemdesign")) failures += run_systemdesign_tests();
     if (failures == 0) std::printf("ALL TESTS PASSED\n");
     else std::printf("%d TEST(S) FAILED\n", failures);
     return failures == 0 ? 0 : 1;

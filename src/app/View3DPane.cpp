@@ -1101,6 +1101,30 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
         canvas_->setBackground(mode, QColor(QSettings().value(QStringLiteral("view3d/backgroundColour")).toString()));
     }
     connect(canvas_, &View3DCanvas::ghostFrozenChanged, this, [this] { syncConnector(); });
+    // A PART OF THE HARNESS DRAWN, TAKEN HOLD OF: the harness put in as a route where it is not yet (its drawing then
+    // hidden - the route stands for it), and the part's node dragged.
+    connect(canvas_, &View3DCanvas::harnessPartPressed, this, [this](const QString& brick, const QPointF& at) {
+        QString node = routeNodeOfPart(route_, brick);
+        if (node.isEmpty()) {
+            if (routeFromHarness() < 0) {
+                emit canvas_->message(QStringLiteral("No harness to route - open one in the harness wizard, or place one"));
+                return;
+            }
+            node = routeNodeOfPart(route_, brick);
+            if (auto* shown = findChild<QAbstractButton*>(QStringLiteral("view3dHarnessShown"))) shown->setChecked(false);
+            emit canvas_->message(QStringLiteral("The harness put in as a route - drag each of its connectors to where it goes"));
+        }
+        if (!node.isEmpty()) canvas_->takeHoldOfNode(node, at);
+    });
+    connect(canvas_, &View3DCanvas::harnessPartClicked, this, [this](const QString& brick) {
+        for (int i = 0; i < parts_->count(); ++i)
+            if (parts_->item(i)->data(Qt::UserRole).toString() == brick) parts_->setCurrentRow(i);
+        emit canvas_->message(routeNodeOfPart(route_, brick).isEmpty()
+                                  ? QStringLiteral("%1 - a part of the harness drawn: Move and drag it to put the harness in as a route "
+                                                   "and move it, or Route from harness")
+                                        .arg(harnessPartName(brick))
+                                  : QStringLiteral("%1 - put in the route as %2").arg(harnessPartName(brick), route_.node(routeNodeOfPart(route_, brick))->label));
+    });
     // THE BRANCH TOOL ON A CONNECTOR: from its front, or its back.
     connect(canvas_, &View3DCanvas::connectorBranchAsked, this, [this](const QString& node, const QPoint& at) {
         const RouteNode3D* n = route_.node(node);
@@ -3778,7 +3802,7 @@ void View3DCanvas::pullKept(V3 target) {
         if (close) break;
     }}
 
-bool View3DCanvas::beginNodeDrag(const QPointF& at, bool stretch) {
+bool View3DCanvas::beginNodeDrag(const QPointF& at, bool stretch, const QString& forceNode) {
     dragKind_ = 0;
     dragStarted_ = false;
     kept_.clear();
@@ -3787,7 +3811,7 @@ bool View3DCanvas::beginNodeDrag(const QPointF& at, bool stretch) {
     keptBase_.clear();
     stretchSeg_.clear();
     if (!route_) return false;
-    QString id = nodeAt(at);
+    QString id = forceNode.isEmpty() ? nodeAt(at) : forceNode;
     if (stretch) {
         // STRETCH TAKES A CABLE: the one clicked, pulled through its connector (the nearer, where it has two); or, a
         // connector clicked, its one cable - or of its cables the one selected.
@@ -4964,10 +4988,26 @@ void View3DCanvas::mousePressEvent(QMouseEvent* e) {
     if (route_ && e->button() == Qt::LeftButton && (tool_ == RouteTool::Move || tool_ == RouteTool::Stretch)) {
         if (beginNodeDrag(e->position(), tool_ == RouteTool::Stretch)) setCursor(Qt::ClosedHandCursor);
         else if (tool_ == RouteTool::Move && segmentAt(e->position()).size() && beginItemDrag(e->position())) setCursor(Qt::ClosedHandCursor);
+        else if (tool_ == RouteTool::Move) {
+            // A PART OF THE HARNESS DRAWN: to be moved - the harness put in as a route first, where it is not yet.
+            int part = -1;
+            QString brick;
+            whatIsAt(e->position(), part, brick);
+            if (!brick.isEmpty()) emit harnessPartPressed(brick, e->position());
+        }
         return;
     }
-    // LOCKED: a press on something takes hold of it.
-    if (viewLocked_ && e->button() == Qt::LeftButton && beginItemDrag(e->position())) setCursor(Qt::ClosedHandCursor);
+    // LOCKED: a press on something takes hold of it - a part of the harness drawn too.
+    if (viewLocked_ && e->button() == Qt::LeftButton) {
+        if (beginItemDrag(e->position())) {
+            setCursor(Qt::ClosedHandCursor);
+        } else {
+            int part = -1;
+            QString brick;
+            whatIsAt(e->position(), part, brick);
+            if (!brick.isEmpty()) emit harnessPartPressed(brick, e->position());
+        }
+    }
 }
 
 void View3DCanvas::mouseMoveEvent(QMouseEvent* e) {
@@ -5236,6 +5276,17 @@ void View3DCanvas::mouseReleaseEvent(QMouseEvent* e) {
             selSegment_.clear();
             routeRedraw();
             emit selectionChanged(QString());
+        }
+    }
+    // A PART OF THE HARNESS DRAWN, clicked: selected - lit, and said what it is.
+    {
+        int part = -1;
+        QString brick;
+        whatIsAt(e->position(), part, brick);
+        if (!brick.isEmpty()) {
+            setHighlight({brick});
+            emit harnessPartClicked(brick);
+            return;
         }
     }
     if (env_) pickAt(e->position());

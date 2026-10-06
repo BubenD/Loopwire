@@ -1,0 +1,132 @@
+#pragma once
+
+#include <QColor>
+#include <QJsonObject>
+#include <QString>
+#include <QStringList>
+
+#include <functional>
+#include <vector>
+
+namespace Edraw_Desktop {
+
+// THE SYSTEM DIAGRAM: the units of a system - boxes, each with its part number and revision - their ports (where a
+// cable plugs in), and the cables between ports. Each cable has its own part number and revision and can be linked to
+// the drawing that defines it (a harness drawing, DWX or DXF), so the diagram can say whether the drawing linked is
+// the revision the system calls for. Saved with the drawing.
+
+// A PORT ON A UNIT: where a cable plugs in - on one of its sides, so far along it (0 to 1), named, with the connector it
+// takes and how many pins.
+struct SysPort {
+    QString id;
+    QString name;
+    QString side = QStringLiteral("right");   // "left", "right", "top", "bottom"
+    double at = 0.5;
+    QString connector;   // the mating connector's part number, as the system calls for it
+    int pins = 0;
+};
+
+// A UNIT: a box of the system - a controller, a sensor, a panel - where it is drawn, and its ports.
+struct SysUnit {
+    QString id;
+    QString name;
+    QString pn;
+    QString rev;
+    QString description;
+    double x = 0.0, y = 0.0, w = 160.0, h = 100.0;
+    QColor color;
+    std::vector<SysPort> ports;
+    const SysPort* port(const QString& id) const;
+    SysPort* port(const QString& id);
+};
+
+// A CABLE between two ports: its name (W1, W2...), part number and revision, how long, how many wires, and the drawing
+// that defines it - with the number and revision read off that drawing when it was last checked.
+struct SysCable {
+    QString id;
+    QString name;
+    QString pn;
+    QString rev;
+    QString description;
+    QString aUnit, aPort, bUnit, bPort;
+    double lengthMm = 0.0;
+    int wires = 0;
+    QColor color;
+    QString drawing;      // the file, as linked
+    QString drawingNo;    // read off it at the last check
+    QString drawingRev;
+};
+
+// WHAT A DRAWING SAYS ABOUT ITSELF: its drawing number and its current revision, read off its title block (the field
+// "drawingNo"), its revision table (the last revision written in it), its revision boxes and its template.
+struct DrawingInfo {
+    bool found = false;   // the file is there and could be read
+    QString drawingNo;
+    QString revision;
+    QString title;
+};
+DrawingInfo readDrawingInfo(const QString& path);
+
+// ONE THING THE CHECK FOUND: how bad (0 a note, 1 a warning, 2 an error), what, and on what.
+struct SysIssue {
+    int level = 1;
+    QString what;
+    QString unit;
+    QString cable;
+};
+
+// HOW THE LINK OF A CABLE TO ITS DRAWING STANDS: none linked, the file not there, its revision not the one the cable
+// calls for, or matching.
+enum class SysLinkState { None, Missing, Mismatch, Match };
+
+struct SystemDesign {
+    QString name;
+    QString pnPrefix = QStringLiteral("CBL-");
+    std::vector<SysUnit> units;
+    std::vector<SysCable> cables;
+
+    bool empty() const { return units.empty() && cables.empty(); }
+    const SysUnit* unit(const QString& id) const;
+    SysUnit* unit(const QString& id);
+    const SysCable* cable(const QString& id) const;
+    SysCable* cable(const QString& id);
+
+    // A NEW UNIT, named U1, U2... where none is given, at a place; its id.
+    QString addUnit(double x, double y, const QString& name = QString());
+    // A NEW PORT on a unit's side, so far along; named P1, P2... on that unit; its id (empty: no such unit).
+    QString addPort(const QString& unit, const QString& side, double at, const QString& name = QString());
+    // A NEW CABLE from one port to another, named W1, W2...; its id (empty where either port is not there, or they are
+    // the same port).
+    QString addCable(const QString& aUnit, const QString& aPort, const QString& bUnit, const QString& bPort);
+    // A unit taken away with its cables; a port with its cables; a cable.
+    void removeUnit(const QString& id);
+    void removePort(const QString& unit, const QString& port);
+    void removeCable(const QString& id);
+    // The cables plugged into a port.
+    std::vector<const SysCable*> cablesAt(const QString& unit, const QString& port) const;
+
+    // PART NUMBERS for the cables that have none: the prefix and the next free number, three digits (CBL-001). How many.
+    int numberCables();
+
+    // How a cable's link to its drawing stands - against the number and revision last read off it.
+    static SysLinkState linkState(const SysCable& c);
+    // EACH CABLE'S DRAWING READ AGAIN: its number and revision off the file (by `read`, readDrawingInfo where none is
+    // given). How many were read.
+    int refreshDrawings(const std::function<DrawingInfo(const QString&)>& read = {});
+
+    // THE CHECK: ports with nothing plugged in, or more than one cable; cables with no part number, the same part number
+    // on cables that are not alike, no drawing linked, the drawing not found, its revision or number not the cable's;
+    // units with no part number.
+    std::vector<SysIssue> check() const;
+
+    // THE CABLE LIST, one line a cable, as comma-separated values with a heading line.
+    QString cableListCsv() const;
+
+    QJsonObject toJson() const;
+    static SystemDesign fromJson(const QJsonObject& o);
+
+    // A fresh id for a kind of thing ("u", "p", "c").
+    QString freshId(const QString& prefix) const;
+};
+
+} // namespace Edraw_Desktop

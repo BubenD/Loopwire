@@ -163,6 +163,11 @@ add_library(edraw_core STATIC
     src/app/Icons3D.h
     src/app/Icons3D.cpp
     src/app/ribbon/View3DTab.cpp
+    src/app/ribbon/SystemTab.cpp
+    src/app/SystemCanvas.cpp
+    src/app/SystemDesignView.cpp
+    src/app/DrawingFinderDialog.cpp
+    src/system/SystemDesign.cpp
     src/app/View3DHelpDialog.h
     src/app/NavWheel.h
     src/app/Part3DEditorDialog.h
@@ -184,6 +189,10 @@ add_library(edraw_core STATIC
     src/harness/Route3D.h
     src/harness/Route3D.cpp
     src/harness/RouteLink.h
+    src/system/SystemDesign.h
+    src/app/SystemCanvas.h
+    src/app/SystemDesignView.h
+    src/app/DrawingFinderDialog.h
     src/harness/RouteGravity.h
     src/harness/RouteGravity.cpp
     src/harness/RouteLink.cpp

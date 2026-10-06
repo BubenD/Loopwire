@@ -604,7 +604,11 @@ int run_mechmodelcanvas_tests() {
         win.openMechModelEditor(MechModelKind::RingInsulated, QStringLiteral("Insulated"), true);
         QApplication::processEvents();
 
-        auto* ribbon = win.findChild<QTabWidget*>();
+        // THE RIBBON: the tab widget with a Home tab - not the System design view's own tabs.
+        QTabWidget* ribbon = nullptr;
+        for (QTabWidget* t : win.findChildren<QTabWidget*>())
+            for (int i = 0; i < t->count() && !ribbon; ++i)
+                if (t->tabText(i) == QLatin1String("Home")) ribbon = t;
         check(ribbon != nullptr, "symbol session: there is a ribbon");
         QStringList shown;
         if (ribbon)

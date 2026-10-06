@@ -335,6 +335,54 @@ void draw(QPainter& p, const QString& k, const QColor& ink, const QColor& acc) {
         arrow(p, QPointF(16, 19), QPointF(16, 30), 4);
         return;
     }
+    if (k == QLatin1String("unit")) {
+        // A unit of a system: a box with a port on each side and a cable out of one.
+        p.setPen(QPen(ink, 1.6));
+        p.setBrush(QColor(205, 214, 228));
+        p.drawRoundedRect(QRectF(7, 8, 18, 16), 2.5, 2.5);
+        p.setBrush(QColor(70, 80, 95));
+        p.drawRect(QRectF(4.5, 13.5, 4, 5));
+        p.drawRect(QRectF(23.5, 13.5, 4, 5));
+        p.setPen(accLine);
+        p.drawLine(QPointF(27.5, 16), QPointF(31, 16));
+        p.drawLine(QPointF(1, 16), QPointF(4.5, 16));
+        return;
+    }
+    if (k == QLatin1String("search")) {
+        // A sheet and a magnifying glass over it.
+        p.setPen(QPen(ink, 1.4));
+        p.setBrush(QColor(240, 242, 246));
+        p.drawRect(QRectF(4, 3, 15, 20));
+        p.setPen(QPen(ink, 1.0));
+        for (double y : {8.0, 12.0, 16.0}) p.drawLine(QPointF(7, y), QPointF(16, y));
+        p.setPen(QPen(ink, 2.2, Qt::SolidLine, Qt::RoundCap));
+        p.setBrush(QColor(170, 210, 255, 160));
+        p.drawEllipse(QPointF(19, 18), 6, 6);
+        p.drawLine(QPointF(23.5, 22.5), QPointF(29, 28));
+        return;
+    }
+    if (k == QLatin1String("check")) {
+        // A list ticked: the design checked.
+        p.setPen(QPen(ink, 1.4));
+        p.setBrush(QColor(240, 242, 246));
+        p.drawRect(QRectF(4, 4, 18, 22));
+        p.setPen(QPen(QColor(60, 170, 90), 2.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.drawPolyline(QPolygonF{QPointF(13, 18), QPointF(18, 24), QPointF(29, 9)});
+        return;
+    }
+    if (k == QLatin1String("export")) {
+        // A sheet and an arrow out of it.
+        p.setPen(QPen(ink, 1.4));
+        p.setBrush(QColor(240, 242, 246));
+        p.drawRect(QRectF(4, 5, 16, 22));
+        p.setPen(QPen(ink, 1.0));
+        for (double y : {10.0, 14.0, 18.0, 22.0}) p.drawLine(QPointF(7, y), QPointF(17, y));
+        p.setPen(QPen(QColor(40, 140, 230), 2.4, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(QPointF(16, 16), QPointF(29, 16));
+        p.drawLine(QPointF(25, 12), QPointF(29, 16));
+        p.drawLine(QPointF(25, 20), QPointF(29, 16));
+        return;
+    }
     if (k == QLatin1String("attach")) {
         // A face, a cable lying along it held by two small clips, and an arrow down onto it.
         p.setPen(QPen(ink, 1.4));

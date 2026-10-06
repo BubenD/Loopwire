@@ -532,6 +532,14 @@ public:
     // WHAT IS UNDER A POINT OF THE PICTURE past the route: a solid of the model (its index) or a part of the harness (its
     // brick), whichever is nearer; -1 and empty for neither.
     void whatIsAt(const QPointF& at, int& part, QString& brick) const;
+    // A NODE TAKEN HOLD OF to drag - pressed on something standing for it (a part of the harness drawn).
+    bool holding() const { return dragKind_ != 0; }
+    QString heldNode() const { return dragKind_ != 0 ? dragId_ : QString(); }
+    bool takeHoldOfNode(const QString& node, const QPointF& at) {
+        if (!beginNodeDrag(at, false, node)) return false;
+        setCursor(Qt::ClosedHandCursor);
+        return true;
+    }
     void setMeasureFaces(bool on) { measureFaces_ = on; }
     bool measureFaces() const { return measureFaces_; }
     // THE FACE OF A SOLID round a point of it: the triangles it is meshed in that run on from the one there without a
@@ -590,6 +598,9 @@ signals:
     void ghostFrozenChanged(bool frozen);
     // THE POINTER OVER SOMETHING: a node, a cable, a solid of the model or a part of the harness (none: all empty, -1).
     void hovered(int envPart, const QString& brick, const QString& node, const QString& segment);
+    // A PART OF THE HARNESS DRAWN pressed to move it (Move, or the view locked) - or clicked to select it.
+    void harnessPartPressed(const QString& brick, const QPointF& at);
+    void harnessPartClicked(const QString& brick);
     // THE BRANCH TOOL ON A CONNECTOR: a bundle to start from it, out of its front or its back - asked at that point.
     void connectorBranchAsked(const QString& node, const QPoint& globalPos);
     // Something to tell the user.
@@ -711,7 +722,7 @@ private:
     bool viewLocked_ = false;
     // A NODE TAKEN HOLD OF WITH MOVE OR STRETCH: where it was. Stretched, it stays where it is: its bundles are pulled
     // tight through it, as far as the pointer goes, and what comes through is cut off.
-    bool beginNodeDrag(const QPointF& at, bool stretch);
+    bool beginNodeDrag(const QPointF& at, bool stretch, const QString& forceNode = QString());
     void tightenKept(double by);
     // THE CABLE STRETCHED: the one clicked, or the one of a node's cables selected - pulled through its connector.
     QString stretchSeg_;

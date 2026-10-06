@@ -32,6 +32,7 @@ add_executable(edraw_tests
     test_mechscript.cpp
     test_mechwizard.cpp
     test_brickharness.cpp
+    test_systemdesign.cpp
     test_main.cpp
     # THE APPLICATION'S OWN RESOURCES, in the test binary as well. The default mechanical models - the house
     # style - are built into the executable, and a test of "a fresh install comes up with the house models"

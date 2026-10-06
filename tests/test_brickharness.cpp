@@ -9585,6 +9585,62 @@ void testRoundSixtyFive() {
     }
 }
 
+// ROUND SIXTY-SIX: A PART OF THE HARNESS DRAWN TAKEN HOLD OF - the harness put in as a route where it is not yet, its
+// drawing hidden, the part's node held to be dragged; clicked - chosen in the parts list.
+void testRoundSixtySix() {
+    BrickDesign design;
+    const QString px = design.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+    const QString pc = design.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+    const QString py = design.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+    design.brick(px)->name = QStringLiteral("P1");
+    design.brick(py)->name = QStringLiteral("P2");
+    design.brick(pc)->run.lengthMm = 300.0;
+    design.connect(px, pc);
+    design.connect(pc, py);
+    QJsonObject stored;
+    View3DPane pane;
+    pane.setRoutingStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    pane.setHarnessLink(
+        [&] {
+            RouteHarness h;
+            h.name = QStringLiteral("Main");
+            h.design = design;
+            h.ok = true;
+            return h;
+        },
+        [&](const QString&, const BrickDesign& out) { design = out; });
+    pane.resize(1000, 700);
+    pane.show();
+    QApplication::processEvents();
+    pane.reloadRouting(true);
+    View3DCanvas* canvas = pane.canvas();
+    canvas->setUseGpu(false);
+    auto* shown = pane.findChild<QAbstractButton*>(QStringLiteral("view3dHarnessShown"));
+    if (shown) shown->setChecked(true);
+    pane.setRouteTool(RouteTool::Move);
+    emit canvas->harnessPartPressed(px, QPointF(200, 200));
+    const QString node = routeNodeOfPart(pane.route(), px);
+    std::printf("  harness part: %zu node(s), %zu bundle(s); holding %s\n", pane.route().nodes.size(), pane.route().segments.size(),
+                qPrintable(canvas->heldNode()));
+    check(!node.isEmpty() && pane.route().segments.size() == 1 && canvas->holding() && canvas->heldNode() == node,
+          "harness part: taken hold of - the harness put in as a route, the part's node held to drag");
+    check(shown && !shown->isChecked(), "harness part: its drawing hidden - the route stands for it now");
+    QMouseEvent release(QEvent::MouseButtonRelease, QPointF(200, 200), canvas->mapToGlobal(QPoint(200, 200)), Qt::LeftButton, Qt::NoButton,
+                        Qt::NoModifier);
+    QApplication::sendEvent(canvas, &release);
+    // Again: put in already - its node held, nothing more added.
+    emit canvas->harnessPartPressed(py, QPointF(300, 200));
+    check(pane.route().segments.size() == 1 && canvas->heldNode() == routeNodeOfPart(pane.route(), py),
+          "harness part: again - its node held, the route as it was");
+    QApplication::sendEvent(canvas, &release);
+    pane.setRouteTool(RouteTool::Select);
+    // Clicked: chosen in the parts list.
+    emit canvas->harnessPartClicked(py);
+    auto* parts = pane.findChild<QListWidget*>(QStringLiteral("view3dParts"));
+    check(parts && parts->currentItem() && parts->currentItem()->data(Qt::UserRole).toString() == py,
+          "harness part: clicked - chosen in the parts list");
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -9674,6 +9730,7 @@ int run_brickharness_tests() {
     ROUND(testRoundSixtyThree);
     ROUND(testRoundSixtyFour);
     ROUND(testRoundSixtyFive);
+    ROUND(testRoundSixtySix);
 #undef ROUND
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
