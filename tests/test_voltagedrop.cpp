@@ -90,24 +90,25 @@ int run_voltagedrop_tests() {
 
     // ---- Temperature, stranding and material ----
     {
-        const VdSegment& cold = twoNodeGraph(10.0, 1.0).segments.front();
+        // Each segment copied out: the graph it comes from is a temporary, gone at the end of the line.
+        const VdSegment cold = twoNodeGraph(10.0, 1.0).segments.front();
         const double r20 = wireResistanceOhms(cold, 20.0);
         const double r85 = wireResistanceOhms(cold, 85.0);
         // R(T) = R20 * [1 + 0.00393 * (85 - 20)] = R20 * 1.25545
         std::printf("    (same wire at 85 C: %.5f ohm, x%.4f)\n", r85, r85 / r20);
         check(near(r85 / r20, 1.0 + 0.00393 * 65.0, 1e-9), "R(T): the copper coefficient is applied");
 
-        const VdSegment& strandedWire =
+        const VdSegment strandedWire =
             twoNodeGraph(10.0, 1.0, ConductorMaterial::BareCopper, true).segments.front();
         check(near(wireResistanceOhms(strandedWire, 20.0) / r20, 1.03, 1e-9),
               "R(T): stranded costs 3 % over solid");
 
-        const VdSegment& tinned =
+        const VdSegment tinned =
             twoNodeGraph(10.0, 1.0, ConductorMaterial::TinnedCopper, false).segments.front();
         check(near(wireResistanceOhms(tinned, 20.0) / r20, 1.03, 1e-9),
               "R(T): the tin coating costs 3 % over bare");
 
-        const VdSegment& alu =
+        const VdSegment alu =
             twoNodeGraph(10.0, 1.0, ConductorMaterial::Aluminium, false).segments.front();
         check(near(wireResistanceOhms(alu, 20.0), 0.28264, 1e-5),
               "R(T): aluminium is 1.64 times the resistance of copper");

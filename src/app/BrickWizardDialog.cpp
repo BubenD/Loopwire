@@ -4602,7 +4602,10 @@ void BrickWizardDialog::loadLayerPart() {
                           : layer == QLatin1String("heatshrink") ? PartKind::Heatshrink
                                                                  : PartKind::Wire;
     layerPart_->addItem(QStringLiteral("(none)"), QString());
-    for (const LibraryPart* p : catalog_.merged().ofKind(kind))
+    // THE LIBRARY KEPT for the loop: merged() is made afresh, and the parts ofKind() points at are in it - looped over
+    // straight off the call, it is gone before the first part is read.
+    const PartsLibrary lib = catalog_.merged();
+    for (const LibraryPart* p : lib.ofKind(kind))
         layerPart_->addItem(p->mfrPn.isEmpty() ? p->title() : p->mfrPn + QStringLiteral(" - ") + p->title(), p->id);
     const int at = layerPart_->findData(b->run.stackParts.value(layer));
     layerPart_->setCurrentIndex(at >= 0 ? at : 0);

@@ -1006,12 +1006,15 @@ MechLayout layoutMechanicalHarness(const MechHarnessDef& def) {
                     faceDeg = dirDeg;                        // no dogleg: it faces the way it came
             }
 
+            // WHERE THE PARENT IS, kept before this node is added: `parent` points into the same list,
+            // and adding to it may move the list - the pointer then reads memory already given back.
+            const Vec2 parentAt = parent->at;
             out.nodes.push_back({n.id, at, dirDeg, faceDeg});
             // Named rather than laid out in order: the path sits among these now, and an aggregate
             // initialiser that is one field out puts a diameter into it without anybody noticing.
             MechPlacedSegment ps;
             ps.id = seg->id;
-            ps.a = parent->at;
+            ps.a = parentAt;
             ps.b = at;
             ps.dirDeg = dirDeg;
             ps.path = path;

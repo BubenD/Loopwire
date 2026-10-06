@@ -196,7 +196,9 @@ int run_mechbuilder_tests() {
         // Scale shrinks the geometry and nothing else.
         MechHarnessDef half = def;
         half.draw.scale = 0.5;
-        const MechPlacedNode* h1 = layoutMechanicalHarness(half).node(QStringLiteral("p1"));
+        // Each layout kept while what it places is read: the pointers are into it.
+        const MechLayout halfLayout = layoutMechanicalHarness(half);
+        const MechPlacedNode* h1 = halfLayout.node(QStringLiteral("p1"));
         check(h1 && near(h1->at.x, 150.0, 1e-9), "layout: the scale is applied to the lengths");
 
         // A node hanging off a run that leads nowhere is not placed at all.
@@ -337,9 +339,10 @@ int run_mechbuilder_tests() {
               "drawing: exaggeration multiplies the body's width");
         // The centreline is what the length is: exaggerating the body moves the mitres, and must not
         // move where the run ends.
-        const MechPlacedSegment* asDrawn = layoutMechanicalHarness(def).segment(QStringLiteral("s1"));
-        const MechPlacedSegment* exaggerated =
-            layoutMechanicalHarness(big).segment(QStringLiteral("s1"));
+        const MechLayout drawnLayout = layoutMechanicalHarness(def);
+        const MechLayout bigLayout = layoutMechanicalHarness(big);
+        const MechPlacedSegment* asDrawn = drawnLayout.segment(QStringLiteral("s1"));
+        const MechPlacedSegment* exaggerated = bigLayout.segment(QStringLiteral("s1"));
         check(asDrawn && exaggerated && near(asDrawn->b.x, exaggerated->b.x, 1e-9) &&
                   near(asDrawn->b.y, exaggerated->b.y, 1e-9),
               "drawing: and leaves the length exactly as it was");
@@ -1100,8 +1103,8 @@ int run_mechbuilder_tests() {
         // TURNED OFF, a branch is the single slanted line it always was.
         MechHarnessDef plain = def;
         plain.draw.squareBranches = false;
-        const MechPlacedSegment* straight =
-            layoutMechanicalHarness(plain).segment(QStringLiteral("s1"));
+        const MechLayout plainLayout = layoutMechanicalHarness(plain);
+        const MechPlacedSegment* straight = plainLayout.segment(QStringLiteral("s1"));
         check(straight && straight->path.empty(),
               "dogleg: switched off, a run is the straight line between its ends");
     }

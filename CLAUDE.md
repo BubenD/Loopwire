@@ -59,6 +59,10 @@ Don't use it.
   `run_brickharness_tests()`.
 - When a change alters behaviour on purpose, update the old test that asserted the old behaviour,
   and say so in the reply.
+- A crashing run prints its call stack (`CRASH:` in the log; names and lines need a build with `/Zi`). For memory
+  errors, configure a second build dir with `-DCMAKE_CXX_FLAGS_RELEASE="/O1 /Zi /DNDEBUG /fsanitize=address"`
+  and put the MSVC `bin/Hostx64/x64` dir on PATH to run it. Pointers or references into a temporary
+  (`merged().ofKind(...)`, `layout(...).node(...)`) were the crashes it found: keep the object in a local.
 - For visual checks, a small scratch program can link `edraw_core.lib`, build a design, put it in
   a `DrawingPreview`, and `grab()` it to a PNG. Look at the PNG before calling a drawing change
   done.

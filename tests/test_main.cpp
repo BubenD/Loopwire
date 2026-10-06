@@ -5,6 +5,54 @@
 
 #include <cstdio>
 
+#ifdef _WIN32
+#include <windows.h>
+#include <dbghelp.h>
+#pragma comment(lib, "dbghelp.lib")
+
+namespace {
+// A RUN THAT CRASHES SAYS WHERE: the exception and the calls that led to it, function by function (and file and line
+// where the build has its symbols), before the process goes - so an intermittent crash can be found from its log.
+LONG WINAPI sayCrash(EXCEPTION_POINTERS* info) {
+    std::fprintf(stdout, "\nCRASH: exception 0x%08lX at %p\n", info->ExceptionRecord->ExceptionCode,
+                 info->ExceptionRecord->ExceptionAddress);
+    HANDLE process = GetCurrentProcess();
+    HANDLE thread = GetCurrentThread();
+    SymSetOptions(SYMOPT_LOAD_LINES | SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
+    SymInitialize(process, nullptr, TRUE);
+    CONTEXT context = *info->ContextRecord;
+    STACKFRAME64 frame{};
+    frame.AddrPC.Offset = context.Rip;
+    frame.AddrPC.Mode = AddrModeFlat;
+    frame.AddrFrame.Offset = context.Rbp;
+    frame.AddrFrame.Mode = AddrModeFlat;
+    frame.AddrStack.Offset = context.Rsp;
+    frame.AddrStack.Mode = AddrModeFlat;
+    for (int depth = 0; depth < 40; ++depth) {
+        if (!StackWalk64(IMAGE_FILE_MACHINE_AMD64, process, thread, &frame, &context, nullptr, SymFunctionTableAccess64,
+                         SymGetModuleBase64, nullptr) ||
+            frame.AddrPC.Offset == 0)
+            break;
+        char buffer[sizeof(SYMBOL_INFO) + 512] = {};
+        auto* symbol = reinterpret_cast<SYMBOL_INFO*>(buffer);
+        symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+        symbol->MaxNameLen = 511;
+        DWORD64 offset = 0;
+        const char* name = SymFromAddr(process, frame.AddrPC.Offset, &offset, symbol) ? symbol->Name : "?";
+        IMAGEHLP_LINE64 line{};
+        line.SizeOfStruct = sizeof(line);
+        DWORD column = 0;
+        if (SymGetLineFromAddr64(process, frame.AddrPC.Offset, &column, &line))
+            std::fprintf(stdout, "  #%d %s  %s:%lu\n", depth, name, line.FileName, line.LineNumber);
+        else
+            std::fprintf(stdout, "  #%d %s\n", depth, name);
+    }
+    std::fflush(stdout);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+} // namespace
+#endif
+
 int run_geometry_tests();
 int run_editor_tests();
 int run_io_tests();
@@ -43,6 +91,9 @@ int run_brickharness_tests();
 int main(int argc, char** argv) {
     // UNBUFFERED: a run that dies leaves its log up to the line it died after, not a page short of it.
     std::setvbuf(stdout, nullptr, _IONBF, 0);
+#ifdef _WIN32
+    SetUnhandledExceptionFilter(sayCrash);
+#endif
     // A window can only be built with an application object behind it, and the step builder is a
     // window. Offscreen, so this runs the same on a machine with no display as on one with a screen -
     // set here rather than left to whoever starts the tests.

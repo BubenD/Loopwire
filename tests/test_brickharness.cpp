@@ -636,7 +636,9 @@ void testRoundThree() {
     auto* bom = dlg.findChild<QTableWidget*>(QStringLiteral("brickBom"));
     const int rowsWas = bom ? bom->rowCount() : -1;
     QString partId;
-    for (const LibraryPart* p : dlg.catalog().merged().ofKind(PartKind::Ferrule)) {
+    // The library kept: the parts ofKind() points at live in it.
+    const PartsLibrary lib = dlg.catalog().merged();
+    for (const LibraryPart* p : lib.ofKind(PartKind::Ferrule)) {
         partId = p->id;
         break;
     }
@@ -1169,7 +1171,9 @@ void testRoundFive() {
     }
     // 11. A part from the list, assigned to the picked end part and put on the bill.
     QString pid;
-    for (const LibraryPart* p : dlg.catalog().merged().ofKind(PartKind::Ferrule)) {
+    // The library kept: the parts ofKind() points at live in it.
+    const PartsLibrary lib = dlg.catalog().merged();
+    for (const LibraryPart* p : lib.ofKind(PartKind::Ferrule)) {
         pid = p->id;
         break;
     }
