@@ -616,6 +616,12 @@ QJsonObject Route3D::toJson() const {
         if (s.tension >= 0.0) j[QStringLiteral("tension")] = s.tension;
         if (s.wires > 0) j[QStringLiteral("wires")] = s.wires;
         if (s.wireD > 0.0) j[QStringLiteral("wireD")] = s.wireD;
+        if (s.wireSame) j[QStringLiteral("wireSame")] = true;
+        if (!s.wireColors.empty()) {
+            QJsonArray colours;
+            for (const QColor& c : s.wireColors) colours.append(c.isValid() ? c.name() : QString());
+            j[QStringLiteral("wireColors")] = colours;
+        }
         QJsonArray via;
         for (const RouteVia3D& v : s.via) via.append(QJsonObject{{QStringLiteral("at"), v3Json(v.at)}, {QStringLiteral("normal"), v3Json(v.normal)}});
         j[QStringLiteral("via")] = via;
@@ -664,6 +670,9 @@ Route3D Route3D::fromJson(const QJsonObject& o) {
         s.tension = j.value(QStringLiteral("tension")).toDouble(-1.0);
         s.wires = j.value(QStringLiteral("wires")).toInt(0);
         s.wireD = j.value(QStringLiteral("wireD")).toDouble(0.0);
+        s.wireSame = j.value(QStringLiteral("wireSame")).toBool(false);
+        for (const QJsonValue& c : j.value(QStringLiteral("wireColors")).toArray())
+            s.wireColors.push_back(c.toString().isEmpty() ? QColor() : QColor(c.toString()));
         for (const QJsonValue& w : j.value(QStringLiteral("via")).toArray()) {
             const QJsonObject k = w.toObject();
             s.via.push_back({v3From(k.value(QStringLiteral("at"))), unitOr(v3From(k.value(QStringLiteral("normal")), {0, 0, 1}), {0, 0, 1})});

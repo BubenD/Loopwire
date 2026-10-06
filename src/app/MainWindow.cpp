@@ -16687,6 +16687,13 @@ QDockWidget* MainWindow::makeView3DPanel() {
         dock->show();
         placeView3DDock(Qt::BottomDockWidgetArea);
     });
+    connect(view3dPane_, &View3DPane::dockToSideRequested, this, [this, dock](bool left) {
+        const Qt::DockWidgetArea side = left ? Qt::LeftDockWidgetArea : Qt::RightDockWidgetArea;
+        dock->setFloating(false);
+        addDockWidget(side, dock);
+        dock->show();
+        placeView3DDock(side);
+    });
     connect(view3dPane_, &View3DPane::dockSideRequested, this, [this, dock] {
         const Qt::DockWidgetArea side = view3dSideArea_ != Qt::NoDockWidgetArea ? view3dSideArea_ : Qt::RightDockWidgetArea;
         dock->setFloating(false);
@@ -16791,6 +16798,8 @@ bool MainWindow::maybeSaveDoc(int index) {
 bool MainWindow::saveDocument(int index, bool forceDialog) {
     if (index < 0 || index >= static_cast<int>(docs_.size())) return false;
     flushPaperSpace();   // what is on the sheet being drawn on belongs in the file
+    // THE 3D VIEW'S ROUTE AND HOW IT IS SHOWN - the view, gravity, what is hidden - written into the drawing too.
+    if (view3dPane_ && index == activeIndex()) view3dPane_->storeNow();
     QString path = docPaths_[index];
     if (path.isEmpty() || forceDialog) {
         path = QFileDialog::getSaveFileName(this, QStringLiteral("Save DWX"),

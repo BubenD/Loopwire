@@ -52,6 +52,62 @@ double routeDistance(const Route3D& route, const QString& from, const QString& t
     return -1.0;
 }
 
+int addHarnessToRoute(Route3D& route, const BrickDesign& design, const std::function<bool(const QString& brick, V3& at)>& placeOf) {
+    // EACH PART A NODE, where the harness draws it - in a row beyond it where it draws none - linked to the part.
+    int unplaced = 0;
+    for (const Brick& b : design.bricks) {
+        if (b.type != BrickType::End || !routeNodeOfPart(route, b.id).isEmpty()) continue;
+        V3 at;
+        if (!placeOf || !placeOf(b.id, at)) at = {unplaced++ * 60.0, -150.0, 0.0};
+        const QString id = route.addNode(b.kind == PartKind::Connector ? RouteNodeKind::Connector : RouteNodeKind::Branch, at, {0, 0, 1});
+        if (RouteNode3D* n = route.node(id)) {
+            n->brick = b.id;
+            n->part = b.name.isEmpty() ? partKindName(b.kind) : b.name;
+            n->label = n->part;
+        }
+    }
+    // EACH CABLE between the parts it joins, unless the route joins them already.
+    int laid = 0;
+    for (const Brick& s : design.bricks) {
+        if (!brickIsSpecial(s.type) || brickIsBranch(s)) continue;
+        const QStringList starts = design.startsOf(s.id), finishes = design.finishesOf(s.id);
+        if (starts.isEmpty() || finishes.isEmpty()) continue;
+        QStringList a, b;
+        for (const QString& p : starts) a << routeNodeOfPart(route, p);
+        for (const QString& p : finishes) b << routeNodeOfPart(route, p);
+        if (a.contains(QString()) || b.contains(QString())) continue;
+        if (routeDistance(route, a.first(), b.first()) >= 0.0) continue;
+        // SEVERAL PARTS AT AN END: a branch a quarter of the way from them toward the other end, a leg to each.
+        auto middle = [&route](const QStringList& ids) {
+            V3 c;
+            for (const QString& id : ids) c = c + route.node(id)->at;
+            return c * (1.0 / ids.size());
+        };
+        auto hub = [&](const QStringList& side, const QStringList& other) {
+            if (side.size() == 1) return side.first();
+            const V3 here = middle(side), there = middle(other);
+            return route.addNode(RouteNodeKind::Branch, here + (there - here) * 0.25, {0, 0, 1});
+        };
+        const QString ha = hub(a, b), hb = hub(b, a);
+        const QString trunk = route.addSegment(ha, hb, {});
+        double legs = 0.0;
+        for (const auto& [side, centre] : {std::pair<const QStringList*, QString>{&a, ha}, {&b, hb}}) {
+            if (side->size() < 2) continue;
+            double longest = 0.0;
+            for (const QString& n : *side) {
+                const QString leg = route.addSegment(centre, n, {});
+                if (const RouteSegment3D* l = route.segment(leg)) longest = std::max(longest, route.length(*l));
+            }
+            legs += longest;
+        }
+        // AS LONG AS THE DESIGN SAYS, where that is longer than the way between them.
+        if (const RouteSegment3D* t = route.segment(trunk); t && s.run.lengthMm - legs > route.length(*t) + 1.0)
+            route.lengthen(trunk, s.run.lengthMm - legs);
+        ++laid;
+    }
+    return laid;
+}
+
 RouteLengths routeLengthsFor(const BrickDesign& design, const Route3D& route) {
     RouteLengths out;
     for (const Brick& s : design.bricks) {

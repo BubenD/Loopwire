@@ -149,6 +149,22 @@ public:
         sideDocked_ = fromSide;
         applyLayout();
     }
+    // BELOW THE DRAWING (or floating): buttons to put it at the left or the right of the window (dockToSideRequested).
+    void setDockedBelow(bool below) {
+        dockedBelow_ = below;
+        applyLayout();
+    }
+    // THE ROUTE AND HOW IT IS SHOWN written to the drawing now - before the drawing is saved.
+    void storeNow() { saveRouting(); }
+    // THE HARNESS PUT IN AS A ROUTE: its parts and its cables between them, where it is drawn in 3D - to be moved into the
+    // model. How many cables were laid.
+    int routeFromHarness();
+    // THE CABLE SELECTED made so long along its path - its ends where they are; as near as it will go. False where none.
+    bool setSegmentLength(const QString& seg, double mm);
+    // A cable's wires' colours: all one, or each its own (`colours` as far as given).
+    void setWireColours(const QString& seg, bool same, const std::vector<QColor>& colours);
+    // WHAT IS SAID UNDER THE WHEEL: the thing the pointer is on.
+    QString hoverText() const;
     // The solids and parts in view listed again, each ticked as shown.
     void refreshSolids();
     // THE VIEW LOCKED (and the button and the wheel saying so).
@@ -186,6 +202,7 @@ signals:
     void routeToolChanged(RouteTool tool);
     void dockBelowRequested();
     void dockSideRequested();
+    void dockToSideRequested(bool left);
     // A MODEL BEING READ: how far (a hundredth), what it is doing, and whether it still is.
     void loadProgress(int percent, const QString& said, bool running);
     // The view locked, or not.
@@ -338,8 +355,30 @@ private:
     QWidget* solidsPanel_ = nullptr;          // what is in view, on the left (the 3D Preview tab)
     bool compact_ = false;                    // at the side of the window: the picture alone
     bool sideDocked_ = false;                 // below, having come from the side
+    bool dockedBelow_ = false;                // below the drawing, or floating
+    QToolButton* toLeft_ = nullptr;
+    QToolButton* toRight_ = nullptr;
+    QToolButton* sideRefresh_ = nullptr;
+    // THE CABLE SELECTED: its own length, diameter, wires and their colours, tension and colour.
+    QWidget* cableBox_ = nullptr;
+    QLabel* cableSaid_ = nullptr;
+    QDoubleSpinBox* cableLength_ = nullptr;
+    QDoubleSpinBox* cableDia_ = nullptr;
+    QToolButton* cableDiaAuto_ = nullptr;
+    QSpinBox* cableWires_ = nullptr;
+    QDoubleSpinBox* cableWireD_ = nullptr;
+    QComboBox* cableWireLook_ = nullptr;
+    void syncCable();
+    void editSegment(const QString& seg, const std::function<void(RouteSegment3D&)>& change);
+    void chooseWireColours(const QString& seg);
+    // UNDER THE WHEEL: what the pointer is on.
+    QLabel* hoverSaid_ = nullptr;
+    // HOW IT WAS SHOWN, saved with the route: the view, gravity, what is hidden or see-through, the section, the rulers -
+    // what needs the model put back once it is read.
+    QJsonObject viewState() const;
+    void applyView(const QJsonObject& view);
+    QJsonObject pendingView_;
     QToolButton* toBottom_ = nullptr;
-    QToolButton* toSide_ = nullptr;
     // The connector's form and sizes; the node being moved - where, the step, its colour and turns; the wheel's two sets.
     QComboBox* connForm_ = nullptr;
     QComboBox* connBack_ = nullptr;
@@ -483,6 +522,16 @@ public:
     void removeMeasure(int index);
     int selectedMeasure() const { return selMeasure_; }
     void selectMeasure(int index);
+    // The rulers put back as they were saved.
+    void setMeasures(const std::vector<Measure3D>& measures) {
+        measures_ = measures;
+        selMeasure_ = -1;
+        measureDirty_ = true;
+        update();
+    }
+    // WHAT IS UNDER A POINT OF THE PICTURE past the route: a solid of the model (its index) or a part of the harness (its
+    // brick), whichever is nearer; -1 and empty for neither.
+    void whatIsAt(const QPointF& at, int& part, QString& brick) const;
     void setMeasureFaces(bool on) { measureFaces_ = on; }
     bool measureFaces() const { return measureFaces_; }
     // THE FACE OF A SOLID round a point of it: the triangles it is meshed in that run on from the one there without a
@@ -539,6 +588,8 @@ signals:
     void routeMenuAsked(const QString& node, const QString& segment, int measure, const QPoint& globalPos);
     // A connector being put frozen with Tab - or let go.
     void ghostFrozenChanged(bool frozen);
+    // THE POINTER OVER SOMETHING: a node, a cable, a solid of the model or a part of the harness (none: all empty, -1).
+    void hovered(int envPart, const QString& brick, const QString& node, const QString& segment);
     // THE BRANCH TOOL ON A CONNECTOR: a bundle to start from it, out of its front or its back - asked at that point.
     void connectorBranchAsked(const QString& node, const QPoint& globalPos);
     // Something to tell the user.
@@ -627,6 +678,12 @@ private:
     QPointer<QVariantAnimation> turnAnim_;
     // The solids of the model hidden, and the ruler. Not saved.
     std::vector<char> envHidden_;
+    // The harness's parts in a tree of boxes, for what the pointer is over - made again when they change. Not saved.
+    mutable std::unique_ptr<RayIndex3D> harnessIndex_;
+    mutable std::vector<QString> harnessIndexBricks_;
+    mutable QString harnessIndexKey_;
+    QString hoverKey_;
+    qint64 hoverAt_ = 0;
     std::vector<double> envOwnAlpha_;
     QHash<QString, double> brickAlpha_;
     // The solid the last point found on the model is on (-1: none - the ground, the work plane).

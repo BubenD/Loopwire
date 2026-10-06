@@ -45,6 +45,9 @@
 #include <QPushButton>
 #include <QProgressBar>
 #include <QElapsedTimer>
+#include <QDateTime>
+#include <QDialog>
+#include <QPixmap>
 #include <atomic>
 #include <mutex>
 #include <QTimer>
@@ -71,6 +74,14 @@ QToolButton* autoButton(QWidget* parent, const char* name, const QString& tip) {
     b->setStyleSheet(QStringLiteral("QToolButton{font-weight:bold;color:#e6ecf4;background:#3a4656;border:1px solid #5a6878;border-radius:3px;}"
                                     "QToolButton:checked{background:#2f855a;border-color:#3fa36f;color:white;}"));
     return b;
+}
+
+// A WIRE'S COLOUR IN TURN, where it is given none: red, blue, green, yellow, black, white, brown, orange, violet, grey.
+QColor wireColourOf(int w) {
+    static const QColor palette[] = {QColor(200, 40, 40), QColor(40, 90, 200), QColor(40, 150, 60), QColor(230, 200, 40),
+                                     QColor(30, 30, 34), QColor(235, 235, 235), QColor(150, 80, 30), QColor(240, 130, 30),
+                                     QColor(140, 60, 170), QColor(120, 120, 130)};
+    return palette[static_cast<size_t>(std::max(0, w)) % std::size(palette)];
 }
 
 } // namespace
@@ -255,13 +266,18 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
                                      "corner or a connector to move it across the view, at the depth it is"),
                       [this] { setViewLocked(!canvas_->viewLocked()); });
     lockBtn_->setCheckable(true);
-    // BELOW THE DRAWING, having come from the side: back there, the picture alone.
-    toSide_ = button(bar, "view3dToSide", QStringLiteral("To the side"),
-                     QStringLiteral("Back to the side of the window - the picture alone, without its options"),
-                     [this] { emit dockSideRequested(); });
-    toSide_->hide();
-    bar->removeWidget(toSide_);
-    bar->insertWidget(0, toSide_);
+    // BELOW THE DRAWING (or floating): to the left or the right of the window, the picture alone there.
+    toLeft_ = button(bar, "view3dToLeft", QStringLiteral("To the left"),
+                     QStringLiteral("Put the 3D view at the left of the window - the picture alone, without its options"),
+                     [this] { emit dockToSideRequested(true); });
+    toRight_ = button(bar, "view3dToRight", QStringLiteral("To the right"),
+                      QStringLiteral("Put the 3D view at the right of the window - the picture alone, without its options"),
+                      [this] { emit dockToSideRequested(false); });
+    for (QToolButton* b : {toRight_, toLeft_}) {
+        b->hide();
+        bar->removeWidget(b);
+        bar->insertWidget(0, b);
+    }
     wheelShown_ = new QCheckBox(QStringLiteral("Wheel"), this);
     wheelShown_->setObjectName(QStringLiteral("view3dWheelShown"));
     wheelShown_->setChecked(true);
@@ -487,7 +503,7 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     };
     for (QDoubleSpinBox* s : {diameter_, bend_, lead_}) connect(s, &QDoubleSpinBox::valueChanged, this, settings);
     // HOW TAUT A BUNDLE IS PUT IN - the route's here; the cable selected its own, beside it and in the table.
-    br->addWidget(new QLabel(QStringLiteral("Tension, all cables"), bundleRow_));
+    br->addWidget(new QLabel(QStringLiteral("Cable tension"), bundleRow_));
     tension_ = new QComboBox(bundleRow_);
     tension_->setObjectName(QStringLiteral("view3dTension"));
     for (const CableTension& t : cableTensions()) tension_->addItem(t.name, t.newtons);
@@ -502,7 +518,7 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
         emit routeChanged();
     });
     br->addWidget(tension_);
-    br->addWidget(new QLabel(QStringLiteral("Selected cable"), bundleRow_));
+    // ONE CABLE'S OWN TENSION: in the Cable box on the right, with the rest of what is its own.
     cableTension_ = new QComboBox(bundleRow_);
     cableTension_->setObjectName(QStringLiteral("view3dCableTension"));
     cableTension_->addItem(QStringLiteral("As all cables"), -1.0);
@@ -519,7 +535,6 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
         refreshRoute();
         emit routeChanged();
     });
-    br->addWidget(cableTension_);
     // GRAVITY: the route hung under its weight, each bundle by its tension, and where it would fall shown.
     gravity_ = new QToolButton(bundleRow_);
     gravity_->setObjectName(QStringLiteral("view3dGravity"));
@@ -713,6 +728,16 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
                    });
     unlink_ = button(linkRow, "view3dUnlinkPart", QStringLiteral("Unlink"),
                      QStringLiteral("The node selected in the picture put for no part"), [this] { linkSelectedNode(QString()); });
+    // THE REAL HARNESS AS A ROUTE: its parts and cables put in where it is drawn in 3D, to move into the model.
+    button(linkRow, "view3dRouteFromHarness", QStringLiteral("Route from harness"),
+           QStringLiteral("Put the harness in as a route: a connector for each of its parts not put yet, where the harness is "
+                          "drawn in 3D, and its cables between them (through a branch where a cable goes to several) - then "
+                          "move the connectors to where they go in the model, and Lengths to harness"),
+           [this] {
+               const int n = routeFromHarness();
+               emit canvas_->message(n < 0 ? QStringLiteral("No harness to route - open one in the harness wizard, or place one")
+                                           : QStringLiteral("%1 cable(s) of the harness laid - move its connectors to where they go").arg(n));
+           });
     lengths_ = button(linkRow, "view3dLengthsToHarness", QStringLiteral("Lengths to harness"),
                       QStringLiteral("Give each cable of the harness its length along the route, between the parts it joins"),
                       [this] { applyLengths(true); });
@@ -809,6 +834,111 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     connect(connBack_, &QComboBox::activated, this, [this](int i) { editSelectedNode([i](RouteNode3D& n) { n.back = i == 1; }); });
     connBox_->setVisible(false);
     sl->addWidget(connBox_);
+    // THE CABLE SELECTED, ITS OWN: how long it is (typed, it is laid so long), how thick (its A: as all cables, or as its
+    // wires pack to), its wires and their colours, its tension and its colour. Shown while a cable is selected.
+    cableBox_ = new QWidget(side_);
+    cableBox_->setObjectName(QStringLiteral("view3dCableBox"));
+    {
+        auto* g = new QGridLayout(cableBox_);
+        g->setContentsMargins(0, 4, 0, 4);
+        g->setHorizontalSpacing(4);
+        g->setVerticalSpacing(2);
+        cableSaid_ = new QLabel(cableBox_);
+        cableSaid_->setWordWrap(true);
+        g->addWidget(cableSaid_, 0, 0, 1, 3);
+        auto mm = [this](const char* name, double lo, double hi, int decimals, const QString& tip) {
+            auto* s = new QDoubleSpinBox(cableBox_);
+            s->setObjectName(QLatin1String(name));
+            s->setRange(lo, hi);
+            s->setDecimals(decimals);
+            s->setSuffix(QStringLiteral(" mm"));
+            s->setKeyboardTracking(false);
+            s->setToolTip(tip);
+            return s;
+        };
+        g->addWidget(new QLabel(QStringLiteral("Length"), cableBox_), 1, 0);
+        cableLength_ = mm("view3dCableLength", 1.0, 100000.0, 1,
+                          QStringLiteral("How long the cable is along its path - type a length and it is laid so long, its ends "
+                                         "where they are (no shorter than straight)"));
+        g->addWidget(cableLength_, 1, 1, 1, 2);
+        connect(cableLength_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
+            if (!filling_) setSegmentLength(canvas_->selectedSegment(), v);
+        });
+        g->addWidget(new QLabel(QString::fromUtf8("Ø"), cableBox_), 2, 0);
+        cableDia_ = mm("view3dCableDia", 0.1, 200.0, 1, QStringLiteral("This cable's diameter"));
+        g->addWidget(cableDia_, 2, 1);
+        cableDiaAuto_ = autoButton(cableBox_, "view3dCableDiaAuto",
+                                   QStringLiteral("Auto: as all cables, or as its wires pack to - the field shows it"));
+        g->addWidget(cableDiaAuto_, 2, 2);
+        connect(cableDia_, &QDoubleSpinBox::valueChanged, this, [this](double v) {
+            if (filling_ || cableDiaAuto_->isChecked()) return;
+            editSegment(canvas_->selectedSegment(), [v](RouteSegment3D& s) {
+                s.diameter = v;
+                s.wires = 0;
+            });
+        });
+        connect(cableDiaAuto_, &QToolButton::toggled, this, [this](bool on) {
+            if (filling_) return;
+            const double shown = cableDia_->value();
+            editSegment(canvas_->selectedSegment(), [on, shown](RouteSegment3D& s) {
+                s.diameter = on ? 0.0 : shown;
+                if (!on) s.wires = 0;
+            });
+        });
+        g->addWidget(new QLabel(QStringLiteral("Wires"), cableBox_), 3, 0);
+        cableWires_ = new QSpinBox(cableBox_);
+        cableWires_->setObjectName(QStringLiteral("view3dCableWires"));
+        cableWires_->setRange(0, 999);
+        cableWires_->setKeyboardTracking(false);
+        cableWires_->setToolTip(QStringLiteral("A bundle of so many wires, drawn wire by wire, as thick as they pack to; 0: as all "
+                                               "cables"));
+        g->addWidget(cableWires_, 3, 1, 1, 2);
+        connect(cableWires_, &QSpinBox::valueChanged, this, [this](int n) {
+            if (filling_) return;
+            editSegment(canvas_->selectedSegment(), [n](RouteSegment3D& s) {
+                s.wires = n;
+                if (n > 0) s.diameter = 0.0;
+            });
+        });
+        g->addWidget(new QLabel(QString::fromUtf8("Wire Ø"), cableBox_), 4, 0);
+        cableWireD_ = mm("view3dCableWireD", 0.05, 50.0, 2, QStringLiteral("Each of its wires' diameter"));
+        cableWireD_->setSingleStep(0.1);
+        g->addWidget(cableWireD_, 4, 1, 1, 2);
+        connect(cableWireD_, &QDoubleSpinBox::valueChanged, this, [this](double d) {
+            if (!filling_) editSegment(canvas_->selectedSegment(), [d](RouteSegment3D& s) { s.wireD = d; });
+        });
+        g->addWidget(new QLabel(QStringLiteral("Wire colours"), cableBox_), 5, 0);
+        cableWireLook_ = new QComboBox(cableBox_);
+        cableWireLook_->setObjectName(QStringLiteral("view3dCableWireLook"));
+        cableWireLook_->addItems({QStringLiteral("Each its own"), QStringLiteral("All one colour")});
+        cableWireLook_->setToolTip(QStringLiteral("Its wires each a colour of its own (as chosen, or in turn), or all the cable's colour"));
+        g->addWidget(cableWireLook_, 5, 1);
+        connect(cableWireLook_, &QComboBox::activated, this, [this](int i) {
+            editSegment(canvas_->selectedSegment(), [i](RouteSegment3D& s) { s.wireSame = i == 1; });
+        });
+        auto* each = new QToolButton(cableBox_);
+        each->setObjectName(QStringLiteral("view3dCableWireEach"));
+        each->setText(QStringLiteral("Each..."));
+        each->setToolTip(QStringLiteral("Choose the colour of each wire"));
+        g->addWidget(each, 5, 2);
+        connect(each, &QToolButton::clicked, this, [this] { chooseWireColours(canvas_->selectedSegment()); });
+        g->addWidget(new QLabel(QStringLiteral("Tension"), cableBox_), 6, 0);
+        g->addWidget(cableTension_, 6, 1, 1, 2);
+        auto* colour = new QToolButton(cableBox_);
+        colour->setObjectName(QStringLiteral("view3dCableColour"));
+        colour->setText(QStringLiteral("Colour..."));
+        colour->setToolTip(QStringLiteral("The cable's colour (and its wires', all one colour)"));
+        g->addWidget(colour, 7, 1);
+        connect(colour, &QToolButton::clicked, this, [this] {
+            const QString seg = canvas_->selectedSegment();
+            const RouteSegment3D* t = route_.segment(seg);
+            if (!t) return;
+            const QColor c = QColorDialog::getColor(t->color.isValid() ? t->color : QColor(235, 140, 40), this, QStringLiteral("The cable's colour"));
+            if (c.isValid()) setSegmentColour(seg, c);
+        });
+    }
+    cableBox_->setVisible(false);
+    sl->addWidget(cableBox_);
     // MOVING A NODE (the Move tool, a node clicked): where it is, by so much a step - or by the wheel's arrows - turned
     // round each axis, and its colour.
     moveBox_ = new QWidget(side_);
@@ -995,6 +1125,47 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
                                             "border-radius:3px;padding:2px 6px;}"));
     toBottom_->hide();
     connect(toBottom_, &QToolButton::clicked, this, [this] { emit dockBelowRequested(); });
+    // AT THE SIDE, REFRESH too: the 3D harness built again from the drawing.
+    sideRefresh_ = new QToolButton(canvas_);
+    sideRefresh_->setObjectName(QStringLiteral("view3dSideRefresh"));
+    sideRefresh_->setText(QStringLiteral("Refresh"));
+    sideRefresh_->setToolTip(QStringLiteral("Build the 3D harness again from the drawing"));
+    sideRefresh_->setIcon(icon3D(QStringLiteral("refresh"), QColor(230, 236, 244)));
+    sideRefresh_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    sideRefresh_->setStyleSheet(toBottom_->styleSheet());
+    sideRefresh_->hide();
+    connect(sideRefresh_, &QToolButton::clicked, this, [this] { rebuild(false); });
+    // UNDER THE WHEEL: what the pointer is on.
+    hoverSaid_ = new QLabel(canvas_);
+    hoverSaid_->setObjectName(QStringLiteral("view3dHover"));
+    hoverSaid_->setStyleSheet(QStringLiteral("QLabel{background:rgba(20,24,30,190);color:#e6ecf4;border:1px solid #4a5868;"
+                                             "border-radius:3px;padding:2px 6px;}"));
+    hoverSaid_->setAttribute(Qt::WA_TransparentForMouseEvents);
+    hoverSaid_->hide();
+    connect(canvas_, &View3DCanvas::hovered, this, [this](int part, const QString& brick, const QString& node, const QString& seg) {
+        QString said;
+        if (const RouteNode3D* n = route_.node(node)) {
+            const QString kind = n->kind == RouteNodeKind::Connector ? QStringLiteral("connector")
+                                 : n->kind == RouteNodeKind::Clip    ? QStringLiteral("clip")
+                                                                     : QStringLiteral("branch");
+            said = QStringLiteral("%1 - %2").arg(n->label, kind);
+        } else if (const RouteSegment3D* s = route_.segment(seg)) {
+            const RouteNode3D* a = route_.node(s->a);
+            const RouteNode3D* b = route_.node(s->b);
+            said = QStringLiteral("Cable %1 - %2   %3 mm, Ø %4")
+                       .arg(a ? a->label : s->a, b ? b->label : s->b)
+                       .arg(route_.length(*s), 0, 'f', 1)
+                       .arg(route_.diameterOf(*s), 0, 'f', 1);
+            if (const int nw = route_.wiresOf(*s); nw > 0) said += QStringLiteral(", %1 wires").arg(nw);
+        } else if (part >= 0) {
+            said = envPartName(part);
+        } else if (!brick.isEmpty()) {
+            said = harnessPartName(brick);
+        }
+        hoverSaid_->setText(said);
+        hoverSaid_->adjustSize();
+        placeWheel();
+    });
     // RIGHT-CLICKED IN THE PICTURE: that solid or part hidden, the others, or all shown again.
     connect(canvas_, &View3DCanvas::partMenuAsked, this, [this](int part, const QString& brick, const QPoint& at) {
         QMenu menu(this);
@@ -1177,10 +1348,28 @@ void View3DPane::placeWheel() {
         toBottom_->move(canvas_->width() - toBottom_->width() - 6, 6);
         toBottom_->raise();
     }
+    if (sideRefresh_ && toBottom_) {
+        sideRefresh_->adjustSize();
+        sideRefresh_->move(toBottom_->x() - sideRefresh_->width() - 4, toBottom_->y());
+        sideRefresh_->raise();
+    }
     if (!wheel_) return;
     wheel_->move(canvas_->width() - wheel_->width() - 8, 8);
     wheel_->raise();
+    // UNDER THE WHEEL, what the pointer is on - under it, kept inside the picture.
+    if (hoverSaid_) {
+        const bool show = !compact_ && !hoverSaid_->text().isEmpty();
+        hoverSaid_->setVisible(show);
+        if (show) {
+            const int wide = hoverSaid_->width();
+            const int x = std::clamp(wheel_->x() + wheel_->width() / 2 - wide / 2, 4, std::max(4, canvas_->width() - wide - 4));
+            hoverSaid_->move(x, (wheel_->isVisible() ? wheel_->y() + wheel_->height() : 8) + 4);
+            hoverSaid_->raise();
+        }
+    }
 }
+
+QString View3DPane::hoverText() const { return hoverSaid_ ? hoverSaid_->text() : QString(); }
 
 bool View3DPane::eventFilter(QObject* watched, QEvent* event) {
     if (watched == canvas_ && (event->type() == QEvent::Resize || event->type() == QEvent::Show)) placeWheel();
@@ -1382,7 +1571,10 @@ void View3DPane::applyLayout() {
     status_->setVisible(!compact_);
     if (wheel_) wheel_->setVisible(!compact_ && wheelShown_->isChecked());
     if (toBottom_) toBottom_->setVisible(compact_);
-    if (toSide_) toSide_->setVisible(!compact_ && sideDocked_);
+    for (QToolButton* b : {toLeft_, toRight_})
+        if (b) b->setVisible(!compact_ && (dockedBelow_ || sideDocked_));
+    if (sideRefresh_) sideRefresh_->setVisible(compact_);
+    if (hoverSaid_ && compact_) hoverSaid_->hide();
     fitRows();
     placeWheel();
 }
@@ -2197,6 +2389,12 @@ void View3DPane::takeEnvironment(Environment3D env, std::shared_ptr<RayIndex3D> 
     applySection();
     V3 lo, hi;
     if (env_.bounds(lo, hi)) canvas_->fitBox(lo, hi);
+    // HOW THE DRAWING SHOWED IT, saved with it: put back now the model is read.
+    if (!pendingView_.isEmpty()) {
+        const QJsonObject view = pendingView_;
+        pendingView_ = QJsonObject();
+        applyView(view);
+    }
     // Asked for and not read: the drawing is not to name it. Named by the drawing and not read: it still names it.
     if (!quietLoad_) {
         if (env_.empty()) envRef_.clear();
@@ -2304,6 +2502,12 @@ void View3DPane::reloadRouting(bool wait) {
             envRef_ = named;
         }
     }
+    // HOW IT WAS SHOWN, saved with it: put back - what needs the model again once it is read.
+    {
+        const QJsonObject view = o.value(QStringLiteral("view")).toObject();
+        pendingView_ = loading_ ? view : QJsonObject();
+        if (!view.isEmpty()) applyView(view);
+    }
     {
         filling_ = true;
         diameter_->setValue(route_.diameter);
@@ -2323,6 +2527,8 @@ void View3DPane::saveRouting() {
     if (!envRef_.isEmpty())
         o[QStringLiteral("environment")] = QJsonObject{{QStringLiteral("path"), QFileInfo(envRef_).absoluteFilePath()},
                                                       {QStringLiteral("file"), QFileInfo(envRef_).fileName()}};
+    // HOW IT IS SHOWN, with it: the view, gravity, what is hidden or see-through, the section, the rulers.
+    if (!o.isEmpty()) o[QStringLiteral("view")] = viewState();
     saveRouting_(o);
 }
 
@@ -2624,7 +2830,212 @@ void View3DPane::refreshRoute() {
     sayStatus();
 }
 
+void View3DPane::syncCable() {
+    const RouteSegment3D* s = route_.segment(canvas_->selectedSegment());
+    const bool show = s && envChoice_;
+    cableBox_->setVisible(show);
+    if (!show) return;
+    const bool was = filling_;
+    filling_ = true;
+    const QSignalBlocker a(cableLength_), b(cableDia_), c(cableDiaAuto_), d(cableWires_), e(cableWireD_), f(cableWireLook_);
+    const RouteNode3D* na = route_.node(s->a);
+    const RouteNode3D* nb = route_.node(s->b);
+    cableSaid_->setText(QStringLiteral("<b>Cable %1 - %2</b>").arg((na ? na->label : s->a).toHtmlEscaped(), (nb ? nb->label : s->b).toHtmlEscaped()));
+    cableLength_->setValue(route_.length(*s));
+    const bool automatic = s->diameter <= 0.0;
+    cableDiaAuto_->setChecked(automatic);
+    cableDia_->setEnabled(!automatic);
+    cableDia_->setValue(route_.diameterOf(*s));
+    cableWires_->setValue(s->wires);
+    cableWireD_->setValue(route_.wireDOf(*s));
+    cableWireLook_->setCurrentIndex(s->wireSame ? 1 : 0);
+    filling_ = was;
+}
+
+void View3DPane::editSegment(const QString& seg, const std::function<void(RouteSegment3D&)>& change) {
+    RouteSegment3D* s = route_.segment(seg);
+    if (!s) return;
+    beforeRouteChange();
+    change(*s);
+    route_.solidsChanged();
+    saveRouting();
+    refreshRoute();
+    syncCable();
+    emit routeChanged();
+}
+
+bool View3DPane::setSegmentLength(const QString& seg, double mm) {
+    if (!route_.segment(seg) || mm <= 0.0) return false;
+    beforeRouteChange();
+    route_.lengthen(seg, mm);
+    saveRouting();
+    refreshRoute();
+    syncCable();
+    emit routeChanged();
+    return true;
+}
+
+void View3DPane::setWireColours(const QString& seg, bool same, const std::vector<QColor>& colours) {
+    editSegment(seg, [same, colours](RouteSegment3D& s) {
+        s.wireSame = same;
+        s.wireColors = colours;
+    });
+}
+
+void View3DPane::chooseWireColours(const QString& seg) {
+    const RouteSegment3D* s = route_.segment(seg);
+    if (!s) return;
+    const int n = std::max(1, route_.wiresOf(*s));
+    std::vector<QColor> colours = s->wireColors;
+    colours.resize(static_cast<size_t>(n));
+    for (int i = 0; i < n; ++i)
+        if (!colours[static_cast<size_t>(i)].isValid()) colours[static_cast<size_t>(i)] = wireColourOf(i);
+    // EACH WIRE AND ITS COLOUR: double-click one (or choose it and Change...) for another.
+    QDialog dlg(this);
+    dlg.setWindowTitle(QStringLiteral("The wires' colours"));
+    auto* lay = new QVBoxLayout(&dlg);
+    auto* list = new QListWidget(&dlg);
+    list->setObjectName(QStringLiteral("view3dWireColours"));
+    auto fill = [&] {
+        list->clear();
+        for (int i = 0; i < n; ++i) {
+            QPixmap swatch(16, 16);
+            swatch.fill(colours[static_cast<size_t>(i)]);
+            list->addItem(new QListWidgetItem(QIcon(swatch), QStringLiteral("Wire %1  (%2)").arg(i + 1).arg(colours[static_cast<size_t>(i)].name())));
+        }
+    };
+    fill();
+    lay->addWidget(list);
+    auto change = [&] {
+        const int row = list->currentRow();
+        if (row < 0) return;
+        const QColor c = QColorDialog::getColor(colours[static_cast<size_t>(row)], &dlg, QStringLiteral("Wire %1").arg(row + 1));
+        if (!c.isValid()) return;
+        colours[static_cast<size_t>(row)] = c;
+        fill();
+        list->setCurrentRow(row);
+    };
+    connect(list, &QListWidget::itemDoubleClicked, &dlg, [&](QListWidgetItem*) { change(); });
+    auto* buttons = new QHBoxLayout;
+    auto* again = new QPushButton(QStringLiteral("Change..."), &dlg);
+    connect(again, &QPushButton::clicked, &dlg, [&] { change(); });
+    buttons->addWidget(again);
+    buttons->addStretch(1);
+    auto* ok = new QPushButton(QStringLiteral("OK"), &dlg);
+    auto* cancel = new QPushButton(QStringLiteral("Cancel"), &dlg);
+    connect(ok, &QPushButton::clicked, &dlg, &QDialog::accept);
+    connect(cancel, &QPushButton::clicked, &dlg, &QDialog::reject);
+    buttons->addWidget(ok);
+    buttons->addWidget(cancel);
+    lay->addLayout(buttons);
+    if (dlg.exec() == QDialog::Accepted) setWireColours(seg, false, colours);
+}
+
+int View3DPane::routeFromHarness() {
+    const RouteHarness h = harness_ ? harness_() : RouteHarness();
+    if (!h.ok) return -1;
+    beforeRouteChange();
+    // WHERE EACH PART IS DRAWN IN 3D: the middle of what the harness draws for it.
+    const int laid = addHarnessToRoute(route_, h.design, [this](const QString& brick, V3& at) {
+        bool any = false;
+        V3 lo, hi;
+        for (const Harness3DItem& it : scene_.items) {
+            if (it.brick != brick) continue;
+            V3 a, b;
+            if (!it.mesh.bounds(a, b)) continue;
+            lo = any ? V3{std::min(lo.x, a.x), std::min(lo.y, a.y), std::min(lo.z, a.z)} : a;
+            hi = any ? V3{std::max(hi.x, b.x), std::max(hi.y, b.y), std::max(hi.z, b.z)} : b;
+            any = true;
+        }
+        if (any) at = (lo + hi) * 0.5;
+        return any;
+    });
+    route_.solidsChanged();
+    saveRouting();
+    refreshRoute();
+    refreshParts();
+    emit routeChanged();
+    return laid;
+}
+
+QJsonObject View3DPane::viewState() const {
+    QJsonObject v;
+    const Camera3D& c = canvas_->camera();
+    v[QStringLiteral("camera")] = QJsonObject{{QStringLiteral("yaw"), c.yawDeg},
+                                              {QStringLiteral("pitch"), c.pitchDeg},
+                                              {QStringLiteral("roll"), c.rollDeg},
+                                              {QStringLiteral("distance"), c.distance},
+                                              {QStringLiteral("target"), QJsonArray{c.target.x, c.target.y, c.target.z}}};
+    if (gravity_ && gravity_->isChecked()) v[QStringLiteral("gravity")] = true;
+    if (down_ && down_->currentIndex() > 0) v[QStringLiteral("down")] = down_->currentIndex();
+    if (envOpacity_ && envOpacity_->value() < 100) v[QStringLiteral("opacity")] = envOpacity_->value();
+    if (section_ && section_->currentIndex() > 0) {
+        v[QStringLiteral("section")] = section_->currentIndex();
+        v[QStringLiteral("sectionAt")] = sectionAt_->value();
+    }
+    QJsonArray hidden;
+    QJsonObject seeThrough;
+    for (size_t i = 0; i < env_.parts.size(); ++i) {
+        const int part = static_cast<int>(i);
+        if (canvas_->envPartHidden(part)) hidden.append(envPartName(part));
+        if (canvas_->envPartOpacity(part) > 0.0) seeThrough[envPartName(part)] = canvas_->envPartOpacity(part);
+    }
+    if (!hidden.isEmpty()) v[QStringLiteral("hidden")] = hidden;
+    if (!seeThrough.isEmpty()) v[QStringLiteral("partOpacity")] = seeThrough;
+    QJsonArray rulers;
+    for (const View3DCanvas::Measure3D& m : canvas_->measures())
+        rulers.append(QJsonArray{m.a.x, m.a.y, m.a.z, m.b.x, m.b.y, m.b.z, m.faces ? 1 : 0});
+    if (!rulers.isEmpty()) v[QStringLiteral("measures")] = rulers;
+    return v;
+}
+
+void View3DPane::applyView(const QJsonObject& v) {
+    if (v.contains(QStringLiteral("camera"))) {
+        const QJsonObject c = v.value(QStringLiteral("camera")).toObject();
+        Camera3D& cam = canvas_->camera();
+        cam.yawDeg = c.value(QStringLiteral("yaw")).toDouble(cam.yawDeg);
+        cam.pitchDeg = c.value(QStringLiteral("pitch")).toDouble(cam.pitchDeg);
+        cam.rollDeg = c.value(QStringLiteral("roll")).toDouble(cam.rollDeg);
+        cam.distance = c.value(QStringLiteral("distance")).toDouble(cam.distance);
+        const QJsonArray t = c.value(QStringLiteral("target")).toArray();
+        if (t.size() == 3) cam.target = {t.at(0).toDouble(), t.at(1).toDouble(), t.at(2).toDouble()};
+        canvas_->update();
+        syncCamera();
+    }
+    if (down_) down_->setCurrentIndex(std::clamp(v.value(QStringLiteral("down")).toInt(0), 0, down_->count() - 1));
+    if (gravity_) gravity_->setChecked(v.value(QStringLiteral("gravity")).toBool(false));
+    if (envOpacity_) envOpacity_->setValue(v.value(QStringLiteral("opacity")).toInt(100));
+    if (section_) {
+        section_->setCurrentIndex(std::clamp(v.value(QStringLiteral("section")).toInt(0), 0, section_->count() - 1));
+        if (v.contains(QStringLiteral("sectionAt"))) sectionAt_->setValue(v.value(QStringLiteral("sectionAt")).toInt());
+    }
+    std::vector<View3DCanvas::Measure3D> rulers;
+    for (const QJsonValue& m : v.value(QStringLiteral("measures")).toArray()) {
+        const QJsonArray a = m.toArray();
+        if (a.size() < 7) continue;
+        View3DCanvas::Measure3D r;
+        r.a = {a.at(0).toDouble(), a.at(1).toDouble(), a.at(2).toDouble()};
+        r.b = {a.at(3).toDouble(), a.at(4).toDouble(), a.at(5).toDouble()};
+        r.faces = a.at(6).toInt() != 0;
+        rulers.push_back(r);
+    }
+    canvas_->setMeasures(rulers);
+    // WHAT NEEDS THE MODEL: its solids hidden or see-through, by name.
+    if (!env_.parts.empty()) {
+        const QStringList hidden = v.value(QStringLiteral("hidden")).toVariant().toStringList();
+        const QJsonObject seeThrough = v.value(QStringLiteral("partOpacity")).toObject();
+        for (size_t i = 0; i < env_.parts.size(); ++i) {
+            const int part = static_cast<int>(i);
+            const QString name = envPartName(part);
+            canvas_->setEnvPartHidden(part, hidden.contains(name));
+            canvas_->setEnvPartOpacity(part, seeThrough.value(name).toDouble(0.0));
+        }
+        partsShownChanged();
+    }
+}
+
 void View3DPane::syncCableTension() {
+    syncCable();
     if (!cableTension_) return;
     const QSignalBlocker hold(cableTension_);
     const RouteSegment3D* s = route_.segment(canvas_->selectedSegment());
@@ -2691,7 +3102,8 @@ void View3DCanvas::setSags(std::vector<CableSag3D> sags) {
 
 View3DCanvas::View3DCanvas(QWidget* parent) : QWidget(parent) {
     setMinimumSize(200, 160);
-    setMouseTracking(false);
+    // The pointer followed always: what it is over is said under the wheel.
+    setMouseTracking(true);
     setFocusPolicy(Qt::StrongFocus);
     setToolTip(QStringLiteral("Wheel-button drag: turn (Shift: roll) - right drag: move - wheel: zoom - double-click: fit - click on the "
                               "environment: pick a point on it, or use the route tool chosen"));
@@ -3038,7 +3450,8 @@ void View3DCanvas::setRouteTool(RouteTool tool) {
     }
     if (tool != RouteTool::Measure && measureStage_ == 1) clearMeasure();
     tool_ = tool;
-    setMouseTracking(tool == RouteTool::Route || tool == RouteTool::Measure || tool == RouteTool::Connector || tool == RouteTool::Select);
+    // ALWAYS: what the pointer is over is said under the wheel, whatever the tool.
+    setMouseTracking(true);
     setCursor(tool == RouteTool::Select                                    ? Qt::ArrowCursor
               : tool == RouteTool::Move || tool == RouteTool::Stretch ? Qt::SizeAllCursor
                                                                            : Qt::CrossCursor);
@@ -3546,13 +3959,14 @@ void View3DCanvas::buildRouteMeshes() const {
             us.push_back(u);
             vs.push_back(cross3(t, u).normalized());
         }
-        static const QColor palette[] = {QColor(200, 40, 40), QColor(40, 90, 200), QColor(40, 150, 60), QColor(230, 200, 40),
-                                         QColor(30, 30, 34), QColor(235, 235, 235), QColor(150, 80, 30), QColor(240, 130, 30),
-                                         QColor(140, 60, 170), QColor(120, 120, 130)};
         for (size_t w = 0; w < lay.size(); ++w) {
             std::vector<V3> path;
             for (size_t i = 0; i < c.size(); ++i) path.push_back(c[i] + us[i] * lay[w].first + vs[i] * lay[w].second);
-            const QColor wc = s.id == selSegment_ ? lit : s.color.isValid() ? s.color : palette[w % std::size(palette)];
+            // ALL ONE COLOUR (the cable's), or each its own - as chosen, the rest a colour each in turn.
+            const QColor wc = s.id == selSegment_ ? lit
+                              : s.wireSame        ? (s.color.isValid() ? s.color : QColor(235, 140, 40))
+                              : w < s.wireColors.size() && s.wireColors[w].isValid() ? s.wireColors[w]
+                                                                                    : wireColourOf(static_cast<int>(w));
             routeMeshes_.push_back({tubeMesh(path, wd * 0.48, 8, true), wc, Texture3D::Plastic, QString(), s.id});
         }
     }
@@ -3806,6 +4220,8 @@ QString View3DCanvas::nodeAt(const QPointF& at) const {
         }
         if (!hit.isEmpty()) return hit;
     }
+    // A CABLE UNDER THE POINTER is what is meant - not a node a few pixels off it.
+    if (!segmentUnder(at).isEmpty()) return QString();
     // Or near where it is shown - a small one, from far off.
     QString best;
     double nearest = 10.0;
@@ -4324,10 +4740,17 @@ void View3DCanvas::contextMenuEvent(QContextMenuEvent* e) {
             return;
         }
     }
-    V3 origin, dir;
-    cam_.rayAt(e->pos().x(), e->pos().y(), width(), height(), origin, dir);
-    // WHAT IS UNDER IT: the nearest solid of the model left showing - or a part of the harness, if that is nearer.
     int part = -1;
+    QString brick;
+    whatIsAt(e->pos(), part, brick);
+    emit partMenuAsked(part, brick, e->globalPos());
+}
+
+void View3DCanvas::whatIsAt(const QPointF& at, int& part, QString& brick) const {
+    V3 origin, dir;
+    cam_.rayAt(at.x(), at.y(), width(), height(), origin, dir);
+    // WHAT IS UNDER IT: the nearest solid of the model left showing - or a part of the harness, if that is nearer.
+    part = -1;
     double nearest = std::numeric_limits<double>::max();
     if (env_ && envIndex_ && envShown_) {
         V3 o = origin;
@@ -4342,24 +4765,30 @@ void View3DCanvas::contextMenuEvent(QContextMenuEvent* e) {
             o = p.point + dir * std::max(1e-6, p.distance * 1e-7);
         }
     }
-    QString brick;
+    brick.clear();
     if (scene_ && harnessShown_) {
-        std::vector<const Mesh3D*> meshes;
-        std::vector<QString> bricks;
-        for (const Harness3DItem& it : scene_->items)
-            if (!it.brick.isEmpty() && !hiddenBricks_.contains(it.brick)) {
-                meshes.push_back(&it.mesh);
-                bricks.push_back(it.brick);
-            }
-        RayIndex3D index;
-        index.build(meshes);
-        const Pick3D p = index.cast(origin, dir);
-        if (p.hit && p.distance < nearest && p.part >= 0) {
-            brick = bricks[static_cast<size_t>(p.part)];
+        // The harness's parts, in a tree kept until they change.
+        QStringList hiddenNow(hiddenBricks_.begin(), hiddenBricks_.end());
+        hiddenNow.sort();
+        const QString key = QStringLiteral("%1/%2/%3").arg(reinterpret_cast<quintptr>(scene_)).arg(scene_->items.size()).arg(hiddenNow.join(QLatin1Char(',')));
+        if (!harnessIndex_ || key != harnessIndexKey_) {
+            std::vector<const Mesh3D*> meshes;
+            harnessIndexBricks_.clear();
+            for (const Harness3DItem& it : scene_->items)
+                if (!it.brick.isEmpty() && !hiddenBricks_.contains(it.brick)) {
+                    meshes.push_back(&it.mesh);
+                    harnessIndexBricks_.push_back(it.brick);
+                }
+            harnessIndex_ = std::make_unique<RayIndex3D>();
+            harnessIndex_->build(meshes);
+            harnessIndexKey_ = key;
+        }
+        const Pick3D p = harnessIndex_->cast(origin, dir);
+        if (p.hit && p.distance < nearest && p.part >= 0 && static_cast<size_t>(p.part) < harnessIndexBricks_.size()) {
+            brick = harnessIndexBricks_[static_cast<size_t>(p.part)];
             part = -1;
         }
     }
-    emit partMenuAsked(part, brick, e->globalPos());
 }
 
 void View3DCanvas::setEnvPartHidden(int part, bool hidden) {
@@ -4562,6 +4991,23 @@ void View3DCanvas::mouseMoveEvent(QMouseEvent* e) {
         routeDirty_ = true;
         update();
         return;
+    }
+    // WHAT THE POINTER IS OVER, said under the wheel - looked at no more than every 40 ms.
+    if (dragging_ == Qt::NoButton) {
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if (now - hoverAt_ > 40) {
+            hoverAt_ = now;
+            const QString node = route_ ? nodeAt(e->position()) : QString();
+            const QString seg = route_ && node.isEmpty() ? segmentUnder(e->position()) : QString();
+            int part = -1;
+            QString brick;
+            if (node.isEmpty() && seg.isEmpty()) whatIsAt(e->position(), part, brick);
+            const QString key = QStringLiteral("%1|%2|%3|%4").arg(node, seg).arg(part).arg(brick);
+            if (key != hoverKey_) {
+                hoverKey_ = key;
+                emit hovered(part, brick, node, seg);
+            }
+        }
     }
     // SELECTING: a hand over what a click would select - a connector, a clip, a cable.
     if (dragging_ == Qt::NoButton && tool_ == RouteTool::Select && route_) {

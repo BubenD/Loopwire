@@ -5,6 +5,8 @@
 
 #include <QStringList>
 
+#include <functional>
+
 #include <vector>
 
 namespace Edraw_Desktop {
@@ -40,6 +42,11 @@ struct RouteLengths {
 // shorter one that branch's own. A branch off a cable's body, or a cable with a part not put in 3D, is left as it is
 // and said why.
 RouteLengths routeLengthsFor(const BrickDesign& design, const Route3D& route);
+// THE HARNESS PUT IN AS A ROUTE: a node for each of its parts not put yet - at the place `placeOf` gives (where the harness
+// is drawn in 3D), linked to it - and each cable laid between the parts it joins: straight where it has one part at each
+// end, through a branch near the parts where it goes to several, each as long as the design says where that is longer
+// than the way between them. A cable already joining its parts is left as it is. How many cables were laid.
+int addHarnessToRoute(Route3D& route, const BrickDesign& design, const std::function<bool(const QString& brick, V3& at)>& placeOf);
 void applyRouteLengths(BrickDesign& design, const RouteLengths& lengths);
 
 } // namespace Edraw_Desktop

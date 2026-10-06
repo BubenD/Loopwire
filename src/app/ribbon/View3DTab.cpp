@@ -388,18 +388,12 @@ void MainWindow::buildView3DTab() {
         auto* gl = new QGridLayout(g);
         gl->setContentsMargins(4, 2, 4, 2);
         gl->setVerticalSpacing(1);
-        gl->addWidget(fieldLabel(QStringLiteral("All cables"), g), 0, 0);
+        gl->addWidget(fieldLabel(QStringLiteral("Cable tension"), g), 0, 0);
         auto* tension = new QComboBox(g);
         tension->setObjectName(QStringLiteral("preview3dTension"));
         tension->setToolTip(QStringLiteral("How taut the cables are put in, where one gives none of its own"));
         gl->addWidget(tension, 0, 1);
         preview3dMirrors_.append({tension, QStringLiteral("view3dTension")});
-        gl->addWidget(fieldLabel(QStringLiteral("Selected"), g), 1, 0);
-        auto* cable = new QComboBox(g);
-        cable->setObjectName(QStringLiteral("preview3dCableTension"));
-        cable->setToolTip(QStringLiteral("The tension of the cable selected - click a cable, then choose"));
-        gl->addWidget(cable, 1, 1);
-        preview3dMirrors_.append({cable, QStringLiteral("view3dCableTension")});
         gl->addWidget(fieldLabel(QStringLiteral("Down"), g), 2, 0);
         auto* down = new QComboBox(g);
         down->setObjectName(QStringLiteral("preview3dGravityDown"));
@@ -415,6 +409,13 @@ void MainWindow::buildView3DTab() {
     });
     // TO AND FROM THE DRAWING: the route's lengths given to the harness drawn, and the 3D harness built again from it.
     group(QStringLiteral("Drawing"), [&](QWidget* w, QHBoxLayout* row) {
+        big(w, row, "preview3dFromHarness", QStringLiteral("Route from harness"), QStringLiteral("route"),
+            QStringLiteral("Put the harness in as a route - its parts where it is drawn in 3D and its cables between them - to "
+                           "move into the model"),
+            [this] {
+                if (!view3dPane_) return;
+                if (auto* b = view3dPane_->findChild<QToolButton*>(QStringLiteral("view3dRouteFromHarness"))) b->click();
+            });
         big(w, row, "preview3dLengths", QStringLiteral("Lengths to harness"), QStringLiteral("lengths"),
             QStringLiteral("Give each cable of the harness drawn its length along the route"),
             [this] { if (view3dPane_) view3dPane_->applyLengths(true); });
@@ -594,6 +595,7 @@ void MainWindow::placeView3DDock(Qt::DockWidgetArea area) {
     if (side) view3dSideArea_ = area;
     view3dPane_->setCompact(side);
     view3dPane_->setSideDocked(!side && view3dSideArea_ != Qt::NoDockWidgetArea);
+    view3dPane_->setDockedBelow(!side);
 }
 
 void MainWindow::restylePreview3DIcons() {
@@ -688,6 +690,7 @@ void MainWindow::showPreview3D(bool on) {
         if (view3dPane_->fullScreenView()) view3dPane_->setFullScreen(false);
         view3dPane_->setCompact(false);
         view3dPane_->setSideDocked(false);
+        view3dPane_->setDockedBelow(false);
         preview3dDockWas_ = view3dDock_->isVisible();
         preview3dLayout_ = saveState();
         // THE PANELS ROUND THE DRAWING PUT AWAY: the 3D view has its own on either side - what is in view on the left,

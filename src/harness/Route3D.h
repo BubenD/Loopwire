@@ -69,6 +69,9 @@ struct RouteSegment3D {
     // route's (or a plain bundle, where it gives its own diameter).
     int wires = 0;
     double wireD = 0.0;
+    // ITS WIRES' COLOURS: all one (its colour, or as bundles are), or each its own - those given, the rest a colour each.
+    bool wireSame = false;
+    std::vector<QColor> wireColors;
 };
 
 struct Route3D {

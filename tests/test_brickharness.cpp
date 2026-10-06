@@ -7968,14 +7968,16 @@ void testRoundFiftyFour() {
                 }
             }
             const QPointF grab = screen(along);
+            // So far on the model, whatever the picture's scale: 7 mm across - within what the stretch reaches.
+            const QPointF pull = screen(along + V3{0, 7, 0}) - grab;
             QMouseEvent down(QEvent::MouseButtonPress, grab, canvas->mapToGlobal(grab), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
             QApplication::sendEvent(canvas, &down);
             for (int i = 1; i <= 8; ++i) {
-                const QPointF to = grab + QPointF(0, -6.0 * i);
+                const QPointF to = grab + pull * (i / 8.0);
                 QMouseEvent move(QEvent::MouseMove, to, canvas->mapToGlobal(to), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
                 QApplication::sendEvent(canvas, &move);
             }
-            QMouseEvent up(QEvent::MouseButtonRelease, grab + QPointF(0, -48), canvas->mapToGlobal(grab + QPointF(0, -48)), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QMouseEvent up(QEvent::MouseButtonRelease, grab + pull, canvas->mapToGlobal(grab + pull), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
             QApplication::sendEvent(canvas, &up);
             QApplication::processEvents();
             pane.setViewLocked(false);
@@ -7990,7 +7992,8 @@ void testRoundFiftyFour() {
                 for (const V3& w : nc) d = std::min(d, (q - w).length());
                 moved = std::max(moved, d);
             }
-            std::printf("  clip: the side pulled moved up to %.1f mm\n", moved);
+            std::printf("  clip: the side pulled moved up to %.1f mm (clip held %d, far side held %d)\n", moved,
+                        clipAfter && (clipAfter->at - clipAt).length() < 1e-9 ? 1 : 0, farSame ? 1 : 0);
             check(moved > 2.0 && clipAfter && (clipAfter->at - clipAt).length() < 1e-9 && farSame,
                   "clip: holds the bundle only where it is - the side pulled moves, the clip and the other side stay");
         }
@@ -8338,12 +8341,21 @@ void testRoundFiftySix() {
           "side: at the side of the window - the picture alone, no wheel, no options, a button to open it below");
     if (toBottom) toBottom->click();
     QApplication::processEvents();
-    auto* toSide = view3d->findChild<QToolButton*>(QStringLiteral("view3dToSide"));
-    check(w.dockWidgetArea(dock) == Qt::BottomDockWidgetArea && !view3d->compact() && toSide && !toSide->isHidden(),
-          "side: opened below - everything, and a button back to the side");
+    auto* toSide = view3d->findChild<QToolButton*>(QStringLiteral("view3dToRight"));
+    auto* toLeft = view3d->findChild<QToolButton*>(QStringLiteral("view3dToLeft"));
+    check(w.dockWidgetArea(dock) == Qt::BottomDockWidgetArea && !view3d->compact() && toSide && !toSide->isHidden() && toLeft &&
+              !toLeft->isHidden(),
+          "side: opened below - everything, and buttons to the left or the right");
     if (toSide) toSide->click();
     QApplication::processEvents();
-    check(w.dockWidgetArea(dock) == Qt::RightDockWidgetArea && view3d->compact(), "side: back to the side it came from - the picture alone");
+    check(w.dockWidgetArea(dock) == Qt::RightDockWidgetArea && view3d->compact(), "side: to the right - the picture alone");
+    auto* sideRefresh = view3d->findChild<QToolButton*>(QStringLiteral("view3dSideRefresh"));
+    check(sideRefresh && !sideRefresh->isHidden(), "side: a Refresh button over the picture there");
+    if (toBottom) toBottom->click();
+    QApplication::processEvents();
+    if (toLeft) toLeft->click();
+    QApplication::processEvents();
+    check(w.dockWidgetArea(dock) == Qt::LeftDockWidgetArea && view3d->compact(), "side: or to the left");
     // THE RIBBON COMPACT: the views small, three to a column, their names beside them.
     auto* iso = w.findChild<QToolButton*>(QStringLiteral("preview3dIso"));
     auto* back = w.findChild<QToolButton*>(QStringLiteral("preview3dBack"));
@@ -9134,9 +9146,10 @@ void testRoundSixtyTwo() {
                 x("preview3dHarness"), x("preview3dHelp"));
     check(x("preview3dRoute") >= 0 && x("preview3dRouteToLand") > x("preview3dRoute") && x("preview3dRouteToLand") < x("preview3dHarness"),
           "ribbon: Route to land next to Route");
-    check(win.findChild<QWidget*>(QStringLiteral("preview3dCableTension")) && win.findChild<QWidget*>(QStringLiteral("preview3dTension")) &&
+    // One cable's own tension is in the Cable box on the right now, not on the ribbon.
+    check(win.findChild<QWidget*>(QStringLiteral("preview3dCableTension")) == nullptr && win.findChild<QWidget*>(QStringLiteral("preview3dTension")) &&
               win.findChild<QWidget*>(QStringLiteral("preview3dAddLoose")) == nullptr,
-          "ribbon: the route's and the cable's tension in a group of their own; no Add loose");
+          "ribbon: the cables' tension in a group of its own (one cable's own in the Cable box); no Add loose");
     win.resize(500, 800);
     for (int i = 0; i < 5; ++i) QApplication::processEvents();
     auto* help = win.findChild<QToolButton*>(QStringLiteral("preview3dHelp"));
@@ -9460,6 +9473,118 @@ void testRoundSixtyFour() {
     }
 }
 
+// ROUND SIXTY-FIVE: THE REAL HARNESS AS A ROUTE - its parts and cables put in where it is drawn, as long as the design
+// says; A CABLE'S OWN in the Cable box - its length typed, its wires and their colours, its tension; WHAT THE POINTER IS ON
+// said under the wheel; HOW IT WAS SHOWN saved with the route and put back.
+void testRoundSixtyFive() {
+    // ---- ROUTE FROM HARNESS ----
+    {
+        BrickDesign d;
+        const QString x1 = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString x2 = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        const QString x3 = d.addBrick(BrickType::End, PartKind::Connector, 2, 1);
+        const QString run = d.addBrick(BrickType::Run, PartKind::Wire, 1, 0);
+        d.connect(x1, run);
+        d.connect(run, x2);
+        d.connect(run, x3);
+        d.brick(x1)->name = QStringLiteral("X1");
+        d.brick(run)->run.lengthMm = 400.0;
+        const QHash<QString, V3> where{{x1, {0, 0, 0}}, {x2, {200, 30, 0}}, {x3, {200, -30, 0}}};
+        Route3D r;
+        const int laid = addHarnessToRoute(r, d, [&](const QString& b, V3& at) {
+            if (!where.contains(b)) return false;
+            at = where.value(b);
+            return true;
+        });
+        int connectors = 0, branches = 0;
+        for (const RouteNode3D& n : r.nodes) {
+            connectors += n.kind == RouteNodeKind::Connector && !n.brick.isEmpty() ? 1 : 0;
+            branches += n.kind == RouteNodeKind::Branch ? 1 : 0;
+        }
+        const RouteLengths lengths = routeLengthsFor(d, r);
+        double measured = 0.0;
+        for (const RouteLengthChange& c : lengths.changes)
+            if (c.part.isEmpty()) measured = c.now;
+        std::printf("  from harness: %d cable(s), %d connector(s), %d branch(es), %zu bundle(s); measured %.0f (design 400)\n", laid,
+                    connectors, branches, r.segments.size(), measured);
+        check(laid == 1 && connectors == 3 && branches == 1 && r.segments.size() == 3 && r.node(routeNodeOfPart(r, x1))->label == QLatin1String("X1"),
+              "from harness: a connector for each part, linked, a branch where the cable goes to two, three bundles");
+        check(lengths.measured == 1 && (lengths.changes.empty() || std::abs(measured - 400.0) <= 3.0),
+              "from harness: as long along the route as the design says");
+        check(addHarnessToRoute(r, d, {}) == 0 && r.segments.size() == 3, "from harness: again - what is joined already left as it is");
+    }
+    // ---- WIRE COLOURS SAVED ----
+    {
+        Route3D r;
+        const QString a = r.addNode(RouteNodeKind::Branch, {0, 0, 0}, {0, 0, 1});
+        const QString b = r.addNode(RouteNodeKind::Branch, {100, 0, 0}, {0, 0, 1});
+        const QString s = r.addSegment(a, b, {});
+        r.segment(s)->wires = 3;
+        r.segment(s)->wireColors = {QColor(255, 0, 0), QColor(), QColor(0, 0, 255)};
+        const Route3D back = Route3D::fromJson(r.toJson());
+        check(back.segment(s)->wireColors.size() == 3 && back.segment(s)->wireColors[0] == QColor(255, 0, 0) &&
+                  !back.segment(s)->wireColors[1].isValid() && !back.segment(s)->wireSame,
+              "wires: each wire's colour saved - one left to its turn");
+    }
+    // ---- THE PANE ----
+    Route3D route;
+    route.diameter = 6.0;
+    const QString x1 = route.addNode(RouteNodeKind::Connector, {-80, 0, 0}, {0, 0, 1});
+    const QString x2 = route.addNode(RouteNodeKind::Connector, {80, 0, 0}, {0, 0, 1});
+    const QString seg = route.addSegment(x1, x2, {{{0, 20, 0}, {0, 0, 1}}});
+    QJsonObject stored = route.toJson();
+    {
+        View3DPane pane;
+        pane.setRoutingStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+        pane.resize(1100, 760);
+        pane.show();
+        QApplication::processEvents();
+        pane.reloadRouting(true);
+        View3DCanvas* canvas = pane.canvas();
+        canvas->setUseGpu(false);
+        canvas->viewFrom(QStringLiteral("top"));
+        QApplication::processEvents();
+        // The Cable box: shown for the cable selected; its length typed.
+        canvas->selectSegment(seg);
+        emit canvas->selectionChanged(seg);
+        QApplication::processEvents();
+        auto* box = pane.findChild<QWidget*>(QStringLiteral("view3dCableBox"));
+        auto* length = pane.findChild<QDoubleSpinBox*>(QStringLiteral("view3dCableLength"));
+        auto* tension = pane.findChild<QComboBox*>(QStringLiteral("view3dCableTension"));
+        check(box && box->isVisibleTo(&pane) && length && tension && box->isAncestorOf(tension),
+              "cable box: the cable selected's own, its tension among them");
+        if (length) length->setValue(260.0);
+        const double now = pane.route().length(*pane.route().segment(seg));
+        std::printf("  cable box: length typed 260, laid %.1f\n", now);
+        check(std::abs(now - 260.0) < 1.0, "cable box: a length typed - the cable laid so long");
+        // What the pointer is on, under the wheel.
+        const RouteNode3D* n = pane.route().node(x1);
+        QPointF over;
+        canvas->toScreen(n->at + n->normal * (pane.route().housingLength(*n) * 0.5), over);
+        QMouseEvent move(QEvent::MouseMove, over, canvas->mapToGlobal(over), Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &move);
+        QApplication::processEvents();
+        std::printf("  hover: \"%s\"\n", qPrintable(pane.hoverText()));
+        check(pane.hoverText().startsWith(QLatin1String("X1")), "hover: the connector under the pointer said under the wheel");
+        // How it was shown: turned, gravity on - saved with the route.
+        canvas->camera().yawDeg = 12.0;
+        if (auto* g = pane.findChild<QToolButton*>(QStringLiteral("view3dGravity"))) g->setChecked(true);
+        pane.storeNow();
+    }
+    check(stored.value(QStringLiteral("view")).toObject().contains(QStringLiteral("camera")), "saved: how it was shown, with the route");
+    {
+        View3DPane again;
+        again.setRoutingStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+        again.resize(900, 600);
+        again.show();
+        QApplication::processEvents();
+        again.reloadRouting(true);
+        auto* g = again.findChild<QToolButton*>(QStringLiteral("view3dGravity"));
+        check(std::abs(again.canvas()->camera().yawDeg - 12.0) < 1e-9 && g && g->isChecked(),
+              "saved: opened again - turned as it was, gravity on as it was");
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -9548,6 +9673,7 @@ int run_brickharness_tests() {
     ROUND(testRoundSixtyTwo);
     ROUND(testRoundSixtyThree);
     ROUND(testRoundSixtyFour);
+    ROUND(testRoundSixtyFive);
 #undef ROUND
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
