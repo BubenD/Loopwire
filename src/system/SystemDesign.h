@@ -64,6 +64,16 @@ struct DrawingInfo {
     QString drawingNo;
     QString revision;
     QString title;
+    // THE DESIGNATORS IN IT, in the order they are drawn: its cables' (W1, W2...) and its connectors' (X1, J2...).
+    QStringList cables;
+    QStringList connectors;
+};
+
+// A NAME ON THE DIAGRAM THE DRAWING CALLS OTHERWISE: the cable's own, or a port at one of its ends - from what to what.
+struct DesignatorChange {
+    bool cable = false;
+    QString unit, port;   // the port's (a port only)
+    QString from, to;
 };
 DrawingInfo readDrawingInfo(const QString& path);
 
@@ -113,6 +123,12 @@ struct SystemDesign {
     // EACH CABLE'S DRAWING READ AGAIN: its number and revision off the file (by `read`, readDrawingInfo where none is
     // given). How many were read.
     int refreshDrawings(const std::function<DrawingInfo(const QString&)>& read = {});
+
+    // THE DRAWING'S DESIGNATORS SET AGAINST THE DIAGRAM'S: the cable's name against the drawing's cable, the ports at its
+    // ends against the drawing's connectors (one already alike kept where it is, the other given the one left; neither
+    // alike - in the order drawn). Nothing where they agree, or the drawing names none.
+    std::vector<DesignatorChange> designatorChanges(const QString& cable, const DrawingInfo& info) const;
+    void applyDesignatorChanges(const QString& cable, const std::vector<DesignatorChange>& changes);
 
     // THE CHECK: ports with nothing plugged in, or more than one cable; cables with no part number, the same part number
     // on cables that are not alike, no drawing linked, the drawing not found, its revision or number not the cable's;

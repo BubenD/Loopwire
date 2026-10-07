@@ -36,9 +36,19 @@ bool laterRevision(const QString& a, const QString& b) {
 void readEntities(const std::vector<Entity>& ents, DrawingInfo& info, QString& fromTable, QString& fromBoxes, QString& fromText) {
     static const QRegularExpression revText(QStringLiteral("^\\s*REV(?:ISION)?\\.?\\s*[:\\-]?\\s*([A-Z0-9]{1,3})\\s*$"),
                                             QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression cableName(QStringLiteral("^W\\d+[A-Z]?$"), QRegularExpression::CaseInsensitiveOption);
+    auto designator = [&info](const QString& d) {
+        const QString name = d.trimmed();
+        if (name.isEmpty() || name.size() > 16 || name.contains(QLatin1Char(' '))) return;
+        QStringList& list = cableName.match(name).hasMatch() ? info.cables : info.connectors;
+        if (!list.contains(name)) list << name;
+    };
     for (const Entity& e : ents) {
         const QString field = e.meta.value(QStringLiteral("field")).toString();
         const QString text = e.meta.value(QStringLiteral("text")).toString().trimmed();
+        // ITS DESIGNATORS: a part's own, or the text a harness writes beside each part.
+        designator(e.meta.value(QStringLiteral("designator")).toString());
+        if (e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("designator")) designator(text);
         if (field == QLatin1String("drawingNo") && !text.isEmpty()) info.drawingNo = text;
         if (field == QLatin1String("title") && !text.isEmpty()) info.title = text;
         if (e.meta.value(QStringLiteral("revisionTable")).toBool()) {
@@ -252,6 +262,39 @@ int SystemDesign::refreshDrawings(const std::function<DrawingInfo(const QString&
         n += info.found ? 1 : 0;
     }
     return n;
+}
+
+std::vector<DesignatorChange> SystemDesign::designatorChanges(const QString& cableId, const DrawingInfo& info) const {
+    std::vector<DesignatorChange> out;
+    const SysCable* c = cable(cableId);
+    if (!c) return out;
+    // THE CABLE: the drawing names one, and not this.
+    if (info.cables.size() == 1 && info.cables.first().compare(c->name, Qt::CaseInsensitive) != 0)
+        out.push_back({true, QString(), QString(), c->name, info.cables.first()});
+    // ITS ENDS: the drawing names two connectors - each port at an end given one, where it is not one of them.
+    const SysUnit* ua = unit(c->aUnit);
+    const SysUnit* ub = unit(c->bUnit);
+    const SysPort* pa = ua ? ua->port(c->aPort) : nullptr;
+    const SysPort* pb = ub ? ub->port(c->bPort) : nullptr;
+    if (!pa || !pb || info.connectors.size() != 2) return out;
+    QStringList left = info.connectors;
+    const bool aAlike = left.contains(pa->name, Qt::CaseInsensitive);
+    const bool bAlike = left.contains(pb->name, Qt::CaseInsensitive);
+    if (aAlike) left.removeAll(pa->name);
+    if (bAlike) left.removeAll(pb->name);
+    if (!aAlike && !left.isEmpty()) out.push_back({false, ua->id, pa->id, pa->name, left.takeFirst()});
+    if (!bAlike && !left.isEmpty()) out.push_back({false, ub->id, pb->id, pb->name, left.takeFirst()});
+    return out;
+}
+
+void SystemDesign::applyDesignatorChanges(const QString& cableId, const std::vector<DesignatorChange>& changes) {
+    for (const DesignatorChange& ch : changes) {
+        if (ch.cable) {
+            if (SysCable* c = cable(cableId)) c->name = ch.to;
+        } else if (SysUnit* u = unit(ch.unit)) {
+            if (SysPort* p = u->port(ch.port)) p->name = ch.to;
+        }
+    }
 }
 
 std::vector<SysIssue> SystemDesign::check() const {

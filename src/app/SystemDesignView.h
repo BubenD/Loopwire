@@ -41,8 +41,11 @@ public:
     bool canUndo() const { return !history_.empty(); }
     // PART NUMBERS for the cables with none. How many.
     int numberCables();
-    // THE CABLE SELECTED linked to a drawing (empty: unlinked) - its number and revision read off it.
-    bool linkDrawing(const QString& cable, const QString& path);
+    // THE CABLE SELECTED linked to a drawing (empty: unlinked) - its number and revision read off it; `ask`: where the
+    // drawing calls the cable or its connectors otherwise, asked whether to take the drawing's names.
+    bool linkDrawing(const QString& cable, const QString& path, bool ask = false);
+    // HOW IT ASKS: yes or no to a question (a message box, unless the tests say otherwise).
+    void setConfirm(std::function<bool(const QString& question)> confirm) { confirm_ = std::move(confirm); }
     void linkDrawingFromFile();   // chosen in a file dialog
     void findDrawing();           // found with Find drawings
     void openDrawing();           // the selected cable's drawing, opened (openRequested)
@@ -72,6 +75,7 @@ private:
     std::function<void(const QJsonObject&)> save_;
     std::vector<QJsonObject> history_;
     std::vector<SysIssue> issues_;
+    std::function<bool(const QString&)> confirm_;
     bool filling_ = false;
 
     SystemCanvas* canvas_ = nullptr;

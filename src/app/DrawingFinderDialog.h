@@ -48,6 +48,8 @@ public:
     int resultHits(int row) const;
     // The drawings beside a result, of the same name ("DWG", "DXF").
     QStringList resultDrawings(int row) const;
+    // What the preview shows: so many objects of the drawing (a PDF's, read in the background - `wait` for it).
+    int previewCount(bool wait = false);
     void showResult(int row);
     QString chosen() const { return chosen_; }
 
@@ -95,6 +97,12 @@ private:
     QCheckBox* seps_ = nullptr;
     QPushButton* go_ = nullptr;
     QPushButton* openDwg_ = nullptr;
+    QPushButton* openPdf_ = nullptr;
+    QPushButton* openDxf_ = nullptr;
+    QPushButton* openDwx_ = nullptr;
+    // The file chosen, or the one of a kind ("PDF", "DXF", "DWX", "DWG") of the same name beside it; empty: none.
+    QString ofKind(const QString& path, const QString& kind) const;
+    int previewToken_ = 0;
     QTableWidget* table_ = nullptr;
     DrawingPreview* preview_ = nullptr;
     QLabel* said_ = nullptr;

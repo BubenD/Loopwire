@@ -16,6 +16,7 @@
 #include <QFile>
 #include <QJsonArray>
 #include <QLineEdit>
+#include <QPushButton>
 #include <QMouseEvent>
 #include <QStackedWidget>
 #include <QTabWidget>
@@ -324,6 +325,14 @@ void testFinderInside(const QString& base) {
           "finder: exact - XK-4417 in the list's cell; not in XK-4417-02 in the drawing's note");
     check(pdfRow >= 0 && finder.resultDrawings(pdfRow).contains(QStringLiteral("DWG")),
           "finder: in the PDF's text - and the DWG of the same name beside it");
+    // The PDF shown, read in the background; Open PDF and Open DWG for it.
+    finder.showResult(pdfRow);
+    auto* openPdf = finder.findChild<QPushButton*>(QStringLiteral("finderOpenPdf"));
+    auto* openDwg = finder.findChild<QPushButton*>(QStringLiteral("finderOpenDwg"));
+    auto* openDwx = finder.findChild<QPushButton*>(QStringLiteral("finderOpenDwx"));
+    check(finder.previewCount(true) > 0, "finder: the PDF shown in the preview");
+    check(openPdf && openPdf->isEnabled() && openDwg && openDwg->isEnabled() && openDwx && !openDwx->isEnabled(),
+          "finder: Open PDF, and Open DWG for the one beside it - no DWX of that name");
     finder.setText(QStringLiteral("XK-4417-02"));
     finder.search(true);
     names.clear();
@@ -338,6 +347,52 @@ void testFinderInside(const QString& base) {
     finder.setText(QStringLiteral("XK4417 02"));
     finder.search(true);
     check(finder.resultCount() == 2, "finder: separators ignored - XK4417 02 finds XK-4417-02");
+}
+
+// THE DRAWING'S DESIGNATORS: linked, the cable and the connectors it names otherwise - asked, and taken on yes.
+void testDesignators(const QString& base) {
+    const QString path = QDir(base).filePath(QStringLiteral("named.dwx"));
+    {
+        Document doc(QStringLiteral("named"));
+        for (const char* d : {"W3", "X1", "X2"}) {
+            Entity t;
+            t.type = EntityType::Text;
+            t.meta.insert(QStringLiteral("text"), QString::fromLatin1(d));
+            t.meta.insert(QStringLiteral("mechRole"), QStringLiteral("designator"));
+            doc.entities().push_back(t);
+        }
+        dwx::save(doc, path);
+    }
+    const DrawingInfo info = readDrawingInfo(path);
+    std::printf("  designators: cables [%s], connectors [%s]\n", qPrintable(info.cables.join(QLatin1Char(','))),
+                qPrintable(info.connectors.join(QLatin1Char(','))));
+    check(info.cables == QStringList{QStringLiteral("W3")} && info.connectors == QStringList({QStringLiteral("X1"), QStringLiteral("X2")}),
+          "designators: the drawing's cable and connectors read");
+    QJsonObject stored;
+    SystemDesignView view;
+    view.setStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    SystemDesign& d = view.design();
+    const QString a = d.addUnit(0, 0), b = d.addUnit(300, 0);
+    const QString pa = d.addPort(a, QStringLiteral("right"), 0.5, QStringLiteral("J2"));
+    const QString pb = d.addPort(b, QStringLiteral("left"), 0.5, QStringLiteral("X1"));
+    const QString w = d.addCable(a, pa, b, pb);
+    const std::vector<DesignatorChange> changes = d.designatorChanges(w, info);
+    check(changes.size() == 2 && changes[0].cable && changes[0].to == QLatin1String("W3") && !changes[1].cable &&
+              changes[1].from == QLatin1String("J2") && changes[1].to == QLatin1String("X2"),
+          "designators: the cable W1 is W3, J2 is X2 - X1 alike, kept");
+    QString asked;
+    view.setConfirm([&](const QString& q) {
+        asked = q;
+        return false;
+    });
+    view.linkDrawing(w, path, true);
+    check(asked.contains(QLatin1String("W1 -> W3")) && asked.contains(QLatin1String("J2 -> X2")) && d.cable(w)->name == QLatin1String("W1"),
+          "designators: asked - and no, the diagram's kept");
+    view.setConfirm([](const QString&) { return true; });
+    view.linkDrawing(w, path, true);
+    check(d.cable(w)->name == QLatin1String("W3") && d.unit(a)->port(pa)->name == QLatin1String("X2") && d.unit(b)->port(pb)->name == QLatin1String("X1"),
+          "designators: yes - the drawing's taken on the diagram");
+    check(d.designatorChanges(w, info).empty(), "designators: alike now - nothing to ask");
 }
 
 void testTab() {
@@ -374,6 +429,7 @@ int run_systemdesign_tests() {
     testFinder(dir.path());
     testMatcher();
     testFinderInside(dir.path());
+    testDesignators(dir.path());
     testTab();
     std::printf("  system design: %s\n", g_fail == 0 ? "OK" : "FAILED");
     return g_fail;

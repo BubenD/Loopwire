@@ -14,6 +14,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QSplitter>
@@ -406,7 +407,7 @@ int SystemDesignView::numberCables() {
     return n;
 }
 
-bool SystemDesignView::linkDrawing(const QString& cable, const QString& path) {
+bool SystemDesignView::linkDrawing(const QString& cable, const QString& path, bool ask) {
     SysCable* c = design_.cable(cable);
     if (!c) return false;
     aboutToChange();
@@ -420,6 +421,19 @@ bool SystemDesignView::linkDrawing(const QString& cable, const QString& path) {
         // A cable with no part number or revision of its own takes the drawing's.
         if (c->pn.isEmpty()) c->pn = info.drawingNo;
         if (c->rev.isEmpty()) c->rev = info.revision;
+        // THE DRAWING NAMES THEM OTHERWISE: the cable, or the connectors at its ends - asked whether to take its names.
+        const std::vector<DesignatorChange> changes = design_.designatorChanges(cable, info);
+        if (ask && !changes.empty()) {
+            QStringList lines;
+            for (const DesignatorChange& ch : changes)
+                lines << QStringLiteral("  %1 %2 -> %3").arg(ch.cable ? QStringLiteral("cable") : QStringLiteral("connector"), ch.from, ch.to);
+            const QString question = QStringLiteral("The drawing %1 names them otherwise:\n\n%2\n\nTake the drawing's designators on the diagram?")
+                                         .arg(QFileInfo(path).fileName(), lines.join(QLatin1Char('\n')));
+            const bool yes = confirm_ ? confirm_(question)
+                                      : QMessageBox::question(this, QStringLiteral("Designators"), question, QMessageBox::Yes | QMessageBox::No,
+                                                              QMessageBox::Yes) == QMessageBox::Yes;
+            if (yes) design_.applyDesignatorChanges(cable, changes);
+        }
     }
     commit();
     return true;
@@ -429,7 +443,7 @@ void SystemDesignView::linkDrawingFromFile() {
     if (!design_.cable(canvas_->selectedCable())) return;
     const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Link a drawing"), QString(),
                                                       QStringLiteral("Drawings (*.dwx *.dxf *.dwg);;All files (*)"));
-    if (!path.isEmpty()) linkDrawing(canvas_->selectedCable(), path);
+    if (!path.isEmpty()) linkDrawing(canvas_->selectedCable(), path, true);
 }
 
 void SystemDesignView::findDrawing() {
@@ -442,7 +456,7 @@ void SystemDesignView::findDrawing() {
         return;
     }
     const QString path = DrawingFinderDialog::choose(this, c->pn);
-    if (!path.isEmpty()) linkDrawing(c->id, path);
+    if (!path.isEmpty()) linkDrawing(c->id, path, true);
 }
 
 void SystemDesignView::openDrawing() {

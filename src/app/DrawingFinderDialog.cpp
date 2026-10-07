@@ -4,6 +4,7 @@
 #include "io/Dwx.h"
 #include "io/Dxf.h"
 #include "io/OdaConverter.h"
+#include "io/PdfImport.h"
 #include "model/Document.h"
 #include "system/FileText.h"
 #include "system/PnMatch.h"
@@ -15,6 +16,7 @@
 #include <QDesktopServices>
 #include <QDir>
 #include <QDirIterator>
+#include <QElapsedTimer>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QGridLayout>
@@ -41,7 +43,7 @@ enum Column { FileCol, HitsCol, FoundCol, NoCol, RevCol, TitleCol, ModifiedCol, 
 QHash<QString, QString> besideOf(const QString& path) {
     QHash<QString, QString> out;
     const QFileInfo fi(path);
-    for (const char* kind : {"dwg", "dxf"}) {
+    for (const char* kind : {"dwg", "dxf", "dwx", "pdf"}) {
         if (fi.suffix().compare(QLatin1String(kind), Qt::CaseInsensitive) == 0) continue;
         const QDir dir = fi.absoluteDir();
         for (const QString& name : dir.entryList({fi.completeBaseName() + QLatin1Char('.') + QLatin1String(kind)}, QDir::Files))
@@ -181,17 +183,23 @@ DrawingFinderDialog::DrawingFinderDialog(QWidget* parent, bool choosing) : QDial
         if (row >= 0) QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(resultPath(row)).absolutePath()));
     });
     bottom->addWidget(reveal);
-    openDwg_ = new QPushButton(QStringLiteral("Open DWG"), this);
-    openDwg_->setObjectName(QStringLiteral("finderOpenDwg"));
-    openDwg_->setToolTip(QStringLiteral("Open the DWG of the same name beside the file chosen"));
-    openDwg_->setEnabled(false);
-    connect(openDwg_, &QPushButton::clicked, this, [this] {
-        const QStringList beside = resultDrawings(table_->currentRow());
-        const Found f = found_.value(resultPath(table_->currentRow()));
-        if (f.beside.contains(QStringLiteral("DWG"))) open(f.beside.value(QStringLiteral("DWG")));
-        else if (!beside.isEmpty()) open(f.beside.value(beside.first()));
-    });
-    bottom->addWidget(openDwg_);
+    // OPEN EACH KIND: the file chosen, or the one of that kind of the same name beside it.
+    auto opener = [this, bottom](const char* name, const QString& kind) {
+        auto* b = new QPushButton(QStringLiteral("Open %1").arg(kind), this);
+        b->setObjectName(QLatin1String(name));
+        b->setToolTip(QStringLiteral("Open the %1 - the file chosen, or the one of the same name beside it").arg(kind));
+        b->setEnabled(false);
+        connect(b, &QPushButton::clicked, this, [this, kind] {
+            const QString path = ofKind(resultPath(table_->currentRow()), kind);
+            if (!path.isEmpty()) open(path);
+        });
+        bottom->addWidget(b);
+        return b;
+    };
+    openPdf_ = opener("finderOpenPdf", QStringLiteral("PDF"));
+    openDxf_ = opener("finderOpenDxf", QStringLiteral("DXF"));
+    openDwx_ = opener("finderOpenDwx", QStringLiteral("DWX"));
+    openDwg_ = opener("finderOpenDwg", QStringLiteral("DWG"));
     auto* act = new QPushButton(choosing ? QStringLiteral("Link this drawing") : QStringLiteral("Open"), this);
     act->setObjectName(QStringLiteral("finderAct"));
     connect(act, &QPushButton::clicked, this, [this] {
@@ -249,6 +257,19 @@ QStringList DrawingFinderDialog::resultDrawings(int row) const {
     QStringList out = found_.value(resultPath(row)).beside.keys();
     out.sort();
     return out;
+}
+
+QString DrawingFinderDialog::ofKind(const QString& path, const QString& kind) const {
+    if (path.isEmpty()) return QString();
+    if (QFileInfo(path).suffix().compare(kind, Qt::CaseInsensitive) == 0) return path;
+    return found_.value(path).beside.value(kind.toUpper());
+}
+
+int DrawingFinderDialog::previewCount(bool wait) {
+    QElapsedTimer clock;
+    clock.start();
+    while (wait && preview_->isEmpty() && clock.elapsed() < 20000) QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    return preview_->isEmpty() ? 0 : 1;
 }
 
 void DrawingFinderDialog::stop() {
@@ -427,7 +448,11 @@ void DrawingFinderDialog::preview(const QString& path) {
     const QFileInfo fi(path);
     const QString suffix = fi.suffix().toLower();
     const Found f = found_.value(path);
-    openDwg_->setEnabled(f.beside.contains(QStringLiteral("DWG")));
+    openPdf_->setEnabled(!ofKind(path, QStringLiteral("PDF")).isEmpty());
+    openDxf_->setEnabled(!ofKind(path, QStringLiteral("DXF")).isEmpty());
+    openDwx_->setEnabled(!ofKind(path, QStringLiteral("DWX")).isEmpty());
+    openDwg_->setEnabled(!ofKind(path, QStringLiteral("DWG")).isEmpty());
+    const int token = ++previewToken_;
     // WHERE IT IS FOUND, every place: what it is in, and the words round it.
     QString said = QStringLiteral("<b>%1</b><br><span style='color:#7a8696'>%2</span>")
                        .arg(fi.fileName().toHtmlEscaped(), QDir::toNativeSeparators(fi.absolutePath()).toHtmlEscaped());
@@ -470,9 +495,30 @@ void DrawingFinderDialog::preview(const QString& path) {
         return;
     }
     preview_->setEntities({});
-    if (suffix == QLatin1String("pdf") || suffix == QLatin1String("csv")) {
-        preview_->setEmptyText(QStringLiteral("%1 - every place it is found is listed below; double-click to open it")
-                                   .arg(suffix == QLatin1String("pdf") ? QStringLiteral("A PDF") : QStringLiteral("A list")));
+    if (suffix == QLatin1String("csv")) {
+        preview_->setEmptyText(QStringLiteral("A list - every place it is found is listed below; double-click to open it"));
+        return;
+    }
+    if (suffix == QLatin1String("pdf")) {
+        // A PDF DRAWN: its pages read as lines and text in the background - a big one takes a moment - shown when read,
+        // unless another file has been chosen meanwhile.
+        preview_->setEmptyText(QStringLiteral("Reading the PDF to show it..."));
+        QPointer<DrawingFinderDialog> self(this);
+        QThread* reader = QThread::create([self, path, token] {
+            auto doc = std::make_shared<Document>(QFileInfo(path).completeBaseName());
+            QString error;
+            const bool ok = pdf::importFile(*doc, path, &error);
+            QMetaObject::invokeMethod(
+                QCoreApplication::instance(),
+                [self, doc, ok, error, token] {
+                    if (!self || token != self->previewToken_) return;
+                    if (ok && !doc->entities().empty()) self->preview_->setEntities(doc->entities());
+                    else self->preview_->setEmptyText(error.isEmpty() ? QStringLiteral("Nothing in the PDF to show") : error);
+                },
+                Qt::QueuedConnection);
+        });
+        connect(reader, &QThread::finished, reader, &QObject::deleteLater);
+        reader->start();
         return;
     }
     if (!oda_) oda_ = new OdaConverter(this);
