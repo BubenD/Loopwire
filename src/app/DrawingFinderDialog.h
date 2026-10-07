@@ -1,7 +1,9 @@
 #pragma once
 
 #include <QDialog>
+#include <QHash>
 #include <QPointer>
+#include <QStringList>
 
 #include <atomic>
 #include <memory>
@@ -18,9 +20,13 @@ namespace Edraw_Desktop {
 class DrawingPreview;
 class OdaConverter;
 
-// FIND DRAWINGS: the DWX, DXF and DWG files under a folder (and its folders), found by their name - or by the drawing
-// number, title and revision written in them - listed with those, and the one chosen shown in a preview beside the list.
-// Searched in the background, stopped at any time. Opened from here, or (asked for one) chosen - to link a cable to it.
+// FIND DRAWINGS: the files under a folder (and its folders) a part number is in - DWX and DXF drawings (every text,
+// note, table cell and attribute in them), PDFs (their text) and CSV lists (every cell) - or whose name has it; DWG
+// drawings by their name, and beside a PDF or DXF of the same name that has it. Found as a person means a part number
+// (on its own, or inside a longer one where asked; separators - . / _ optional where asked; several at once with ';'),
+// each file listed with how often and the words round it, and the one chosen shown beside the list with every place it
+// is found. Searched in the background, stopped at any time; opened from here, or (asked for one) chosen - to link a
+// cable to it.
 class DrawingFinderDialog : public QDialog {
     Q_OBJECT
 public:
@@ -29,12 +35,19 @@ public:
 
     void setFolder(const QString& folder);
     void setText(const QString& text);
+    // How a part number is matched: inside a longer one too; upper and lower case alike or not; separators optional.
+    void setMatching(bool partial, bool caseSensitive, bool ignoreSeparators);
+    // Which kinds of file are searched: "dwx", "dxf", "dwg", "pdf", "csv".
+    void setKinds(const QStringList& kinds);
     // THE SEARCH, from the folder, for the text; `wait` - until it is done (the tests).
     void search(bool wait = false);
     void stop();
     bool searching() const;
     int resultCount() const;
     QString resultPath(int row) const;
+    int resultHits(int row) const;
+    // The drawings beside a result, of the same name ("DWG", "DXF").
+    QStringList resultDrawings(int row) const;
     void showResult(int row);
     QString chosen() const { return chosen_; }
 
@@ -46,16 +59,26 @@ signals:
     void openRequested(const QString& path);
 
 private:
+    struct Hit {
+        QString where;
+        QString before, match, after;
+        bool exact = true;
+    };
     struct Found {
         QString path;
         QString drawingNo;
         QString revision;
         QString title;
         qint64 modified = 0;
+        QList<Hit> hits;
+        QString why;                     // why its insides could not be searched
+        QHash<QString, QString> beside;  // "DWG" / "DXF" of the same name
+        bool byName = false;
     };
     void addFound(const Found& f);
     void finished();
     void preview(const QString& path);
+    void open(const QString& path);
 
     bool choosing_ = false;
     QLineEdit* folder_ = nullptr;
@@ -64,8 +87,14 @@ private:
     QCheckBox* dwx_ = nullptr;
     QCheckBox* dxf_ = nullptr;
     QCheckBox* dwg_ = nullptr;
+    QCheckBox* pdf_ = nullptr;
+    QCheckBox* csv_ = nullptr;
     QCheckBox* inside_ = nullptr;
+    QCheckBox* partial_ = nullptr;
+    QCheckBox* case_ = nullptr;
+    QCheckBox* seps_ = nullptr;
     QPushButton* go_ = nullptr;
+    QPushButton* openDwg_ = nullptr;
     QTableWidget* table_ = nullptr;
     DrawingPreview* preview_ = nullptr;
     QLabel* said_ = nullptr;
@@ -73,6 +102,8 @@ private:
     QThread* worker_ = nullptr;
     std::shared_ptr<std::atomic<bool>> halt_;
     int scanned_ = 0;
+    int unreadable_ = 0;
+    QHash<QString, Found> found_;
     QString chosen_;
     QPointer<OdaConverter> oda_;
 };

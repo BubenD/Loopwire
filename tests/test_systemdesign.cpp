@@ -6,7 +6,10 @@
 #include "app/SystemDesignView.h"
 #include "io/Dwx.h"
 #include "model/Document.h"
+#include "system/PnMatch.h"
 #include "system/SystemDesign.h"
+
+#include <QFileInfo>
 
 #include <QApplication>
 #include <QDir>
@@ -225,12 +228,116 @@ void testFinder(const QString& dir) {
     check(finder.resultCount() == 1 && finder.resultPath(0).endsWith(QLatin1String("harness-17.dwx")),
           "finder: found by the drawing number written in it, in a folder below");
     finder.setText(QString());
+    finder.setKinds({QStringLiteral("dwx"), QStringLiteral("dxf"), QStringLiteral("dwg")});
     finder.search(true);
     check(finder.resultCount() == 2, "finder: every drawing - and nothing that is not one");
     finder.setText(QStringLiteral("harness"));
     finder.search(true);
     check(finder.resultCount() == 1, "finder: by its file name");
     finder.showResult(0);
+}
+
+// PART NUMBERS FOUND as a person means them - the same rules, case by case, as the Partseek app.
+void testMatcher() {
+    auto texts = [](const PnMatcher& m, const QString& t) {
+        QStringList out;
+        for (const PnMatch& x : m.find(t)) out << QStringLiteral("%1%2").arg(x.text, x.exact ? QString() : QStringLiteral("~"));
+        return out.join(QLatin1Char('|'));
+    };
+    check(texts(PnMatcher({QStringLiteral("LM317")}, {}), QStringLiteral("Use LM317, not LM317T or XLM317")) == QLatin1String("LM317"),
+          "match: exact - the P/N on its own only");
+    PnOptions partial;
+    partial.partial = true;
+    check(texts(PnMatcher({QStringLiteral("LM317")}, partial), QStringLiteral("LM317 LM317T XLM317")) == QLatin1String("LM317|LM317~|LM317~"),
+          "match: partial - inside longer ones too, each said to be partial");
+    PnOptions cased;
+    cased.caseSensitive = true;
+    check(texts(PnMatcher({QStringLiteral("abc-1")}, {}), QStringLiteral("ABC-1")) == QLatin1String("ABC-1") &&
+              texts(PnMatcher({QStringLiteral("abc-1")}, cased), QStringLiteral("ABC-1")).isEmpty(),
+          "match: case alike unless asked");
+    PnOptions seps;
+    seps.ignoreSeparators = true;
+    check(texts(PnMatcher({QStringLiteral("ABC-123/4")}, seps), QStringLiteral("ABC1234 ; ABC 123.4 ; ABC-\n123-4")) ==
+              QStringLiteral("ABC1234|ABC 123.4|ABC-\n123-4"),
+          "match: separators ignored where asked");
+    check(texts(PnMatcher({QStringLiteral("R1.5(K)")}, {}), QStringLiteral("R1.5(K) R135(K)")) == QLatin1String("R1.5(K)"),
+          "match: punctuation in a P/N taken as it is");
+    check(texts(PnMatcher(PnMatcher::splitTerms(QStringLiteral("ABC-12; ABC-123")), partial), QStringLiteral("ABC-123")) == QLatin1String("ABC-123"),
+          "match: several at once, the longest first");
+    check(PnMatcher::splitTerms(QStringLiteral(" a ; b;a;; ")) == QStringList({QStringLiteral("a"), QStringLiteral("b")}) &&
+              !PnMatcher({}, {}).valid(),
+          "match: terms split, each once; none - nothing to find");
+    check(texts(PnMatcher({QStringLiteral("LM317")}, {}), QStringLiteral("LM317-ADJ, X-LM317, LM317. (LM317) LM317/")) ==
+              QLatin1String("LM317|LM317|LM317"),
+          "match: a joined suffix or prefix is another P/N");
+    QString before, mid, after;
+    PnMatcher::snippet(QString(100, QLatin1Char('x')) + QStringLiteral(" PN-1\n here"), 101, 105, before, mid, after, 5);
+    check(before == QLatin1String("...xxxx ") && mid == QLatin1String("PN-1") && after == QLatin1String(" her..."), "match: the words round it");
+}
+
+// FOUND INSIDE: in a drawing's note, in a list's cell, in a PDF's text - and a DWG beside a PDF of the same name.
+void testFinderInside(const QString& base) {
+    const QString dir = QDir(base).filePath(QStringLiteral("inside"));
+    QDir().mkpath(dir);
+    {
+        Document doc(QStringLiteral("bracket"));
+        Entity note;
+        note.type = EntityType::Text;
+        note.meta.insert(QStringLiteral("text"), QStringLiteral("NOTES:\n1. Use screw XK-4417-02 only."));
+        doc.entities().push_back(note);
+        dwx::save(doc, QDir(dir).filePath(QStringLiteral("bracket.dwx")));
+    }
+    {
+        QFile f(QDir(dir).filePath(QStringLiteral("bom.csv")));
+        f.open(QIODevice::WriteOnly);
+        f.write("Item;P/N;Description\n1;XK-4417;Screw M4\n2;XK-4417-02;Screw M4 long\n");
+    }
+    {
+        // A PDF WITH TEXT IN IT, written as one is: a page, a font, the words shown in its content stream.
+        const QByteArray content = "BT /F1 12 Tf 20 100 Td (Fasten with XK-4417 \(4x\)) Tj ET";
+        QByteArray pdf = "%PDF-1.4\n1 0 obj <</Type/Catalog/Pages 2 0 R>> endobj\n2 0 obj <</Type/Pages/Kids[3 0 R]/Count 1>> endobj\n"
+                         "3 0 obj <</Type/Page/Parent 2 0 R/MediaBox[0 0 300 200]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>> endobj\n";
+        pdf += "4 0 obj <</Length " + QByteArray::number(content.size()) + ">> stream\n" + content + "\nendstream endobj\n";
+        pdf += "5 0 obj <</Type/Font/Subtype/Type1/BaseFont/Helvetica>> endobj\ntrailer <</Root 1 0 R>>\n%%EOF\n";
+        QFile out(QDir(dir).filePath(QStringLiteral("assembly.pdf")));
+        out.open(QIODevice::WriteOnly);
+        out.write(pdf);
+        out.close();
+        QFile dwg(QDir(dir).filePath(QStringLiteral("assembly.dwg")));
+        dwg.open(QIODevice::WriteOnly);
+        dwg.write("AC1027 not really a drawing");
+    }
+    DrawingFinderDialog finder;
+    finder.setFolder(dir);
+    finder.setMatching(false, false, false);
+    finder.setText(QStringLiteral("XK-4417"));
+    finder.search(true);
+    QStringList names;
+    int pdfRow = -1;
+    for (int r = 0; r < finder.resultCount(); ++r) {
+        names << QFileInfo(finder.resultPath(r)).fileName();
+        if (finder.resultPath(r).endsWith(QLatin1String(".pdf"))) pdfRow = r;
+    }
+    names.sort();
+    std::printf("  finder inside: %s\n", qPrintable(names.join(QStringLiteral(", "))));
+    check(names.contains(QStringLiteral("bom.csv")) && !names.contains(QStringLiteral("bracket.dwx")),
+          "finder: exact - XK-4417 in the list's cell; not in XK-4417-02 in the drawing's note");
+    check(pdfRow >= 0 && finder.resultDrawings(pdfRow).contains(QStringLiteral("DWG")),
+          "finder: in the PDF's text - and the DWG of the same name beside it");
+    finder.setText(QStringLiteral("XK-4417-02"));
+    finder.search(true);
+    names.clear();
+    for (int r = 0; r < finder.resultCount(); ++r) names << QFileInfo(finder.resultPath(r)).fileName();
+    check(names.contains(QStringLiteral("bracket.dwx")) && names.contains(QStringLiteral("bom.csv")) && names.size() == 2,
+          "finder: in the drawing's note and the list's cell");
+    finder.setMatching(true, false, false);
+    finder.setText(QStringLiteral("XK-4417"));
+    finder.search(true);
+    check(finder.resultCount() == 3, "finder: partial - every file it is in, inside the longer number too");
+    finder.setMatching(false, false, true);
+    finder.setText(QStringLiteral("XK4417 02"));
+    finder.search(true);
+    check(finder.resultCount() == 2, "finder: separators ignored - XK4417 02 finds XK-4417-02");
 }
 
 void testTab() {
@@ -265,6 +372,8 @@ int run_systemdesign_tests() {
     testDrawings(dir.path());
     testView(dir.path());
     testFinder(dir.path());
+    testMatcher();
+    testFinderInside(dir.path());
     testTab();
     std::printf("  system design: %s\n", g_fail == 0 ? "OK" : "FAILED");
     return g_fail;

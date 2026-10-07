@@ -168,6 +168,8 @@ add_library(edraw_core STATIC
     src/app/SystemDesignView.cpp
     src/app/DrawingFinderDialog.cpp
     src/system/SystemDesign.cpp
+    src/system/PnMatch.cpp
+    src/system/FileText.cpp
     src/app/View3DHelpDialog.h
     src/app/NavWheel.h
     src/app/Part3DEditorDialog.h
@@ -190,6 +192,8 @@ add_library(edraw_core STATIC
     src/harness/Route3D.cpp
     src/harness/RouteLink.h
     src/system/SystemDesign.h
+    src/system/PnMatch.h
+    src/system/FileText.h
     src/app/SystemCanvas.h
     src/app/SystemDesignView.h
     src/app/DrawingFinderDialog.h
