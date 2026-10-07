@@ -46,7 +46,8 @@ void MainWindow::buildView3DTab() {
         {QStringLiteral("View"), {QStringLiteral("iso"), 5}},          {QStringLiteral("Route"), {QStringLiteral("route"), 6}},
         {QStringLiteral("Show"), {QStringLiteral("harness"), 4}},      {QStringLiteral("Environment"), {QStringLiteral("load"), 3}},
         {QStringLiteral("Bundle"), {QStringLiteral("route"), 2}},      {QStringLiteral("Route to land"), {QStringLiteral("workplane"), 7}},
-        {QStringLiteral("Tension"), {QStringLiteral("gravity"), 6}},  {QStringLiteral("Drawing"), {QStringLiteral("lengths"), 0}}};
+        {QStringLiteral("Tension"), {QStringLiteral("gravity"), 6}},  {QStringLiteral("Drawing"), {QStringLiteral("lengths"), 0}},
+        {QStringLiteral("Keep-out"), {QStringLiteral("keepout"), 4}}};
     auto group = [&](const QString& title, auto fill) {
         auto* slot = new QWidget(page);
         auto* sl = new QHBoxLayout(slot);
@@ -406,6 +407,30 @@ void MainWindow::buildView3DTab() {
                                    [] {});
         gravity->setCheckable(true);
         preview3dMirrors_.append({gravity, QStringLiteral("view3dGravity")});
+    });
+    // KEEP-OUTS: a level across X, Y or Z (from the arrow) or a zone added, all of them listed to be set, and shown or not.
+    group(QStringLiteral("Keep-out"), [&](QWidget* w, QHBoxLayout* row) {
+        QToolButton* level = big(w, row, "preview3dAddLevel", QStringLiteral("Add level"), QStringLiteral("keepout"),
+                                 QStringLiteral("A level no cable may go through - a plane across X, Y or Z, at the middle of the "
+                                                "model (set where in Keep-outs)"),
+                                 [this] { if (view3dPane_) view3dPane_->addKeepOutLevel(2); });
+        level->setPopupMode(QToolButton::MenuButtonPopup);
+        auto* levels = new QMenu(level);
+        levels->setObjectName(QStringLiteral("preview3dAddLevelMenu"));
+        for (int axis = 0; axis < 3; ++axis)
+            levels->addAction(QStringLiteral("A level across %1").arg(QLatin1Char("XYZ"[axis])), this,
+                              [this, axis] { if (view3dPane_) view3dPane_->addKeepOutLevel(axis); });
+        level->setMenu(levels);
+        big(w, row, "preview3dAddZone", QStringLiteral("Add zone"), QStringLiteral("keepzone"),
+            QStringLiteral("A zone no cable may go through - a box in the middle of the model (set its corners in Keep-outs)"),
+            [this] { if (view3dPane_) view3dPane_->addKeepOutZone(); });
+        big(w, row, "preview3dKeepOuts", QStringLiteral("Keep-outs"), QStringLiteral("parts"),
+            QStringLiteral("Every keep-out: where it is, and whether it blocks a cable or alerts"),
+            [this] { if (view3dPane_) view3dPane_->showKeepOuts(); });
+        QToolButton* shown = big(w, row, "preview3dKeepOutsShown", QStringLiteral("Show"), QStringLiteral("harness"),
+                                 QStringLiteral("Show or hide the keep-outs"), [] {});
+        shown->setCheckable(true);
+        preview3dMirrors_.append({shown, QStringLiteral("view3dKeepOutsShown")});
     });
     // TO AND FROM THE DRAWING: the route's lengths given to the harness drawn, and the 3D harness built again from it.
     group(QStringLiteral("Drawing"), [&](QWidget* w, QHBoxLayout* row) {

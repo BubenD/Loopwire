@@ -24,6 +24,7 @@
 #include "harness/Harness3D.h"
 #include "harness/Route3D.h"
 #include "harness/RouteGravity.h"
+#include "harness/RouteKeepOut.h"
 #include "harness/RouteLink.h"
 #include "render/Render3D.h"
 #include "harness/BrickHarness.h"
@@ -8892,7 +8893,7 @@ void testRoundSixty() {
         check(opacity && opacity->isVisible() && opacity->window() != &win, "ribbon: the folded group opened under its button - all of it there");
         if (opacity) opacity->window()->hide();
     }
-    win.resize(6000, 700);
+    win.resize(9000, 700);   // wide enough for every group, a Keep-out group among them
     for (int i = 0; i < 5; ++i) QApplication::processEvents();
     bool none = true;
     for (QToolButton* b : win.findChildren<QToolButton*>())
@@ -9641,6 +9642,143 @@ void testRoundSixtySix() {
           "harness part: clicked - chosen in the parts list");
 }
 
+// ROUND SIXTY-SEVEN: KEEP-OUTS - levels across X, Y or Z and zones no cable may go through: a cable through one that
+// alerts marked and warned of, a change that would take one through one that blocks refused; listed and set, shown or
+// hidden, saved with the route.
+void testRoundSixtySeven() {
+    // ---- WHERE A CABLE GOES THROUGH ONE ----
+    Route3D r;
+    r.diameter = 6.0;
+    r.lead = 10.0;
+    const QString x1 = r.addNode(RouteNodeKind::Connector, {0, 0, 0}, {0, 0, 1});
+    const QString x2 = r.addNode(RouteNodeKind::Connector, {100, 0, 0}, {0, 0, 1});
+    const QString s = r.addSegment(x1, x2, {{{50, 0, 0}, {0, 0, 1}}});
+    KeepOut3D high;
+    high.axis = 2;
+    high.at = 40.0;
+    const QString kHigh = r.addKeepOut(high);
+    KeepOut3D across;
+    across.axis = 0;
+    across.at = 50.0;
+    across.block = true;
+    const QString kAcross = r.addKeepOut(across);
+    KeepOut3D box;
+    box.zone = true;
+    box.lo = {40, -10, -5};
+    box.hi = {60, 10, 5};
+    const QString kBox = r.addKeepOut(box);
+    KeepOut3D away = box;
+    away.lo = {200, 200, 0};
+    away.hi = {220, 220, 20};
+    const QString kAway = r.addKeepOut(away);
+    check(kHigh == QStringLiteral("K1") && kAway == QStringLiteral("K4"), "keep-out: numbered in turn, K1, K2 ...");
+    QStringList through;
+    for (const KeepOutHit& h : keepOutHits(r)) through << h.keepOut;
+    std::printf("  keep-out: the cable through %s\n", qPrintable(through.join(QStringLiteral(", "))));
+    check(!through.contains(kHigh) && through.contains(kAcross) && through.contains(kBox) && !through.contains(kAway),
+          "keep-out: a level crossed and a zone entered are found - a level above it and a zone off to the side are not");
+    check(keepOutName(*r.keepOut(kHigh)) == QStringLiteral("Level Z 40.0") && keepOutName(*r.keepOut(kBox)) == QStringLiteral("Zone K3"),
+          "keep-out: named by what it is");
+    {
+        const Route3D back = Route3D::fromJson(r.toJson());
+        check(back.keepOuts.size() == 4 && back.keepOut(kAcross) && back.keepOut(kAcross)->block && back.keepOut(kAcross)->axis == 0 &&
+                  std::abs(back.keepOut(kAcross)->at - 50.0) < 1e-9 && back.keepOut(kBox)->zone &&
+                  (back.keepOut(kBox)->hi - V3{60, 10, 5}).length() < 1e-9,
+              "keep-out: saved with the route and read back the same");
+        check(!Route3D().toJson().contains(QStringLiteral("keepOuts")), "keep-out: none written where there are none");
+    }
+
+    // ---- IN THE 3D VIEW ----
+    Route3D plain = r;
+    plain.keepOuts.clear();
+    QJsonObject stored = plain.toJson();
+    View3DPane pane;
+    pane.setRoutingStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    pane.resize(1000, 700);
+    pane.show();
+    QApplication::processEvents();
+    pane.reloadRouting(true);
+    View3DCanvas* canvas = pane.canvas();
+    canvas->setUseGpu(false);
+    canvas->viewFrom(QStringLiteral("top"));
+    auto* status = pane.findChild<QLabel*>(QStringLiteral("view3dStatus"));
+    // ALERT: a level across X at 50 - the cable goes through it; allowed, marked and warned of.
+    const QString alert = pane.addKeepOutLevel(0, 50.0, false);
+    std::printf("  keep-out: %s\n", qPrintable(canvas->keepOutAlert()));
+    check(!pane.keepOutHitsNow().empty() && canvas->keepOutAlert().contains(QStringLiteral("X1 - X2 passes through Level X 50.0")) &&
+              status && status->text().contains(QStringLiteral("Keep-out:")),
+          "keep-out: alert - the cable through it allowed, and warned of in the picture and on the status line");
+    pane.setKeepOutsShown(false);
+    check(!canvas->keepOutsShown() && !pane.findChild<QToolButton*>(QStringLiteral("view3dKeepOutsShown"))->isChecked() &&
+              !canvas->keepOutAlert().isEmpty(),
+          "keep-out: hidden - not drawn, and still warned of");
+    pane.setKeepOutsShown(true);
+    check(canvas->keepOutsShown(), "keep-out: shown again");
+    pane.undoRoute();
+    check(pane.route().keepOuts.empty() && canvas->keepOutAlert().isEmpty(), "keep-out: added - Undo takes it away");
+    // BLOCK: a level across X at 150; X2 moved out past it - refused.
+    pane.addKeepOutLevel(0, 150.0, true);
+    canvas->setGrowLength(true);   // moved alone, so it goes where it is dragged
+    pane.setRouteTool(RouteTool::Move);
+    auto screen = [&](const V3& p) {
+        QPointF at;
+        canvas->toScreen(p, at);
+        return at;
+    };
+    auto drag = [&](const QPointF& from, const QPointF& to) {
+        QMouseEvent press(QEvent::MouseButtonPress, from, canvas->mapToGlobal(from), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &press);
+        for (int i = 1; i <= 8; ++i) {
+            const QPointF at = from + (to - from) * (i / 8.0);
+            QMouseEvent move(QEvent::MouseMove, at, canvas->mapToGlobal(at), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(canvas, &move);
+        }
+        QMouseEvent release(QEvent::MouseButtonRelease, to, canvas->mapToGlobal(to), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &release);
+        QApplication::processEvents();
+    };
+    const RouteNode3D* n2 = pane.route().node(x2);
+    const QPointF grip = screen(n2->at + n2->normal * (pane.route().lead * 0.5));
+    drag(grip, grip + (screen({200, 0, 0}) - screen({100, 0, 0})));
+    std::printf("  keep-out: X2 dragged out past a blocking level - at %.1f; %s\n", pane.route().node(x2)->at.x,
+                qPrintable(status ? status->text().section(QLatin1Char('\n'), -1) : QString()));
+    check(std::abs(pane.route().node(x2)->at.x - 100.0) < 1e-6 && status && status->text().contains(QStringLiteral("Not done")) &&
+              status->text().contains(QStringLiteral("blocks")),
+          "keep-out: block - a move that would take the cable through it refused, the route as it was, and it says why");
+    // Within it: allowed.
+    const RouteNode3D* again = pane.route().node(x2);
+    const QPointF grip2 = screen(again->at + again->normal * (pane.route().lead * 0.5));
+    drag(grip2, grip2 + (screen({130, 0, 0}) - screen({100, 0, 0})));
+    std::printf("  keep-out: X2 dragged to this side of it - at %.1f; %s\n", pane.route().node(x2)->at.x,
+                qPrintable(status ? status->text().section(QLatin1Char('\n'), -1) : QString()));
+    check(pane.route().node(x2)->at.x > 120.0 && pane.route().node(x2)->at.x < 150.0, "keep-out: block - a move that stays this side of it done");
+    canvas->setGrowLength(false);
+    // THE LIST: each one set there.
+    pane.showKeepOuts();
+    QApplication::processEvents();
+    auto* table = pane.findChild<QTableWidget*>(QStringLiteral("view3dKeepOutTable"));
+    check(table && table->rowCount() == 1, "keep-out: listed");
+    if (table && table->rowCount() == 1) {
+        if (auto* rule = qobject_cast<QComboBox*>(table->cellWidget(0, 6))) rule->setCurrentIndex(0);
+        QApplication::processEvents();
+        if (auto* at = qobject_cast<QDoubleSpinBox*>(table->cellWidget(0, 3))) at->setValue(90.0);
+        QApplication::processEvents();
+        QApplication::processEvents();
+        const KeepOut3D& k = pane.route().keepOuts.front();
+        check(!k.block && std::abs(k.at - 90.0) < 1e-9 && !canvas->keepOutAlert().isEmpty(),
+              "keep-out: set in the list - Alert, at 90 - and the cable through it warned of");
+    }
+    if (auto* dlg = pane.findChild<QDialog*>(QStringLiteral("view3dKeepOutsDialog"))) dlg->close();
+
+    // ---- ON THE RIBBON ----
+    MainWindow win;
+    win.show();
+    QApplication::processEvents();
+    for (const char* name : {"preview3dAddLevel", "preview3dAddZone", "preview3dKeepOuts", "preview3dKeepOutsShown"})
+        check(win.findChild<QWidget*>(QLatin1String(name)) != nullptr,
+              qPrintable(QStringLiteral("ribbon: %1 on the 3D Preview tab").arg(QLatin1String(name))));
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -9731,6 +9869,7 @@ int run_brickharness_tests() {
     ROUND(testRoundSixtyFour);
     ROUND(testRoundSixtyFive);
     ROUND(testRoundSixtySix);
+    ROUND(testRoundSixtySeven);
 #undef ROUND
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;

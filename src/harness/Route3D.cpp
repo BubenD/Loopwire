@@ -88,6 +88,30 @@ bool Route3D::aimNode(const QString& id, const V3& dir, double spinDeg) {
     return false;
 }
 
+QString Route3D::addKeepOut(KeepOut3D k) {
+    int most = 0;
+    for (const KeepOut3D& o : keepOuts) {
+        bool ok = false;
+        const int n = o.id.mid(1).toInt(&ok);
+        if (ok) most = std::max(most, n);
+    }
+    k.id = QStringLiteral("K%1").arg(most + 1);
+    keepOuts.push_back(k);
+    return k.id;
+}
+
+const KeepOut3D* Route3D::keepOut(const QString& id) const {
+    for (const KeepOut3D& k : keepOuts)
+        if (k.id == id) return &k;
+    return nullptr;
+}
+
+KeepOut3D* Route3D::keepOut(const QString& id) {
+    for (KeepOut3D& k : keepOuts)
+        if (k.id == id) return &k;
+    return nullptr;
+}
+
 QString Route3D::addNode(RouteNodeKind kind, const V3& at, const V3& normal) {
     RouteNode3D n;
     n.id = freshId(QStringLiteral("n"));
@@ -628,6 +652,24 @@ QJsonObject Route3D::toJson() const {
         ss.append(j);
     }
     o[QStringLiteral("segments")] = ss;
+    // THE KEEP-OUTS, written only where there are some.
+    if (!keepOuts.empty()) {
+        QJsonArray ks;
+        for (const KeepOut3D& k : keepOuts) {
+            QJsonObject j{{QStringLiteral("id"), k.id}, {QStringLiteral("block"), k.block}};
+            if (!k.name.isEmpty()) j[QStringLiteral("name")] = k.name;
+            if (k.zone) {
+                j[QStringLiteral("zone")] = true;
+                j[QStringLiteral("lo")] = v3Json(k.lo);
+                j[QStringLiteral("hi")] = v3Json(k.hi);
+            } else {
+                j[QStringLiteral("axis")] = k.axis;
+                j[QStringLiteral("at")] = k.at;
+            }
+            ks.append(j);
+        }
+        o[QStringLiteral("keepOuts")] = ks;
+    }
     return o;
 }
 
@@ -679,6 +721,19 @@ Route3D Route3D::fromJson(const QJsonObject& o) {
         }
         // A bundle to a node that is not there is dropped, not kept dangling.
         if (!s.id.isEmpty() && r.node(s.a) && r.node(s.b) && s.a != s.b) r.segments.push_back(std::move(s));
+    }
+    for (const QJsonValue& v : o.value(QStringLiteral("keepOuts")).toArray()) {
+        const QJsonObject j = v.toObject();
+        KeepOut3D k;
+        k.id = j.value(QStringLiteral("id")).toString();
+        k.name = j.value(QStringLiteral("name")).toString();
+        k.zone = j.value(QStringLiteral("zone")).toBool(false);
+        k.axis = std::clamp(j.value(QStringLiteral("axis")).toInt(2), 0, 2);
+        k.at = j.value(QStringLiteral("at")).toDouble(0.0);
+        k.lo = v3From(j.value(QStringLiteral("lo")));
+        k.hi = v3From(j.value(QStringLiteral("hi")));
+        k.block = j.value(QStringLiteral("block")).toBool(false);
+        if (!k.id.isEmpty()) r.keepOuts.push_back(k);
     }
     return r;
 }

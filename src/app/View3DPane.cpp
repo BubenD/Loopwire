@@ -558,6 +558,16 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
         sayStatus();
     });
     br->addWidget(down_);
+    // KEEP-OUTS: levels and zones no cable may go through - listed and set, shown or hidden.
+    button(rr2, "view3dKeepOuts", QStringLiteral("Keep-outs..."),
+           QStringLiteral("Levels (a plane across X, Y or Z) and zones (a box) no cable may go through - each set to block "
+                          "a cable (the change refused) or to alert (allowed, and warned of)"),
+           [this] { showKeepOuts(); });
+    keepShown_ = button(rr2, "view3dKeepOutsShown", QStringLiteral("Show keep-outs"),
+                        QStringLiteral("Show or hide the keep-out levels and zones"), [this] {});
+    keepShown_->setCheckable(true);
+    keepShown_->setChecked(true);
+    connect(keepShown_, &QToolButton::toggled, this, [this](bool on) { canvas_->setKeepOutsShown(on); });
     undo_ = button(rr2, "view3dRouteUndo", QStringLiteral("Undo"), QStringLiteral("Take back the last change to the route (Ctrl+Z)"),
                    [this] { undoRoute(); });
     redo_ = button(rr2, "view3dRouteRedo", QStringLiteral("Redo"), QStringLiteral("Put back what Undo took back (Ctrl+Y)"),
@@ -1077,6 +1087,35 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     connect(canvas_, &View3DCanvas::picked, this, [this](const Pick3D& pick) { showPick(pick); });
     connect(canvas_, &View3DCanvas::routeAboutToChange, this, [this] { beforeRouteChange(); });
     connect(canvas_, &View3DCanvas::routeChanged, this, [this] {
+        // A KEEP-OUT THAT BLOCKS: a change that takes a cable through one it did not go through is refused - the route
+        // put back as it was, and said why.
+        if (!history_.empty()) {
+            const Route3D was = Route3D::fromJson(history_.back());
+            auto blocked = [](const Route3D& r) {
+                QStringList through;
+                for (const KeepOutHit& h : keepOutHits(r))
+                    if (h.block) through << h.segment + QLatin1Char('|') + h.keepOut;
+                return through;
+            };
+            const QStringList before = blocked(was);
+            for (const KeepOutHit& h : keepOutHits(route_)) {
+                if (!h.block || before.contains(h.segment + QLatin1Char('|') + h.keepOut)) continue;
+                const RouteSegment3D* s = route_.segment(h.segment);
+                const RouteNode3D* a = s ? route_.node(s->a) : nullptr;
+                const RouteNode3D* b = s ? route_.node(s->b) : nullptr;
+                const KeepOut3D* k = route_.keepOut(h.keepOut);
+                // Said before the route is put back - what it points into goes with it.
+                const QString cable = a && b ? QStringLiteral("%1 - %2").arg(a->label, b->label) : QStringLiteral("A cable");
+                const QString zone = k ? keepOutName(*k) : h.keepOut;
+                const QJsonObject back = history_.back();
+                history_.pop_back();
+                restoreRoute(back);
+                pickSaid_ = QStringLiteral("Not done: %1 would pass through the keep-out %2, which blocks it.").arg(cable, zone);
+                sayStatus();
+                return;
+            }
+        }
+        if (pickSaid_.startsWith(QLatin1String("Not done:"))) pickSaid_.clear();   // what was refused, said once
         saveRouting();
         refreshRoute();
         refreshParts();
@@ -2321,6 +2360,7 @@ void View3DPane::sayStatus() {
         lines << QStringLiteral("Environment: %1").arg(env_.how);
     if (!pickSaid_.isEmpty()) lines << pickSaid_;
     if (!gravitySaid_.isEmpty()) lines << gravitySaid_;
+    if (!keepSaid_.isEmpty()) lines << keepSaid_;
     const QString either = nodeLengths();
     if (!either.isEmpty()) lines << either;
     status_->setText(lines.join(QLatin1Char('\n')));
@@ -2851,7 +2891,239 @@ void View3DPane::refreshRoute() {
     filling_ = false;
     canvas_->routeRedraw();
     runGravity();
+    refreshKeepOuts();
     sayStatus();
+}
+
+// ---- Keep-outs --------------------------------------------------------------------------------------
+
+void View3DPane::refreshKeepOuts() {
+    const std::vector<KeepOutHit> hits = keepOutHits(route_);
+    QStringList said;
+    for (const KeepOutHit& h : hits) {
+        const RouteSegment3D* s = route_.segment(h.segment);
+        const RouteNode3D* a = s ? route_.node(s->a) : nullptr;
+        const RouteNode3D* b = s ? route_.node(s->b) : nullptr;
+        const KeepOut3D* k = route_.keepOut(h.keepOut);
+        said << QStringLiteral("%1 - %2 passes through %3%4")
+                    .arg(a ? a->label : QString(), b ? b->label : QString(), k ? keepOutName(*k) : h.keepOut,
+                         h.block ? QStringLiteral(" (blocks)") : QString());
+    }
+    keepSaid_ = said.isEmpty() ? QString() : QStringLiteral("Keep-out: ") + said.join(QStringLiteral("; "));
+    canvas_->setKeepOuts(hits, keepSaid_);
+    if (keepDialog_ && keepDialog_->isVisible() && !filling_) fillKeepOutTable();
+}
+
+bool View3DPane::sceneBounds(V3& lo, V3& hi) const {
+    if (env_.bounds(lo, hi)) return true;
+    bool any = false;
+    for (const RouteNode3D& n : route_.nodes) {
+        lo = any ? V3{std::min(lo.x, n.at.x), std::min(lo.y, n.at.y), std::min(lo.z, n.at.z)} : n.at;
+        hi = any ? V3{std::max(hi.x, n.at.x), std::max(hi.y, n.at.y), std::max(hi.z, n.at.z)} : n.at;
+        any = true;
+    }
+    if (!any) {
+        lo = {-100, -100, -100};
+        hi = {100, 100, 100};
+    }
+    return any;
+}
+
+QString View3DPane::addKeepOutLevel(int axis, double at, bool block) {
+    beforeRouteChange();
+    KeepOut3D k;
+    k.axis = std::clamp(axis, 0, 2);
+    k.at = at;
+    k.block = block;
+    const QString id = route_.addKeepOut(k);
+    saveRouting();
+    refreshRoute();
+    emit routeChanged();
+    return id;
+}
+
+QString View3DPane::addKeepOutLevel(int axis) {
+    V3 lo, hi;
+    sceneBounds(lo, hi);
+    const V3 mid = (lo + hi) * 0.5;
+    return addKeepOutLevel(axis, axis == 0 ? mid.x : axis == 1 ? mid.y : mid.z, false);
+}
+
+QString View3DPane::addKeepOutZone(const V3& lo, const V3& hi, bool block) {
+    beforeRouteChange();
+    KeepOut3D k;
+    k.zone = true;
+    k.lo = lo;
+    k.hi = hi;
+    k.block = block;
+    const QString id = route_.addKeepOut(k);
+    saveRouting();
+    refreshRoute();
+    emit routeChanged();
+    return id;
+}
+
+QString View3DPane::addKeepOutZone() {
+    V3 lo, hi;
+    sceneBounds(lo, hi);
+    const V3 third = (hi - lo) * (1.0 / 3.0);
+    return addKeepOutZone(lo + third, hi - third, false);
+}
+
+void View3DPane::setKeepOutsShown(bool on) {
+    if (keepShown_) keepShown_->setChecked(on);
+    canvas_->setKeepOutsShown(on);
+}
+
+void View3DPane::showKeepOuts() {
+    if (!keepDialog_) {
+        auto* dlg = new QDialog(this);
+        dlg->setObjectName(QStringLiteral("view3dKeepOutsDialog"));
+        dlg->setWindowTitle(QStringLiteral("Keep-outs"));
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        auto* lay = new QVBoxLayout(dlg);
+        auto* say = new QLabel(QStringLiteral("Where no cable may go. A <b>level</b> is a plane across X, Y or Z at a place "
+                                              "along it; a <b>zone</b> is a box. <b>Block</b>: a change that takes a cable "
+                                              "through it is refused. <b>Alert</b>: it is allowed, and the cable is marked "
+                                              "and warned of."),
+                               dlg);
+        say->setWordWrap(true);
+        lay->addWidget(say);
+        auto* table = new QTableWidget(0, 7, dlg);
+        table->setObjectName(QStringLiteral("view3dKeepOutTable"));
+        table->setHorizontalHeaderLabels({QStringLiteral("Name"), QStringLiteral("Kind"), QStringLiteral("Axis"), QStringLiteral("At"),
+                                          QStringLiteral("From (x, y, z)"), QStringLiteral("To (x, y, z)"), QStringLiteral("Rule")});
+        table->verticalHeader()->setVisible(false);
+        table->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+        table->horizontalHeader()->setStretchLastSection(true);
+        lay->addWidget(table, 1);
+        auto* row = new QHBoxLayout;
+        auto add = [&](const char* name, const QString& text, auto fn) {
+            auto* b = new QPushButton(text, dlg);
+            b->setObjectName(QLatin1String(name));
+            connect(b, &QPushButton::clicked, this, fn);
+            row->addWidget(b);
+            return b;
+        };
+        add("view3dAddLevelX", QStringLiteral("Add level X"), [this] { addKeepOutLevel(0); });
+        add("view3dAddLevelY", QStringLiteral("Add level Y"), [this] { addKeepOutLevel(1); });
+        add("view3dAddLevelZ", QStringLiteral("Add level Z"), [this] { addKeepOutLevel(2); });
+        add("view3dAddZone", QStringLiteral("Add zone"), [this] { addKeepOutZone(); });
+        add("view3dDeleteKeepOut", QStringLiteral("Delete"), [this, table] {
+            const int r = table->currentRow();
+            if (r < 0 || r >= static_cast<int>(route_.keepOuts.size())) return;
+            beforeRouteChange();
+            route_.keepOuts.erase(route_.keepOuts.begin() + r);
+            saveRouting();
+            refreshRoute();
+            emit routeChanged();
+        });
+        row->addStretch(1);
+        lay->addLayout(row);
+        dlg->resize(860, 320);
+        keepDialog_ = dlg;
+    }
+    fillKeepOutTable();
+    keepDialog_->show();
+    keepDialog_->raise();
+}
+
+void View3DPane::fillKeepOutTable() {
+    auto* table = keepDialog_ ? keepDialog_->findChild<QTableWidget*>(QStringLiteral("view3dKeepOutTable")) : nullptr;
+    if (!table) return;
+    const int current = table->currentRow();
+    table->setRowCount(0);
+    // A CHANGE FROM THE TABLE: one step to undo; the table filled again after the edit is done with.
+    auto change = [this](const QString& id, const std::function<void(KeepOut3D&)>& how) {
+        KeepOut3D* k = route_.keepOut(id);
+        if (!k) return;
+        beforeRouteChange();
+        how(*k);
+        saveRouting();
+        QTimer::singleShot(0, this, [this] {
+            refreshRoute();
+            emit routeChanged();
+        });
+    };
+    auto vec = [](const V3& v) { return QStringLiteral("%1, %2, %3").arg(v.x, 0, 'f', 1).arg(v.y, 0, 'f', 1).arg(v.z, 0, 'f', 1); };
+    auto parse = [](const QString& text, V3& v) {
+        const QStringList p = QString(text).replace(QLatin1Char(';'), QLatin1Char(',')).split(QLatin1Char(','));
+        if (p.size() != 3) return false;
+        bool a = false, b = false, c = false;
+        v = {p[0].trimmed().toDouble(&a), p[1].trimmed().toDouble(&b), p[2].trimmed().toDouble(&c)};
+        return a && b && c;
+    };
+    for (const KeepOut3D& k : route_.keepOuts) {
+        const int r = table->rowCount();
+        table->insertRow(r);
+        const QString id = k.id;
+        auto* name = new QLineEdit(k.name, table);
+        name->setPlaceholderText(keepOutName(k));
+        connect(name, &QLineEdit::editingFinished, this, [change, id, name] {
+            change(id, [name](KeepOut3D& o) { o.name = name->text().trimmed(); });
+        });
+        table->setCellWidget(r, 0, name);
+        auto* kind = new QComboBox(table);
+        kind->addItems({QStringLiteral("Level"), QStringLiteral("Zone")});
+        kind->setCurrentIndex(k.zone ? 1 : 0);
+        connect(kind, &QComboBox::currentIndexChanged, this, [this, change, id](int i) {
+            change(id, [this, i](KeepOut3D& o) {
+                o.zone = i == 1;
+                if (o.zone && (o.hi - o.lo).length() < 1e-9) {
+                    V3 lo, hi;
+                    sceneBounds(lo, hi);
+                    const V3 third = (hi - lo) * (1.0 / 3.0);
+                    o.lo = lo + third;
+                    o.hi = hi - third;
+                }
+            });
+        });
+        table->setCellWidget(r, 1, kind);
+        auto* axis = new QComboBox(table);
+        axis->addItems({QStringLiteral("X"), QStringLiteral("Y"), QStringLiteral("Z")});
+        axis->setCurrentIndex(k.axis);
+        axis->setEnabled(!k.zone);
+        connect(axis, &QComboBox::currentIndexChanged, this, [change, id](int i) { change(id, [i](KeepOut3D& o) { o.axis = i; }); });
+        table->setCellWidget(r, 2, axis);
+        auto* at = new QDoubleSpinBox(table);
+        at->setRange(-1e6, 1e6);
+        at->setDecimals(1);
+        at->setSuffix(QStringLiteral(" mm"));
+        at->setValue(k.at);
+        at->setKeyboardTracking(false);
+        at->setEnabled(!k.zone);
+        connect(at, &QDoubleSpinBox::valueChanged, this, [change, id](double v) { change(id, [v](KeepOut3D& o) { o.at = v; }); });
+        table->setCellWidget(r, 3, at);
+        for (int c = 0; c < 2; ++c) {
+            auto* corner = new QLineEdit(vec(c == 0 ? k.lo : k.hi), table);
+            corner->setEnabled(k.zone);
+            connect(corner, &QLineEdit::editingFinished, this, [change, parse, id, corner, c] {
+                V3 v;
+                if (!parse(corner->text(), v)) return;
+                change(id, [v, c](KeepOut3D& o) { (c == 0 ? o.lo : o.hi) = v; });
+            });
+            table->setCellWidget(r, 4 + c, corner);
+        }
+        auto* rule = new QComboBox(table);
+        rule->addItems({QStringLiteral("Alert"), QStringLiteral("Block")});
+        rule->setCurrentIndex(k.block ? 1 : 0);
+        connect(rule, &QComboBox::currentIndexChanged, this, [change, id](int i) { change(id, [i](KeepOut3D& o) { o.block = i == 1; }); });
+        table->setCellWidget(r, 6, rule);
+    }
+    if (current >= 0 && current < table->rowCount()) table->setCurrentCell(current, 0);
+}
+
+void View3DCanvas::setKeepOuts(std::vector<KeepOutHit> hits, const QString& alert) {
+    keepHits_ = std::move(hits);
+    keepAlert_ = alert;
+    keepDirty_ = true;
+    update();
+}
+
+void View3DCanvas::setKeepOutsShown(bool on) {
+    keepShown_ = on;
+    keepDirty_ = true;
+    update();
 }
 
 void View3DPane::syncCable() {
@@ -3870,6 +4142,7 @@ bool View3DCanvas::beginNodeDrag(const QPointF& at, bool stretch, const QString&
 }
 
 void View3DCanvas::routeRedraw() {
+    keepDirty_ = true;
     if (route_) {
         if (!selSegment_.isEmpty() && !route_->segment(selSegment_)) selSegment_.clear();
         if (!selNode_.isEmpty() && !route_->node(selNode_)) selNode_.clear();
@@ -4102,6 +4375,46 @@ std::vector<DrawItem3D> View3DCanvas::drawItems() const {
     if (routeDirty_) buildRouteMeshes();
     for (const Drawn& d : routeMeshes_) items.push_back({&d.mesh, d.color, 1.0, false, d.texture});
     // GRAVITY: each bundle as it would hang, faint, and a red line down from where it is laid to where it falls.
+    // THE KEEP-OUTS: each level a sheet across the model, each zone a box - faint, red where it blocks, orange where it
+    // alerts - and each cable through one marked where it goes in.
+    if (route_ && keepShown_ && !route_->keepOuts.empty()) {
+        if (keepDirty_) {
+            keepBlockMesh_ = Mesh3D();
+            keepAlertMesh_ = Mesh3D();
+            keepHitMesh_ = Mesh3D();
+            V3 lo{-100, -100, -100}, hi{100, 100, 100};
+            bool any = env_ && env_->bounds(lo, hi);
+            for (const RouteNode3D& n : route_->nodes) {
+                lo = any ? V3{std::min(lo.x, n.at.x), std::min(lo.y, n.at.y), std::min(lo.z, n.at.z)} : n.at;
+                hi = any ? V3{std::max(hi.x, n.at.x), std::max(hi.y, n.at.y), std::max(hi.z, n.at.z)} : n.at;
+                any = true;
+            }
+            const V3 pad = (hi - lo) * 0.1 + V3{10, 10, 10};
+            lo = lo - pad;
+            hi = hi + pad;
+            for (const KeepOut3D& k : route_->keepOuts) {
+                Mesh3D& into = k.block ? keepBlockMesh_ : keepAlertMesh_;
+                if (k.zone) {
+                    into.append(boxMesh({std::min(k.lo.x, k.hi.x), std::min(k.lo.y, k.hi.y), std::min(k.lo.z, k.hi.z)},
+                                        {std::max(k.lo.x, k.hi.x), std::max(k.lo.y, k.hi.y), std::max(k.lo.z, k.hi.z)}));
+                } else {
+                    // A sheet a hair thick across the rest of the scene.
+                    V3 a = lo, b = hi;
+                    (k.axis == 0 ? a.x : k.axis == 1 ? a.y : a.z) = k.at - 0.25;
+                    (k.axis == 0 ? b.x : k.axis == 1 ? b.y : b.z) = k.at + 0.25;
+                    into.append(boxMesh(a, b));
+                }
+            }
+            for (const KeepOutHit& h : keepHits_) {
+                const double r = 0.8 * std::max(2.0, route_->diameter);
+                keepHitMesh_.append(boxMesh(h.at - V3{r, r, r}, h.at + V3{r, r, r}));
+            }
+            keepDirty_ = false;
+        }
+        if (!keepBlockMesh_.empty()) items.push_back({&keepBlockMesh_, QColor(235, 60, 60), 0.16});
+        if (!keepAlertMesh_.empty()) items.push_back({&keepAlertMesh_, QColor(255, 170, 40), 0.16});
+        if (!keepHitMesh_.empty()) items.push_back({&keepHitMesh_, QColor(255, 40, 40)});
+    }
     if (!sags_.empty()) {
         if (sagDirty_) {
             sagMesh_ = Mesh3D();
@@ -4663,6 +4976,31 @@ void View3DCanvas::paintEvent(QPaintEvent*) {
                        measureStage_ == 1 ? QStringLiteral("Click the other end - ") + said
                                           : said + QStringLiteral("   (Delete takes it away)"));
         }
+    }
+    // A CABLE THROUGH A KEEP-OUT: the alert along the top of the picture, and each keep-out's name by it.
+    if (route_ && keepShown_) {
+        for (const KeepOut3D& k : route_->keepOuts) {
+            QPointF at;
+            const V3 where = k.zone ? V3{std::max(k.lo.x, k.hi.x), std::max(k.lo.y, k.hi.y), std::max(k.lo.z, k.hi.z)}
+                                    : V3{k.axis == 0 ? k.at : 0.0, k.axis == 1 ? k.at : 0.0, k.axis == 2 ? k.at : 0.0};
+            if (!toScreen(where, at)) continue;
+            p.setPen(k.block ? QColor(255, 120, 120) : QColor(255, 190, 90));
+            p.drawText(at + QPointF(6, -4), keepOutName(k) + (k.block ? QStringLiteral(" (block)") : QStringLiteral(" (alert)")));
+        }
+    }
+    if (!keepAlert_.isEmpty()) {
+        QFont f = p.font();
+        f.setBold(true);
+        p.setFont(f);
+        const QString text = QStringLiteral("\u26A0 ") + keepAlert_;
+        const QRectF box(width() * 0.5 - std::min(width() - 20.0, p.fontMetrics().horizontalAdvance(text) + 20.0) / 2.0, 40,
+                         std::min(width() - 20.0, p.fontMetrics().horizontalAdvance(text) + 20.0), p.fontMetrics().height() + 8);
+        p.fillRect(box, QColor(150, 20, 20, 220));
+        p.setPen(QColor(255, 235, 235));
+        p.drawText(box.adjusted(8, 0, -8, 0), Qt::AlignCenter | Qt::TextSingleLine,
+                   p.fontMetrics().elidedText(text, Qt::ElideRight, static_cast<int>(box.width()) - 16));
+        f.setBold(false);
+        p.setFont(f);
     }
     // WHICH VIEW IT IS, in the top left corner: Top, Front, Back, Left, Right, Bottom, Iso - or Custom.
     {

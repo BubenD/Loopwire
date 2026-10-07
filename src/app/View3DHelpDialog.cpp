@@ -258,7 +258,23 @@ const Topic kTopics[] = {
      "much more cable it needs to hang so. <i>Down</i> is the way gravity pulls in the model's axes: -Z, unless the "
      "model was drawn another way up. Nothing falls? Every cable is held or lies on something - add a clip where one "
      "does fall.</p>"},
-    {"17. What every command does",
+    {"17. Keep-outs - levels and zones no cable may go through",
+     "",
+     "<p>A <b>keep-out</b> is a place no cable may go: a <b>level</b> - a plane across X, Y or Z, at a place along it (a "
+     "lid, a floor not to be crossed, a height to keep under) - or a <b>zone</b>, a box (a hot part, a moving part, "
+     "another team's space).</p>"
+     "<p><b>To add one:</b> <i>Keep-outs...</i> (in the route's row, or <i>Keep-outs</i> on the ribbon), then <i>Add level "
+     "X / Y / Z</i> or <i>Add zone</i> - it is put at the middle of the model. In the list set its name, where the level "
+     "is (<i>At</i>), a zone's two corners (<i>From</i>, <i>To</i>: x, y, z), and its <b>rule</b>:</p>"
+     "<ul><li><b>Block</b> - a change that would take a cable through it is refused: laying the cable, moving or pulling "
+     "it, stretching it. The route stays as it was, and the status line says why.</li>"
+     "<li><b>Alert</b> - it is allowed, but the cable is marked where it goes in, a red warning runs along the top of "
+     "the picture, and the status line names the cable and the keep-out.</li></ul>"
+     "<p>A blocking level is drawn faint red, an alerting one orange. <i>Show keep-outs</i> (or <i>Show</i> on the "
+     "ribbon) hides them and shows them again - they still apply while hidden. <i>Example:</i> a lid 80 mm up - a level "
+     "Z at 80, Block: no cable can be laid or pulled over the rim.</p>"
+     "<p>Keep-outs are saved with the drawing, with the route; <i>Undo</i> takes back adding, changing or deleting one.</p>"},
+    {"18. What every command does",
      "",
      "<p><b>The top row - what is shown, and the view</b></p><dl>"
      "<dt><i>The drawing / The harness wizard</i></dt><dd>Which harness to show: the one on the sheet, or the one open in "
@@ -342,7 +358,7 @@ const Topic kTopics[] = {
      "<dt>Ctrl+Y</dt><dd>Redo.</dd>"
      "<dt>F11</dt><dd>Full screen, and back.</dd>"
      "</dl>"},
-    {"18. Words used here",
+    {"19. Words used here",
      "",
      "<dl>"
      "<dt><b>Environment</b></dt><dd>The CAD model the harness is routed in (STEP, STL or OBJ).</dd>"

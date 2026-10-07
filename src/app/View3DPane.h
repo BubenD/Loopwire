@@ -5,6 +5,7 @@
 #include "harness/Harness3D.h"
 #include "harness/Route3D.h"
 #include "harness/RouteGravity.h"
+#include "harness/RouteKeepOut.h"
 #include "harness/RouteLink.h"
 #include "render/GlRender3D.h"
 #include "render/Render3D.h"
@@ -319,7 +320,24 @@ public:
     // Gravity is on; taken away when it is off.
     void runGravity();
     const std::vector<CableSag3D>& sags() const;
+    // KEEP-OUTS: levels and zones no cable may go through - added (at the middle of the model, or where said), listed
+    // to be set (Keep-outs...), shown or hidden. A cable through one that blocks is refused; through one that alerts,
+    // warned of.
+    QString addKeepOutLevel(int axis, double at, bool block);
+    QString addKeepOutLevel(int axis);
+    QString addKeepOutZone(const V3& lo, const V3& hi, bool block);
+    QString addKeepOutZone();
+    void showKeepOuts();
+    void setKeepOutsShown(bool on);
+    std::vector<KeepOutHit> keepOutHitsNow() const { return keepOutHits(route_); }
 private:
+    QToolButton* keepShown_ = nullptr;
+    QString keepSaid_;
+    QPointer<QDialog> keepDialog_;
+    void refreshKeepOuts();
+    void fillKeepOutTable();
+    // Where a new keep-out goes: the model's middle along that axis (or the route's, or nought), its extent.
+    bool sceneBounds(V3& lo, V3& hi) const;
     QButtonGroup* tools_ = nullptr;
     QDoubleSpinBox* diameter_ = nullptr;
     QToolButton* diameterAuto_ = nullptr;
@@ -518,6 +536,12 @@ public:
     void clearMeasures();
     // GRAVITY'S PREVIEW: each bundle as it hangs, drawn faint over it, and each place it falls from marked with how far.
     void setSags(std::vector<CableSag3D> sags);
+    // THE KEEP-OUTS SHOWN (each faint, red where it blocks, orange where it alerts), each cable through one marked, and
+    // the alert along the top of the picture.
+    void setKeepOuts(std::vector<KeepOutHit> hits, const QString& alert);
+    void setKeepOutsShown(bool on);
+    bool keepOutsShown() const { return keepShown_; }
+    const QString& keepOutAlert() const { return keepAlert_; }
     const std::vector<CableSag3D>& sags() const { return sags_; }
     void removeMeasure(int index);
     int selectedMeasure() const { return selMeasure_; }
@@ -717,6 +741,11 @@ private:
     std::vector<CableSag3D> sags_;
     mutable Mesh3D sagMesh_, fallMesh_;
     mutable bool sagDirty_ = true;
+    std::vector<KeepOutHit> keepHits_;
+    QString keepAlert_;
+    bool keepShown_ = true;
+    mutable Mesh3D keepBlockMesh_, keepAlertMesh_, keepHitMesh_;
+    mutable bool keepDirty_ = true;
     bool skipPart(int part, const V3& point) const;
     // Locked, and what a drag is moving. Not saved.
     bool viewLocked_ = false;

@@ -198,6 +198,8 @@ add_library(edraw_core STATIC
     src/app/SystemDesignView.h
     src/app/DrawingFinderDialog.h
     src/harness/RouteGravity.h
+    src/harness/RouteKeepOut.h
+    src/harness/RouteKeepOut.cpp
     src/harness/RouteGravity.cpp
     src/harness/RouteLink.cpp
     src/app/BlockDialog.h

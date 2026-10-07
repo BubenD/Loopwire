@@ -74,6 +74,18 @@ struct RouteSegment3D {
     std::vector<QColor> wireColors;
 };
 
+// A KEEP-OUT: where no cable may go - a level (a plane across X, Y or Z, at a place along it) or a zone (a box). A cable
+// through one is refused (`block`) or allowed and warned of (an alert). Saved with the route.
+struct KeepOut3D {
+    QString id;      // K1, K2 ...
+    QString name;    // empty: "Level Z 80.0", "Zone K2"
+    bool zone = false;
+    int axis = 2;    // a level's: 0 X, 1 Y, 2 Z
+    double at = 0.0;
+    V3 lo, hi;       // a zone's corners
+    bool block = false;
+};
+
 struct Route3D {
     // For a bundle that gives none, in mm.
     double diameter = 8.0;
@@ -97,7 +109,14 @@ struct Route3D {
     // its face looks. Not saved.
     std::function<bool(const V3& point)> insideSolid;
 
-    bool empty() const { return nodes.empty() && segments.empty(); }
+    // WHERE NO CABLE MAY GO (RouteKeepOut).
+    std::vector<KeepOut3D> keepOuts;
+    // A keep-out added, its id the next in turn (K1, K2 ...).
+    QString addKeepOut(KeepOut3D k);
+    const KeepOut3D* keepOut(const QString& id) const;
+    KeepOut3D* keepOut(const QString& id);
+
+    bool empty() const { return nodes.empty() && segments.empty() && keepOuts.empty(); }
     const RouteNode3D* node(const QString& id) const;
     RouteNode3D* node(const QString& id);
     const RouteSegment3D* segment(const QString& id) const;

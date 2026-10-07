@@ -320,6 +320,28 @@ void draw(QPainter& p, const QString& k, const QColor& ink, const QColor& acc) {
         p.drawEllipse(QPointF(16, 16), 4, 4);
         return;
     }
+    if (k == QLatin1String("keepout") || k == QLatin1String("keepzone")) {
+        // A level (a sheet seen at a slant) or a zone (a box), and a no-entry sign on it.
+        p.setPen(QPen(ink, 1.4));
+        p.setBrush(QColor(235, 90, 70, 90));
+        if (k == QLatin1String("keepout")) {
+            QPolygonF sheet;
+            sheet << QPointF(3, 20) << QPointF(13, 12) << QPointF(29, 12) << QPointF(19, 20);
+            p.drawPolygon(sheet);
+        } else {
+            p.drawRect(QRectF(4, 12, 16, 13));
+            p.drawLine(QPointF(4, 12), QPointF(9, 7));
+            p.drawLine(QPointF(20, 12), QPointF(25, 7));
+            p.drawLine(QPointF(9, 7), QPointF(25, 7));
+            p.drawLine(QPointF(25, 7), QPointF(25, 20));
+            p.drawLine(QPointF(25, 20), QPointF(20, 25));
+        }
+        p.setPen(QPen(QColor(235, 60, 60), 2.2));
+        p.setBrush(Qt::NoBrush);
+        p.drawEllipse(QPointF(23, 23), 6.5, 6.5);
+        p.drawLine(QPointF(18.5, 27.5), QPointF(27.5, 18.5));
+        return;
+    }
     if (k == QLatin1String("gravity")) {
         // A cable hung between two clips, sagging, and gravity's arrow down under it.
         p.setPen(QPen(ink, 1.4));
