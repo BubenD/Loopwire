@@ -88,6 +88,11 @@ private:
     int sizeHandleAt(const QPointF& world, QString& unit) const;
     // A UNIT DROPPED: in the unit round its middle now (or none), and kept inside that one.
     void settleUnit(const QString& unit);
+    // A CABLE STARTED BY A CLICK: it follows the pointer until a click on another port or unit ends it (Esc gives it up).
+    bool pending_ = false;
+    // The cable being drawn ended where the pointer is: on a port, or on another unit (a port put there); anywhere else,
+    // given up.
+    void finishCable(const QMouseEvent* e);
     // After a unit, port, cable or note is put: back to Select, unless Shift is held to put another.
     void placed(const QMouseEvent* e);
     // Whether a unit lies inside another (a PCBA in its housing).

@@ -12,6 +12,7 @@
 #include "system/SystemDesign.h"
 #include "system/SystemExport.h"
 
+#include <QAction>
 #include <QFileInfo>
 #include <QXmlStreamReader>
 #include <QComboBox>
@@ -890,6 +891,66 @@ void testNestingAndLook() {
     QFile::remove(own);
 }
 
+// THE KEYBOARD'S DELETE ON THE SYSTEM DESIGN TAB - the window's shortcut - deletes the unit selected; A CABLE BY TWO
+// CLICKS: one on a port starts it, one on another ends it.
+void testDeleteKeyAndClickCable() {
+    // ---- TWO CLICKS ----
+    QJsonObject stored;
+    SystemDesignView view;
+    view.setStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    view.resize(1100, 700);
+    view.show();
+    QApplication::processEvents();
+    SystemCanvas* c = view.canvas();
+    SystemDesign& d = view.design();
+    const QString a = d.addUnit(0, 0), b = d.addUnit(400, 0);
+    const QString pa = d.addPort(a, QStringLiteral("right"), 0.5), pb = d.addPort(b, QStringLiteral("left"), 0.5);
+    c->fit();
+    view.setTool(SysTool::Cable);
+    const QPointF from = c->portOnScreen(a, pa), to = c->portOnScreen(b, pb);
+    click(c, from);
+    for (int i = 1; i <= 4; ++i) mouse(c, QEvent::MouseMove, from + (to - from) * (i / 4.0), Qt::NoButton, Qt::NoButton);
+    check(d.cables.empty(), "two clicks: the first - the cable started, following the pointer, none put yet");
+    click(c, to);
+    check(d.cables.size() == 1 && d.cables[0].aPort == pa && d.cables[0].bPort == pb && c->tool() == SysTool::Select,
+          "two clicks: the second, on the other port - the cable put, back to Select");
+    // Started by a click on a unit, ended on nothing: given up.
+    view.setTool(SysTool::Cable);
+    click(c, c->unitOnScreen(a));
+    click(c, c->toScreen({200, 600}));
+    check(d.cables.size() == 1 && d.unit(a)->ports.size() == 1, "two clicks: ended on nothing - given up, no port put");
+
+    // ---- THE KEYBOARD'S DELETE ----
+    MainWindow w;
+    w.show();
+    QApplication::processEvents();
+    QTabWidget* ribbon = nullptr;
+    int tab = -1;
+    for (QTabWidget* t : w.findChildren<QTabWidget*>())
+        for (int i = 0; i < t->count(); ++i)
+            if (t->tabText(i) == QLatin1String("System design")) {
+                ribbon = t;
+                tab = i;
+            }
+    auto* sys = w.findChild<SystemDesignView*>(QStringLiteral("systemDesign"));
+    QAction* del = nullptr;
+    for (QAction* act : w.findChildren<QAction*>())
+        if (act->shortcut() == QKeySequence(QKeySequence::Delete)) del = act;
+    check(ribbon && sys && del, "delete key: the window's Delete");
+    if (!ribbon || !sys || !del) return;
+    ribbon->setCurrentIndex(tab);
+    QApplication::processEvents();
+    sys->setTool(SysTool::Unit);
+    click(sys->canvas(), sys->canvas()->toScreen({100, 100}));
+    const QString u = sys->design().units.empty() ? QString() : sys->design().units[0].id;
+    sys->canvas()->select(u, QString(), QString());
+    del->trigger();
+    QApplication::processEvents();
+    check(!u.isEmpty() && sys->design().units.empty(), "delete key: on the System design tab - the unit selected deleted");
+    ribbon->setCurrentIndex(0);
+    QApplication::processEvents();
+}
+
 } // namespace
 
 int run_systemdesign_tests() {
@@ -906,6 +967,7 @@ int run_systemdesign_tests() {
     testUnitsPortsNotes();
     testFilesOut(dir.path());
     testNestingAndLook();
+    testDeleteKeyAndClickCable();
     std::printf("  system design: %s\n", g_fail == 0 ? "OK" : "FAILED");
     return g_fail;
 }

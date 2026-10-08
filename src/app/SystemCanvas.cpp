@@ -89,6 +89,11 @@ void SystemCanvas::setDesign(SystemDesign* design) {
 
 void SystemCanvas::setTool(SysTool tool) {
     const bool changedTool = tool != tool_;
+    if (pending_) {
+        pending_ = false;
+        drag_ = Drag::None;
+        update();
+    }
     tool_ = tool;
     if (tool != SysTool::Select) {
         lastTool_ = tool;
@@ -439,6 +444,11 @@ void SystemCanvas::paintEvent(QPaintEvent*) {
 
 void SystemCanvas::mousePressEvent(QMouseEvent* e) {
     setFocus();
+    // THE SECOND CLICK of a cable started by a click: where it ends.
+    if (pending_ && e->button() == Qt::LeftButton) {
+        finishCable(e);
+        return;
+    }
     lastScreen_ = e->position();
     pressWorld_ = toWorld(e->position());
     moved_ = false;
@@ -671,13 +681,30 @@ void SystemCanvas::mouseReleaseEvent(QMouseEvent* e) {
         return;
     }
     if (was == Drag::Cable) {
+        // A CLICK, NOT A DRAG: the cable started there - it follows the pointer, and a click on another port or unit ends it.
+        if (!moved_ && !pending_) {
+            pending_ = true;
+            drag_ = Drag::Cable;
+            if (!fromNew_) select(fromUnit_, fromPort_, QString());
+            rubber_ = e->position();
+            update();
+            return;
+        }
+        finishCable(e);
+    }
+}
+
+void SystemCanvas::finishCable(const QMouseEvent* e) {
+    {
         QString unit, port;
         const QPointF w = toWorld(e->position());
         const bool onPort = portAt(w, unit, port);
         const QString onUnit = onPort ? unit : unitAt(w);
         const bool same = onPort && unit == fromUnit_ && port == fromPort_ && !fromNew_;
-        // Let go on a port, or on another unit (a port put there); on its own unit's body, or on nothing: given up.
-        if (moved_ && !same && (onPort || (!onUnit.isEmpty() && onUnit != fromUnit_))) {
+        drag_ = Drag::None;
+        pending_ = false;
+        // Ended on a port, or on another unit (a port put there); on its own unit's body, or on nothing: given up.
+        if (!same && (onPort || (!onUnit.isEmpty() && onUnit != fromUnit_))) {
             emit aboutToChange();
             // PORTS PUT WHERE THERE WERE NONE: where the cable started, and where it ends on a unit.
             QString aPort = fromPort_, bPort = port, bUnit = onPort ? unit : onUnit;
@@ -698,7 +725,7 @@ void SystemCanvas::mouseReleaseEvent(QMouseEvent* e) {
             select(QString(), QString(), id);
             emit changed();
             placed(e);
-        } else if (!fromNew_ && (!moved_ || same)) {
+        } else if (!fromNew_ && same) {
             select(fromUnit_, fromPort_, QString());
         }
         fromNew_ = false;
@@ -736,6 +763,7 @@ void SystemCanvas::keyPressEvent(QKeyEvent* e) {
         return;
     }
     if (e->key() == Qt::Key_Escape) {
+        pending_ = false;
         drag_ = Drag::None;
         setTool(SysTool::Select);
         select(QString(), QString(), QString());

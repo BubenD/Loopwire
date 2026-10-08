@@ -7546,7 +7546,18 @@ void MainWindow::buildMenus() {
     editMenu->addAction(QStringLiteral("&Redo"), QKeySequence::Redo, this, [this] { undoHere(true); });
     editMenu->addSeparator();
     editMenu->addAction(QStringLiteral("Select &all"), QKeySequence::SelectAll, this, [this] { editor_->selectAll(); });
-    editMenu->addAction(QStringLiteral("&Delete"), QKeySequence::Delete, this, [this] { editor_->deleteSelected(); });
+    // DELETE OF WHAT IS OPEN: the window's Delete key is this shortcut, so it goes to the system diagram or the 3D view
+    // where one of them is open - and to the drawing otherwise.
+    editMenu->addAction(QStringLiteral("&Delete"), QKeySequence::Delete, this, [this] {
+        if (systemView_ && centralStack_ && centralStack_->currentWidget() == systemView_) {
+            systemView_->deleteSelected();
+        } else if (preview3dOn_ && view3dPane_) {
+            QKeyEvent del(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
+            QApplication::sendEvent(view3dPane_->canvas(), &del);
+        } else {
+            editor_->deleteSelected();
+        }
+    });
     // "Color: ByLayer" used to sit here. It is a property command, not an edit one - it belongs with
     // the colour picker on the ribbon, which is where somebody setting a colour already is - and one
     // lonely entry under a separator made the menu look like it had been left half-finished. Still
