@@ -16,19 +16,23 @@ namespace Edraw_Desktop {
 // the revision the system calls for. Saved with the drawing.
 
 // A PORT ON A UNIT: where a cable plugs in - on one of its sides, so far along it (0 to 1), named, with the connector it
-// takes and how many pins.
+// takes and how many pins. A connector through the unit's wall: its inside (always there, inside the wall) and its
+// outside (drawn once a cable is plugged into it from outside), each with its own connector part number.
 struct SysPort {
     QString id;
     QString name;
     QString side = QStringLiteral("right");   // "left", "right", "top", "bottom"
     double at = 0.5;
-    QString connector;   // the mating connector's part number, as the system calls for it
+    QString connector;   // the outside's mating connector part number, as the system calls for it
+    QString insidePn;    // the inside's connector part number
     int pins = 0;
 };
 
-// A UNIT: a box of the system - a controller, a sensor, a panel - where it is drawn, and its ports.
+// A UNIT: a box of the system - a controller, a sensor, a panel - where it is drawn, and its ports. What it is: a
+// mechanical part ("mech", as it starts) or a printed circuit board assembly ("pcba").
 struct SysUnit {
     QString id;
+    QString kind = QStringLiteral("mech");
     QString name;
     QString pn;
     QString rev;
@@ -49,6 +53,8 @@ struct SysCable {
     QString rev;
     QString description;
     QString aUnit, aPort, bUnit, bPort;
+    // AN END ON A PORT'S INSIDE: from within the unit - another port of the same unit, or a unit inside it.
+    bool aInside = false, bInside = false;
     double lengthMm = 0.0;
     int wires = 0;
     QColor color;
@@ -85,6 +91,13 @@ struct SysIssue {
     QString cable;
 };
 
+// A NOTE ON THE DIAGRAM: text in a box, where it is put.
+struct SysNote {
+    QString id;
+    QString text;
+    double x = 0.0, y = 0.0, w = 180.0, h = 70.0;
+};
+
 // HOW THE LINK OF A CABLE TO ITS DRAWING STANDS: none linked, the file not there, its revision not the one the cable
 // calls for, or matching.
 enum class SysLinkState { None, Missing, Mismatch, Match };
@@ -92,10 +105,19 @@ enum class SysLinkState { None, Missing, Mismatch, Match };
 struct SystemDesign {
     QString name;
     QString pnPrefix = QStringLiteral("CBL-");
+    int pnDigits = 3;   // how many digits the number after the prefix has (CBL-001)
     std::vector<SysUnit> units;
     std::vector<SysCable> cables;
+    std::vector<SysNote> notes;
 
-    bool empty() const { return units.empty() && cables.empty(); }
+    bool empty() const { return units.empty() && cables.empty() && notes.empty(); }
+    const SysNote* note(const QString& id) const;
+    SysNote* note(const QString& id);
+    // A NOTE put at a place; its id. One taken away.
+    QString addNote(double x, double y, const QString& text = QString());
+    void removeNote(const QString& id);
+    // The cables plugged into one side of a port - its inside or its outside.
+    std::vector<const SysCable*> cablesAt(const QString& unit, const QString& port, bool inside) const;
     const SysUnit* unit(const QString& id) const;
     SysUnit* unit(const QString& id);
     const SysCable* cable(const QString& id) const;
@@ -115,7 +137,7 @@ struct SystemDesign {
     // The cables plugged into a port.
     std::vector<const SysCable*> cablesAt(const QString& unit, const QString& port) const;
 
-    // PART NUMBERS for the cables that have none: the prefix and the next free number, three digits (CBL-001). How many.
+    // PART NUMBERS for the cables that have none: the prefix and the next free number, so many digits (CBL-001). How many.
     int numberCables();
 
     // How a cable's link to its drawing stands - against the number and revision last read off it.

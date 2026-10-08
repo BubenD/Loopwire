@@ -4364,6 +4364,35 @@ static QIcon undoArrowIcon(bool redo, bool compact, const QColor& ink) {
     return QIcon(pm);
 }
 
+void MainWindow::undoHere(bool redo) {
+    if (systemView_ && centralStack_ && centralStack_->currentWidget() == systemView_) {
+        if (redo) systemView_->redo();
+        else systemView_->undo();
+        systemView_->canvas()->setFocus(Qt::OtherFocusReason);
+    } else if (preview3dOn_ && view3dPane_) {
+        if (redo) view3dPane_->redoRoute();
+        else view3dPane_->undoRoute();
+        view3dPane_->canvas()->setFocus(Qt::OtherFocusReason);
+    } else {
+        if (redo) editor_->redo();
+        else editor_->undo();
+        canvas_->setFocus(Qt::OtherFocusReason);   // the keys keep working afterwards
+    }
+    syncUndoRedo();
+}
+
+bool MainWindow::canUndoHere(bool redo) const {
+    if (systemView_ && centralStack_ && centralStack_->currentWidget() == systemView_)
+        return redo ? systemView_->canRedo() : systemView_->canUndo();
+    if (preview3dOn_ && view3dPane_) return redo ? view3dPane_->canRedoRoute() : view3dPane_->canUndoRoute();
+    return redo ? editor_->canRedo() : editor_->canUndo();
+}
+
+void MainWindow::syncUndoRedo() {
+    for (QToolButton* b : undoRedoBtns_)
+        if (b) b->setEnabled(canUndoHere(b->property("redo").toBool()));
+}
+
 QWidget* MainWindow::undoRedoRow(QWidget* parent, bool compact) {
     auto* host = new QWidget(parent);
     auto* lay = new QHBoxLayout(host);
@@ -4387,16 +4416,11 @@ QWidget* MainWindow::undoRedoRow(QWidget* parent, bool compact) {
         b->setProperty("redo", redo);
         b->setProperty("compact", compact);
         undoRedoBtns_.append(b);
-        connect(b, &QToolButton::clicked, this, [this, redo] {
-            if (redo) editor_->redo();
-            else editor_->undo();
-            canvas_->setFocus(Qt::OtherFocusReason);   // the keys keep working afterwards
-        });
-        // Greyed when there is nothing to do, so the button says what the drawing's state is.
-        auto sync = [this, b, redo] { b->setEnabled(redo ? editor_->canRedo() : editor_->canUndo()); };
-        sync();
-        connect(editor_, &Editor::changed, this, sync);
-        connect(editor_, &Editor::selectionChanged, this, sync);
+        connect(b, &QToolButton::clicked, this, [this, redo] { undoHere(redo); });
+        // Greyed when there is nothing to do, so the button says what the state is of what is open.
+        b->setEnabled(canUndoHere(redo));
+        connect(editor_, &Editor::changed, this, [this] { syncUndoRedo(); });
+        connect(editor_, &Editor::selectionChanged, this, [this] { syncUndoRedo(); });
         return b;
     };
     if (compact) {
@@ -4674,7 +4698,11 @@ void MainWindow::buildRibbon() {
     connect(ribbon_, &QTabWidget::currentChanged, this, [this](int i) {
         showPreview3D(ribbon_->widget(i) == view3dTabPage_);
         showSystemDesign(ribbon_->widget(i) == systemTabPage_);
+        syncUndoRedo();
     });
+    // THE CORNER'S UNDO AND REDO kept in step with the system diagram and the 3D route as they change.
+    if (systemView_) connect(systemView_, &SystemDesignView::changed, this, [this] { syncUndoRedo(); });
+    if (view3dPane_) connect(view3dPane_, &View3DPane::routeChanged, this, [this] { syncUndoRedo(); });
 
     // (Parametric and Output ribbon tabs were removed — file New/Open/Save and the
     //  DXF/PDF/CSV exports live on the E (application) menu and the command line.)
@@ -7514,8 +7542,8 @@ void MainWindow::buildMenus() {
         "QMenu::separator{height:1px;background-color:#4a4e55;margin:3px 6px;}"));
 
     QMenu* editMenu = menuBar()->addMenu(QStringLiteral("&Edit"));
-    editMenu->addAction(QStringLiteral("&Undo"), QKeySequence::Undo, this, [this] { editor_->undo(); });
-    editMenu->addAction(QStringLiteral("&Redo"), QKeySequence::Redo, this, [this] { editor_->redo(); });
+    editMenu->addAction(QStringLiteral("&Undo"), QKeySequence::Undo, this, [this] { undoHere(false); });
+    editMenu->addAction(QStringLiteral("&Redo"), QKeySequence::Redo, this, [this] { undoHere(true); });
     editMenu->addSeparator();
     editMenu->addAction(QStringLiteral("Select &all"), QKeySequence::SelectAll, this, [this] { editor_->selectAll(); });
     editMenu->addAction(QStringLiteral("&Delete"), QKeySequence::Delete, this, [this] { editor_->deleteSelected(); });
@@ -11773,8 +11801,8 @@ void MainWindow::buildCommands() {
          [this] { insertPictureFromClipboard(false); }},
         {{"pdfimport", "pdfin", "importpdf"}, "Insert", "Import vector paths from a PDF",
          [this] { importPdf(); }},
-        {{"undo", "u"}, "Edit", "Undo", [this] { editor_->undo(); }},
-        {{"redo"}, "Edit", "Redo", [this] { editor_->redo(); }},
+        {{"undo", "u"}, "Edit", "Undo", [this] { undoHere(false); }},
+        {{"redo"}, "Edit", "Redo", [this] { undoHere(true); }},
         {{"bylayer"}, "Edit", "Set selection color to ByLayer", [this] { editor_->setColorsByLayer(); }},
         // View
         {{"zoom", "z", "fit", "extents", "ze"}, "View", "Zoom to fit the drawing", [this] { canvas_->fitView(); }},

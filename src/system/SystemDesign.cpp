@@ -141,6 +141,7 @@ QString SystemDesign::freshId(const QString& prefix) const {
         for (const SysPort& p : u.ports) taken.insert(p.id);
     }
     for (const SysCable& c : cables) taken.insert(c.id);
+    for (const SysNote& n : notes) taken.insert(n.id);
     for (int n = 1;; ++n) {
         const QString id = prefix + QString::number(n);
         if (!taken.contains(id)) return id;
@@ -231,6 +232,40 @@ std::vector<const SysCable*> SystemDesign::cablesAt(const QString& unitId, const
     return out;
 }
 
+const SysNote* SystemDesign::note(const QString& id) const {
+    for (const SysNote& n : notes)
+        if (n.id == id) return &n;
+    return nullptr;
+}
+
+SysNote* SystemDesign::note(const QString& id) {
+    for (SysNote& n : notes)
+        if (n.id == id) return &n;
+    return nullptr;
+}
+
+QString SystemDesign::addNote(double x, double y, const QString& text) {
+    SysNote n;
+    n.id = freshId(QStringLiteral("n"));
+    n.x = x;
+    n.y = y;
+    n.text = text.isEmpty() ? QStringLiteral("Note") : text;
+    notes.push_back(n);
+    return n.id;
+}
+
+void SystemDesign::removeNote(const QString& id) {
+    notes.erase(std::remove_if(notes.begin(), notes.end(), [&](const SysNote& n) { return n.id == id; }), notes.end());
+}
+
+std::vector<const SysCable*> SystemDesign::cablesAt(const QString& unitId, const QString& port, bool inside) const {
+    std::vector<const SysCable*> out;
+    for (const SysCable& c : cables)
+        if ((c.aUnit == unitId && c.aPort == port && c.aInside == inside) || (c.bUnit == unitId && c.bPort == port && c.bInside == inside))
+            out.push_back(&c);
+    return out;
+}
+
 int SystemDesign::numberCables() {
     // THE NEXT FREE NUMBER after those the prefix has been given already.
     int highest = 0;
@@ -239,7 +274,7 @@ int SystemDesign::numberCables() {
     int given = 0;
     for (SysCable& c : cables) {
         if (!c.pn.trimmed().isEmpty()) continue;
-        c.pn = pnPrefix + QStringLiteral("%1").arg(++highest, 3, 10, QLatin1Char('0'));
+        c.pn = pnPrefix + QStringLiteral("%1").arg(++highest, std::clamp(pnDigits, 1, 9), 10, QLatin1Char('0'));
         ++given;
     }
     return given;
@@ -311,9 +346,13 @@ std::vector<SysIssue> SystemDesign::check() const {
     for (const SysUnit& u : units) {
         if (u.pn.trimmed().isEmpty()) out.push_back({0, QStringLiteral("%1 has no part number").arg(u.name), u.id, QString()});
         for (const SysPort& p : u.ports) {
-            const size_t n = cablesAt(u.id, p.id).size();
-            if (n == 0) out.push_back({1, QStringLiteral("%1.%2 - nothing plugged in").arg(u.name, p.name), u.id, QString()});
-            if (n > 1) out.push_back({2, QStringLiteral("%1.%2 - %3 cables plugged into one port").arg(u.name, p.name).arg(n), u.id, QString()});
+            // ONE CABLE A SIDE: a port's inside and its outside each take one.
+            const size_t in = cablesAt(u.id, p.id, true).size(), out_ = cablesAt(u.id, p.id, false).size();
+            if (in + out_ == 0) out.push_back({1, QStringLiteral("%1.%2 - nothing plugged in").arg(u.name, p.name), u.id, QString()});
+            if (out_ > 1)
+                out.push_back({2, QStringLiteral("%1.%2 - %3 cables plugged into one port").arg(u.name, p.name).arg(out_), u.id, QString()});
+            if (in > 1)
+                out.push_back({2, QStringLiteral("%1.%2 - %3 cables plugged into its inside").arg(u.name, p.name).arg(in), u.id, QString()});
         }
     }
     QHash<QString, const SysCable*> byPn;
@@ -372,6 +411,7 @@ QJsonObject SystemDesign::toJson() const {
     QJsonObject o;
     if (!name.isEmpty()) o[QStringLiteral("name")] = name;
     o[QStringLiteral("pnPrefix")] = pnPrefix;
+    if (pnDigits != 3) o[QStringLiteral("pnDigits")] = pnDigits;
     QJsonArray us;
     for (const SysUnit& u : units) {
         QJsonObject j{{QStringLiteral("id"), u.id}, {QStringLiteral("name"), u.name}, {QStringLiteral("x"), u.x},
@@ -380,11 +420,13 @@ QJsonObject SystemDesign::toJson() const {
         if (!u.rev.isEmpty()) j[QStringLiteral("rev")] = u.rev;
         if (!u.description.isEmpty()) j[QStringLiteral("description")] = u.description;
         if (u.color.isValid()) j[QStringLiteral("color")] = u.color.name();
+        if (u.kind != QLatin1String("mech")) j[QStringLiteral("kind")] = u.kind;
         QJsonArray ps;
         for (const SysPort& p : u.ports) {
             QJsonObject q{{QStringLiteral("id"), p.id}, {QStringLiteral("name"), p.name}, {QStringLiteral("side"), p.side},
                           {QStringLiteral("at"), p.at}};
             if (!p.connector.isEmpty()) q[QStringLiteral("connector")] = p.connector;
+            if (!p.insidePn.isEmpty()) q[QStringLiteral("insidePn")] = p.insidePn;
             if (p.pins > 0) q[QStringLiteral("pins")] = p.pins;
             ps.append(q);
         }
@@ -400,6 +442,8 @@ QJsonObject SystemDesign::toJson() const {
         if (!c.rev.isEmpty()) j[QStringLiteral("rev")] = c.rev;
         if (!c.description.isEmpty()) j[QStringLiteral("description")] = c.description;
         if (c.lengthMm > 0.0) j[QStringLiteral("length")] = c.lengthMm;
+        if (c.aInside) j[QStringLiteral("aIn")] = true;
+        if (c.bInside) j[QStringLiteral("bIn")] = true;
         if (c.wires > 0) j[QStringLiteral("wires")] = c.wires;
         if (c.color.isValid()) j[QStringLiteral("color")] = c.color.name();
         if (!c.drawing.isEmpty()) {
@@ -410,6 +454,13 @@ QJsonObject SystemDesign::toJson() const {
         cs.append(j);
     }
     o[QStringLiteral("cables")] = cs;
+    if (!notes.empty()) {
+        QJsonArray ns;
+        for (const SysNote& n : notes)
+            ns.append(QJsonObject{{QStringLiteral("id"), n.id}, {QStringLiteral("text"), n.text}, {QStringLiteral("x"), n.x},
+                                  {QStringLiteral("y"), n.y},   {QStringLiteral("w"), n.w},       {QStringLiteral("h"), n.h}});
+        o[QStringLiteral("notes")] = ns;
+    }
     return o;
 }
 
@@ -417,6 +468,18 @@ SystemDesign SystemDesign::fromJson(const QJsonObject& o) {
     SystemDesign d;
     d.name = o.value(QStringLiteral("name")).toString();
     d.pnPrefix = o.value(QStringLiteral("pnPrefix")).toString(QStringLiteral("CBL-"));
+    d.pnDigits = std::clamp(o.value(QStringLiteral("pnDigits")).toInt(3), 1, 9);
+    for (const QJsonValue& v : o.value(QStringLiteral("notes")).toArray()) {
+        const QJsonObject j = v.toObject();
+        SysNote n;
+        n.id = j.value(QStringLiteral("id")).toString();
+        n.text = j.value(QStringLiteral("text")).toString();
+        n.x = j.value(QStringLiteral("x")).toDouble();
+        n.y = j.value(QStringLiteral("y")).toDouble();
+        n.w = j.value(QStringLiteral("w")).toDouble(180.0);
+        n.h = j.value(QStringLiteral("h")).toDouble(70.0);
+        if (!n.id.isEmpty()) d.notes.push_back(n);
+    }
     for (const QJsonValue& v : o.value(QStringLiteral("units")).toArray()) {
         const QJsonObject j = v.toObject();
         SysUnit u;
@@ -425,6 +488,7 @@ SystemDesign SystemDesign::fromJson(const QJsonObject& o) {
         u.pn = j.value(QStringLiteral("pn")).toString();
         u.rev = j.value(QStringLiteral("rev")).toString();
         u.description = j.value(QStringLiteral("description")).toString();
+        u.kind = j.value(QStringLiteral("kind")).toString(QStringLiteral("mech"));
         u.x = j.value(QStringLiteral("x")).toDouble();
         u.y = j.value(QStringLiteral("y")).toDouble();
         u.w = j.value(QStringLiteral("w")).toDouble(160.0);
@@ -438,6 +502,7 @@ SystemDesign SystemDesign::fromJson(const QJsonObject& o) {
             p.side = q.value(QStringLiteral("side")).toString(QStringLiteral("right"));
             p.at = q.value(QStringLiteral("at")).toDouble(0.5);
             p.connector = q.value(QStringLiteral("connector")).toString();
+            p.insidePn = q.value(QStringLiteral("insidePn")).toString();
             p.pins = q.value(QStringLiteral("pins")).toInt(0);
             if (!p.id.isEmpty()) u.ports.push_back(p);
         }
@@ -457,6 +522,8 @@ SystemDesign SystemDesign::fromJson(const QJsonObject& o) {
         c.bPort = j.value(QStringLiteral("bPort")).toString();
         c.lengthMm = j.value(QStringLiteral("length")).toDouble(0.0);
         c.wires = j.value(QStringLiteral("wires")).toInt(0);
+        c.aInside = j.value(QStringLiteral("aIn")).toBool(false);
+        c.bInside = j.value(QStringLiteral("bIn")).toBool(false);
         if (j.contains(QStringLiteral("color"))) c.color = QColor(j.value(QStringLiteral("color")).toString());
         c.drawing = j.value(QStringLiteral("drawing")).toString();
         c.drawingNo = j.value(QStringLiteral("drawingNo")).toString();

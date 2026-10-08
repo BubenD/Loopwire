@@ -118,6 +118,9 @@ public:
     void setRouteTool(RouteTool tool);
     // The last change to the route taken back.
     void undoRoute();
+    // Whether there is a change to take back, or one to put back (the window's Undo and Redo, while the 3D Preview is open).
+    bool canUndoRoute() const { return !history_.empty(); }
+    bool canRedoRoute() const { return !future_.empty(); }
     // TAKEN BACK, PUT BACK AGAIN: what Undo took back, in turn (Ctrl+Y); none once anything else is changed.
     void redoRoute();
     bool canRedo() const { return !future_.empty(); }
@@ -343,7 +346,6 @@ private:
     QToolButton* diameterAuto_ = nullptr;
     QSpinBox* wires_ = nullptr;
     QDoubleSpinBox* wireD_ = nullptr;
-    QToolButton* redo_ = nullptr;
     QDoubleSpinBox* bend_ = nullptr;
     QDoubleSpinBox* lead_ = nullptr;
     QToolButton* undo_ = nullptr;

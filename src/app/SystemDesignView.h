@@ -9,7 +9,9 @@
 #include <functional>
 #include <vector>
 
+class QComboBox;
 class QDoubleSpinBox;
+class QPlainTextEdit;
 class QLabel;
 class QLineEdit;
 class QListWidget;
@@ -38,9 +40,15 @@ public:
 
     void setTool(SysTool tool);
     void undo();
+    void redo();
     bool canUndo() const { return !history_.empty(); }
+    bool canRedo() const { return !future_.empty(); }
     // PART NUMBERS for the cables with none. How many.
     int numberCables();
+    // HOW CABLES ARE NUMBERED: the prefix and how many digits after it (CBL-001: "CBL-", 3) - set, one step to undo; and
+    // asked for in a dialog.
+    void setNumbering(const QString& prefix, int digits);
+    void askNumbering();
     // THE CABLE SELECTED linked to a drawing (empty: unlinked) - its number and revision read off it; `ask`: where the
     // drawing calls the cable or its connectors otherwise, asked whether to take the drawing's names.
     bool linkDrawing(const QString& cable, const QString& path, bool ask = false);
@@ -74,6 +82,7 @@ private:
     std::function<QJsonObject()> load_;
     std::function<void(const QJsonObject&)> save_;
     std::vector<QJsonObject> history_;
+    std::vector<QJsonObject> future_;   // what Undo took back, for Redo
     std::vector<SysIssue> issues_;
     std::function<bool(const QString&)> confirm_;
     bool filling_ = false;
@@ -86,6 +95,7 @@ private:
     QLineEdit* unitPn_ = nullptr;
     QLineEdit* unitRev_ = nullptr;
     QLineEdit* unitDesc_ = nullptr;
+    QComboBox* unitKind_ = nullptr;
     QTableWidget* ports_ = nullptr;
     // A cable.
     QLineEdit* cableName_ = nullptr;
@@ -98,6 +108,9 @@ private:
     QLineEdit* cableDrawing_ = nullptr;
     QLabel* cableRead_ = nullptr;
     QLabel* cableStatus_ = nullptr;
+    // A note: its text - one step to undo however much of it is typed at once.
+    QPlainTextEdit* noteText_ = nullptr;
+    QString noteTyping_;
     // Under the picture.
     QTabWidget* tabs_ = nullptr;
     QTableWidget* cables_ = nullptr;

@@ -282,6 +282,11 @@ private:
     // THE SYSTEM DESIGN TAB: the system diagram where the drawing is while it is open (SystemDesignView).
     void buildSystemTab();
     void showSystemDesign(bool on);
+    // UNDO AND REDO OF WHAT IS OPEN: the system diagram's (the System design tab), the 3D route's (the 3D Preview tab),
+    // or the drawing's - the window's corner buttons, Ctrl+Z and Ctrl+Y alike; and the buttons greyed by it.
+    void undoHere(bool redo);
+    bool canUndoHere(bool redo) const;
+    void syncUndoRedo();
     void showPreview3D(bool on);
     void restylePreview3DIcons();
     // THE 3D VIEW'S PANEL PUT AT A SIDE (the picture alone) or below (everything).

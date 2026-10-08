@@ -1,6 +1,7 @@
 // THE SYSTEM DESIGN TAB: the system diagram - units, their ports and the cables between them, each cable with its part
 // number and revision and the drawing that defines it - in the middle of the window while the tab is open, and every
-// other tab puts the drawing back. Its buttons: what a click does (Select, Unit, Port, Cable), Delete and Undo; the
+// other tab puts the drawing back. Its buttons: what a click does (Select, Unit, Port, Cable, Note) and Delete - Undo
+// and Redo are the window's, in its top right corner; the
 // cables' part numbers, the drawing each is linked to, Find drawings; the revision check and the design check; the
 // cable list out to a file.
 #include "app/MainWindow.h"
@@ -11,7 +12,9 @@
 #include "model/Document.h"
 #include "render/CanvasWidget.h"
 
+#include <QActionGroup>
 #include <QButtonGroup>
+#include <QMenu>
 #include <QHBoxLayout>
 #include <QMessageBox>
 #include <QStackedWidget>
@@ -70,34 +73,68 @@ void MainWindow::buildSystemTab() {
             const char* icon;
             const char* tip;
         } list[] = {
-            {SysTool::Select, "systemSelect", "Select", "select", "Select a unit, a port or a cable - drag a unit to move it, drag from a port to draw a cable"},
-            {SysTool::Unit, "systemUnit", "Unit", "unit", "Put a unit of the system where you click"},
-            {SysTool::Port, "systemPort", "Port", "connector", "Put a port on the side of the unit you click, where you click"},
-            {SysTool::Cable, "systemCable", "Cable", "route", "Draw a cable: press on one port and let go on another"},
+            {SysTool::Select, "systemSelect", "Select", "select",
+             "Select a unit, a port, a cable or a note - drag a unit or a note to move it, a port to slide it along its unit's "
+             "sides, a unit's corner or edge to size it (Esc)"},
+            {SysTool::Unit, "systemUnit", "Unit", "unit",
+             "Put a unit of the system where you click (U) - the arrow: a mechanical part or a PCBA"},
+            {SysTool::Port, "systemPort", "Port", "connector", "Put a port on the side of the unit you click, where you click (P)"},
+            {SysTool::Cable, "systemCable", "Cable", "route",
+             "Draw a cable - a harness (H): press on a port and let go on another; start or end on a unit where it has no port, "
+             "and a port is put there"},
+            {SysTool::Note, "systemNote", "Note", "help", "Put a note where you click (N) - its text on the right"},
         };
+        auto* toolGroup = tools;
         for (const auto& t : list) {
             QToolButton* b = big(w, row, t.name, QString::fromLatin1(t.text), QString::fromLatin1(t.icon), QString::fromLatin1(t.tip),
                                  [this, tool = t.tool] {
                                      if (systemView_) systemView_->setTool(tool);
                                  });
             b->setCheckable(true);
-            tools->addButton(b);
+            tools->addButton(b, static_cast<int>(t.tool));
             if (t.tool == SysTool::Select) b->setChecked(true);
+            // UNIT'S ARROW: what the units put next are.
+            if (t.tool == SysTool::Unit) {
+                b->setPopupMode(QToolButton::MenuButtonPopup);
+                auto* kinds = new QMenu(b);
+                kinds->setObjectName(QStringLiteral("systemUnitKinds"));
+                auto* pick = new QActionGroup(kinds);
+                for (const auto& [text, kind] : {std::pair<const char*, const char*>{"Mechanical part", "mech"}, {"PCBA", "pcba"}}) {
+                    QAction* a = kinds->addAction(QString::fromLatin1(text), this, [this, b, k = QString::fromLatin1(kind)] {
+                        if (!systemView_) return;
+                        systemView_->canvas()->setNewUnitKind(k);
+                        systemView_->setTool(SysTool::Unit);
+                        b->setChecked(true);
+                    });
+                    a->setCheckable(true);
+                    a->setChecked(QLatin1String(kind) == QLatin1String("mech"));
+                    pick->addAction(a);
+                }
+                b->setMenu(kinds);
+            }
         }
+        // THE TOOL TAKEN BY ITS KEY in the diagram: its button pressed in here too.
+        connect(systemView_->canvas(), &SystemCanvas::toolChanged, this, [toolGroup](SysTool tool) {
+            if (QAbstractButton* b = toolGroup->button(static_cast<int>(tool))) b->setChecked(true);
+        });
         big(w, row, "systemDelete", QStringLiteral("Delete"), QStringLiteral("delete"),
             QStringLiteral("Delete the unit, port or cable selected (a unit or port takes its cables with it)"),
             [this] { if (systemView_) systemView_->canvas()->deleteSelected(); });
-        big(w, row, "systemUndo", QStringLiteral("Undo"), QStringLiteral("undo"), QStringLiteral("Take back the last change to the diagram"),
-            [this] { if (systemView_) systemView_->undo(); });
         big(w, row, "systemFit", QStringLiteral("Fit"), QStringLiteral("fit"), QStringLiteral("The whole diagram in view"),
             [this] { if (systemView_) systemView_->canvas()->fit(); });
     });
     // THE CABLES: their part numbers, and the drawings that define them.
     group(QStringLiteral("Cables"), [&](QWidget* w, QHBoxLayout* row) {
-        big(w, row, "systemNumber", QStringLiteral("Number P/Ns"), QStringLiteral("renumber"),
-            QStringLiteral("Give each cable with no part number the next one (CBL-001, CBL-002...)"), [this] {
-                if (systemView_) systemView_->numberCables();
-            });
+        QToolButton* number = big(w, row, "systemNumber", QStringLiteral("Number P/Ns"), QStringLiteral("renumber"),
+                                  QStringLiteral("Give each cable with no part number the next one (CBL-001, CBL-002...) - the arrow: "
+                                                 "the prefix and how many digits"),
+                                  [this] {
+                                      if (systemView_) systemView_->numberCables();
+                                  });
+        number->setPopupMode(QToolButton::MenuButtonPopup);
+        auto* numbering = new QMenu(number);
+        numbering->addAction(QStringLiteral("Prefix and digits..."), this, [this] { if (systemView_) systemView_->askNumbering(); });
+        number->setMenu(numbering);
         big(w, row, "systemLink", QStringLiteral("Link drawing"), QStringLiteral("link"),
             QStringLiteral("Link a drawing file to the cable selected - its drawing number and revision are read off it"),
             [this] { if (systemView_) systemView_->linkDrawingFromFile(); });

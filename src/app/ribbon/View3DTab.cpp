@@ -194,10 +194,6 @@ void MainWindow::buildView3DTab() {
             preview3dTools_.append({static_cast<int>(t.tool), b});
         }
         if (QAbstractButton* first = tools->button(static_cast<int>(RouteTool::Select))) first->setChecked(true);
-        big(w, row, "preview3dUndo", QStringLiteral("Undo"), QStringLiteral("undo"), QStringLiteral("Take back the last change to the route"),
-            [this] { if (view3dPane_) view3dPane_->undoRoute(); });
-        big(w, row, "preview3dRedo", QStringLiteral("Redo"), QStringLiteral("redo"), QStringLiteral("Put back what Undo took back (Ctrl+Y)"),
-            [this] { if (view3dPane_) view3dPane_->redoRoute(); });
         big(w, row, "preview3dAttach", QStringLiteral("Attach"), QStringLiteral("attach"),
             QStringLiteral("Attach to surface: lay the cable selected (every cable, where none is) on the faces under it, the way "
                            "gravity pulls - onto a wall beside it where nothing is under it - and hold it there"),
@@ -524,8 +520,7 @@ void MainWindow::buildView3DTab() {
     stack({QStringLiteral("preview3dHarness"), QStringLiteral("preview3dParts")});
     stack({QStringLiteral("preview3dEnvClear")});
     stack({QStringLiteral("preview3dBranch"), QStringLiteral("preview3dClip"), QStringLiteral("preview3dMove"), QStringLiteral("preview3dStretch"),
-           QStringLiteral("preview3dDelete"), QStringLiteral("preview3dUndo"), QStringLiteral("preview3dRedo"),
-           QStringLiteral("preview3dAttach")});
+           QStringLiteral("preview3dDelete"), QStringLiteral("preview3dAttach")});
     stack({QStringLiteral("preview3dAddLoose"), QStringLiteral("preview3dAddLength")});
     stack({QStringLiteral("preview3dWorkPlaneHere")});
     stack({QStringLiteral("preview3dRefresh")});

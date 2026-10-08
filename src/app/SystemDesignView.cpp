@@ -14,6 +14,10 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QInputDialog>
+#include <QPlainTextEdit>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSpinBox>
@@ -23,6 +27,8 @@
 #include <QTableWidget>
 #include <QTextStream>
 #include <QVBoxLayout>
+
+#include <algorithm>
 
 namespace Edraw_Desktop {
 
@@ -66,15 +72,32 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
         unitPn_ = field(page, "systemUnitPn", QStringLiteral("Its part number"));
         unitRev_ = field(page, "systemUnitRev", QStringLiteral("Its revision"));
         unitDesc_ = field(page, "systemUnitDesc", QStringLiteral("What it is"));
+        unitKind_ = new QComboBox(page);
+        unitKind_->setObjectName(QStringLiteral("systemUnitKind"));
+        unitKind_->addItem(QStringLiteral("Mechanical part"), QStringLiteral("mech"));
+        unitKind_->addItem(QStringLiteral("PCBA"), QStringLiteral("pcba"));
+        unitKind_->setToolTip(QStringLiteral("What the unit is - a mechanical part or a printed circuit board assembly; its mark "
+                                             "is in its corner on the diagram"));
+        connect(unitKind_, &QComboBox::currentIndexChanged, this, [this](int i) {
+            SysUnit* u = design_.unit(canvas_->selectedUnit());
+            if (filling_ || !u || i < 0 || u->kind == unitKind_->itemData(i).toString()) return;
+            aboutToChange();
+            u->kind = unitKind_->itemData(i).toString();
+            commit();
+        });
+        form->addRow(QStringLiteral("Kind"), unitKind_);
         form->addRow(QStringLiteral("Name"), unitName_);
         form->addRow(QStringLiteral("P/N"), unitPn_);
         form->addRow(QStringLiteral("Rev"), unitRev_);
         form->addRow(QStringLiteral("Description"), unitDesc_);
         v->addLayout(form);
-        v->addWidget(new QLabel(QStringLiteral("<b>Ports</b> - name, side, the connector it takes, pins"), page));
-        ports_ = new QTableWidget(0, 4, page);
+        v->addWidget(new QLabel(QStringLiteral("<b>Ports</b> - name, side, the connector P/N outside and inside, pins"), page));
+        ports_ = new QTableWidget(0, 5, page);
         ports_->setObjectName(QStringLiteral("systemPorts"));
-        ports_->setHorizontalHeaderLabels({QStringLiteral("Name"), QStringLiteral("Side"), QStringLiteral("Connector"), QStringLiteral("Pins")});
+        ports_->setHorizontalHeaderLabels({QStringLiteral("Name"), QStringLiteral("Side"), QStringLiteral("Outside P/N"),
+                                           QStringLiteral("Inside P/N"), QStringLiteral("Pins")});
+        ports_->setToolTip(QStringLiteral("Each port is a connector through the unit's wall: the connector P/N its outside takes (the "
+                                          "mating one, as the system calls for it) and its inside's"));
         ports_->horizontalHeader()->setStretchLastSection(true);
         ports_->verticalHeader()->setVisible(false);
         v->addWidget(ports_, 1);
@@ -106,6 +129,7 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
             const QString text = ports_->item(row, col) ? ports_->item(row, col)->text() : QString();
             if (col == 0) p.name = text;
             else if (col == 2) p.connector = text;
+            else if (col == 3) p.insidePn = text;
             else p.pins = text.toInt();
             commit();
         });
@@ -199,6 +223,33 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
         connect(cableWires_, &QSpinBox::valueChanged, this, applyCable);
         panel_->addWidget(page);
     }
+    // A NOTE.
+    {
+        auto* page = new QWidget(panel_);
+        auto* v = new QVBoxLayout(page);
+        v->addWidget(new QLabel(QStringLiteral("<b>Note</b> - its text"), page));
+        noteText_ = new QPlainTextEdit(page);
+        noteText_->setObjectName(QStringLiteral("systemNoteText"));
+        v->addWidget(noteText_, 1);
+        connect(noteText_, &QPlainTextEdit::textChanged, this, [this] {
+            SysNote* n = design_.note(canvas_->selectedNote());
+            if (filling_ || !n || n->text == noteText_->toPlainText()) return;
+            // ONE STEP TO UNDO for what is typed into one note at a time.
+            if (noteTyping_ != n->id) {
+                aboutToChange();
+                noteTyping_ = n->id;
+            }
+            n->text = noteText_->toPlainText();
+            if (save_) save_(design_.toJson());
+            canvas_->update();
+            emit changed();
+        });
+        panel_->addWidget(page);
+    }
+    connect(canvas_, &SystemCanvas::noteEditRequested, this, [this] {
+        noteText_->setFocus();
+        noteText_->selectAll();
+    });
     split->addWidget(canvas_);
     split->addWidget(panel_);
     split->setStretchFactor(0, 4);
@@ -248,6 +299,7 @@ void SystemDesignView::setStore(std::function<QJsonObject()> load, std::function
 void SystemDesignView::reload() {
     design_ = SystemDesign::fromJson(load_ ? load_() : QJsonObject());
     history_.clear();
+    future_.clear();
     issues_.clear();
     canvas_->setDesign(&design_);
     refresh();
@@ -259,6 +311,8 @@ void SystemDesignView::setTool(SysTool tool) { canvas_->setTool(tool); }
 void SystemDesignView::aboutToChange() {
     history_.push_back(design_.toJson());
     if (history_.size() > 100) history_.erase(history_.begin());
+    // Something new done: what Undo took back cannot be put back over it.
+    future_.clear();
 }
 
 void SystemDesignView::commit() {
@@ -267,10 +321,63 @@ void SystemDesignView::commit() {
     emit changed();
 }
 
+void SystemDesignView::redo() {
+    if (future_.empty()) return;
+    const QJsonObject again = future_.back();
+    future_.pop_back();
+    history_.push_back(design_.toJson());
+    const QString unit = canvas_->selectedUnit(), cable = canvas_->selectedCable();
+    noteTyping_.clear();
+    design_ = SystemDesign::fromJson(again);
+    canvas_->setDesign(&design_);
+    canvas_->select(design_.unit(unit) ? unit : QString(), QString(), design_.cable(cable) ? cable : QString());
+    if (save_) save_(design_.empty() ? QJsonObject() : design_.toJson());
+    refresh();
+    emit changed();
+}
+
+void SystemDesignView::setNumbering(const QString& prefix, int digits) {
+    if (prefix == design_.pnPrefix && digits == design_.pnDigits) return;
+    aboutToChange();
+    design_.pnPrefix = prefix;
+    design_.pnDigits = std::clamp(digits, 1, 9);
+    commit();
+}
+
+void SystemDesignView::askNumbering() {
+    QDialog dlg(this);
+    dlg.setObjectName(QStringLiteral("systemNumberingDialog"));
+    dlg.setWindowTitle(QStringLiteral("Number P/Ns"));
+    auto* form = new QFormLayout(&dlg);
+    auto* prefix = new QLineEdit(design_.pnPrefix, &dlg);
+    prefix->setObjectName(QStringLiteral("systemPnPrefix"));
+    auto* digits = new QSpinBox(&dlg);
+    digits->setObjectName(QStringLiteral("systemPnDigits"));
+    digits->setRange(1, 9);
+    digits->setValue(design_.pnDigits);
+    auto* example = new QLabel(&dlg);
+    auto show = [prefix, digits, example] {
+        example->setText(QStringLiteral("The first: %1%2").arg(prefix->text()).arg(1, digits->value(), 10, QLatin1Char('0')));
+    };
+    connect(prefix, &QLineEdit::textChanged, &dlg, show);
+    connect(digits, &QSpinBox::valueChanged, &dlg, show);
+    show();
+    form->addRow(QStringLiteral("Prefix"), prefix);
+    form->addRow(QStringLiteral("Digits"), digits);
+    form->addRow(example);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    form->addRow(buttons);
+    if (dlg.exec() == QDialog::Accepted) setNumbering(prefix->text(), digits->value());
+}
+
 void SystemDesignView::undo() {
     if (history_.empty()) return;
     const QJsonObject back = history_.back();
     history_.pop_back();
+    future_.push_back(design_.toJson());
+    noteTyping_.clear();
     const QString unit = canvas_->selectedUnit(), cable = canvas_->selectedCable();
     design_ = SystemDesign::fromJson(back);
     canvas_->setDesign(&design_);
@@ -302,7 +409,12 @@ void SystemDesignView::syncPanel() {
     filling_ = true;
     const SysUnit* u = design_.unit(canvas_->selectedUnit());
     const SysCable* c = design_.cable(canvas_->selectedCable());
-    if (c) {
+    const SysNote* n = design_.note(canvas_->selectedNote());
+    if (!n || n->id != noteTyping_) noteTyping_.clear();
+    if (n) {
+        panel_->setCurrentIndex(3);
+        if (noteText_->toPlainText() != n->text) noteText_->setPlainText(n->text);
+    } else if (c) {
         panel_->setCurrentIndex(2);
         cableName_->setText(c->name);
         cablePn_->setText(c->pn);
@@ -332,6 +444,7 @@ void SystemDesignView::syncPanel() {
         unitPn_->setText(u->pn);
         unitRev_->setText(u->rev);
         unitDesc_->setText(u->description);
+        unitKind_->setCurrentIndex(u->kind == QLatin1String("pcba") ? 1 : 0);
         ports_->setRowCount(static_cast<int>(u->ports.size()));
         for (int i = 0; i < static_cast<int>(u->ports.size()); ++i) {
             const SysPort& p = u->ports[static_cast<size_t>(i)];
@@ -350,7 +463,8 @@ void SystemDesignView::syncPanel() {
             });
             ports_->setCellWidget(i, 1, side);
             ports_->setItem(i, 2, new QTableWidgetItem(p.connector));
-            ports_->setItem(i, 3, new QTableWidgetItem(p.pins > 0 ? QString::number(p.pins) : QString()));
+            ports_->setItem(i, 3, new QTableWidgetItem(p.insidePn));
+            ports_->setItem(i, 4, new QTableWidgetItem(p.pins > 0 ? QString::number(p.pins) : QString()));
         }
     } else {
         panel_->setCurrentIndex(0);

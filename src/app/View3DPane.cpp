@@ -570,8 +570,6 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     connect(keepShown_, &QToolButton::toggled, this, [this](bool on) { canvas_->setKeepOutsShown(on); });
     undo_ = button(rr2, "view3dRouteUndo", QStringLiteral("Undo"), QStringLiteral("Take back the last change to the route (Ctrl+Z)"),
                    [this] { undoRoute(); });
-    redo_ = button(rr2, "view3dRouteRedo", QStringLiteral("Redo"), QStringLiteral("Put back what Undo took back (Ctrl+Y)"),
-                   [this] { redoRoute(); });
     // LAID ON THE FACES UNDER IT, the way gravity pulls - the cable selected, or all of them.
     button(rr2, "view3dAttach", QStringLiteral("Attach to surface"),
            QStringLiteral("Lay the cable selected (every cable, where none is) on the faces under it, the way gravity pulls "

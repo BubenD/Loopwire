@@ -10,6 +10,11 @@
 #include "system/SystemDesign.h"
 
 #include <QFileInfo>
+#include <QComboBox>
+#include <QKeyEvent>
+#include <QPlainTextEdit>
+#include <QTableWidget>
+#include <QToolButton>
 
 #include <QApplication>
 #include <QDir>
@@ -418,6 +423,220 @@ void testTab() {
     check(view && !view->isVisible(), "tab: another tab - the drawing back");
 }
 
+// MECHANICAL PARTS AND PCBAS, SIZED, THEIR PORTS THROUGH THE WALL: each unit marked for what it is, sized by its corner;
+// each port an inside and an outside, its outside there once a cable is plugged in from outside, each with its
+// connector P/N; ports slid along the sides; ports put where a cable starts or ends on a unit without one; notes; the
+// numbering's prefix and digits; the tools by their keys; Undo and Redo - the window's, on every tab.
+void testUnitsPortsNotes() {
+    // ---- SAVED ----
+    {
+        SystemDesign d;
+        const QString u = d.addUnit(0, 0);
+        d.unit(u)->kind = QStringLiteral("pcba");
+        const QString p = d.addPort(u, QStringLiteral("right"), 0.5);
+        d.unit(u)->port(p)->insidePn = QStringLiteral("HDR-10");
+        const QString v = d.addUnit(300, 0);
+        const QString q = d.addPort(v, QStringLiteral("left"), 0.5);
+        const QString c = d.addCable(u, p, v, q);
+        d.cable(c)->aInside = true;
+        d.addNote(10, 200, QStringLiteral("Keep W1 away from the fan"));
+        d.pnPrefix = QStringLiteral("HRN-");
+        d.pnDigits = 4;
+        const SystemDesign back = SystemDesign::fromJson(d.toJson());
+        check(back.unit(u)->kind == QLatin1String("pcba") && back.unit(u)->port(p)->insidePn == QLatin1String("HDR-10") &&
+                  back.cable(c)->aInside && !back.cable(c)->bInside && back.notes.size() == 1 &&
+                  back.notes[0].text == QLatin1String("Keep W1 away from the fan") && back.pnDigits == 4,
+              "saved: what a unit is, a port's inside P/N, a cable's inside end, notes, the numbering's digits");
+        check(SystemDesign::fromJson(QJsonObject{{QStringLiteral("units"), QJsonArray{QJsonObject{{QStringLiteral("id"), QStringLiteral("u1")}}}}})
+                      .units[0]
+                      .kind == QLatin1String("mech"),
+              "saved: a unit saved before - a mechanical part");
+        SystemDesign numbered = back;
+        numbered.cables[0].pn.clear();
+        numbered.numberCables();
+        check(numbered.cables[0].pn == QLatin1String("HRN-0001"), "numbering: its prefix and its digits - HRN-0001");
+    }
+
+    QJsonObject stored;
+    SystemDesignView view;
+    view.setStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    view.resize(1200, 760);
+    view.show();
+    QApplication::processEvents();
+    SystemCanvas* c = view.canvas();
+    SystemDesign& d = view.design();
+    auto drag = [&](const QPointF& from, const QPointF& to) {
+        mouse(c, QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
+        for (int i = 1; i <= 6; ++i) mouse(c, QEvent::MouseMove, from + (to - from) * (i / 6.0), Qt::LeftButton, Qt::NoButton);
+        mouse(c, QEvent::MouseButtonRelease, to, Qt::NoButton, Qt::LeftButton);
+        QApplication::processEvents();
+    };
+    auto key = [&](Qt::Key k) {
+        QKeyEvent e(QEvent::KeyPress, k, Qt::NoModifier);
+        QApplication::sendEvent(c, &e);
+    };
+    // ---- THE TOOLS BY THEIR KEYS ----
+    key(Qt::Key_U);
+    const bool unitKey = c->tool() == SysTool::Unit;
+    key(Qt::Key_P);
+    const bool portKey = c->tool() == SysTool::Port;
+    key(Qt::Key_H);
+    const bool cableKey = c->tool() == SysTool::Cable;
+    key(Qt::Key_N);
+    const bool noteKey = c->tool() == SysTool::Note;
+    key(Qt::Key_Escape);
+    check(unitKey && portKey && cableKey && noteKey && c->tool() == SysTool::Select, "keys: U a unit, P a port, H a harness, N a note, Esc select");
+
+    // ---- A MECHANICAL PART AND A PCBA ----
+    view.setTool(SysTool::Unit);
+    click(c, c->toScreen({100, 100}));
+    c->setNewUnitKind(QStringLiteral("pcba"));
+    click(c, c->toScreen({500, 100}));
+    check(d.units.size() == 2 && d.units[0].kind == QLatin1String("mech") && d.units[1].kind == QLatin1String("pcba"),
+          "kind: units put as a mechanical part, then - chosen - as a PCBA");
+    c->select(d.units[0].id, QString(), QString());
+    auto* kind = view.findChild<QComboBox*>(QStringLiteral("systemUnitKind"));
+    if (kind) kind->setCurrentIndex(1);
+    check(kind && d.units[0].kind == QLatin1String("pcba"), "kind: set on the right - a PCBA");
+    if (kind) kind->setCurrentIndex(0);
+
+    // ---- SIZED BY ITS CORNER ----
+    view.setTool(SysTool::Select);
+    const QString u1 = d.units[0].id, u2 = d.units[1].id;
+    const double w0 = d.unit(u1)->w, h0 = d.unit(u1)->h;
+    const QPointF corner = c->unitCornerOnScreen(u1);
+    drag(corner, corner + (c->toScreen({100, 60}) - c->toScreen({0, 0})));
+    std::printf("  size: %.0f x %.0f, was %.0f x %.0f\n", d.unit(u1)->w, d.unit(u1)->h, w0, h0);
+    check(std::abs(d.unit(u1)->w - (w0 + 100)) < 10.5 && std::abs(d.unit(u1)->h - (h0 + 60)) < 10.5, "size: a unit made bigger by dragging its corner");
+    view.undo();
+    check(d.unit(u1)->w == w0 && d.unit(u1)->h == h0, "size: undone in one step");
+    view.redo();
+    check(d.unit(u1)->w > w0, "size: and done again with Redo");
+
+    // ---- PORTS PUT WHERE A CABLE STARTS AND ENDS ON A UNIT ----
+    view.setTool(SysTool::Cable);
+    drag(c->toScreen({d.unit(u1)->x + d.unit(u1)->w - 8, d.unit(u1)->y + d.unit(u1)->h / 2}),
+         c->toScreen({d.unit(u2)->x + 8, d.unit(u2)->y + d.unit(u2)->h / 2}));
+    check(d.cables.size() == 1 && d.unit(u1)->ports.size() == 1 && d.unit(u2)->ports.size() == 1 &&
+              d.unit(u1)->ports[0].side == QLatin1String("right") && d.unit(u2)->ports[0].side == QLatin1String("left") &&
+              !d.cables[0].aInside && !d.cables[0].bInside,
+          "ports: a cable from a unit to a unit with no ports - a port put on each, on the sides facing, the cable on their outsides");
+    view.undo();
+    check(d.cables.empty() && d.unit(u1)->ports.empty() && d.unit(u2)->ports.empty(), "ports: the ports and the cable - one step to undo");
+    view.redo();
+    // A cable let go on nothing: none, and no port.
+    drag(c->unitOnScreen(u1), c->toScreen({300, 600}));
+    check(d.cables.size() == 1 && d.unit(u1)->ports.size() == 1, "ports: a cable let go on nothing - given up, no port put");
+
+    // ---- A PORT SLID ALONG ITS UNIT'S SIDES ----
+    view.setTool(SysTool::Select);
+    const QString p1 = d.unit(u1)->ports[0].id;
+    const SysUnit& unit1 = *d.unit(u1);
+    drag(c->portOnScreen(u1, p1), c->toScreen({unit1.x + unit1.w * 0.4, unit1.y - 2}));
+    check(d.unit(u1)->port(p1)->side == QLatin1String("top") && std::abs(d.unit(u1)->port(p1)->at - 0.4) < 0.08 && d.cables.size() == 1,
+          "ports: slid round onto the top - its cable with it");
+
+    // ---- A PCBA INSIDE ITS HOUSING: its cable on the housing's port's inside ----
+    view.setTool(SysTool::Unit);
+    c->setNewUnitKind(QStringLiteral("mech"));
+    click(c, c->toScreen({180, 500}));
+    const QString housing = d.units.back().id;
+    d.unit(housing)->w = 400;
+    d.unit(housing)->h = 220;
+    c->setNewUnitKind(QStringLiteral("pcba"));
+    click(c, c->toScreen({d.unit(housing)->x + 230, d.unit(housing)->y + 120}));
+    const QString board = d.units.back().id;
+    const bool within = QRectF(d.unit(housing)->x, d.unit(housing)->y, 400, 220)
+                            .contains(QRectF(d.unit(board)->x, d.unit(board)->y, d.unit(board)->w, d.unit(board)->h));
+    // The housing's port, on its left; a cable to it from outside (U2), and one from the board within.
+    view.setTool(SysTool::Port);
+    click(c, c->toScreen({d.unit(housing)->x + 2, d.unit(housing)->y + 110}));
+    const QString through = d.unit(housing)->ports.back().id;
+    view.setTool(SysTool::Cable);
+    drag(c->unitOnScreen(u2), c->portOnScreen(housing, through));
+    drag(c->unitOnScreen(board), c->portOnScreen(housing, through));
+    const SysCable& outsideCable = d.cables[d.cables.size() - 2];
+    const SysCable& insideCable = d.cables.back();
+    std::printf("  through the wall: board within its housing %d; the outside cable's ends %d/%d, the inside one's %d/%d\n", within ? 1 : 0,
+                outsideCable.aInside ? 1 : 0, outsideCable.bInside ? 1 : 0, insideCable.aInside ? 1 : 0, insideCable.bInside ? 1 : 0);
+    check(within && !outsideCable.bInside && insideCable.bInside && !insideCable.aInside,
+          "through the wall: a cable from outside on the port's outside, one from the board within on its inside");
+    bool doubled = false;
+    for (const SysIssue& i : d.check()) doubled = doubled || i.what.contains(QLatin1String("cables plugged"));
+    check(!doubled, "through the wall: a cable each side of a port is not two cables in one");
+    // The connector P/Ns, outside and inside, in the port list.
+    c->select(housing, QString(), QString());
+    auto* ports = view.findChild<QTableWidget*>(QStringLiteral("systemPorts"));
+    if (ports && ports->rowCount() > 0) {
+        ports->setItem(0, 2, new QTableWidgetItem(QStringLiteral("M12-8F")));
+        ports->setItem(0, 3, new QTableWidgetItem(QStringLiteral("HDR-8")));
+    }
+    check(ports && d.unit(housing)->port(through)->connector == QLatin1String("M12-8F") &&
+              d.unit(housing)->port(through)->insidePn == QLatin1String("HDR-8"),
+          "ports: a connector P/N each for its outside and its inside");
+
+    // ---- A NOTE ----
+    view.setTool(SysTool::Note);
+    click(c, c->toScreen({700, 400}));
+    check(d.notes.size() == 1 && c->selectedNote() == d.notes[0].id, "note: put where clicked, and selected");
+    auto* text = view.findChild<QPlainTextEdit*>(QStringLiteral("systemNoteText"));
+    if (text) text->setPlainText(QStringLiteral("Fan side - keep cables 20 mm clear"));
+    check(text && d.notes[0].text == QLatin1String("Fan side - keep cables 20 mm clear") && stored.contains(QStringLiteral("notes")),
+          "note: its text written on the right - and kept in the drawing");
+    view.undo();
+    check(d.notes.size() == 1 && d.notes[0].text == QLatin1String("Note"), "note: its text one step to undo");
+    view.setTool(SysTool::Select);
+    const QPointF noteAt = c->noteOnScreen(d.notes[0].id);
+    const double nx = d.notes[0].x;
+    drag(noteAt, noteAt + QPointF(60, 0));
+    check(d.notes[0].x > nx + 20, "note: moved by dragging it");
+    c->selectNote(d.notes[0].id);
+    c->deleteSelected();
+    check(d.notes.empty(), "note: deleted");
+
+    // ---- NUMBERED WITH ITS PREFIX AND DIGITS ----
+    view.setNumbering(QStringLiteral("HRN-"), 4);
+    view.numberCables();
+    check(!d.cables.empty() && d.cables[0].pn == QLatin1String("HRN-0001"), "numbering: set - the cables numbered HRN-0001...");
+
+    // ---- UNDO AND REDO: THE WINDOW'S, ON EVERY TAB ----
+    MainWindow w;
+    w.show();
+    QApplication::processEvents();
+    check(!w.findChild<QToolButton*>(QStringLiteral("systemUndo")) && !w.findChild<QToolButton*>(QStringLiteral("preview3dRedo")) &&
+              !w.findChild<QToolButton*>(QStringLiteral("preview3dUndo")) && !w.findChild<QToolButton*>(QStringLiteral("view3dRouteRedo")),
+          "undo: no Undo of its own on the System design and 3D Preview tabs, no Redo in the 3D Preview");
+    QToolButton* undo = nullptr;
+    QToolButton* redo = nullptr;
+    for (QToolButton* b : w.findChildren<QToolButton*>())
+        if (b->property("redo").isValid() && b->property("compact").toBool()) (b->property("redo").toBool() ? redo : undo) = b;
+    QTabWidget* ribbon = nullptr;
+    int tab = -1;
+    for (QTabWidget* t : w.findChildren<QTabWidget*>())
+        for (int i = 0; i < t->count(); ++i)
+            if (t->tabText(i) == QLatin1String("System design")) {
+                ribbon = t;
+                tab = i;
+            }
+    auto* sys = w.findChild<SystemDesignView*>(QStringLiteral("systemDesign"));
+    check(undo && redo && ribbon && sys, "undo: the window's Undo and Redo in its corner");
+    if (!undo || !redo || !ribbon || !sys) return;
+    ribbon->setCurrentIndex(tab);
+    QApplication::processEvents();
+    sys->setTool(SysTool::Unit);
+    click(sys->canvas(), sys->canvas()->toScreen({100, 100}));
+    QApplication::processEvents();
+    check(sys->design().units.size() == 1 && undo->isEnabled(), "undo: a unit put on the System design tab - the corner's Undo lit");
+    undo->click();
+    QApplication::processEvents();
+    check(sys->design().units.empty() && redo->isEnabled(), "undo: the corner's Undo takes it back - the diagram's, not the drawing's");
+    redo->click();
+    QApplication::processEvents();
+    check(sys->design().units.size() == 1, "undo: and its Redo puts it back");
+    ribbon->setCurrentIndex(0);
+    QApplication::processEvents();
+}
+
 } // namespace
 
 int run_systemdesign_tests() {
@@ -431,6 +650,7 @@ int run_systemdesign_tests() {
     testFinderInside(dir.path());
     testDesignators(dir.path());
     testTab();
+    testUnitsPortsNotes();
     std::printf("  system design: %s\n", g_fail == 0 ? "OK" : "FAILED");
     return g_fail;
 }
