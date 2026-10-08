@@ -18,7 +18,8 @@ QPointF sysPortPoint(const SysUnit& u, const SysPort& p);
 QPointF sysPortOut(const SysPort& p);
 std::vector<QPointF> sysCablePath(const SystemDesign& d, const SysCable& c, double end = 8.0);
 
-// A FILE OF ITS OWN (.edsys): the design as JSON, marked as one. Read back: false where it is not one.
+// A FILE OF ITS OWN (.wetsys - Edraw's own extension, Whatson ETS system; .edsys read too): the design as JSON, marked
+// as one. Read back: false where it is not one.
 bool saveSystemFile(const SystemDesign& d, const QString& path, QString* error = nullptr);
 bool loadSystemFile(const QString& path, SystemDesign& d, QString* error = nullptr);
 

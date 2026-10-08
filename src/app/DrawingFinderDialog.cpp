@@ -222,6 +222,12 @@ DrawingFinderDialog::DrawingFinderDialog(QWidget* parent, bool choosing) : QDial
 DrawingFinderDialog::~DrawingFinderDialog() {
     stop();
     if (worker_) worker_->wait();
+    // A DWG STILL BEING CONVERTED: the converter put down first, not heard from - what it would show it in is going.
+    if (oda_) {
+        disconnect(oda_, nullptr, this, nullptr);
+        delete oda_;
+        oda_ = nullptr;
+    }
 }
 
 void DrawingFinderDialog::setFolder(const QString& folder) { folder_->setText(folder); }
@@ -499,12 +505,12 @@ void DrawingFinderDialog::preview(const QString& path) {
         preview_->setEmptyText(QStringLiteral("A list - every place it is found is listed below; double-click to open it"));
         return;
     }
-    if (suffix == QLatin1String("pdf")) {
-        // A PDF DRAWN: its pages read as lines and text in the background - a big one takes a moment - shown when read,
-        // unless another file has been chosen meanwhile.
-        preview_->setEmptyText(QStringLiteral("Reading the PDF to show it..."));
+    // A PDF DRAWN: its pages read as lines and text in the background - a big one takes a moment - shown when read,
+    // unless another file has been chosen meanwhile.
+    auto showPdf = [this, token](const QString& pdfPath, const QString& said) {
+        preview_->setEmptyText(said);
         QPointer<DrawingFinderDialog> self(this);
-        QThread* reader = QThread::create([self, path, token] {
+        QThread* reader = QThread::create([self, path = pdfPath, token] {
             auto doc = std::make_shared<Document>(QFileInfo(path).completeBaseName());
             QString error;
             const bool ok = pdf::importFile(*doc, path, &error);
@@ -519,12 +525,22 @@ void DrawingFinderDialog::preview(const QString& path) {
         });
         connect(reader, &QThread::finished, reader, &QObject::deleteLater);
         reader->start();
+    };
+    if (suffix == QLatin1String("pdf")) {
+        showPdf(path, QStringLiteral("Reading the PDF to show it..."));
+        return;
+    }
+    // A DWG WITH ITS PDF BESIDE IT (the same name): the PDF shown - at once, and whether or not the DWG could be.
+    if (const QString twin = ofKind(path, QStringLiteral("PDF")); !twin.isEmpty()) {
+        preview_->setCaption(QStringLiteral("%1 - shown from %2").arg(fi.fileName(), QFileInfo(twin).fileName()));
+        showPdf(twin, QStringLiteral("Reading %1 to show the drawing...").arg(QFileInfo(twin).fileName()));
         return;
     }
     if (!oda_) oda_ = new OdaConverter(this);
     if (!oda_->available() || oda_->busy()) {
         preview_->setEmptyText(oda_->available() ? QStringLiteral("Converting another DWG...")
-                                                 : QStringLiteral("A DWG is shown through the ODA File Converter - install it to see DWG drawings here"));
+                                                 : QStringLiteral("A DWG is shown through the ODA File Converter - install it to see DWG drawings here "
+                                                                  "(or keep a PDF of it beside it, of the same name)"));
         return;
     }
     auto tmp = std::make_shared<QTemporaryDir>();

@@ -205,7 +205,70 @@ QString SystemDesign::addCable(const QString& aUnit, const QString& aPort, const
     return c.id;
 }
 
+std::vector<QString> SystemDesign::childrenOf(const QString& id) const {
+    std::vector<QString> out;
+    for (const SysUnit& u : units)
+        if (u.parent == id && u.id != id) out.push_back(u.id);
+    return out;
+}
+
+bool SystemDesign::isWithin(const QString& id, const QString& ancestor) const {
+    if (ancestor.isEmpty()) return false;
+    QString at = id;
+    for (int guard = 0; guard < 64; ++guard) {
+        const SysUnit* u = unit(at);
+        if (!u || u->parent.isEmpty()) return false;
+        if (u->parent == ancestor) return true;
+        at = u->parent;
+    }
+    return false;
+}
+
+int SystemDesign::depth(const QString& id) const {
+    int n = 0;
+    QString at = id;
+    for (int guard = 0; guard < 64; ++guard) {
+        const SysUnit* u = unit(at);
+        if (!u || u->parent.isEmpty()) break;
+        ++n;
+        at = u->parent;
+    }
+    return n;
+}
+
+void SystemDesign::moveUnit(const QString& id, double dx, double dy) {
+    for (SysUnit& u : units)
+        if (u.id == id || isWithin(u.id, id)) {
+            u.x += dx;
+            u.y += dy;
+        }
+}
+
+QRectF SystemDesign::contentsOf(const QString& id) const {
+    QRectF box;
+    for (const SysUnit& u : units)
+        if (isWithin(u.id, id)) box = box.isNull() ? u.rect() : box.united(u.rect());
+    return box;
+}
+
+QString SystemDesign::unitAround(const QPointF& point, const QString& except) const {
+    QString best;
+    int deepest = -1;
+    for (const SysUnit& u : units) {
+        if (!except.isEmpty() && (u.id == except || isWithin(u.id, except))) continue;
+        if (!u.rect().contains(point)) continue;
+        const int d = depth(u.id);
+        if (d > deepest) {
+            deepest = d;
+            best = u.id;
+        }
+    }
+    return best;
+}
+
 void SystemDesign::removeUnit(const QString& id) {
+    // EVERYTHING INSIDE IT goes with it.
+    for (const QString& child : childrenOf(id)) removeUnit(child);
     cables.erase(std::remove_if(cables.begin(), cables.end(), [&](const SysCable& c) { return c.aUnit == id || c.bUnit == id; }),
                  cables.end());
     units.erase(std::remove_if(units.begin(), units.end(), [&](const SysUnit& u) { return u.id == id; }), units.end());
@@ -421,6 +484,9 @@ QJsonObject SystemDesign::toJson() const {
         if (!u.description.isEmpty()) j[QStringLiteral("description")] = u.description;
         if (u.color.isValid()) j[QStringLiteral("color")] = u.color.name();
         if (u.kind != QLatin1String("mech")) j[QStringLiteral("kind")] = u.kind;
+        if (u.opacity < 1.0) j[QStringLiteral("opacity")] = u.opacity;
+        j[QStringLiteral("parent")] = u.parent;
+        if (!u.hidden.isEmpty()) j[QStringLiteral("hide")] = QJsonArray::fromStringList(u.hidden);
         QJsonArray ps;
         for (const SysPort& p : u.ports) {
             QJsonObject q{{QStringLiteral("id"), p.id}, {QStringLiteral("name"), p.name}, {QStringLiteral("side"), p.side},
@@ -442,6 +508,7 @@ QJsonObject SystemDesign::toJson() const {
         if (!c.rev.isEmpty()) j[QStringLiteral("rev")] = c.rev;
         if (!c.description.isEmpty()) j[QStringLiteral("description")] = c.description;
         if (c.lengthMm > 0.0) j[QStringLiteral("length")] = c.lengthMm;
+        if (c.hidden != QStringList{QStringLiteral("desc")}) j[QStringLiteral("hide")] = QJsonArray::fromStringList(c.hidden);
         if (c.aInside) j[QStringLiteral("aIn")] = true;
         if (c.bInside) j[QStringLiteral("bIn")] = true;
         if (c.wires > 0) j[QStringLiteral("wires")] = c.wires;
@@ -489,6 +556,11 @@ SystemDesign SystemDesign::fromJson(const QJsonObject& o) {
         u.rev = j.value(QStringLiteral("rev")).toString();
         u.description = j.value(QStringLiteral("description")).toString();
         u.kind = j.value(QStringLiteral("kind")).toString(QStringLiteral("mech"));
+        u.opacity = std::clamp(j.value(QStringLiteral("opacity")).toDouble(1.0), 0.05, 1.0);
+        u.parent = j.value(QStringLiteral("parent")).toString();
+        // Saved before units went in units: none is in another yet - found below by where it lies.
+        if (!j.contains(QStringLiteral("parent"))) u.parent = QStringLiteral("?");
+        for (const QJsonValue& h : j.value(QStringLiteral("hide")).toArray()) u.hidden << h.toString();
         u.x = j.value(QStringLiteral("x")).toDouble();
         u.y = j.value(QStringLiteral("y")).toDouble();
         u.w = j.value(QStringLiteral("w")).toDouble(160.0);
@@ -508,6 +580,16 @@ SystemDesign SystemDesign::fromJson(const QJsonObject& o) {
         }
         if (!u.id.isEmpty()) d.units.push_back(u);
     }
+    for (SysUnit& u : d.units) {
+        if (u.parent != QLatin1String("?")) continue;
+        u.parent.clear();
+        double area = 1e300;
+        for (const SysUnit& o2 : d.units)
+            if (o2.id != u.id && o2.rect().contains(u.rect()) && o2.w * o2.h < area && o2.w * o2.h > u.w * u.h) {
+                area = o2.w * o2.h;
+                u.parent = o2.id;
+            }
+    }
     for (const QJsonValue& v : o.value(QStringLiteral("cables")).toArray()) {
         const QJsonObject j = v.toObject();
         SysCable c;
@@ -522,6 +604,10 @@ SystemDesign SystemDesign::fromJson(const QJsonObject& o) {
         c.bPort = j.value(QStringLiteral("bPort")).toString();
         c.lengthMm = j.value(QStringLiteral("length")).toDouble(0.0);
         c.wires = j.value(QStringLiteral("wires")).toInt(0);
+        if (j.contains(QStringLiteral("hide"))) {
+            c.hidden.clear();
+            for (const QJsonValue& h : j.value(QStringLiteral("hide")).toArray()) c.hidden << h.toString();
+        }
         c.aInside = j.value(QStringLiteral("aIn")).toBool(false);
         c.bInside = j.value(QStringLiteral("bIn")).toBool(false);
         if (j.contains(QStringLiteral("color"))) c.color = QColor(j.value(QStringLiteral("color")).toString());

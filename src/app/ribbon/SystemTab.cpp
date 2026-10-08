@@ -118,8 +118,9 @@ void MainWindow::buildSystemTab() {
             if (QAbstractButton* b = toolGroup->button(static_cast<int>(tool))) b->setChecked(true);
         });
         big(w, row, "systemDelete", QStringLiteral("Delete"), QStringLiteral("delete"),
-            QStringLiteral("Delete the unit, port or cable selected (a unit or port takes its cables with it)"),
-            [this] { if (systemView_) systemView_->canvas()->deleteSelected(); });
+            QStringLiteral("Delete the unit, port, cable or note selected (Delete) - a unit or port with cables, or a unit with "
+                           "units in it, only once asked; Space does it again"),
+            [this] { if (systemView_) systemView_->deleteSelected(); });
         big(w, row, "systemFit", QStringLiteral("Fit"), QStringLiteral("fit"), QStringLiteral("The whole diagram in view"),
             [this] { if (systemView_) systemView_->canvas()->fit(); });
     });
@@ -165,10 +166,10 @@ void MainWindow::buildSystemTab() {
     // THE DESIGN AS A FILE OF ITS OWN - saved, opened - and the diagram out for draw.io and Visio.
     group(QStringLiteral("File"), [&](QWidget* w, QHBoxLayout* row) {
         big(w, row, "systemSave", QStringLiteral("Save as"), QStringLiteral("export"),
-            QStringLiteral("Save the system design as a file of its own (.edsys) - it is kept in the drawing too"),
+            QStringLiteral("Save the system design as a file of its own (.wetsys, Edraw's own) - it is kept in the drawing too"),
             [this] { if (systemView_) systemView_->saveDesignAs(); });
         big(w, row, "systemOpenDesign", QStringLiteral("Open"), QStringLiteral("load"),
-            QStringLiteral("Open a system design saved as a file of its own (.edsys) - in place of this one (Undo takes it back)"),
+            QStringLiteral("Open a system design saved as a file of its own (.wetsys) - in place of this one (Undo takes it back)"),
             [this] { if (systemView_) systemView_->openDesign(); });
     });
     group(QStringLiteral("Export"), [&](QWidget* w, QHBoxLayout* row) {

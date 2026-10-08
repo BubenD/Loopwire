@@ -90,6 +90,10 @@ void SystemCanvas::setDesign(SystemDesign* design) {
 void SystemCanvas::setTool(SysTool tool) {
     const bool changedTool = tool != tool_;
     tool_ = tool;
+    if (tool != SysTool::Select) {
+        lastTool_ = tool;
+        lastDelete_ = false;
+    }
     setCursor(tool == SysTool::Select ? Qt::ArrowCursor : Qt::CrossCursor);
     if (changedTool) emit toolChanged(tool);
 }
@@ -122,10 +126,24 @@ QPointF SystemCanvas::portOut(const SysPort& p) const { return sysPortOut(p); }
 
 double SystemCanvas::portHalf() const { return kPortSize * std::clamp(scale_, 0.6, 1.6) / 2.0 / scale_; }
 
-bool SystemCanvas::inside(const QString& inner, const QString& outer) const {
-    const SysUnit* a = design_ ? design_->unit(inner) : nullptr;
-    const SysUnit* b = design_ ? design_->unit(outer) : nullptr;
-    return a && b && inner != outer && QRectF(b->x, b->y, b->w, b->h).contains(QRectF(a->x, a->y, a->w, a->h));
+bool SystemCanvas::inside(const QString& inner, const QString& outer) const { return design_ && design_->isWithin(inner, outer); }
+
+void SystemCanvas::placed(const QMouseEvent* e) {
+    if (!(e->modifiers() & Qt::ShiftModifier)) setTool(SysTool::Select);
+}
+
+void SystemCanvas::settleUnit(const QString& id) {
+    SysUnit* u = design_ ? design_->unit(id) : nullptr;
+    if (!u) return;
+    // IN THE UNIT ROUND ITS MIDDLE - one big enough to hold it - or in none.
+    QString around = design_->unitAround(u->rect().center(), id);
+    if (const SysUnit* p = design_->unit(around); p && (p->w < u->w || p->h < u->h)) around.clear();
+    u->parent = around;
+    // KEPT INSIDE IT, everything inside the unit moved with it.
+    if (const SysUnit* p = design_->unit(around)) {
+        const double nx = std::clamp(u->x, p->x, p->x + p->w - u->w), ny = std::clamp(u->y, p->y, p->y + p->h - u->h);
+        design_->moveUnit(id, nx - u->x, ny - u->y);
+    }
 }
 
 // SQUARE: straight out of each port - out of its outside, or in from its inside, beyond its square - then across and
@@ -133,16 +151,8 @@ bool SystemCanvas::inside(const QString& inner, const QString& outer) const {
 std::vector<QPointF> SystemCanvas::cablePath(const SysCable& c) const { return sysCablePath(*design_, c, 2.0 * portHalf()); }
 
 QString SystemCanvas::unitAt(const QPointF& w) const {
-    if (!design_) return QString();
     // The innermost first: a unit inside another is drawn over it.
-    QString best;
-    double area = 1e300;
-    for (const SysUnit& u : design_->units)
-        if (QRectF(u.x, u.y, u.w, u.h).contains(w) && u.w * u.h < area) {
-            area = u.w * u.h;
-            best = u.id;
-        }
-    return best;
+    return design_ ? design_->unitAround(w) : QString();
 }
 
 QString SystemCanvas::noteAt(const QPointF& w) const {
@@ -200,15 +210,23 @@ void SystemCanvas::nearestSide(const SysUnit& u, const QPointF& w, QString& side
 
 int SystemCanvas::sizeHandleAt(const QPointF& w, QString& unit) const {
     if (!design_) return 0;
-    const double reach = 6.0 / scale_;
-    for (auto it = design_->units.rbegin(); it != design_->units.rend(); ++it) {
-        const SysUnit& u = *it;
+    const double reach = 5.0 / scale_;
+    // The innermost first: its walls lie inside its mother's.
+    std::vector<const SysUnit*> order;
+    for (const SysUnit& u : design_->units) order.push_back(&u);
+    std::stable_sort(order.begin(), order.end(), [this](const SysUnit* a, const SysUnit* b) { return design_->depth(a->id) > design_->depth(b->id); });
+    for (const SysUnit* up : order) {
+        const SysUnit& u = *up;
         const double r = u.x + u.w, b = u.y + u.h;
-        const bool nearRight = std::abs(w.x() - r) <= reach && w.y() >= u.y - reach && w.y() <= b + reach;
-        const bool nearBottom = std::abs(w.y() - b) <= reach && w.x() >= u.x - reach && w.x() <= r + reach;
-        if (nearRight || nearBottom) {
+        const bool alongY = w.y() >= u.y - reach && w.y() <= b + reach, alongX = w.x() >= u.x - reach && w.x() <= r + reach;
+        int how = 0;
+        if (alongY && std::abs(w.x() - r) <= reach) how |= 1;
+        if (alongX && std::abs(w.y() - b) <= reach) how |= 2;
+        if (alongY && std::abs(w.x() - u.x) <= reach) how |= 4;
+        if (alongX && std::abs(w.y() - u.y) <= reach) how |= 8;
+        if (how != 0) {
             unit = u.id;
-            return nearRight && nearBottom ? 3 : nearRight ? 1 : 2;
+            return how;
         }
     }
     return 0;
@@ -286,37 +304,44 @@ void SystemCanvas::paintEvent(QPaintEvent*) {
     QFont f = font();
     f.setPointSizeF(std::clamp(9.0 * scale_, 6.0, 16.0));
     p.setFont(f);
-    // THE UNITS: a box - the biggest first, so a unit inside another is drawn over it - its mark for what it is in its
-    // corner, its name in it, its part number and revision under the name.
+    // THE UNITS: a box - a mother before what is in it, so what is inside is drawn over it - filled as solid as it is
+    // set; its mark for what it is in its corner and its description beside it, its name in it, its part number and
+    // revision under the name - each where it is to be shown.
     std::vector<const SysUnit*> order;
     for (const SysUnit& u : design_->units) order.push_back(&u);
-    std::stable_sort(order.begin(), order.end(), [](const SysUnit* a, const SysUnit* b) { return a->w * a->h > b->w * b->h; });
+    std::stable_sort(order.begin(), order.end(), [this](const SysUnit* a, const SysUnit* b) { return design_->depth(a->id) < design_->depth(b->id); });
     for (const SysUnit* up : order) {
         const SysUnit& u = *up;
         const QRectF r(toScreen(QPointF(u.x, u.y)), QSizeF(u.w * scale_, u.h * scale_));
         const bool on = u.id == selUnit_ && selPort_.isEmpty();
         p.setPen(QPen(on ? QColor(40, 140, 230) : QColor(90, 98, 110), on ? 2.5 : 1.5));
-        p.setBrush(u.color.isValid() ? u.color : u.kind == QLatin1String("pcba") ? QColor(226, 242, 230) : QColor(232, 238, 246));
+        QColor fill = u.color.isValid() ? u.color : u.kind == QLatin1String("pcba") ? QColor(226, 242, 230) : QColor(232, 238, 246);
+        fill.setAlphaF(static_cast<float>(std::clamp(u.opacity, 0.0, 1.0)));
+        p.setBrush(fill);
         p.drawRoundedRect(r, 5, 5);
         const double mark = 14.0 * std::clamp(scale_, 0.7, 1.5);
         drawKind(p, QRectF(r.left() + 5, r.top() + 5, mark, mark), u.kind);
+        if (u.shows(QStringLiteral("desc")) && !u.description.isEmpty()) {
+            QFont small = f;
+            small.setItalic(true);
+            p.setFont(small);
+            p.setPen(QColor(70, 78, 90));
+            const QRectF beside(r.left() + 5 + mark + 4, r.top() + 5, std::max(0.0, r.width() - mark - 18), mark);
+            p.drawText(beside, Qt::AlignLeft | Qt::AlignVCenter,
+                       p.fontMetrics().elidedText(u.description, Qt::ElideRight, static_cast<int>(beside.width())));
+            p.setFont(f);
+        }
         QFont bold = f;
         bold.setBold(true);
         p.setFont(bold);
         p.setPen(QColor(25, 30, 36));
-        p.drawText(r.adjusted(6, 4, -6, -r.height() / 2), Qt::AlignHCenter | Qt::AlignBottom, u.name);
+        if (u.shows(QStringLiteral("name"))) p.drawText(r.adjusted(6, 4, -6, -r.height() / 2), Qt::AlignHCenter | Qt::AlignBottom, u.name);
         p.setFont(f);
         QStringList sub;
-        if (!u.pn.isEmpty()) sub << u.pn;
-        if (!u.rev.isEmpty()) sub << QStringLiteral("rev ") + u.rev;
+        if (!u.pn.isEmpty() && u.shows(QStringLiteral("pn"))) sub << u.pn;
+        if (!u.rev.isEmpty() && u.shows(QStringLiteral("rev"))) sub << QStringLiteral("rev ") + u.rev;
         p.setPen(QColor(80, 88, 100));
         if (!sub.isEmpty()) p.drawText(r.adjusted(6, r.height() / 2 + 2, -6, -4), Qt::AlignHCenter | Qt::AlignTop, sub.join(QStringLiteral("  ")));
-        // Selected: its corner to size it by.
-        if (on) {
-            p.setPen(QPen(QColor(40, 140, 230), 1.0));
-            p.setBrush(QColor(255, 255, 255));
-            p.drawRect(QRectF(r.right() - 4, r.bottom() - 4, 8, 8));
-        }
     }
     // THE CABLES, each labelled at its middle with a dot for how its drawing stands.
     for (const SysCable& c : design_->cables) {
@@ -329,9 +354,13 @@ void SystemCanvas::paintEvent(QPaintEvent*) {
         p.setBrush(Qt::NoBrush);
         p.drawPolyline(line);
         const QPointF mid = (line[line.size() / 2 - 1] + line[line.size() / 2]) / 2.0;
-        QString label = c.name;
-        if (!c.pn.isEmpty()) label += QStringLiteral("  ") + c.pn;
-        if (!c.rev.isEmpty()) label += QStringLiteral("  rev ") + c.rev;
+        // ITS LABEL: what of it is to be shown.
+        QStringList parts;
+        if (c.shows(QStringLiteral("name")) && !c.name.isEmpty()) parts << c.name;
+        if (c.shows(QStringLiteral("pn")) && !c.pn.isEmpty()) parts << c.pn;
+        if (c.shows(QStringLiteral("rev")) && !c.rev.isEmpty()) parts << QStringLiteral("rev ") + c.rev;
+        if (c.shows(QStringLiteral("desc")) && !c.description.isEmpty()) parts << c.description;
+        const QString label = parts.join(QStringLiteral("  "));
         const QRectF text = p.fontMetrics().boundingRect(label).adjusted(-4, -2, 14, 2);
         QRectF box(mid - QPointF(text.width() / 2.0, text.height() / 2.0), text.size());
         p.setPen(QPen(QColor(180, 186, 196), 1.0));
@@ -425,10 +454,21 @@ void SystemCanvas::mousePressEvent(QMouseEvent* e) {
     switch (tool_) {
     case SysTool::Unit: {
         emit aboutToChange();
-        const QString id = design_->addUnit(std::round((pressWorld_.x() - 80.0) / 10.0) * 10.0, std::round((pressWorld_.y() - 50.0) / 10.0) * 10.0);
-        if (SysUnit* u = design_->unit(id)) u->kind = newKind_;
+        // IN THE UNIT CLICKED, where one is - no bigger than half of it.
+        const QString around = design_->unitAround(pressWorld_);
+        const SysUnit* mother = design_->unit(around);
+        const double w = mother ? std::min(160.0, std::max(60.0, std::floor(mother->w * 0.5 / 10.0) * 10.0)) : 160.0;
+        const double h = mother ? std::min(100.0, std::max(40.0, std::floor(mother->h * 0.5 / 10.0) * 10.0)) : 100.0;
+        const QString id = design_->addUnit(std::round((pressWorld_.x() - w / 2) / 10.0) * 10.0, std::round((pressWorld_.y() - h / 2) / 10.0) * 10.0);
+        if (SysUnit* u = design_->unit(id)) {
+            u->kind = newKind_;
+            u->w = w;
+            u->h = h;
+        }
+        settleUnit(id);
         select(id, QString(), QString());
         emit changed();
+        placed(e);
         return;
     }
     case SysTool::Note: {
@@ -436,6 +476,7 @@ void SystemCanvas::mousePressEvent(QMouseEvent* e) {
         const QString id = design_->addNote(std::round(pressWorld_.x() / 10.0) * 10.0, std::round(pressWorld_.y() / 10.0) * 10.0);
         selectNote(id);
         emit changed();
+        placed(e);
         return;
     }
     case SysTool::Port: {
@@ -450,6 +491,7 @@ void SystemCanvas::mousePressEvent(QMouseEvent* e) {
         const QString p = design_->addPort(id, side, at);
         select(id, p, QString());
         emit changed();
+        placed(e);
         return;
     }
     case SysTool::Cable:
@@ -482,6 +524,7 @@ void SystemCanvas::mousePressEvent(QMouseEvent* e) {
         if (const int how = sizeHandleAt(pressWorld_, sized); how != 0) {
             drag_ = Drag::Size;
             sizeHow_ = how;
+            sizeFrom_ = design_->unit(sized)->rect();
             select(sized, QString(), QString());
             return;
         }
@@ -532,9 +575,15 @@ void SystemCanvas::mouseMoveEvent(QMouseEvent* e) {
             if (!moved_) break;
             announce();
             const QPointF to = w - grabOffset_;
-            // On the grid, ten units at a time.
-            u->x = std::round(to.x() / 10.0) * 10.0;
-            u->y = std::round(to.y() / 10.0) * 10.0;
+            // On the grid, ten units at a time - everything inside it with it.
+            double nx = std::round(to.x() / 10.0) * 10.0, ny = std::round(to.y() / 10.0) * 10.0;
+            // KEPT INSIDE ITS MOTHER while its middle is - taken out of it once its middle is dragged past her wall.
+            if (const SysUnit* m = design_->unit(u->parent);
+                m && QRectF(m->x, m->y, m->w, m->h).contains(QPointF(nx + u->w / 2, ny + u->h / 2))) {
+                nx = std::clamp(nx, m->x, m->x + m->w - u->w);
+                ny = std::clamp(ny, m->y, m->y + m->h - u->h);
+            }
+            design_->moveUnit(u->id, nx - u->x, ny - u->y);
             update();
         }
         break;
@@ -552,9 +601,31 @@ void SystemCanvas::mouseMoveEvent(QMouseEvent* e) {
         if (SysUnit* u = design_->unit(selUnit_)) {
             if (!moved_) break;
             announce();
-            // ITS PORTS where they were along its sides - so far along each, the side longer or shorter.
-            if (sizeHow_ & 1) u->w = std::max(60.0, std::round((w.x() - u->x) / 10.0) * 10.0);
-            if (sizeHow_ & 2) u->h = std::max(40.0, std::round((w.y() - u->y) / 10.0) * 10.0);
+            // BY THE WALL OR CORNER TAKEN HOLD OF - its ports where they were along its sides, so far along each; no
+            // smaller than what is inside it, nor out past its mother.
+            double left = sizeFrom_.left(), top = sizeFrom_.top(), right = sizeFrom_.right(), bottom = sizeFrom_.bottom();
+            const double gx = std::round(w.x() / 10.0) * 10.0, gy = std::round(w.y() / 10.0) * 10.0;
+            if (sizeHow_ & 1) right = std::max(gx, left + 60.0);
+            if (sizeHow_ & 4) left = std::min(gx, right - 60.0);
+            if (sizeHow_ & 2) bottom = std::max(gy, top + 40.0);
+            if (sizeHow_ & 8) top = std::min(gy, bottom - 40.0);
+            const QRectF inside = design_->contentsOf(u->id);
+            if (!inside.isNull()) {
+                left = std::min(left, inside.left());
+                top = std::min(top, inside.top());
+                right = std::max(right, inside.right());
+                bottom = std::max(bottom, inside.bottom());
+            }
+            if (const SysUnit* m = design_->unit(u->parent)) {
+                left = std::max(left, m->x);
+                top = std::max(top, m->y);
+                right = std::min(right, m->x + m->w);
+                bottom = std::min(bottom, m->y + m->h);
+            }
+            u->x = left;
+            u->y = top;
+            u->w = right - left;
+            u->h = bottom - top;
             update();
         }
         break;
@@ -576,9 +647,10 @@ void SystemCanvas::mouseMoveEvent(QMouseEvent* e) {
         QString unit, port, sized;
         const int how = tool_ == SysTool::Select ? sizeHandleAt(w, sized) : 0;
         setCursor(portAt(w, unit, port) ? (tool_ == SysTool::Select ? Qt::SizeAllCursor : Qt::CrossCursor)
-                  : how == 3                                        ? Qt::SizeFDiagCursor
-                  : how == 1                                        ? Qt::SizeHorCursor
-                  : how == 2                                        ? Qt::SizeVerCursor
+                  : how == 3 || how == 12                           ? Qt::SizeFDiagCursor
+                  : how == 6 || how == 9                            ? Qt::SizeBDiagCursor
+                  : how == 1 || how == 4                            ? Qt::SizeHorCursor
+                  : how == 2 || how == 8                            ? Qt::SizeVerCursor
                   : (!unitAt(w).isEmpty() || !noteAt(w).isEmpty()) && tool_ == SysTool::Select ? Qt::SizeAllCursor
                   : tool_ == SysTool::Select                                                   ? Qt::ArrowCursor
                                                                                                : Qt::CrossCursor);
@@ -592,6 +664,8 @@ void SystemCanvas::mouseReleaseEvent(QMouseEvent* e) {
     const Drag was = drag_;
     drag_ = Drag::None;
     if ((was == Drag::Unit || was == Drag::Note || was == Drag::Size || was == Drag::Port) && moveAnnounced_) {
+        // A UNIT DROPPED: into the unit it is now in, or out of the one it was in.
+        if (was == Drag::Unit) settleUnit(selUnit_);
         // Moved, sized or slid: one change - how it was before kept for Undo by the view, at the first move.
         emit changed();
         return;
@@ -623,6 +697,7 @@ void SystemCanvas::mouseReleaseEvent(QMouseEvent* e) {
             }
             select(QString(), QString(), id);
             emit changed();
+            placed(e);
         } else if (!fromNew_ && (!moved_ || same)) {
             select(fromUnit_, fromPort_, QString());
         }
@@ -651,7 +726,13 @@ void SystemCanvas::wheelEvent(QWheelEvent* e) {
 
 void SystemCanvas::keyPressEvent(QKeyEvent* e) {
     if (e->key() == Qt::Key_Delete || e->key() == Qt::Key_Backspace) {
-        deleteSelected();
+        emit deleteRequested();
+        return;
+    }
+    // SPACE: the last thing done again - Delete, or the tool last put down.
+    if (e->key() == Qt::Key_Space) {
+        if (lastDelete_) emit deleteRequested();
+        else if (lastTool_ != SysTool::Select) setTool(lastTool_);
         return;
     }
     if (e->key() == Qt::Key_Escape) {

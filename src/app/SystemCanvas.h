@@ -19,7 +19,8 @@ enum class SysTool { Select, Unit, Port, Cable, Note };
 // its outside once a cable is plugged into it from outside - the cables between ports drawn square, each with its name,
 // part number and revision, and a dot saying how its drawing stands (green: the revision called for; red: another
 // revision, or not there; amber: none linked); notes. Zoomed with the wheel, moved with the right or middle button.
-// Keys: U a unit, P a port, H a harness (a cable), N a note, Esc select.
+// Keys: U a unit, P a port, H a harness (a cable), N a note, Esc select, Space the last thing done again (a tool, or
+// Delete). A unit, port, cable or note put, it is back to Select - unless Shift is held, to put another.
 class SystemCanvas : public QWidget {
     Q_OBJECT
 public:
@@ -37,7 +38,10 @@ public:
     QString selectedNote() const { return selNote_; }
     void select(const QString& unit, const QString& port, const QString& cable);
     void selectNote(const QString& note);
+    // What is selected taken away - as it is, no questions (the view asks first: deleteRequested).
     void deleteSelected();
+    // Delete was the last thing done - Space does it again.
+    void noteDeleteDone() { lastDelete_ = true; }
     // The whole diagram in view.
     void fit();
 
@@ -56,6 +60,7 @@ signals:
     void changed();         // after it
     void selectionChanged();
     void toolChanged(SysTool tool);
+    void deleteRequested();
     void noteEditRequested(const QString& note);
 
 protected:
@@ -78,14 +83,22 @@ private:
     QString noteAt(const QPointF& world) const;
     // THE NEAREST SIDE of a unit to a point, and how far along it.
     static void nearestSide(const SysUnit& u, const QPointF& w, QString& side, double& at);
-    // A unit's corner or edge under the pointer, to size it: 1 its right edge, 2 its bottom, 3 its bottom-right corner.
+    // A unit's wall or corner under the pointer, to size it by: 1 its right, 2 its bottom, 4 its left, 8 its top - a
+    // corner two of them.
     int sizeHandleAt(const QPointF& world, QString& unit) const;
+    // A UNIT DROPPED: in the unit round its middle now (or none), and kept inside that one.
+    void settleUnit(const QString& unit);
+    // After a unit, port, cable or note is put: back to Select, unless Shift is held to put another.
+    void placed(const QMouseEvent* e);
     // Whether a unit lies inside another (a PCBA in its housing).
     bool inside(const QString& inner, const QString& outer) const;
 
     SystemDesign* design_ = nullptr;
     SysTool tool_ = SysTool::Select;
     QString newKind_ = QStringLiteral("mech");
+    // THE LAST THING DONE, for Space: a tool put down (Unit, Port, Cable, Note), or Delete.
+    SysTool lastTool_ = SysTool::Select;
+    bool lastDelete_ = false;
     QString selUnit_, selPort_, selCable_, selNote_;
     double scale_ = 1.0;
     QPointF offset_{40.0, 40.0};
@@ -93,6 +106,7 @@ private:
     enum class Drag { None, Unit, Note, Port, Size, Cable, Pan };
     Drag drag_ = Drag::None;
     int sizeHow_ = 0;
+    QRectF sizeFrom_;
     QPointF pressWorld_, lastScreen_, grabOffset_;
     QString fromUnit_, fromPort_;
     // A CABLE STARTED ON A UNIT WITH NO PORT THERE: the port it is to have, put when the cable is.

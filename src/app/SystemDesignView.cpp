@@ -29,12 +29,46 @@
 #include <QSettings>
 #include <QTextStream>
 #include <QVBoxLayout>
+#include <QColorDialog>
+#include <QPainter>
+#include <QPainterPath>
+#include <QSlider>
+#include <QToolButton>
 
 #include <algorithm>
 
 namespace Edraw_Desktop {
 
 namespace {
+
+// AN EYE: open - shown on the diagram; shut, a stroke across it - not.
+QIcon eyeIcon() {
+    QIcon icon;
+    for (const bool open : {true, false}) {
+        QPixmap pm(36, 36);
+        pm.fill(Qt::transparent);
+        QPainter p(&pm);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        const QColor ink = open ? QColor(40, 140, 230) : QColor(140, 146, 156);
+        p.setPen(QPen(ink, 2.6));
+        QPainterPath lid;
+        lid.moveTo(4, 18);
+        lid.quadTo(18, 4, 32, 18);
+        lid.quadTo(18, 32, 4, 18);
+        p.drawPath(lid);
+        if (open) {
+            p.setBrush(ink);
+            p.drawEllipse(QPointF(18, 18), 5, 5);
+        } else {
+            p.drawLine(QPointF(7, 29), QPointF(29, 7));
+        }
+        p.end();
+        icon.addPixmap(pm, QIcon::Normal, open ? QIcon::On : QIcon::Off);
+    }
+    return icon;
+}
+
+const char* const kShown[4] = {"name", "pn", "rev", "desc"};
 
 QLineEdit* field(QWidget* parent, const char* name, const QString& tip) {
     auto* e = new QLineEdit(parent);
@@ -88,10 +122,74 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
             commit();
         });
         form->addRow(QStringLiteral("Kind"), unitKind_);
-        form->addRow(QStringLiteral("Name"), unitName_);
-        form->addRow(QStringLiteral("P/N"), unitPn_);
-        form->addRow(QStringLiteral("Rev"), unitRev_);
-        form->addRow(QStringLiteral("Description"), unitDesc_);
+        // EACH FIELD WITH ITS EYE: shown on the unit on the diagram, or not.
+        auto withEye = [this, page](QLineEdit* edit, int which, bool cable) {
+            auto* row = new QWidget(page);
+            auto* h = new QHBoxLayout(row);
+            h->setContentsMargins(0, 0, 0, 0);
+            h->setSpacing(2);
+            h->addWidget(edit, 1);
+            auto* eye = new QToolButton(row);
+            eye->setObjectName(edit->objectName() + QStringLiteral("Eye"));
+            eye->setCheckable(true);
+            eye->setChecked(true);
+            eye->setAutoRaise(true);
+            eye->setIcon(eyeIcon());
+            eye->setIconSize(QSize(18, 18));
+            eye->setToolTip(QStringLiteral("Shown on the diagram - click to hide it there (it is kept all the same)"));
+            h->addWidget(eye);
+            (cable ? cableEyes_ : unitEyes_)[which] = eye;
+            connect(eye, &QToolButton::toggled, this, [this, which, cable](bool on) {
+                if (filling_) return;
+                QStringList* hidden = nullptr;
+                if (cable) {
+                    if (SysCable* c = design_.cable(canvas_->selectedCable())) hidden = &c->hidden;
+                } else if (SysUnit* u = design_.unit(canvas_->selectedUnit())) {
+                    hidden = &u->hidden;
+                }
+                const QString key = QString::fromLatin1(kShown[which]);
+                if (!hidden || hidden->contains(key) == !on) return;
+                aboutToChange();
+                if (on) hidden->removeAll(key);
+                else hidden->append(key);
+                commit();
+            });
+            return row;
+        };
+        form->addRow(QStringLiteral("Name"), withEye(unitName_, 0, false));
+        form->addRow(QStringLiteral("P/N"), withEye(unitPn_, 1, false));
+        form->addRow(QStringLiteral("Rev"), withEye(unitRev_, 2, false));
+        form->addRow(QStringLiteral("Description"), withEye(unitDesc_, 3, false));
+        // ITS COLOUR, and how solid it is drawn.
+        auto* look = new QWidget(page);
+        auto* lh = new QHBoxLayout(look);
+        lh->setContentsMargins(0, 0, 0, 0);
+        unitColour_ = new QToolButton(look);
+        unitColour_->setObjectName(QStringLiteral("systemUnitColour"));
+        unitColour_->setText(QStringLiteral("Colour..."));
+        unitColour_->setToolTip(QStringLiteral("The unit's colour on the diagram"));
+        connect(unitColour_, &QToolButton::clicked, this, [this] {
+            const SysUnit* u = design_.unit(canvas_->selectedUnit());
+            if (!u) return;
+            const QColor c = QColorDialog::getColor(u->color.isValid() ? u->color : QColor(232, 238, 246), this, QStringLiteral("Unit colour"));
+            if (c.isValid()) setUnitColour(c);
+        });
+        auto* plain = new QToolButton(look);
+        plain->setObjectName(QStringLiteral("systemUnitColourDefault"));
+        plain->setText(QStringLiteral("As its kind"));
+        plain->setToolTip(QStringLiteral("Back to the colour of its kind - grey-blue for a mechanical part, green for a PCBA"));
+        connect(plain, &QToolButton::clicked, this, [this] { setUnitColour(QColor()); });
+        unitOpacity_ = new QSlider(Qt::Horizontal, look);
+        unitOpacity_->setObjectName(QStringLiteral("systemUnitOpacity"));
+        unitOpacity_->setRange(5, 100);
+        unitOpacity_->setToolTip(QStringLiteral("How solid the unit is filled - less, and what is behind it shows through"));
+        connect(unitOpacity_, &QSlider::valueChanged, this, [this](int v) {
+            if (!filling_) setUnitOpacity(v / 100.0);
+        });
+        lh->addWidget(unitColour_);
+        lh->addWidget(plain);
+        lh->addWidget(unitOpacity_, 1);
+        form->addRow(QStringLiteral("Look"), look);
         v->addLayout(form);
         v->addWidget(new QLabel(QStringLiteral("<b>Ports</b> - name, side, the connector P/N outside and inside, pins"), page));
         ports_ = new QTableWidget(0, 5, page);
@@ -172,10 +270,37 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
         cableWires_->setKeyboardTracking(false);
         cableEnds_ = new QLabel(page);
         cableEnds_->setWordWrap(true);
-        form->addRow(QStringLiteral("Name"), cableName_);
-        form->addRow(QStringLiteral("P/N"), cablePn_);
-        form->addRow(QStringLiteral("Rev"), cableRev_);
-        form->addRow(QStringLiteral("Description"), cableDesc_);
+        // EACH FIELD WITH ITS EYE: shown on the cable's label, or not.
+        auto withEye = [this, page](QLineEdit* edit, int which) {
+            auto* row = new QWidget(page);
+            auto* h = new QHBoxLayout(row);
+            h->setContentsMargins(0, 0, 0, 0);
+            h->setSpacing(2);
+            h->addWidget(edit, 1);
+            auto* eye = new QToolButton(row);
+            eye->setObjectName(edit->objectName() + QStringLiteral("Eye"));
+            eye->setCheckable(true);
+            eye->setAutoRaise(true);
+            eye->setIcon(eyeIcon());
+            eye->setIconSize(QSize(18, 18));
+            eye->setToolTip(QStringLiteral("Shown on the cable's label - click to hide it there, or show it"));
+            h->addWidget(eye);
+            cableEyes_[which] = eye;
+            connect(eye, &QToolButton::toggled, this, [this, which](bool on) {
+                SysCable* c = design_.cable(canvas_->selectedCable());
+                const QString key = QString::fromLatin1(kShown[which]);
+                if (filling_ || !c || c->hidden.contains(key) == !on) return;
+                aboutToChange();
+                if (on) c->hidden.removeAll(key);
+                else c->hidden.append(key);
+                commit();
+            });
+            return row;
+        };
+        form->addRow(QStringLiteral("Name"), withEye(cableName_, 0));
+        form->addRow(QStringLiteral("P/N"), withEye(cablePn_, 1));
+        form->addRow(QStringLiteral("Rev"), withEye(cableRev_, 2));
+        form->addRow(QStringLiteral("Description"), withEye(cableDesc_, 3));
         form->addRow(QStringLiteral("Length"), cableLength_);
         form->addRow(QStringLiteral("Wires"), cableWires_);
         form->addRow(QStringLiteral("From - to"), cableEnds_);
@@ -248,6 +373,7 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
         });
         panel_->addWidget(page);
     }
+    connect(canvas_, &SystemCanvas::deleteRequested, this, [this] { deleteSelected(); });
     connect(canvas_, &SystemCanvas::noteEditRequested, this, [this] {
         noteText_->setFocus();
         noteText_->selectAll();
@@ -338,6 +464,68 @@ void SystemDesignView::redo() {
     emit changed();
 }
 
+bool SystemDesignView::deleteSelected() {
+    const QString unit = canvas_->selectedUnit(), port = canvas_->selectedPort();
+    const bool any = !unit.isEmpty() || !canvas_->selectedCable().isEmpty() || !canvas_->selectedNote().isEmpty();
+    if (!any) return false;
+    // CONNECTED: a unit with cables (its own, or those of units inside it) or units in it, or a port with cables - asked
+    // first.
+    QString question;
+    if (const SysUnit* u = design_.unit(unit)) {
+        if (!port.isEmpty()) {
+            const size_t n = design_.cablesAt(unit, port).size();
+            const SysPort* p = u->port(port);
+            if (n > 0)
+                question = QStringLiteral("%1.%2 has %3 cable(s) plugged in - delete the port and its cable(s)?")
+                               .arg(u->name, p ? p->name : port)
+                               .arg(n);
+        } else {
+            size_t cables = 0, inside = 0;
+            for (const SysCable& c : design_.cables)
+                if (c.aUnit == unit || c.bUnit == unit || design_.isWithin(c.aUnit, unit) || design_.isWithin(c.bUnit, unit)) ++cables;
+            for (const SysUnit& o : design_.units) inside += design_.isWithin(o.id, unit) ? 1 : 0;
+            if (cables > 0 || inside > 0) {
+                QStringList what;
+                if (cables > 0) what << QStringLiteral("%1 cable(s)").arg(cables);
+                if (inside > 0) what << QStringLiteral("%1 unit(s) inside it").arg(inside);
+                question = QStringLiteral("%1 is connected - %2. Delete it with them?").arg(u->name, what.join(QStringLiteral(" and ")));
+            }
+        }
+    }
+    if (!question.isEmpty()) {
+        const bool yes = confirm_ ? confirm_(question)
+                                  : QMessageBox::question(this, QStringLiteral("Delete"), question, QMessageBox::Yes | QMessageBox::No,
+                                                          QMessageBox::No) == QMessageBox::Yes;
+        if (!yes) return false;
+    }
+    canvas_->deleteSelected();
+    canvas_->noteDeleteDone();
+    return true;
+}
+
+void SystemDesignView::setUnitColour(const QColor& colour) {
+    SysUnit* u = design_.unit(canvas_->selectedUnit());
+    if (!u || u->color == colour) return;
+    aboutToChange();
+    u->color = colour;
+    commit();
+}
+
+void SystemDesignView::setUnitOpacity(double opacity) {
+    SysUnit* u = design_.unit(canvas_->selectedUnit());
+    opacity = std::clamp(opacity, 0.05, 1.0);
+    if (!u || std::abs(u->opacity - opacity) < 1e-9) return;
+    // ONE STEP TO UNDO for a slide of it.
+    if (opacityDragging_ != u->id) {
+        aboutToChange();
+        opacityDragging_ = u->id;
+    }
+    u->opacity = opacity;
+    if (save_) save_(design_.toJson());
+    canvas_->update();
+    emit changed();
+}
+
 void SystemDesignView::setNumbering(const QString& prefix, int digits) {
     if (prefix == design_.pnPrefix && digits == design_.pnDigits) return;
     aboutToChange();
@@ -424,6 +612,8 @@ void SystemDesignView::syncPanel() {
         cableDesc_->setText(c->description);
         cableLength_->setValue(c->lengthMm);
         cableWires_->setValue(c->wires);
+        for (int i = 0; i < 4; ++i)
+            if (cableEyes_[i]) cableEyes_[i]->setChecked(c->shows(QString::fromLatin1(kShown[i])));
         const SysUnit* a = design_.unit(c->aUnit);
         const SysUnit* b = design_.unit(c->bUnit);
         const SysPort* pa = a ? a->port(c->aPort) : nullptr;
@@ -447,6 +637,10 @@ void SystemDesignView::syncPanel() {
         unitRev_->setText(u->rev);
         unitDesc_->setText(u->description);
         unitKind_->setCurrentIndex(u->kind == QLatin1String("pcba") ? 1 : 0);
+        for (int i = 0; i < 4; ++i)
+            if (unitEyes_[i]) unitEyes_[i]->setChecked(u->shows(QString::fromLatin1(kShown[i])));
+        unitOpacity_->setValue(static_cast<int>(std::lround(u->opacity * 100.0)));
+        if (opacityDragging_ != u->id) opacityDragging_.clear();
         ports_->setRowCount(static_cast<int>(u->ports.size()));
         for (int i = 0; i < static_cast<int>(u->ports.size()); ++i) {
             const SysPort& p = u->ports[static_cast<size_t>(i)];
@@ -616,8 +810,8 @@ QString baseName(const SystemDesign& d) { return d.name.isEmpty() ? QStringLiter
 } // namespace
 
 bool SystemDesignView::saveDesignAs(const QString& given) {
-    const QString path = askPath(this, given, true, QStringLiteral("Save the system design"), baseName(design_) + QStringLiteral(".edsys"),
-                                 QStringLiteral("System design (*.edsys)"));
+    const QString path = askPath(this, given, true, QStringLiteral("Save the system design"), baseName(design_) + QStringLiteral(".wetsys"),
+                                 QStringLiteral("Edraw system design (*.wetsys)"));
     if (path.isEmpty()) return false;
     QString error;
     if (!saveSystemFile(design_, path, &error)) {
@@ -629,7 +823,7 @@ bool SystemDesignView::saveDesignAs(const QString& given) {
 
 bool SystemDesignView::openDesign(const QString& given) {
     const QString path = askPath(this, given, false, QStringLiteral("Open a system design"), QString(),
-                                 QStringLiteral("System design (*.edsys)"));
+                                 QStringLiteral("Edraw system design (*.wetsys *.edsys)"));
     if (path.isEmpty()) return false;
     SystemDesign read;
     QString error;

@@ -5,6 +5,8 @@
 #include "app/SystemCanvas.h"
 #include "app/SystemDesignView.h"
 #include "io/Dwx.h"
+#include <QElapsedTimer>
+#include "io/PdfImport.h"
 #include "model/Document.h"
 #include "system/PnMatch.h"
 #include "system/SystemDesign.h"
@@ -175,6 +177,7 @@ void testView(const QString& dir) {
     // Two units, a port on each, a cable drawn from one to the other.
     view.setTool(SysTool::Unit);
     click(c, c->toScreen({100, 100}));
+    view.setTool(SysTool::Unit);   // a unit put, back to Select
     click(c, c->toScreen({500, 100}));
     SystemDesign& d = view.design();
     check(d.units.size() == 2 && stored.contains(QStringLiteral("units")), "view: units put with Unit - and kept in the drawing");
@@ -183,6 +186,7 @@ void testView(const QString& dir) {
     const SysUnit& u2 = d.units[1];
     view.setTool(SysTool::Port);
     click(c, c->toScreen({u1.x + u1.w - 3, u1.y + u1.h / 2}));
+    view.setTool(SysTool::Port);
     click(c, c->toScreen({u2.x + 3, u2.y + u2.h / 2}));
     check(d.units[0].ports.size() == 1 && d.units[0].ports[0].side == QLatin1String("right") && d.units[1].ports.size() == 1 &&
               d.units[1].ports[0].side == QLatin1String("left"),
@@ -338,6 +342,16 @@ void testFinderInside(const QString& base) {
     auto* openDwg = finder.findChild<QPushButton*>(QStringLiteral("finderOpenDwg"));
     auto* openDwx = finder.findChild<QPushButton*>(QStringLiteral("finderOpenDwx"));
     check(finder.previewCount(true) > 0, "finder: the PDF shown in the preview");
+    finder.setText(QStringLiteral("assembly"));
+    finder.search(true);
+    int dwgRow = -1;
+    for (int r = 0; r < finder.resultCount(); ++r)
+        if (finder.resultPath(r).endsWith(QLatin1String(".dwg"))) dwgRow = r;
+    if (dwgRow >= 0) {
+        finder.showResult(dwgRow);
+        std::printf("  finder: the DWG beside its PDF - shown %d\n", finder.previewCount(true));
+        check(finder.previewCount(true) > 0, "finder: a DWG with its PDF beside it - shown from the PDF");
+    }
     check(openPdf && openPdf->isEnabled() && openDwg && openDwg->isEnabled() && openDwx && !openDwx->isEnabled(),
           "finder: Open PDF, and Open DWG for the one beside it - no DWX of that name");
     finder.setText(QStringLiteral("XK-4417-02"));
@@ -493,6 +507,7 @@ void testUnitsPortsNotes() {
     view.setTool(SysTool::Unit);
     click(c, c->toScreen({100, 100}));
     c->setNewUnitKind(QStringLiteral("pcba"));
+    view.setTool(SysTool::Unit);
     click(c, c->toScreen({500, 100}));
     check(d.units.size() == 2 && d.units[0].kind == QLatin1String("mech") && d.units[1].kind == QLatin1String("pcba"),
           "kind: units put as a mechanical part, then - chosen - as a PCBA");
@@ -527,6 +542,7 @@ void testUnitsPortsNotes() {
     check(d.cables.empty() && d.unit(u1)->ports.empty() && d.unit(u2)->ports.empty(), "ports: the ports and the cable - one step to undo");
     view.redo();
     // A cable let go on nothing: none, and no port.
+    view.setTool(SysTool::Cable);
     drag(c->unitOnScreen(u1), c->toScreen({300, 600}));
     check(d.cables.size() == 1 && d.unit(u1)->ports.size() == 1, "ports: a cable let go on nothing - given up, no port put");
 
@@ -546,6 +562,7 @@ void testUnitsPortsNotes() {
     d.unit(housing)->w = 400;
     d.unit(housing)->h = 220;
     c->setNewUnitKind(QStringLiteral("pcba"));
+    view.setTool(SysTool::Unit);
     click(c, c->toScreen({d.unit(housing)->x + 230, d.unit(housing)->y + 120}));
     const QString board = d.units.back().id;
     const bool within = QRectF(d.unit(housing)->x, d.unit(housing)->y, 400, 220)
@@ -556,6 +573,7 @@ void testUnitsPortsNotes() {
     const QString through = d.unit(housing)->ports.back().id;
     view.setTool(SysTool::Cable);
     drag(c->unitOnScreen(u2), c->portOnScreen(housing, through));
+    view.setTool(SysTool::Cable);
     drag(c->unitOnScreen(board), c->portOnScreen(housing, through));
     const SysCable& outsideCable = d.cables[d.cables.size() - 2];
     const SysCable& insideCable = d.cables.back();
@@ -727,6 +745,151 @@ void testFilesOut(const QString& base) {
     QFile::copy(vsdx, QDir::temp().filePath(QStringLiteral("edraw_system_test.vsdx")));
 }
 
+// UNITS IN UNITS, SIZED BY ANY WALL, THEIR LOOK, WHAT IS SHOWN, DELETE ASKED, THE TOOLS: a unit put in a unit kept
+// inside it and moved with it; any wall or corner sizes a unit; its colour and how solid it is; each field's eye;
+// Delete asks where a unit is connected; back to Select after putting one (Shift: another), Space the last again.
+void testNestingAndLook() {
+    QJsonObject stored;
+    SystemDesignView view;
+    view.setStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    view.resize(1200, 760);
+    view.show();
+    QApplication::processEvents();
+    SystemCanvas* c = view.canvas();
+    SystemDesign& d = view.design();
+    auto drag = [&](const QPointF& from, const QPointF& to) {
+        mouse(c, QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
+        for (int i = 1; i <= 6; ++i) mouse(c, QEvent::MouseMove, from + (to - from) * (i / 6.0), Qt::LeftButton, Qt::NoButton);
+        mouse(c, QEvent::MouseButtonRelease, to, Qt::NoButton, Qt::LeftButton);
+        QApplication::processEvents();
+    };
+    auto shiftClick = [&](const QPointF& at) {
+        QMouseEvent down(QEvent::MouseButtonPress, at, c->mapToGlobal(at), Qt::LeftButton, Qt::LeftButton, Qt::ShiftModifier);
+        QMouseEvent up(QEvent::MouseButtonRelease, at, c->mapToGlobal(at), Qt::LeftButton, Qt::NoButton, Qt::ShiftModifier);
+        QApplication::sendEvent(c, &down);
+        QApplication::sendEvent(c, &up);
+    };
+    auto key = [&](Qt::Key k) {
+        QKeyEvent e(QEvent::KeyPress, k, Qt::NoModifier);
+        QApplication::sendEvent(c, &e);
+    };
+
+    // ---- PUT, THEN BACK TO SELECT - SHIFT FOR ANOTHER - SPACE THE TOOL AGAIN ----
+    view.setTool(SysTool::Unit);
+    click(c, c->toScreen({100, 100}));
+    check(d.units.size() == 1 && c->tool() == SysTool::Select, "tools: a unit put - back to Select");
+    key(Qt::Key_Space);
+    check(c->tool() == SysTool::Unit, "tools: Space - the Unit tool again");
+    shiftClick(c->toScreen({900, 100}));
+    check(d.units.size() == 2 && c->tool() == SysTool::Unit, "tools: Shift held - a unit put, and Unit kept for another");
+    key(Qt::Key_Escape);
+
+    // ---- A UNIT IN A UNIT ----
+    const QString mother = d.units[0].id;
+    d.unit(mother)->w = 400;
+    d.unit(mother)->h = 300;
+    view.setTool(SysTool::Unit);
+    click(c, c->toScreen({d.unit(mother)->x + 200, d.unit(mother)->y + 150}));
+    const QString child = d.units.back().id;
+    check(d.unit(child)->parent == mother && d.unit(mother)->rect().contains(d.unit(child)->rect()),
+          "inside: a unit put in a unit - in it, and inside its walls");
+    // Dragged against her wall: kept inside.
+    view.setTool(SysTool::Select);
+    const QPointF mid = c->unitOnScreen(child);
+    drag(mid, mid + (c->toScreen({140, 0}) - c->toScreen({0, 0})));
+    check(d.unit(child)->parent == mother && d.unit(mother)->rect().contains(d.unit(child)->rect()), "inside: dragged to her wall - kept inside her");
+    // The mother moved: the child with her.
+    const QPointF childWas(d.unit(child)->x, d.unit(child)->y);
+    const QPointF momMid = c->toScreen({d.unit(mother)->x + 30, d.unit(mother)->y + 270});
+    drag(momMid, momMid + (c->toScreen({100, 50}) - c->toScreen({0, 0})));
+    std::printf("  inside: the child moved %.0f, %.0f with its mother\n", d.unit(child)->x - childWas.x(), d.unit(child)->y - childWas.y());
+    check(std::abs(d.unit(child)->x - childWas.x() - 100) < 10.5 && std::abs(d.unit(child)->y - childWas.y() - 50) < 10.5,
+          "inside: the mother moved - what is in her moves with her");
+    // Made smaller than what is in her: no smaller than it.
+    const QRectF in = d.contentsOf(mother);
+    drag(c->unitCornerOnScreen(mother), c->toScreen({d.unit(mother)->x + 30, d.unit(mother)->y + 30}));
+    check(d.unit(mother)->rect().contains(in), "inside: sized - never smaller than what is in her");
+    // Dragged out past her wall: out of her.
+    const QPointF cm = c->unitOnScreen(child);
+    drag(cm, c->toScreen({d.unit(mother)->x + d.unit(mother)->w + 300, d.unit(child)->y + 20}));
+    check(d.unit(child)->parent.isEmpty(), "inside: dragged out past her wall - in her no more");
+    view.undo();
+    check(d.unit(child)->parent == mother, "inside: one step to undo");
+
+    // ---- ANY WALL, ANY CORNER ----
+    const QString other = d.units[1].id;
+    const QRectF before = d.unit(other)->rect();
+    drag(c->toScreen({before.left(), before.center().y()}), c->toScreen({before.left() - 60, before.center().y()}));
+    std::printf("  wall: left %.0f -> %.0f, width %.0f -> %.0f\n", before.left(), d.unit(other)->x, before.width(), d.unit(other)->w);
+    check(std::abs(d.unit(other)->x - (before.left() - 60)) < 10.5 && std::abs(d.unit(other)->rect().right() - before.right()) < 1e-6,
+          "size: by its left wall - wider to the left, its right where it was");
+    const QRectF b2 = d.unit(other)->rect();
+    drag(c->toScreen(b2.topLeft()), c->toScreen(b2.topLeft() - QPointF(0, 40)));
+    check(std::abs(d.unit(other)->y - (b2.top() - 40)) < 10.5 && std::abs(d.unit(other)->rect().bottom() - b2.bottom()) < 1e-6,
+          "size: by its top-left corner - taller upward");
+
+    // ---- ITS LOOK, AND WHAT IS SHOWN ----
+    c->select(other, QString(), QString());
+    view.setUnitColour(QColor(200, 60, 60));
+    view.setUnitOpacity(0.4);
+    auto* eye = view.findChild<QToolButton*>(QStringLiteral("systemUnitNameEye"));
+    check(eye && eye->isChecked(), "eye: by the unit's name, open - shown");
+    if (eye) eye->click();
+    check(d.unit(other)->color == QColor(200, 60, 60) && std::abs(d.unit(other)->opacity - 0.4) < 1e-9 &&
+              d.unit(other)->hidden.contains(QStringLiteral("name")) && d.unit(other)->shows(QStringLiteral("desc")),
+          "look: its colour, how solid it is, and its name hidden on the diagram (its description shown, as it starts)");
+    const SystemDesign back = SystemDesign::fromJson(d.toJson());
+    check(back.unit(other)->opacity == d.unit(other)->opacity && back.unit(other)->hidden == d.unit(other)->hidden &&
+              back.unit(child)->parent == mother,
+          "saved: how solid, what is hidden, which unit it is in");
+    // An old design - no unit said to be in another: found by where they lie.
+    QJsonObject old = d.toJson();
+    QJsonArray us = old.value(QStringLiteral("units")).toArray();
+    for (int i = 0; i < us.size(); ++i) {
+        QJsonObject u = us[i].toObject();
+        u.remove(QStringLiteral("parent"));
+        us[i] = u;
+    }
+    old.insert(QStringLiteral("units"), us);
+    check(SystemDesign::fromJson(old).unit(child)->parent == mother, "saved: an old design - a unit inside another found in it");
+    c->selectNote(QString());
+    auto* cableEye = view.findChild<QToolButton*>(QStringLiteral("systemCableDescEye"));
+    check(cableEye != nullptr, "eye: by each of a cable's fields too");
+
+    // ---- DELETE, ASKED WHERE IT IS CONNECTED ----
+    QStringList asked;
+    bool answer = false;
+    view.setConfirm([&](const QString& q) {
+        asked << q;
+        return answer;
+    });
+    // A cable from the mother's child to the other unit.
+    view.setTool(SysTool::Cable);
+    drag(c->unitOnScreen(child), c->unitOnScreen(other));
+    check(d.cables.size() == 1, "delete: a cable to delete with");
+    c->select(mother, QString(), QString());
+    check(!view.deleteSelected() && d.unit(mother) && asked.size() == 1 && asked[0].contains(QStringLiteral("unit(s) inside it")),
+          "delete: a unit with a unit and a cable in it - asked, and kept when the answer is no");
+    answer = true;
+    check(view.deleteSelected() && !d.unit(mother) && !d.unit(child) && d.cables.empty(), "delete: yes - it, what is in it and its cables gone");
+    view.setTool(SysTool::Unit);
+    click(c, c->toScreen({100, 600}));
+    const QString lone = d.units.back().id;
+    asked.clear();
+    c->select(lone, QString(), QString());
+    key(Qt::Key_Delete);
+    check(!d.unit(lone) && asked.isEmpty(), "delete: a unit with nothing connected - deleted, nothing asked");
+    // SPACE: Delete again.
+    c->select(other, QString(), QString());
+    key(Qt::Key_Space);
+    check(!d.unit(other), "delete: Space - deletes again");
+    // Saved as Edraw's own: .wetsys read back.
+    const QString own = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_test.wetsys"));
+    SystemDesign got;
+    check(saveSystemFile(back, own) && loadSystemFile(own, got) && got.units.size() == back.units.size(), "file: Edraw's own .wetsys");
+    QFile::remove(own);
+}
+
 } // namespace
 
 int run_systemdesign_tests() {
@@ -742,6 +905,7 @@ int run_systemdesign_tests() {
     testTab();
     testUnitsPortsNotes();
     testFilesOut(dir.path());
+    testNestingAndLook();
     std::printf("  system design: %s\n", g_fail == 0 ? "OK" : "FAILED");
     return g_fail;
 }

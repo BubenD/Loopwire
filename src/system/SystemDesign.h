@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QColor>
+#include <QRectF>
 #include <QJsonObject>
 #include <QString>
 #include <QStringList>
@@ -38,7 +39,14 @@ struct SysUnit {
     QString rev;
     QString description;
     double x = 0.0, y = 0.0, w = 160.0, h = 100.0;
-    QColor color;
+    QColor color;          // none: as units of its kind are
+    double opacity = 1.0;  // how solid its fill is, 0 to 1
+    // THE UNIT IT IS IN - a PCBA in its housing - kept inside it, moved with it. Empty: in none.
+    QString parent;
+    // WHAT IS NOT SHOWN ON THE DIAGRAM of its own: "name", "pn", "rev", "desc".
+    QStringList hidden;
+    bool shows(const QString& what) const { return !hidden.contains(what); }
+    QRectF rect() const { return QRectF(x, y, w, h); }
     std::vector<SysPort> ports;
     const SysPort* port(const QString& id) const;
     SysPort* port(const QString& id);
@@ -61,6 +69,9 @@ struct SysCable {
     QString drawing;      // the file, as linked
     QString drawingNo;    // read off it at the last check
     QString drawingRev;
+    // WHAT IS NOT SHOWN ON ITS LABEL: "name", "pn", "rev", "desc" (its description, as it starts).
+    QStringList hidden{QStringLiteral("desc")};
+    bool shows(const QString& what) const { return !hidden.contains(what); }
 };
 
 // WHAT A DRAWING SAYS ABOUT ITSELF: its drawing number and its current revision, read off its title block (the field
@@ -116,6 +127,15 @@ struct SystemDesign {
     // A NOTE put at a place; its id. One taken away.
     QString addNote(double x, double y, const QString& text = QString());
     void removeNote(const QString& id);
+    // UNITS IN UNITS: those right inside one (empty: those in none), whether one is somewhere inside another, how deep
+    // one is; a unit moved with everything inside it; the box everything inside a unit takes.
+    std::vector<QString> childrenOf(const QString& unit) const;
+    bool isWithin(const QString& unit, const QString& ancestor) const;
+    int depth(const QString& unit) const;
+    void moveUnit(const QString& unit, double dx, double dy);
+    QRectF contentsOf(const QString& unit) const;
+    // THE UNIT A BOX WOULD BE IN: the innermost one round the point (not `except`, nor one inside it).
+    QString unitAround(const QPointF& point, const QString& except = QString()) const;
     // The cables plugged into one side of a port - its inside or its outside.
     std::vector<const SysCable*> cablesAt(const QString& unit, const QString& port, bool inside) const;
     const SysUnit* unit(const QString& id) const;
@@ -130,7 +150,7 @@ struct SystemDesign {
     // A NEW CABLE from one port to another, named W1, W2...; its id (empty where either port is not there, or they are
     // the same port).
     QString addCable(const QString& aUnit, const QString& aPort, const QString& bUnit, const QString& bPort);
-    // A unit taken away with its cables; a port with its cables; a cable.
+    // A unit taken away with its cables and every unit inside it; a port with its cables; a cable.
     void removeUnit(const QString& id);
     void removePort(const QString& unit, const QString& port);
     void removeCable(const QString& id);

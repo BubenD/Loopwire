@@ -16,7 +16,9 @@ class QLabel;
 class QLineEdit;
 class QListWidget;
 class QPushButton;
+class QSlider;
 class QSpinBox;
+class QToolButton;
 class QStackedWidget;
 class QTableWidget;
 class QTabWidget;
@@ -39,6 +41,12 @@ public:
     SystemCanvas* canvas() const { return canvas_; }
 
     void setTool(SysTool tool);
+    // WHAT IS SELECTED DELETED - a unit with cables or units in it, or a port with cables, only once asked (confirm).
+    // False where nothing was.
+    bool deleteSelected();
+    // THE UNIT SELECTED'S COLOUR (none: as units of its kind are) and how solid its fill is (0 to 1).
+    void setUnitColour(const QColor& colour);
+    void setUnitOpacity(double opacity);
     void undo();
     void redo();
     bool canUndo() const { return !history_.empty(); }
@@ -102,6 +110,12 @@ private:
     QLineEdit* unitRev_ = nullptr;
     QLineEdit* unitDesc_ = nullptr;
     QComboBox* unitKind_ = nullptr;
+    QToolButton* unitColour_ = nullptr;
+    QSlider* unitOpacity_ = nullptr;
+    QString opacityDragging_;   // one step to undo for a slide of it
+    // THE EYES: whether each of a unit's (a cable's) name, P/N, rev and description is shown on the diagram.
+    QToolButton* unitEyes_[4] = {};
+    QToolButton* cableEyes_[4] = {};
     QTableWidget* ports_ = nullptr;
     // A cable.
     QLineEdit* cableName_ = nullptr;

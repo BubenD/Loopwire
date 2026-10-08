@@ -22,20 +22,24 @@ QString num(double v) { return QString::number(v, 'f', 4); }
 QString colour(const QColor& c, const QColor& otherwise) { return (c.isValid() ? c : otherwise).name().toUpper(); }
 
 QString unitLabel(const SysUnit& u) {
-    QStringList lines{u.name};
+    QString kind = u.kind == QLatin1String("pcba") ? QStringLiteral("[PCBA]") : QStringLiteral("[Mechanical]");
+    if (u.shows(QStringLiteral("desc")) && !u.description.isEmpty()) kind += QLatin1Char(' ') + u.description;
+    QStringList lines{kind};
+    if (u.shows(QStringLiteral("name"))) lines << u.name;
     QStringList sub;
-    if (!u.pn.isEmpty()) sub << u.pn;
-    if (!u.rev.isEmpty()) sub << QStringLiteral("rev ") + u.rev;
+    if (!u.pn.isEmpty() && u.shows(QStringLiteral("pn"))) sub << u.pn;
+    if (!u.rev.isEmpty() && u.shows(QStringLiteral("rev"))) sub << QStringLiteral("rev ") + u.rev;
     if (!sub.isEmpty()) lines << sub.join(QStringLiteral("  "));
-    lines << (u.kind == QLatin1String("pcba") ? QStringLiteral("[PCBA]") : QStringLiteral("[Mechanical]"));
     return lines.join(QLatin1Char('\n'));
 }
 
 QString cableLabel(const SysCable& c) {
-    QString label = c.name;
-    if (!c.pn.isEmpty()) label += QStringLiteral("  ") + c.pn;
-    if (!c.rev.isEmpty()) label += QStringLiteral("  rev ") + c.rev;
-    return label;
+    QStringList parts;
+    if (c.shows(QStringLiteral("name")) && !c.name.isEmpty()) parts << c.name;
+    if (c.shows(QStringLiteral("pn")) && !c.pn.isEmpty()) parts << c.pn;
+    if (c.shows(QStringLiteral("rev")) && !c.rev.isEmpty()) parts << QStringLiteral("rev ") + c.rev;
+    if (c.shows(QStringLiteral("desc")) && !c.description.isEmpty()) parts << c.description;
+    return parts.join(QStringLiteral("  "));
 }
 
 QString portLabel(const SysPort& p) {
@@ -234,13 +238,14 @@ QString systemDrawioXml(const SystemDesign& d) {
     // THE UNITS, the biggest first - a unit inside another over it.
     std::vector<const SysUnit*> order;
     for (const SysUnit& u : d.units) order.push_back(&u);
-    std::stable_sort(order.begin(), order.end(), [](const SysUnit* a, const SysUnit* b) { return a->w * a->h > b->w * b->h; });
+    std::stable_sort(order.begin(), order.end(), [&d](const SysUnit* a, const SysUnit* b) { return d.depth(a->id) < d.depth(b->id); });
     for (const SysUnit* u : order) {
         const bool pcba = u->kind == QLatin1String("pcba");
         vertex(u->id, unitLabel(*u),
                QStringLiteral("rounded=1;arcSize=4;whiteSpace=wrap;html=0;verticalAlign=top;spacingTop=6;fontStyle=1;fillColor=%1;"
-                              "strokeColor=#5A626E;")
-                   .arg(colour(u->color, pcba ? QColor(226, 242, 230) : QColor(232, 238, 246))),
+                              "fillOpacity=%2;strokeColor=#5A626E;")
+                   .arg(colour(u->color, pcba ? QColor(226, 242, 230) : QColor(232, 238, 246)))
+                   .arg(std::lround(u->opacity * 100.0)),
                u->x, u->y, u->w, u->h);
     }
     // THE PORTS: a small square on the side, named; the cables go from and to them.
@@ -321,7 +326,7 @@ bool exportSystemVsdx(const SystemDesign& d, const QString& path, QString* error
     };
     std::vector<const SysUnit*> order;
     for (const SysUnit& u : d.units) order.push_back(&u);
-    std::stable_sort(order.begin(), order.end(), [](const SysUnit* a, const SysUnit* b) { return a->w * a->h > b->w * b->h; });
+    std::stable_sort(order.begin(), order.end(), [&d](const SysUnit* a, const SysUnit* b) { return d.depth(a->id) < d.depth(b->id); });
     for (const SysUnit* u : order)
         rect(u->x, u->y, u->w, u->h, colour(u->color, u->kind == QLatin1String("pcba") ? QColor(226, 242, 230) : QColor(232, 238, 246)),
              QStringLiteral("#5A626E"), unitLabel(*u), 9.0, true);
