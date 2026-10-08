@@ -8,8 +8,10 @@
 #include "model/Document.h"
 #include "system/PnMatch.h"
 #include "system/SystemDesign.h"
+#include "system/SystemExport.h"
 
 #include <QFileInfo>
+#include <QXmlStreamReader>
 #include <QComboBox>
 #include <QKeyEvent>
 #include <QPlainTextEdit>
@@ -637,6 +639,94 @@ void testUnitsPortsNotes() {
     QApplication::processEvents();
 }
 
+// SAVED AS A FILE OF ITS OWN, AND OUT FOR DRAW.IO AND VISIO: the design read back the same; the draw.io file a diagram
+// of its units, ports, cables (from port to port, through their corners) and notes; the Visio file a package with a
+// page of shapes, each part well formed.
+void testFilesOut(const QString& base) {
+    const QString dir = QDir(base).filePath(QStringLiteral("out"));
+    QDir().mkpath(dir);
+    SystemDesign d;
+    d.name = QStringLiteral("Test rig");
+    const QString u1 = d.addUnit(0, 0), u2 = d.addUnit(400, 40);
+    d.unit(u2)->kind = QStringLiteral("pcba");
+    d.unit(u1)->pn = QStringLiteral("ENC-100");
+    const QString p1 = d.addPort(u1, QStringLiteral("right"), 0.5), p2 = d.addPort(u2, QStringLiteral("left"), 0.5);
+    d.unit(u1)->port(p1)->connector = QStringLiteral("M12 & co <8F>");
+    const QString w = d.addCable(u1, p1, u2, p2);
+    d.cable(w)->pn = QStringLiteral("CBL-001");
+    d.addNote(0, 200, QStringLiteral("Keep W1 clear\nof the fan"));
+
+    // ---- A FILE OF ITS OWN ----
+    const QString own = QDir(dir).filePath(QStringLiteral("rig.edsys"));
+    SystemDesign back;
+    check(saveSystemFile(d, own) && loadSystemFile(own, back) && back.toJson() == d.toJson(), "file: saved as its own and read back the same");
+    SystemDesign none;
+    check(!loadSystemFile(QDir(dir).filePath(QStringLiteral("nothing.edsys")), none), "file: one not there - not read");
+
+    // ---- DRAW.IO ----
+    const QString drawio = QDir(dir).filePath(QStringLiteral("rig.drawio"));
+    check(exportSystemDrawio(d, drawio), "draw.io: written");
+    QFile f(drawio);
+    f.open(QIODevice::ReadOnly);
+    QXmlStreamReader xml(&f);
+    int vertices = 0, edges = 0;
+    bool joined = false, labelled = false;
+    while (!xml.atEnd()) {
+        if (xml.readNext() != QXmlStreamReader::StartElement || xml.name() != QLatin1String("mxCell")) continue;
+        const auto a = xml.attributes();
+        if (a.value(QLatin1String("vertex")) == QLatin1String("1")) ++vertices;
+        if (a.value(QLatin1String("edge")) == QLatin1String("1")) {
+            ++edges;
+            joined = a.value(QLatin1String("source")) == QStringLiteral("%1.%2").arg(u1, p1) &&
+                     a.value(QLatin1String("target")) == QStringLiteral("%1.%2").arg(u2, p2);
+            labelled = a.value(QLatin1String("value")).contains(QLatin1String("CBL-001"));
+        }
+    }
+    std::printf("  draw.io: %d shape(s), %d cable(s), well formed %d\n", vertices, edges, xml.hasError() ? 0 : 1);
+    check(!xml.hasError() && vertices == 5 && edges == 1 && joined && labelled,
+          "draw.io: well formed - two units, two ports, a note, and the cable from port to port with its P/N");
+
+    // ---- VISIO ----
+    const QString vsdx = QDir(dir).filePath(QStringLiteral("rig.vsdx"));
+    check(exportSystemVsdx(d, vsdx), "visio: written");
+    QFile v(vsdx);
+    v.open(QIODevice::ReadOnly);
+    const QByteArray bytes = v.readAll();
+    bool parts = bytes.startsWith("PK\x03\x04");
+    for (const char* part : {"[Content_Types].xml", "_rels/.rels", "visio/document.xml", "visio/pages/pages.xml", "visio/pages/page1.xml",
+                             "visio/pages/_rels/pages.xml.rels", "visio/_rels/document.xml.rels"})
+        parts = parts && bytes.contains(part);
+    // Each part stored as it is: its XML read where it lies.
+    auto wellFormed = [&](const QByteArray& open, const QByteArray& close) {
+        const int at = bytes.indexOf(open), end = bytes.indexOf(close, at);
+        if (at < 0 || end < 0) return false;
+        QXmlStreamReader r(bytes.mid(at, end - at + close.size()));
+        while (!r.atEnd()) r.readNext();
+        return !r.hasError();
+    };
+    const int shapes = static_cast<int>(bytes.count("<Shape ID="));
+    std::printf("  visio: %lld bytes, %d shape(s)\n", static_cast<long long>(bytes.size()), shapes);
+    check(parts && wellFormed("<PageContents", "</PageContents>") && wellFormed("<VisioDocument", "</VisioDocument>") &&
+              wellFormed("<Pages ", "</Pages>") && wellFormed("<Types ", "</Types>"),
+          "visio: a package with its document, its pages and a page - each part well formed");
+    check(shapes == 2 + 2 * 2 + 1 + 1 && bytes.contains("Keep W1 clear") && bytes.contains("M12 &amp; co &lt;8F&gt;"),
+          "visio: a shape for each unit, port and its name, cable and note - their text kept, written safely");
+
+    // ---- FROM THE TAB ----
+    SystemDesignView view;
+    QJsonObject stored;
+    view.setStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    check(view.openDesign(own) && view.design().units.size() == 2 && view.design().notes.size() == 1, "file: opened on the tab");
+    view.undo();
+    check(view.design().units.empty(), "file: opened - Undo takes it back");
+    check(view.exportDrawio(QDir(dir).filePath(QStringLiteral("tab.drawio"))) && view.exportVisio(QDir(dir).filePath(QStringLiteral("tab.vsdx"))) &&
+              view.saveDesignAs(QDir(dir).filePath(QStringLiteral("tab.edsys"))),
+          "file: saved, and out for draw.io and Visio, from the tab");
+    // Kept for a look from outside: the Visio file the tests wrote.
+    QFile::remove(QDir::temp().filePath(QStringLiteral("edraw_system_test.vsdx")));
+    QFile::copy(vsdx, QDir::temp().filePath(QStringLiteral("edraw_system_test.vsdx")));
+}
+
 } // namespace
 
 int run_systemdesign_tests() {
@@ -651,6 +741,7 @@ int run_systemdesign_tests() {
     testDesignators(dir.path());
     testTab();
     testUnitsPortsNotes();
+    testFilesOut(dir.path());
     std::printf("  system design: %s\n", g_fail == 0 ? "OK" : "FAILED");
     return g_fail;
 }

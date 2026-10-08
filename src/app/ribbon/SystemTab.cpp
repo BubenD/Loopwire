@@ -162,10 +162,25 @@ void MainWindow::buildSystemTab() {
                            "cables that differ, no drawing linked"),
             [this] { if (systemView_) systemView_->checkDesign(); });
     });
+    // THE DESIGN AS A FILE OF ITS OWN - saved, opened - and the diagram out for draw.io and Visio.
+    group(QStringLiteral("File"), [&](QWidget* w, QHBoxLayout* row) {
+        big(w, row, "systemSave", QStringLiteral("Save as"), QStringLiteral("export"),
+            QStringLiteral("Save the system design as a file of its own (.edsys) - it is kept in the drawing too"),
+            [this] { if (systemView_) systemView_->saveDesignAs(); });
+        big(w, row, "systemOpenDesign", QStringLiteral("Open"), QStringLiteral("load"),
+            QStringLiteral("Open a system design saved as a file of its own (.edsys) - in place of this one (Undo takes it back)"),
+            [this] { if (systemView_) systemView_->openDesign(); });
+    });
     group(QStringLiteral("Export"), [&](QWidget* w, QHBoxLayout* row) {
         big(w, row, "systemExport", QStringLiteral("Cable list"), QStringLiteral("export"),
             QStringLiteral("The cable list - each cable, its part number, revision, ends, length and drawing - to a CSV file"),
             [this] { if (systemView_) systemView_->exportCableList(); });
+        big(w, row, "systemExportDrawio", QStringLiteral("draw.io"), QStringLiteral("export"),
+            QStringLiteral("The diagram for draw.io (diagrams.net) - units, ports, cables with their labels, and notes - a .drawio file"),
+            [this] { if (systemView_) systemView_->exportDrawio(); });
+        big(w, row, "systemExportVisio", QStringLiteral("Visio"), QStringLiteral("export"),
+            QStringLiteral("The diagram for Microsoft Visio (2013 and on) - units, ports, cables with their labels, and notes - a .vsdx file"),
+            [this] { if (systemView_) systemView_->exportVisio(); });
     });
     lay->addStretch(1);
     ribbon_->addTab(page, QStringLiteral("System design"));

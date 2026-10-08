@@ -1,4 +1,5 @@
 #include "app/SystemCanvas.h"
+#include "system/SystemExport.h"
 
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -14,7 +15,6 @@ namespace Edraw_Desktop {
 namespace {
 
 constexpr double kPortSize = 8.0;
-constexpr double kLead = 22.0;
 
 double segDistance(const QPointF& p, const QPointF& a, const QPointF& b) {
     const QPointF e = b - a;
@@ -116,19 +116,9 @@ QPointF SystemCanvas::toScreen(const QPointF& w) const { return w * scale_ + off
 
 QPointF SystemCanvas::toWorld(const QPointF& s) const { return (s - offset_) / scale_; }
 
-QPointF SystemCanvas::portPoint(const SysUnit& u, const SysPort& p) const {
-    if (p.side == QLatin1String("left")) return {u.x, u.y + u.h * p.at};
-    if (p.side == QLatin1String("top")) return {u.x + u.w * p.at, u.y};
-    if (p.side == QLatin1String("bottom")) return {u.x + u.w * p.at, u.y + u.h};
-    return {u.x + u.w, u.y + u.h * p.at};
-}
+QPointF SystemCanvas::portPoint(const SysUnit& u, const SysPort& p) const { return sysPortPoint(u, p); }
 
-QPointF SystemCanvas::portOut(const SysPort& p) const {
-    if (p.side == QLatin1String("left")) return {-1, 0};
-    if (p.side == QLatin1String("top")) return {0, -1};
-    if (p.side == QLatin1String("bottom")) return {0, 1};
-    return {1, 0};
-}
+QPointF SystemCanvas::portOut(const SysPort& p) const { return sysPortOut(p); }
 
 double SystemCanvas::portHalf() const { return kPortSize * std::clamp(scale_, 0.6, 1.6) / 2.0 / scale_; }
 
@@ -138,35 +128,9 @@ bool SystemCanvas::inside(const QString& inner, const QString& outer) const {
     return a && b && inner != outer && QRectF(b->x, b->y, b->w, b->h).contains(QRectF(a->x, a->y, a->w, a->h));
 }
 
-std::vector<QPointF> SystemCanvas::cablePath(const SysCable& c) const {
-    const SysUnit* ua = design_->unit(c.aUnit);
-    const SysUnit* ub = design_->unit(c.bUnit);
-    const SysPort* pa = ua ? ua->port(c.aPort) : nullptr;
-    const SysPort* pb = ub ? ub->port(c.bPort) : nullptr;
-    if (!pa || !pb) return {};
-    // SQUARE: straight out of each port - out of its outside, or in from its inside - then across and along to meet.
-    const QPointF da = portOut(*pa) * (c.aInside ? -1.0 : 1.0), db = portOut(*pb) * (c.bInside ? -1.0 : 1.0);
-    const double end = 2.0 * portHalf();
-    const QPointF a = portPoint(*ua, *pa) + da * end, b = portPoint(*ub, *pb) + db * end;
-    const QPointF a1 = a + da * kLead, b1 = b + db * kLead;
-    std::vector<QPointF> path{a, a1};
-    if (std::abs(da.x()) > 0.5 && std::abs(db.x()) > 0.5) {
-        const double mx = (a1.x() + b1.x()) / 2.0;
-        path.push_back({mx, a1.y()});
-        path.push_back({mx, b1.y()});
-    } else if (std::abs(da.y()) > 0.5 && std::abs(db.y()) > 0.5) {
-        const double my = (a1.y() + b1.y()) / 2.0;
-        path.push_back({a1.x(), my});
-        path.push_back({b1.x(), my});
-    } else if (std::abs(da.x()) > 0.5) {
-        path.push_back({b1.x(), a1.y()});
-    } else {
-        path.push_back({a1.x(), b1.y()});
-    }
-    path.push_back(b1);
-    path.push_back(b);
-    return path;
-}
+// SQUARE: straight out of each port - out of its outside, or in from its inside, beyond its square - then across and
+// along to meet (as the exports draw it).
+std::vector<QPointF> SystemCanvas::cablePath(const SysCable& c) const { return sysCablePath(*design_, c, 2.0 * portHalf()); }
 
 QString SystemCanvas::unitAt(const QPointF& w) const {
     if (!design_) return QString();

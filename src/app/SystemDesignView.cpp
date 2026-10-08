@@ -1,6 +1,7 @@
 #include "app/SystemDesignView.h"
 
 #include "app/DrawingFinderDialog.h"
+#include "system/SystemExport.h"
 
 #include <QComboBox>
 #include <QDoubleSpinBox>
@@ -25,6 +26,7 @@
 #include <QStackedWidget>
 #include <QTabWidget>
 #include <QTableWidget>
+#include <QSettings>
 #include <QTextStream>
 #include <QVBoxLayout>
 
@@ -594,6 +596,73 @@ int SystemDesignView::checkDesign() {
     int errors = 0;
     for (const SysIssue& i : issues_) errors += i.level == 2 ? 1 : 0;
     return errors;
+}
+
+namespace {
+
+// WHERE TO, asked when not given: the place last used for these files, kept.
+QString askPath(QWidget* parent, const QString& given, bool save, const QString& title, const QString& name, const QString& filter) {
+    if (!given.isEmpty()) return given;
+    QSettings settings;
+    const QString dir = settings.value(QStringLiteral("system/fileDir")).toString();
+    const QString start = dir.isEmpty() ? name : QDir(dir).filePath(name);
+    const QString path = save ? QFileDialog::getSaveFileName(parent, title, start, filter) : QFileDialog::getOpenFileName(parent, title, dir, filter);
+    if (!path.isEmpty()) settings.setValue(QStringLiteral("system/fileDir"), QFileInfo(path).absolutePath());
+    return path;
+}
+
+QString baseName(const SystemDesign& d) { return d.name.isEmpty() ? QStringLiteral("system") : d.name; }
+
+} // namespace
+
+bool SystemDesignView::saveDesignAs(const QString& given) {
+    const QString path = askPath(this, given, true, QStringLiteral("Save the system design"), baseName(design_) + QStringLiteral(".edsys"),
+                                 QStringLiteral("System design (*.edsys)"));
+    if (path.isEmpty()) return false;
+    QString error;
+    if (!saveSystemFile(design_, path, &error)) {
+        if (given.isEmpty()) QMessageBox::warning(this, QStringLiteral("System design"), error);
+        return false;
+    }
+    return true;
+}
+
+bool SystemDesignView::openDesign(const QString& given) {
+    const QString path = askPath(this, given, false, QStringLiteral("Open a system design"), QString(),
+                                 QStringLiteral("System design (*.edsys)"));
+    if (path.isEmpty()) return false;
+    SystemDesign read;
+    QString error;
+    if (!loadSystemFile(path, read, &error)) {
+        if (given.isEmpty()) QMessageBox::warning(this, QStringLiteral("System design"), error);
+        return false;
+    }
+    aboutToChange();
+    design_ = read;
+    canvas_->setDesign(&design_);
+    commit();
+    canvas_->fit();
+    return true;
+}
+
+bool SystemDesignView::exportDrawio(const QString& given) {
+    const QString path = askPath(this, given, true, QStringLiteral("Export the diagram for draw.io"), baseName(design_) + QStringLiteral(".drawio"),
+                                 QStringLiteral("draw.io diagram (*.drawio)"));
+    if (path.isEmpty()) return false;
+    QString error;
+    const bool ok = exportSystemDrawio(design_, path, &error);
+    if (!ok && given.isEmpty()) QMessageBox::warning(this, QStringLiteral("System design"), error);
+    return ok;
+}
+
+bool SystemDesignView::exportVisio(const QString& given) {
+    const QString path = askPath(this, given, true, QStringLiteral("Export the diagram for Visio"), baseName(design_) + QStringLiteral(".vsdx"),
+                                 QStringLiteral("Visio drawing (*.vsdx)"));
+    if (path.isEmpty()) return false;
+    QString error;
+    const bool ok = exportSystemVsdx(design_, path, &error);
+    if (!ok && given.isEmpty()) QMessageBox::warning(this, QStringLiteral("System design"), error);
+    return ok;
 }
 
 bool SystemDesignView::exportCableList(const QString& given) {

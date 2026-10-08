@@ -62,6 +62,12 @@ public:
     int checkDesign();
     // THE CABLE LIST to a CSV file (asked where, when none is given).
     bool exportCableList(const QString& path = QString());
+    // THE DESIGN AS A FILE OF ITS OWN (.edsys), and read back from one (one step to undo); THE DIAGRAM FOR DRAW.IO and
+    // FOR VISIO. Asked where, when no path is given.
+    bool saveDesignAs(const QString& path = QString());
+    bool openDesign(const QString& path = QString());
+    bool exportDrawio(const QString& path = QString());
+    bool exportVisio(const QString& path = QString());
     // What the check found last.
     const std::vector<SysIssue>& issues() const { return issues_; }
 
