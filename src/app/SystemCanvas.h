@@ -2,8 +2,11 @@
 
 #include "system/SystemDesign.h"
 
+#include <QElapsedTimer>
 #include <QPointF>
 #include <QWidget>
+
+class QTimer;
 
 #include <vector>
 
@@ -38,6 +41,27 @@ public:
     QString selectedNote() const { return selNote_; }
     void select(const QString& unit, const QString& port, const QString& cable);
     void selectNote(const QString& note);
+    // A ZONE SELECTED: dragged over empty ground with Select - left to right a blue window, what is wholly in it; right to
+    // left a green crossing, what it touches. Moved together, deleted together. Empty: none.
+    void selectZone(const QStringList& units, const QStringList& cables, const QStringList& notes);
+    QStringList zoneUnits() const { return zoneUnits_; }
+    QStringList zoneCables() const { return zoneCables_; }
+    QStringList zoneNotes() const { return zoneNotes_; }
+    int zoneCount() const { return static_cast<int>(zoneUnits_.size() + zoneCables_.size() + zoneNotes_.size()); }
+    // THE CHECK SHOWN: a line swept across the diagram, then each thing found ringed where it is - the rings pulsing a
+    // while, then kept until the design changes. Whether it is still moving; it put to its end at once; taken away.
+    struct Mark {
+        QPointF at;     // in the diagram's own units
+        int level = 1;  // 0 a note, 1 a warning, 2 an error
+        QString what;
+    };
+    void playCheck(const std::vector<SysIssue>& issues);
+    bool checkAnimating() const;
+    void finishCheck();
+    void clearCheck();
+    const std::vector<Mark>& checkMarks() const { return marks_; }
+    // WHERE A PORT'S DESIGNATOR IS DRAWN, on the screen: outside its unit, above the cable's line - moved as dragged.
+    QRectF portLabelOnScreen(const QString& unit, const QString& port) const;
     // What is selected taken away - as it is, no questions (the view asks first: deleteRequested).
     void deleteSelected();
     // Delete was the last thing done - Space does it again.
@@ -84,8 +108,14 @@ private:
     // THE NEAREST SIDE of a unit to a point, and how far along it.
     static void nearestSide(const SysUnit& u, const QPointF& w, QString& side, double& at);
     // A unit's wall or corner under the pointer, to size it by: 1 its right, 2 its bottom, 4 its left, 8 its top - a
-    // corner two of them.
+    // corner two of them. A note's alike.
     int sizeHandleAt(const QPointF& world, QString& unit) const;
+    int noteHandleAt(const QPointF& world, QString& note) const;
+    QFont diagramFont() const;
+    QRectF portLabelRect(const SysUnit& u, const SysPort& p) const;
+    bool labelAt(const QPointF& screen, QString& unit, QString& port) const;
+    // Where a note's line goes to: the port, the cable's middle, or the unit's wall nearest the note. False: linked to none.
+    bool noteTarget(const SysNote& n, QPointF& world) const;
     // A UNIT DROPPED: in the unit round its middle now (or none), and kept inside that one.
     void settleUnit(const QString& unit);
     // A CABLE STARTED BY A CLICK: it follows the pointer until a click on another port or unit ends it (Esc gives it up).
@@ -105,10 +135,16 @@ private:
     SysTool lastTool_ = SysTool::Select;
     bool lastDelete_ = false;
     QString selUnit_, selPort_, selCable_, selNote_;
+    QStringList zoneUnits_, zoneCables_, zoneNotes_;
+    QPointF zoneFrom_, zoneTo_;
+    std::vector<Mark> marks_;
+    QTimer* anim_ = nullptr;
+    QElapsedTimer animClock_;
+    bool animating_ = false;
     double scale_ = 1.0;
     QPointF offset_{40.0, 40.0};
     // A drag under way: a unit, a note or a port moved, a unit sized, a cable drawn from a port, the view moved.
-    enum class Drag { None, Unit, Note, Port, Size, Cable, Pan };
+    enum class Drag { None, Unit, Note, Port, Size, NoteSize, Label, Zone, Cable, Pan };
     Drag drag_ = Drag::None;
     int sizeHow_ = 0;
     QRectF sizeFrom_;
@@ -119,6 +155,7 @@ private:
     QString fromSide_;
     double fromAt_ = 0.5;
     QPointF rubber_;
+    QString labelUnit_, labelPort_;
     bool moved_ = false;
     bool moveAnnounced_ = false;
 };

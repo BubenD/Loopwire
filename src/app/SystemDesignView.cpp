@@ -30,6 +30,7 @@
 #include <QTextStream>
 #include <QVBoxLayout>
 #include <QColorDialog>
+#include <QCheckBox>
 #include <QPainter>
 #include <QPainterPath>
 #include <QSlider>
@@ -191,13 +192,13 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
         lh->addWidget(unitOpacity_, 1);
         form->addRow(QStringLiteral("Look"), look);
         v->addLayout(form);
-        v->addWidget(new QLabel(QStringLiteral("<b>Ports</b> - name, side, the connector P/N outside and inside, pins"), page));
-        ports_ = new QTableWidget(0, 5, page);
+        v->addWidget(new QLabel(QStringLiteral("<b>Ports</b> - name, side, the connector's P/N, its contacts' P/N"), page));
+        ports_ = new QTableWidget(0, 4, page);
         ports_->setObjectName(QStringLiteral("systemPorts"));
-        ports_->setHorizontalHeaderLabels({QStringLiteral("Name"), QStringLiteral("Side"), QStringLiteral("Outside P/N"),
-                                           QStringLiteral("Inside P/N"), QStringLiteral("Pins")});
-        ports_->setToolTip(QStringLiteral("Each port is a connector through the unit's wall: the connector P/N its outside takes (the "
-                                          "mating one, as the system calls for it) and its inside's"));
+        ports_->setHorizontalHeaderLabels({QStringLiteral("Name"), QStringLiteral("Side"), QStringLiteral("Connector P/N"),
+                                           QStringLiteral("Contact P/N")});
+        ports_->setToolTip(QStringLiteral("Each port: its designator, the side it is on, the connector's part number as the system "
+                                          "calls for it, and its contacts' part number"));
         ports_->horizontalHeader()->setStretchLastSection(true);
         ports_->verticalHeader()->setVisible(false);
         v->addWidget(ports_, 1);
@@ -229,8 +230,7 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
             const QString text = ports_->item(row, col) ? ports_->item(row, col)->text() : QString();
             if (col == 0) p.name = text;
             else if (col == 2) p.connector = text;
-            else if (col == 3) p.insidePn = text;
-            else p.pins = text.toInt();
+            else if (col == 3) p.contactPn = text;
             commit();
         });
         connect(add, &QPushButton::clicked, this, [this] {
@@ -358,6 +358,32 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
         noteText_ = new QPlainTextEdit(page);
         noteText_->setObjectName(QStringLiteral("systemNoteText"));
         v->addWidget(noteText_, 1);
+        // ITS COLOUR, and WHAT IT IS ABOUT.
+        auto* look = new QHBoxLayout;
+        auto* colour = new QPushButton(QStringLiteral("Colour..."), page);
+        colour->setObjectName(QStringLiteral("systemNoteColour"));
+        connect(colour, &QPushButton::clicked, this, [this] {
+            const SysNote* n = design_.note(canvas_->selectedNote());
+            if (!n) return;
+            const QColor c = QColorDialog::getColor(n->color.isValid() ? n->color : QColor(255, 247, 190), this, QStringLiteral("Note colour"));
+            if (c.isValid()) setNoteColour(c);
+        });
+        auto* plainNote = new QPushButton(QStringLiteral("Yellow"), page);
+        plainNote->setObjectName(QStringLiteral("systemNoteColourDefault"));
+        connect(plainNote, &QPushButton::clicked, this, [this] { setNoteColour(QColor()); });
+        look->addWidget(colour);
+        look->addWidget(plainNote);
+        look->addStretch(1);
+        v->addLayout(look);
+        v->addWidget(new QLabel(QStringLiteral("Linked to - a line drawn to it"), page));
+        noteLink_ = new QComboBox(page);
+        noteLink_->setObjectName(QStringLiteral("systemNoteLink"));
+        noteLink_->setToolTip(QStringLiteral("What the note is about: a unit, a port of a unit, or a cable - a dashed line is drawn to it"));
+        connect(noteLink_, &QComboBox::activated, this, [this](int i) {
+            const QStringList key = noteLink_->itemData(i).toString().split(QLatin1Char('|'));
+            linkNote(key.value(0), key.value(1), key.value(2));
+        });
+        v->addWidget(noteLink_);
         connect(noteText_, &QPlainTextEdit::textChanged, this, [this] {
             SysNote* n = design_.note(canvas_->selectedNote());
             if (filling_ || !n || n->text == noteText_->toPlainText()) return;
@@ -406,6 +432,15 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
         canvas_->select(it->data(Qt::UserRole).toString(), QString(), it->data(Qt::UserRole + 1).toString());
     });
     tabs_->addTab(found_, QStringLiteral("Check"));
+    // THE CONNECTIONS THROUGH THE SYSTEM: each, from the cables' drawings, with how it stands.
+    links_ = new QTableWidget(0, 5, tabs_);
+    links_->setObjectName(QStringLiteral("systemConnections"));
+    links_->setHorizontalHeaderLabels({QStringLiteral("Cable"), QStringLiteral("From"), QStringLiteral("To"), QStringLiteral("Line"),
+                                       QStringLiteral("Status")});
+    links_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    links_->verticalHeader()->setVisible(false);
+    links_->horizontalHeader()->setStretchLastSection(true);
+    tabs_->addTab(links_, QStringLiteral("Connections"));
     outer->addWidget(split);
     outer->addWidget(tabs_);
     outer->setStretchFactor(0, 4);
@@ -444,6 +479,8 @@ void SystemDesignView::aboutToChange() {
 }
 
 void SystemDesignView::commit() {
+    // The check shown was of the design as it was.
+    canvas_->clearCheck();
     if (save_) save_(design_.empty() ? QJsonObject() : design_.toJson());
     refresh();
     emit changed();
@@ -468,6 +505,30 @@ bool SystemDesignView::deleteSelected() {
     const QString unit = canvas_->selectedUnit(), port = canvas_->selectedPort();
     const bool any = !unit.isEmpty() || !canvas_->selectedCable().isEmpty() || !canvas_->selectedNote().isEmpty();
     if (!any) return false;
+    // A ZONE: asked where any unit of it is connected - to a cable, or a unit in it.
+    if (canvas_->zoneCount() > 0) {
+        size_t connected = 0;
+        for (const QString& z : canvas_->zoneUnits()) {
+            bool c = false;
+            for (const SysCable& cb : design_.cables) c = c || cb.aUnit == z || cb.bUnit == z;
+            c = c || !design_.childrenOf(z).empty();
+            connected += c ? 1 : 0;
+        }
+        if (connected > 0) {
+            const QString question = QStringLiteral("%1 unit(s), %2 cable(s) and %3 note(s) selected - %4 of the units connected. Delete them all?")
+                                         .arg(canvas_->zoneUnits().size())
+                                         .arg(canvas_->zoneCables().size())
+                                         .arg(canvas_->zoneNotes().size())
+                                         .arg(connected);
+            const bool yes = confirm_ ? confirm_(question)
+                                      : QMessageBox::question(this, QStringLiteral("Delete"), question, QMessageBox::Yes | QMessageBox::No,
+                                                              QMessageBox::No) == QMessageBox::Yes;
+            if (!yes) return false;
+        }
+        canvas_->deleteSelected();
+        canvas_->noteDeleteDone();
+        return true;
+    }
     // CONNECTED: a unit with cables (its own, or those of units inside it) or units in it, or a port with cables - asked
     // first.
     QString question;
@@ -604,6 +665,17 @@ void SystemDesignView::syncPanel() {
     if (n) {
         panel_->setCurrentIndex(3);
         if (noteText_->toPlainText() != n->text) noteText_->setPlainText(n->text);
+        // WHAT IT CAN BE ABOUT: nothing, each unit, each port, each cable.
+        noteLink_->clear();
+        noteLink_->addItem(QStringLiteral("(nothing)"), QStringLiteral("||"));
+        for (const SysUnit& each : design_.units) {
+            noteLink_->addItem(QStringLiteral("Unit %1").arg(each.name), QStringLiteral("%1||").arg(each.id));
+            for (const SysPort& p : each.ports)
+                noteLink_->addItem(QStringLiteral("Port %1.%2").arg(each.name, p.name), QStringLiteral("%1|%2|").arg(each.id, p.id));
+        }
+        for (const SysCable& cb : design_.cables) noteLink_->addItem(QStringLiteral("Cable %1").arg(cb.name), QStringLiteral("||%1").arg(cb.id));
+        const int at = noteLink_->findData(QStringLiteral("%1|%2|%3").arg(n->linkUnit, n->linkPort, n->linkCable));
+        noteLink_->setCurrentIndex(std::max(0, at));
     } else if (c) {
         panel_->setCurrentIndex(2);
         cableName_->setText(c->name);
@@ -659,8 +731,7 @@ void SystemDesignView::syncPanel() {
             });
             ports_->setCellWidget(i, 1, side);
             ports_->setItem(i, 2, new QTableWidgetItem(p.connector));
-            ports_->setItem(i, 3, new QTableWidgetItem(p.insidePn));
-            ports_->setItem(i, 4, new QTableWidgetItem(p.pins > 0 ? QString::number(p.pins) : QString()));
+            ports_->setItem(i, 3, new QTableWidgetItem(p.contactPn));
         }
     } else {
         panel_->setCurrentIndex(0);
@@ -787,9 +858,91 @@ int SystemDesignView::checkDesign() {
     fillCables();
     syncPanel();
     tabs_->setCurrentIndex(1);
+    // SHOWN ON THE DIAGRAM: swept across, each thing found ringed.
+    canvas_->playCheck(issues_);
     int errors = 0;
     for (const SysIssue& i : issues_) errors += i.level == 2 ? 1 : 0;
     return errors;
+}
+
+void SystemDesignView::setRuleOn(const QString& rule, bool on) {
+    if (design_.ruleOn(rule) == on) return;
+    aboutToChange();
+    if (on) design_.rulesOff.removeAll(rule);
+    else design_.rulesOff << rule;
+    commit();
+}
+
+void SystemDesignView::editRules() {
+    QDialog dlg(this);
+    dlg.setObjectName(QStringLiteral("systemRulesDialog"));
+    dlg.setWindowTitle(QStringLiteral("Design rules"));
+    auto* lay = new QVBoxLayout(&dlg);
+    lay->addWidget(new QLabel(QStringLiteral("The rules Check design checks this design by - each on or off:"), &dlg));
+    std::vector<std::pair<QString, QCheckBox*>> boxes;
+    for (const SysRule& r : SystemDesign::rules()) {
+        auto* box = new QCheckBox(QStringLiteral("%1  (%2)").arg(r.title, r.level >= 2 ? QStringLiteral("error") : r.level == 1 ? QStringLiteral("warning")
+                                                                                                                             : QStringLiteral("note")),
+                                  &dlg);
+        box->setObjectName(QStringLiteral("systemRule_%1").arg(r.id));
+        box->setChecked(design_.ruleOn(r.id));
+        lay->addWidget(box);
+        boxes.push_back({r.id, box});
+    }
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    lay->addWidget(buttons);
+    if (dlg.exec() != QDialog::Accepted) return;
+    QStringList off;
+    for (const auto& [id, box] : boxes)
+        if (!box->isChecked()) off << id;
+    if (off == design_.rulesOff) return;
+    aboutToChange();
+    design_.rulesOff = off;
+    commit();
+}
+
+int SystemDesignView::checkConnections() {
+    connections_ = design_.checkConnections();
+    links_->setRowCount(0);
+    int wrong = 0;
+    for (const SysConnection& k : connections_) {
+        const int row = links_->rowCount();
+        links_->insertRow(row);
+        const QStringList cells{k.cable, k.from, k.to, k.name, k.status};
+        const QColor tint = k.level >= 2 ? QColor(255, 222, 218) : k.level == 1 ? QColor(255, 240, 205) : k.level == 0 ? QColor(226, 238, 255)
+                                                                                                                       : QColor();
+        for (int c = 0; c < 5; ++c) {
+            auto* it = new QTableWidgetItem(cells[c]);
+            if (tint.isValid()) {
+                it->setBackground(tint);
+                it->setForeground(QColor(30, 30, 30));
+            }
+            links_->setItem(row, c, it);
+        }
+        wrong += k.level >= 1 ? 1 : 0;
+    }
+    tabs_->setCurrentWidget(links_);
+    return wrong;
+}
+
+void SystemDesignView::setNoteColour(const QColor& colour) {
+    SysNote* n = design_.note(canvas_->selectedNote());
+    if (!n || n->color == colour) return;
+    aboutToChange();
+    n->color = colour;
+    commit();
+}
+
+void SystemDesignView::linkNote(const QString& unit, const QString& port, const QString& cable) {
+    SysNote* n = design_.note(canvas_->selectedNote());
+    if (!n || (n->linkUnit == unit && n->linkPort == port && n->linkCable == cable)) return;
+    aboutToChange();
+    n->linkUnit = unit;
+    n->linkPort = port;
+    n->linkCable = cable;
+    commit();
 }
 
 namespace {

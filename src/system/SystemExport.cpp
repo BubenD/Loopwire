@@ -271,12 +271,29 @@ QString systemDrawioXml(const SystemDesign& d) {
         for (size_t i = 0; i < path.size(); ++i) x += QStringLiteral("<mxPoint x=\"%1\" y=\"%2\"/>").arg(num(path[i].x()), num(path[i].y()));
         x += QStringLiteral("</Array></mxGeometry></mxCell>\n");
     }
-    // THE NOTES.
-    for (const SysNote& n : d.notes)
+    // THE NOTES, each in its colour - and a dashed line to what it is about.
+    for (const SysNote& n : d.notes) {
         vertex(n.id, n.text,
                QStringLiteral("shape=note;size=12;whiteSpace=wrap;html=0;align=left;verticalAlign=top;spacingLeft=6;spacingTop=4;"
-                              "fillColor=#FFF7BE;strokeColor=#C8AA3C;"),
+                              "fillColor=%1;strokeColor=#C8AA3C;")
+                   .arg(colour(n.color, QColor(255, 247, 190))),
                n.x, n.y, n.w, n.h);
+        const QString target = !n.linkPort.isEmpty() ? QStringLiteral("%1.%2").arg(n.linkUnit, n.linkPort) : !n.linkCable.isEmpty() ? QString() : n.linkUnit;
+        if (!target.isEmpty() || !n.linkCable.isEmpty()) {
+            QString to = target.isEmpty() ? QString() : QStringLiteral(" target=\"%1\"").arg(esc(target));
+            QString point;
+            if (const SysCable* c = d.cable(n.linkCable)) {
+                const std::vector<QPointF> path = sysCablePath(d, *c);
+                if (path.size() >= 2) {
+                    const QPointF m = (path[path.size() / 2 - 1] + path[path.size() / 2]) / 2.0;
+                    point = QStringLiteral("<mxPoint x=\"%1\" y=\"%2\" as=\"targetPoint\"/>").arg(num(m.x()), num(m.y()));
+                }
+            }
+            x += QStringLiteral("<mxCell id=\"%1.link\" value=\"\" style=\"endArrow=oval;endFill=1;dashed=1;html=0;strokeColor=#786E46;\" "
+                                "edge=\"1\" parent=\"1\" source=\"%1\"%2><mxGeometry relative=\"1\" as=\"geometry\">%3</mxGeometry></mxCell>\n")
+                     .arg(esc(n.id), to, point);
+        }
+    }
     x += QStringLiteral("</root>\n</mxGraphModel>\n</diagram>\n</mxfile>\n");
     return x;
 }
@@ -365,7 +382,7 @@ bool exportSystemVsdx(const SystemDesign& d, const QString& path, QString* error
                                cell(QStringLiteral("Y"), num((around.bottom() - line[i].y()) / perInch)));
         shapes += QStringLiteral("</Section><Text>%1</Text></Shape>").arg(cableLabel(c).toHtmlEscaped());
     }
-    for (const SysNote& n : d.notes) rect(n.x, n.y, n.w, n.h, QStringLiteral("#FFF7BE"), QStringLiteral("#C8AA3C"), n.text, 9.0, true);
+    for (const SysNote& n : d.notes) rect(n.x, n.y, n.w, n.h, colour(n.color, QColor(255, 247, 190)), QStringLiteral("#C8AA3C"), n.text, 9.0, true);
 
     const QString xmlHead = QStringLiteral("<?xml version=\"1.0\" encoding=\"utf-8\" standalone=\"yes\"?>\n");
     std::vector<ZipEntry> parts;

@@ -17,16 +17,18 @@ namespace Edraw_Desktop {
 // the revision the system calls for. Saved with the drawing.
 
 // A PORT ON A UNIT: where a cable plugs in - on one of its sides, so far along it (0 to 1), named, with the connector it
-// takes and how many pins. A connector through the unit's wall: its inside (always there, inside the wall) and its
-// outside (drawn once a cable is plugged into it from outside), each with its own connector part number.
+// takes - its connector's part number and its contacts' - and how many pins. A connector through the unit's wall: its
+// inside always drawn, its outside once a cable is plugged into it from outside. Its designator is drawn outside the
+// unit, above the cable's line - and where it was dragged to, so far from there.
 struct SysPort {
     QString id;
     QString name;
     QString side = QStringLiteral("right");   // "left", "right", "top", "bottom"
     double at = 0.5;
-    QString connector;   // the outside's mating connector part number, as the system calls for it
-    QString insidePn;    // the inside's connector part number
+    QString connector;   // the connector's part number, as the system calls for it
+    QString contactPn;   // its contacts' part number
     int pins = 0;
+    double labelDx = 0.0, labelDy = 0.0;   // the designator moved from where it is drawn, in the diagram's units
 };
 
 // A UNIT: a box of the system - a controller, a sensor, a panel - where it is drawn, and its ports. What it is: a
@@ -84,6 +86,14 @@ struct DrawingInfo {
     // THE DESIGNATORS IN IT, in the order they are drawn: its cables' (W1, W2...) and its connectors' (X1, J2...).
     QStringList cables;
     QStringList connectors;
+    // ITS CONNECTION LIST: each row of a table with From and To columns ("X1-3": connector and pin), and the line's
+    // name where the table has a column for it (Signal, Name, Line, Label, Net, Function). Whether there is one.
+    struct Connection {
+        QString fromConn, fromPin, toConn, toPin, name;
+    };
+    std::vector<Connection> connections;
+    bool hasConnectionList = false;
+    bool hasLineNames = false;
 };
 
 // A NAME ON THE DIAGRAM THE DRAWING CALLS OTHERWISE: the cable's own, or a port at one of its ends - from what to what.
@@ -100,13 +110,36 @@ struct SysIssue {
     QString what;
     QString unit;
     QString cable;
+    QString rule;   // which design rule found it
+    QString port;   // the port it is about, on `unit`
+    QString note;   // the note it is about
 };
 
-// A NOTE ON THE DIAGRAM: text in a box, where it is put.
+// A DESIGN RULE: what it checks, how bad breaking it is - each switched on or off for the design.
+struct SysRule {
+    QString id;
+    QString title;
+    int level = 1;
+};
+
+// ONE CONNECTION OF A CABLE, as its drawing lists it: from which unit's port and pin to which, the line's name, and how it
+// stands - "ok", or what is wrong (how bad: 0 a note, 1 a warning, 2 an error).
+struct SysConnection {
+    QString cable;
+    QString from, to;   // "U1.P1 pin 3"
+    QString name;
+    QString status = QStringLiteral("ok");
+    int level = -1;     // -1: ok
+};
+
+// A NOTE ON THE DIAGRAM: text in a box, where it is put, its colour (none: pale yellow) - and what it is about, where it
+// is linked to one: a unit, a port of a unit, or a cable (a line drawn to it).
 struct SysNote {
     QString id;
     QString text;
     double x = 0.0, y = 0.0, w = 180.0, h = 70.0;
+    QColor color;
+    QString linkUnit, linkPort, linkCable;
 };
 
 // HOW THE LINK OF A CABLE TO ITS DRAWING STANDS: none linked, the file not there, its revision not the one the cable
@@ -117,6 +150,10 @@ struct SystemDesign {
     QString name;
     QString pnPrefix = QStringLiteral("CBL-");
     int pnDigits = 3;   // how many digits the number after the prefix has (CBL-001)
+    // THE DESIGN RULES switched off for this design (by id); every other is checked.
+    QStringList rulesOff;
+    static const std::vector<SysRule>& rules();
+    bool ruleOn(const QString& id) const { return !rulesOff.contains(id); }
     std::vector<SysUnit> units;
     std::vector<SysCable> cables;
     std::vector<SysNote> notes;
@@ -176,6 +213,12 @@ struct SystemDesign {
     // on cables that are not alike, no drawing linked, the drawing not found, its revision or number not the cable's;
     // units with no part number.
     std::vector<SysIssue> check() const;
+
+    // THE CONNECTIONS THROUGH THE SYSTEM, from each cable's drawing (read by `read`, readDrawingInfo where none is given):
+    // each listed with where it runs from and to and the line's name - and where it is not consistent: a connector in
+    // the drawing at neither end of the cable, a line named one way on a pin by one cable and another way on the same pin
+    // by the cable on the port's other side, no connection list in the drawing.
+    std::vector<SysConnection> checkConnections(const std::function<DrawingInfo(const QString&)>& read = {}) const;
 
     // THE CABLE LIST, one line a cable, as comma-separated values with a heading line.
     QString cableListCsv() const;

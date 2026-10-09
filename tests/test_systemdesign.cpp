@@ -451,7 +451,7 @@ void testUnitsPortsNotes() {
         const QString u = d.addUnit(0, 0);
         d.unit(u)->kind = QStringLiteral("pcba");
         const QString p = d.addPort(u, QStringLiteral("right"), 0.5);
-        d.unit(u)->port(p)->insidePn = QStringLiteral("HDR-10");
+        d.unit(u)->port(p)->contactPn = QStringLiteral("HDR-10");
         const QString v = d.addUnit(300, 0);
         const QString q = d.addPort(v, QStringLiteral("left"), 0.5);
         const QString c = d.addCable(u, p, v, q);
@@ -460,10 +460,10 @@ void testUnitsPortsNotes() {
         d.pnPrefix = QStringLiteral("HRN-");
         d.pnDigits = 4;
         const SystemDesign back = SystemDesign::fromJson(d.toJson());
-        check(back.unit(u)->kind == QLatin1String("pcba") && back.unit(u)->port(p)->insidePn == QLatin1String("HDR-10") &&
+        check(back.unit(u)->kind == QLatin1String("pcba") && back.unit(u)->port(p)->contactPn == QLatin1String("HDR-10") &&
                   back.cable(c)->aInside && !back.cable(c)->bInside && back.notes.size() == 1 &&
                   back.notes[0].text == QLatin1String("Keep W1 away from the fan") && back.pnDigits == 4,
-              "saved: what a unit is, a port's inside P/N, a cable's inside end, notes, the numbering's digits");
+              "saved: what a unit is, a port's contact P/N, a cable's inside end, notes, the numbering's digits");
         check(SystemDesign::fromJson(QJsonObject{{QStringLiteral("units"), QJsonArray{QJsonObject{{QStringLiteral("id"), QStringLiteral("u1")}}}}})
                       .units[0]
                       .kind == QLatin1String("mech"),
@@ -585,7 +585,7 @@ void testUnitsPortsNotes() {
     bool doubled = false;
     for (const SysIssue& i : d.check()) doubled = doubled || i.what.contains(QLatin1String("cables plugged"));
     check(!doubled, "through the wall: a cable each side of a port is not two cables in one");
-    // The connector P/Ns, outside and inside, in the port list.
+    // The connector's P/N and its contacts', in the port list.
     c->select(housing, QString(), QString());
     auto* ports = view.findChild<QTableWidget*>(QStringLiteral("systemPorts"));
     if (ports && ports->rowCount() > 0) {
@@ -593,8 +593,8 @@ void testUnitsPortsNotes() {
         ports->setItem(0, 3, new QTableWidgetItem(QStringLiteral("HDR-8")));
     }
     check(ports && d.unit(housing)->port(through)->connector == QLatin1String("M12-8F") &&
-              d.unit(housing)->port(through)->insidePn == QLatin1String("HDR-8"),
-          "ports: a connector P/N each for its outside and its inside");
+              d.unit(housing)->port(through)->contactPn == QLatin1String("HDR-8"),
+          "ports: its connector P/N - one - and its contact P/N");
 
     // ---- A NOTE ----
     view.setTool(SysTool::Note);
@@ -951,6 +951,156 @@ void testDeleteKeyAndClickCable() {
     QApplication::processEvents();
 }
 
+// A DRAWING WITH A CONNECTION LIST: a table, From, To and Signal, a row a wire.
+bool writeConnections(const QString& path, const std::vector<QStringList>& rows) {
+    Document doc(QStringLiteral("cable"));
+    Entity table;
+    table.type = EntityType::Rect;
+    QJsonArray cells{QStringLiteral("#"), QStringLiteral("From"), QStringLiteral("To"), QStringLiteral("Signal")};
+    for (size_t r = 0; r < rows.size(); ++r) {
+        cells.append(QString::number(r + 1));
+        for (const QString& v : rows[r]) cells.append(v);
+    }
+    table.meta.insert(QStringLiteral("table"), true);
+    table.meta.insert(QStringLiteral("rows"), static_cast<int>(rows.size()) + 1);
+    table.meta.insert(QStringLiteral("cols"), 4);
+    table.meta.insert(QStringLiteral("cells"), cells);
+    doc.entities().push_back(table);
+    return dwx::save(doc, path);
+}
+
+// THE DESIGN RULES AND THEIR CHECK SHOWN, PORT DESIGNATORS ABOVE THE LINE, ZONES, NOTES SIZED, COLOURED AND LINKED, THE
+// CONNECTIONS THROUGH THE SYSTEM CHECKED.
+void testRulesZonesNotesConnections(const QString& base) {
+    QJsonObject stored;
+    SystemDesignView view;
+    view.setStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    view.resize(1200, 760);
+    view.show();
+    QApplication::processEvents();
+    SystemCanvas* c = view.canvas();
+    SystemDesign& d = view.design();
+    auto drag = [&](const QPointF& from, const QPointF& to) {
+        mouse(c, QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
+        for (int i = 1; i <= 6; ++i) mouse(c, QEvent::MouseMove, from + (to - from) * (i / 6.0), Qt::LeftButton, Qt::NoButton);
+        mouse(c, QEvent::MouseButtonRelease, to, Qt::NoButton, Qt::LeftButton);
+        QApplication::processEvents();
+    };
+    const QString a = d.addUnit(0, 0), b = d.addUnit(300, 0), e = d.addUnit(600, 0);
+    const QString pa = d.addPort(a, QStringLiteral("right"), 0.5), pb = d.addPort(b, QStringLiteral("left"), 0.5);
+    d.addCable(a, pa, b, pb);
+    view.reload();
+    stored = d.toJson();
+    view.reload();
+    c->fit();
+    QApplication::processEvents();
+    SystemDesign& dd = view.design();
+
+    // ---- THE PORT'S DESIGNATOR: OUTSIDE, ABOVE THE LINE; DRAGGED ----
+    const QRectF label = c->portLabelOnScreen(a, pa);
+    const QPointF port = c->portOnScreen(a, pa);
+    check(label.left() > port.x() && label.bottom() <= port.y() + 0.5, "designator: outside its unit, above the cable's line");
+    view.setTool(SysTool::Select);
+    drag(label.center(), label.center() + QPointF(0, -30));
+    check(dd.unit(a)->port(pa)->labelDy < -10.0, "designator: dragged up - where it was put");
+    view.undo();
+    check(dd.unit(a)->port(pa)->labelDy == 0.0, "designator: one step to undo");
+
+    // ---- ZONES: A BLUE WINDOW, A GREEN CROSSING ----
+    const QPointF tl = c->toScreen({-20, -20}), br = c->toScreen({470, 120});
+    drag(tl, br);
+    check(c->zoneUnits().size() == 2 && c->zoneUnits().contains(a) && c->zoneUnits().contains(b) && c->zoneCables().size() == 1,
+          "zone: a blue window, left to right - the two units wholly in it and the cable between them");
+    drag(c->toScreen({650, 120}), c->toScreen({420, 40}));
+    check(c->zoneUnits().size() == 2 && c->zoneUnits().contains(b) && c->zoneUnits().contains(e) && c->zoneCables().isEmpty(),
+          "zone: a green crossing, right to left - the two units it touches, not the cable it does not");
+    // Moved together.
+    drag(tl, br);
+    const double ax = dd.unit(a)->x, bx = dd.unit(b)->x;
+    const QPointF grab = c->unitOnScreen(a);
+    drag(grab, grab + (c->toScreen({0, 100}) - c->toScreen({0, 0})));
+    check(std::abs(dd.unit(a)->y - 100) < 10.5 && std::abs(dd.unit(b)->y - 100) < 10.5 && dd.unit(a)->x == ax && dd.unit(b)->x == bx &&
+              dd.unit(e)->y == 0.0,
+          "zone: one of it dragged - all of it moved together, nothing else");
+    view.undo();
+    check(dd.unit(a)->y == 0.0 && dd.unit(b)->y == 0.0, "zone: moved - one step to undo");
+
+    // ---- A NOTE: SIZED, COLOURED, LINKED ----
+    view.setTool(SysTool::Note);
+    click(c, c->toScreen({100, 300}));
+    const QString n = dd.notes.back().id;
+    const double w0 = dd.note(n)->w;
+    view.setTool(SysTool::Select);
+    const QPointF wall = c->toScreen({dd.note(n)->x + dd.note(n)->w, dd.note(n)->y + dd.note(n)->h / 2});
+    drag(wall, wall + (c->toScreen({80, 0}) - c->toScreen({0, 0})));
+    check(dd.note(n)->w > w0 + 60, "note: sized by its wall");
+    c->selectNote(n);
+    view.setNoteColour(QColor(200, 230, 255));
+    view.linkNote(b, pb, QString());
+    check(dd.note(n)->color == QColor(200, 230, 255) && dd.note(n)->linkUnit == b && dd.note(n)->linkPort == pb,
+          "note: its colour, and linked to a port");
+    auto* link = view.findChild<QComboBox*>(QStringLiteral("systemNoteLink"));
+    check(link && link->currentText() == QStringLiteral("Port U2.P1"), "note: what it is linked to, on the right");
+    const SystemDesign back = SystemDesign::fromJson(dd.toJson());
+    check(back.note(n)->linkPort == pb && back.note(n)->color == QColor(200, 230, 255), "note: its colour and link saved");
+    dd.removePort(b, pb);
+    check(dd.note(n)->linkPort.isEmpty() && dd.note(n)->linkUnit == b, "note: its port deleted - linked to the unit still, not the port");
+    view.reload();
+
+    // ---- THE RULES, AND THE CHECK SHOWN ----
+    bool unitPn = false;
+    for (const SysIssue& i : view.design().check()) unitPn = unitPn || i.rule == QLatin1String("unit-pn");
+    check(unitPn, "rules: a unit with no P/N found");
+    view.setRuleOn(QStringLiteral("unit-pn"), false);
+    unitPn = false;
+    for (const SysIssue& i : view.design().check()) unitPn = unitPn || i.rule == QLatin1String("unit-pn");
+    check(!unitPn && view.design().rulesOff.contains(QStringLiteral("unit-pn")), "rules: switched off - not checked");
+    view.checkDesign();
+    std::printf("  check: %d mark(s), moving %d\n", static_cast<int>(c->checkMarks().size()), c->checkAnimating() ? 1 : 0);
+    check(!c->checkMarks().empty() && c->checkAnimating(), "check: shown - swept across the diagram, each thing found ringed");
+    QElapsedTimer clock;
+    clock.start();
+    while (c->checkAnimating() && clock.elapsed() < 6000) QApplication::processEvents(QEventLoop::AllEvents, 30);
+    check(!c->checkAnimating() && !c->checkMarks().empty(), "check: the rings stop pulsing, and stay");
+    view.setRuleOn(QStringLiteral("unit-pn"), true);
+    check(c->checkMarks().empty(), "check: the design changed - its rings gone");
+
+    // ---- THE CONNECTIONS THROUGH THE SYSTEM ----
+    const QString dir = QDir(base).filePath(QStringLiteral("links"));
+    QDir().mkpath(dir);
+    SystemDesign s;
+    const QString u1 = s.addUnit(0, 0), u2 = s.addUnit(300, 0), u3 = s.addUnit(320, 20);
+    s.unit(u3)->parent = u2;
+    const QString x1 = s.addPort(u1, QStringLiteral("right"), 0.5, QStringLiteral("X1"));
+    const QString x2 = s.addPort(u2, QStringLiteral("left"), 0.5, QStringLiteral("X2"));
+    const QString x3 = s.addPort(u3, QStringLiteral("left"), 0.5, QStringLiteral("X3"));
+    const QString w1 = s.addCable(u1, x1, u2, x2), w2 = s.addCable(u2, x2, u3, x3);
+    s.cable(w2)->aInside = true;
+    s.cable(w1)->drawing = QDir(dir).filePath(QStringLiteral("W1.dwx"));
+    s.cable(w2)->drawing = QDir(dir).filePath(QStringLiteral("W2.dwx"));
+    writeConnections(s.cable(w1)->drawing, {{QStringLiteral("X1-1"), QStringLiteral("X2-1"), QStringLiteral("CAN_H")},
+                                            {QStringLiteral("X1-2"), QStringLiteral("X2-2"), QStringLiteral("CAN_L")}});
+    writeConnections(s.cable(w2)->drawing, {{QStringLiteral("X2-1"), QStringLiteral("X3-1"), QStringLiteral("CANH")},
+                                            {QStringLiteral("X2-2"), QStringLiteral("X3-2"), QStringLiteral("CAN_L")},
+                                            {QStringLiteral("X9-1"), QStringLiteral("X3-3"), QStringLiteral("PWR")}});
+    const std::vector<SysConnection> rows = s.checkConnections();
+    int differs = 0, neither = 0, ok = 0;
+    for (const SysConnection& r : rows) {
+        differs += r.status.contains(QLatin1String("named CAN_H by")) ? 1 : 0;
+        neither += r.status.contains(QLatin1String("X9 is at neither end")) ? 1 : 0;
+        ok += r.level < 0 ? 1 : 0;
+    }
+    std::printf("  connections: %d row(s) - %d named otherwise, %d at neither end, %d ok\n", static_cast<int>(rows.size()), differs, neither, ok);
+    check(rows.size() == 5 && differs == 2 && neither == 1 && ok == 2,
+          "connections: each listed - a line named otherwise on one pin by the cable on the port's other side, a connector at neither "
+          "end, the rest ok");
+    SystemDesignView links;
+    QJsonObject sStored = s.toJson();
+    links.setStore([&] { return sStored; }, [&](const QJsonObject& o) { sStored = o; });
+    check(links.checkConnections() == 3 && links.findChild<QTableWidget*>(QStringLiteral("systemConnections"))->rowCount() == 5,
+          "connections: the table under the diagram - three to look at");
+}
+
 } // namespace
 
 int run_systemdesign_tests() {
@@ -968,6 +1118,7 @@ int run_systemdesign_tests() {
     testFilesOut(dir.path());
     testNestingAndLook();
     testDeleteKeyAndClickCable();
+    testRulesZonesNotesConnections(dir.path());
     std::printf("  system design: %s\n", g_fail == 0 ? "OK" : "FAILED");
     return g_fail;
 }

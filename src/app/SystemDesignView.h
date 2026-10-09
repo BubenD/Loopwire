@@ -68,6 +68,16 @@ public:
     // EVERY LINKED DRAWING READ AGAIN, and the design checked - what is found listed. How many errors.
     int checkRevisions();
     int checkDesign();
+    // THE DESIGN RULES checked - each switched on or off in a dialog (or by id), one step to undo.
+    void editRules();
+    void setRuleOn(const QString& rule, bool on);
+    // THE CONNECTIONS THROUGH THE SYSTEM from the cables' drawings, listed under the diagram with what is wrong. How many
+    // are not ok (a warning or an error).
+    int checkConnections();
+    const std::vector<SysConnection>& connections() const { return connections_; }
+    // A NOTE'S COLOUR (none: pale yellow) and WHAT IT IS ABOUT: a unit, a port of one, a cable - or nothing (all empty).
+    void setNoteColour(const QColor& colour);
+    void linkNote(const QString& unit, const QString& port, const QString& cable);
     // THE CABLE LIST to a CSV file (asked where, when none is given).
     bool exportCableList(const QString& path = QString());
     // THE DESIGN AS A FILE OF ITS OWN (.edsys), and read back from one (one step to undo); THE DIAGRAM FOR DRAW.IO and
@@ -135,6 +145,9 @@ private:
     QTabWidget* tabs_ = nullptr;
     QTableWidget* cables_ = nullptr;
     QListWidget* found_ = nullptr;
+    QTableWidget* links_ = nullptr;   // the connections
+    std::vector<SysConnection> connections_;
+    QComboBox* noteLink_ = nullptr;
 };
 
 } // namespace Edraw_Desktop

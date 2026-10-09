@@ -158,6 +158,20 @@ void MainWindow::buildSystemTab() {
                                                      : QStringLiteral("System design: %1 error(s) - see Check under the diagram").arg(errors),
                                          8000);
             });
+        big(w, row, "systemRules", QStringLiteral("Rules"), QStringLiteral("parts"),
+            QStringLiteral("The design rules Check design checks by - each switched on or off for this design"),
+            [this] { if (systemView_) systemView_->editRules(); });
+        big(w, row, "systemCheckConnections", QStringLiteral("Connections"), QStringLiteral("route"),
+            QStringLiteral("Read each cable's drawing for its connection list (From and To, and the line's name) and list every "
+                           "connection through the system - with where a line is named one way on a pin by one cable and another "
+                           "way by the cable on the port's other side, or a connector is at neither end of its cable"),
+            [this] {
+                if (!systemView_) return;
+                const int wrong = systemView_->checkConnections();
+                statusBar()->showMessage(wrong == 0 ? QStringLiteral("System design: every connection consistent")
+                                                    : QStringLiteral("System design: %1 connection(s) to look at - see Connections under the diagram").arg(wrong),
+                                         8000);
+            });
         big(w, row, "systemCheck", QStringLiteral("Check design"), QStringLiteral("measure"),
             QStringLiteral("Ports with nothing plugged in or more than one cable, cables with no part number, the same part number on "
                            "cables that differ, no drawing linked"),

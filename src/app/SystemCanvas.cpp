@@ -2,6 +2,7 @@
 #include "system/SystemExport.h"
 
 #include <QKeyEvent>
+#include <QTimer>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -103,7 +104,140 @@ void SystemCanvas::setTool(SysTool tool) {
     if (changedTool) emit toolChanged(tool);
 }
 
+void SystemCanvas::selectZone(const QStringList& units, const QStringList& cables, const QStringList& notes) {
+    // The first of it the one shown on the right.
+    selUnit_ = units.value(0);
+    selPort_.clear();
+    selCable_ = units.isEmpty() ? cables.value(0) : QString();
+    selNote_ = units.isEmpty() && cables.isEmpty() ? notes.value(0) : QString();
+    zoneUnits_ = units;
+    zoneCables_ = cables;
+    zoneNotes_ = notes;
+    update();
+    emit selectionChanged();
+}
+
+QFont SystemCanvas::diagramFont() const {
+    QFont f = font();
+    f.setPointSizeF(std::clamp(9.0 * scale_, 6.0, 16.0));
+    return f;
+}
+
+QRectF SystemCanvas::portLabelRect(const SysUnit& u, const SysPort& p) const {
+    const QFontMetricsF fm(diagramFont());
+    const QSizeF size(fm.horizontalAdvance(p.name.isEmpty() ? QStringLiteral(" ") : p.name) + 6, fm.height());
+    const QPointF c = toScreen(portPoint(u, p));
+    const double s = kPortSize * std::clamp(scale_, 0.6, 1.6);
+    // OUTSIDE ITS UNIT, ABOVE THE CABLE'S LINE: beside the line out of a left or right side, up from it; to the right of
+    // the line out of the top or the bottom.
+    QPointF at;
+    if (p.side == QLatin1String("left")) at = QPointF(c.x() - s - 4 - size.width(), c.y() - size.height() - 1);
+    else if (p.side == QLatin1String("top")) at = QPointF(c.x() + 4, c.y() - s - 4 - size.height());
+    else if (p.side == QLatin1String("bottom")) at = QPointF(c.x() + 4, c.y() + s + 4);
+    else at = QPointF(c.x() + s + 4, c.y() - size.height() - 1);
+    return QRectF(at + QPointF(p.labelDx, p.labelDy) * scale_, size);
+}
+
+QRectF SystemCanvas::portLabelOnScreen(const QString& unit, const QString& port) const {
+    const SysUnit* u = design_ ? design_->unit(unit) : nullptr;
+    const SysPort* p = u ? u->port(port) : nullptr;
+    return u && p ? portLabelRect(*u, *p) : QRectF();
+}
+
+bool SystemCanvas::labelAt(const QPointF& screen, QString& unit, QString& port) const {
+    if (!design_) return false;
+    for (const SysUnit& u : design_->units)
+        for (const SysPort& p : u.ports)
+            if (portLabelRect(u, p).contains(screen)) {
+                unit = u.id;
+                port = p.id;
+                return true;
+            }
+    return false;
+}
+
+bool SystemCanvas::noteTarget(const SysNote& n, QPointF& w) const {
+    const SysUnit* u = design_->unit(n.linkUnit);
+    if (u && !n.linkPort.isEmpty()) {
+        const SysPort* p = u->port(n.linkPort);
+        if (!p) return false;
+        w = portPoint(*u, *p);
+        return true;
+    }
+    if (const SysCable* c = design_->cable(n.linkCable)) {
+        const std::vector<QPointF> path = cablePath(*c);
+        if (path.size() < 2) return false;
+        w = (path[path.size() / 2 - 1] + path[path.size() / 2]) / 2.0;
+        return true;
+    }
+    if (u) {
+        const QPointF mid(n.x + n.w / 2, n.y + n.h / 2);
+        w = QPointF(std::clamp(mid.x(), u->x, u->x + u->w), std::clamp(mid.y(), u->y, u->y + u->h));
+        // On its wall, where the note's middle is outside it.
+        if (u->rect().contains(mid)) w = u->rect().center();
+        return true;
+    }
+    return false;
+}
+
+void SystemCanvas::playCheck(const std::vector<SysIssue>& issues) {
+    marks_.clear();
+    for (const SysIssue& i : issues) {
+        Mark m;
+        m.level = i.level;
+        m.what = i.what;
+        const SysUnit* u = design_ ? design_->unit(i.unit) : nullptr;
+        if (u && !i.port.isEmpty()) {
+            if (const SysPort* p = u->port(i.port)) m.at = portPoint(*u, *p);
+            else continue;
+        } else if (u) {
+            m.at = QPointF(u->x + u->w - 10, u->y + 10);
+        } else if (const SysCable* c = design_ ? design_->cable(i.cable) : nullptr) {
+            const std::vector<QPointF> path = cablePath(*c);
+            if (path.size() < 2) continue;
+            m.at = (path[path.size() / 2 - 1] + path[path.size() / 2]) / 2.0;
+        } else if (const SysNote* n = design_ ? design_->note(i.note) : nullptr) {
+            m.at = QPointF(n->x + n->w - 8, n->y + 8);
+        } else {
+            continue;
+        }
+        marks_.push_back(m);
+    }
+    if (!anim_) {
+        anim_ = new QTimer(this);
+        anim_->setInterval(30);
+        connect(anim_, &QTimer::timeout, this, [this] {
+            if (!checkAnimating()) {
+                anim_->stop();
+                animating_ = false;
+            }
+            update();
+        });
+    }
+    animating_ = true;
+    animClock_.start();
+    anim_->start();
+    update();
+}
+
+// The sweep 0.9 s, then the rings pulsing to 4 s.
+bool SystemCanvas::checkAnimating() const { return animating_ && animClock_.isValid() && animClock_.elapsed() < 4000; }
+
+void SystemCanvas::finishCheck() {
+    animating_ = false;
+    if (anim_) anim_->stop();
+    update();
+}
+
+void SystemCanvas::clearCheck() {
+    marks_.clear();
+    finishCheck();
+}
+
 void SystemCanvas::select(const QString& unit, const QString& port, const QString& cable) {
+    zoneUnits_.clear();
+    zoneCables_.clear();
+    zoneNotes_.clear();
     selUnit_ = unit;
     selPort_ = port;
     selCable_ = cable;
@@ -113,6 +247,9 @@ void SystemCanvas::select(const QString& unit, const QString& port, const QStrin
 }
 
 void SystemCanvas::selectNote(const QString& note) {
+    zoneUnits_.clear();
+    zoneCables_.clear();
+    zoneNotes_.clear();
     selUnit_.clear();
     selPort_.clear();
     selCable_.clear();
@@ -213,6 +350,26 @@ void SystemCanvas::nearestSide(const SysUnit& u, const QPointF& w, QString& side
     at = std::clamp(at, 0.05, 0.95);
 }
 
+int SystemCanvas::noteHandleAt(const QPointF& w, QString& note) const {
+    if (!design_) return 0;
+    const double reach = 5.0 / scale_;
+    for (auto it = design_->notes.rbegin(); it != design_->notes.rend(); ++it) {
+        const SysNote& n = *it;
+        const double r = n.x + n.w, b = n.y + n.h;
+        const bool alongY = w.y() >= n.y - reach && w.y() <= b + reach, alongX = w.x() >= n.x - reach && w.x() <= r + reach;
+        int how = 0;
+        if (alongY && std::abs(w.x() - r) <= reach) how |= 1;
+        if (alongX && std::abs(w.y() - b) <= reach) how |= 2;
+        if (alongY && std::abs(w.x() - n.x) <= reach) how |= 4;
+        if (alongX && std::abs(w.y() - n.y) <= reach) how |= 8;
+        if (how != 0) {
+            note = n.id;
+            return how;
+        }
+    }
+    return 0;
+}
+
 int SystemCanvas::sizeHandleAt(const QPointF& w, QString& unit) const {
     if (!design_) return 0;
     const double reach = 5.0 / scale_;
@@ -284,6 +441,15 @@ void SystemCanvas::fit() {
 void SystemCanvas::deleteSelected() {
     if (!design_ || (selUnit_.isEmpty() && selCable_.isEmpty() && selNote_.isEmpty())) return;
     emit aboutToChange();
+    // A ZONE: everything in it.
+    if (zoneCount() > 0) {
+        for (const QString& n : zoneNotes_) design_->removeNote(n);
+        for (const QString& c : zoneCables_) design_->removeCable(c);
+        for (const QString& u : zoneUnits_) design_->removeUnit(u);
+        select(QString(), QString(), QString());
+        emit changed();
+        return;
+    }
     if (!selNote_.isEmpty()) design_->removeNote(selNote_);
     else if (!selCable_.isEmpty()) design_->removeCable(selCable_);
     else if (!selPort_.isEmpty()) design_->removePort(selUnit_, selPort_);
@@ -306,8 +472,7 @@ void SystemCanvas::paintEvent(QPaintEvent*) {
         }
     }
     if (!design_) return;
-    QFont f = font();
-    f.setPointSizeF(std::clamp(9.0 * scale_, 6.0, 16.0));
+    QFont f = diagramFont();
     p.setFont(f);
     // THE UNITS: a box - a mother before what is in it, so what is inside is drawn over it - filled as solid as it is
     // set; its mark for what it is in its corner and its description beside it, its name in it, its part number and
@@ -318,7 +483,7 @@ void SystemCanvas::paintEvent(QPaintEvent*) {
     for (const SysUnit* up : order) {
         const SysUnit& u = *up;
         const QRectF r(toScreen(QPointF(u.x, u.y)), QSizeF(u.w * scale_, u.h * scale_));
-        const bool on = u.id == selUnit_ && selPort_.isEmpty();
+        const bool on = (u.id == selUnit_ && selPort_.isEmpty()) || zoneUnits_.contains(u.id);
         p.setPen(QPen(on ? QColor(40, 140, 230) : QColor(90, 98, 110), on ? 2.5 : 1.5));
         QColor fill = u.color.isValid() ? u.color : u.kind == QLatin1String("pcba") ? QColor(226, 242, 230) : QColor(232, 238, 246);
         fill.setAlphaF(static_cast<float>(std::clamp(u.opacity, 0.0, 1.0)));
@@ -352,7 +517,7 @@ void SystemCanvas::paintEvent(QPaintEvent*) {
     for (const SysCable& c : design_->cables) {
         const std::vector<QPointF> path = cablePath(c);
         if (path.size() < 2) continue;
-        const bool on = c.id == selCable_;
+        const bool on = c.id == selCable_ || zoneCables_.contains(c.id);
         QPolygonF line;
         for (const QPointF& q : path) line << toScreen(q);
         p.setPen(QPen(on ? QColor(40, 140, 230) : c.color.isValid() ? c.color : QColor(60, 66, 76), on ? 3.0 : 2.0));
@@ -395,7 +560,7 @@ void SystemCanvas::paintEvent(QPaintEvent*) {
     }
     // THE PORTS: each a connector through its unit's wall - its inside a square just inside the side, filled where a
     // cable is plugged into it from within; its outside a square just outside, there once a cable is plugged in from
-    // outside - and its name inside the unit.
+    // outside - and its designator outside the unit, above the cable's line (or where it was dragged to).
     for (const SysUnit& u : design_->units)
         for (const SysPort& pt : u.ports) {
             const QPointF c = toScreen(portPoint(u, pt));
@@ -413,26 +578,69 @@ void SystemCanvas::paintEvent(QPaintEvent*) {
                 p.setBrush(QColor(70, 80, 95));
                 p.drawRect(QRectF(oc.x() - s / 2, oc.y() - s / 2, s, s));
             }
-            const QPointF at = c - out * (s + 4);
-            const QRectF nameBox = pt.side == QLatin1String("left")    ? QRectF(at.x(), at.y() - 8, 60, 16)
-                                   : pt.side == QLatin1String("right") ? QRectF(at.x() - 60, at.y() - 8, 60, 16)
-                                   : pt.side == QLatin1String("top")   ? QRectF(at.x() - 30, at.y(), 60, 16)
-                                                                       : QRectF(at.x() - 30, at.y() - 16, 60, 16);
-            const Qt::Alignment align = pt.side == QLatin1String("left")    ? (Qt::AlignLeft | Qt::AlignVCenter)
-                                        : pt.side == QLatin1String("right") ? (Qt::AlignRight | Qt::AlignVCenter)
-                                                                            : Qt::AlignCenter;
-            p.setPen(QColor(50, 56, 66));
-            p.drawText(nameBox, align, pt.name);
+            const QRectF nameBox = portLabelRect(u, pt);
+            p.setPen(pon ? QColor(40, 140, 230) : QColor(50, 56, 66));
+            p.drawText(nameBox, Qt::AlignCenter, pt.name);
         }
-    // THE NOTES, over everything: a pale yellow box with its text.
+    // THE NOTES, over everything: a box in its colour (pale yellow as it starts) with its text wrapped inside it - and a
+    // dashed line to what it is about, where it is linked to something.
     for (const SysNote& n : design_->notes) {
         const QRectF r(toScreen(QPointF(n.x, n.y)), QSizeF(n.w * scale_, n.h * scale_));
-        const bool on = n.id == selNote_;
+        QPointF target;
+        if (noteTarget(n, target)) {
+            const QPointF to = toScreen(target);
+            const QPointF from(std::clamp(to.x(), r.left(), r.right()), std::clamp(to.y(), r.top(), r.bottom()));
+            p.setPen(QPen(QColor(120, 110, 70), 1.2, Qt::DashLine));
+            p.drawLine(from, to);
+            p.setPen(Qt::NoPen);
+            p.setBrush(QColor(120, 110, 70));
+            p.drawEllipse(to, 3, 3);
+        }
+        const bool on = n.id == selNote_ || zoneNotes_.contains(n.id);
         p.setPen(QPen(on ? QColor(40, 140, 230) : QColor(200, 170, 60), on ? 2.0 : 1.0));
-        p.setBrush(QColor(255, 247, 190));
+        p.setBrush(n.color.isValid() ? n.color : QColor(255, 247, 190));
         p.drawRect(r);
+        p.save();
+        p.setClipRect(r.adjusted(1, 1, -1, -1));
         p.setPen(QColor(60, 52, 20));
         p.drawText(r.adjusted(6, 4, -6, -4), Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap, n.text);
+        p.restore();
+    }
+    // THE ZONE BEING DRAGGED: a blue window left to right, a green crossing right to left.
+    if (drag_ == Drag::Zone) {
+        const QRectF z = QRectF(zoneFrom_, zoneTo_).normalized();
+        const bool window = zoneTo_.x() >= zoneFrom_.x();
+        p.setPen(QPen(window ? QColor(40, 110, 230) : QColor(40, 170, 80), 1.2, window ? Qt::SolidLine : Qt::DashLine));
+        p.setBrush(window ? QColor(40, 110, 230, 40) : QColor(40, 170, 80, 40));
+        p.drawRect(z);
+    }
+    // THE CHECK: a line swept across the diagram, then each thing found ringed - pulsing a while, then kept.
+    if (!marks_.empty() || checkAnimating()) {
+        const double t = animating_ && animClock_.isValid() ? animClock_.elapsed() / 1000.0 : 99.0;
+        const double sweep = std::clamp(t / 0.9, 0.0, 1.0);
+        if (sweep < 1.0) {
+            const double x = width() * sweep;
+            QLinearGradient band(x - 60, 0, x, 0);
+            band.setColorAt(0.0, QColor(40, 140, 230, 0));
+            band.setColorAt(1.0, QColor(40, 140, 230, 90));
+            p.fillRect(QRectF(x - 60, 0, 60, height()), band);
+            p.setPen(QPen(QColor(40, 140, 230), 2.0));
+            p.drawLine(QPointF(x, 0), QPointF(x, height()));
+        }
+        for (const Mark& m : marks_) {
+            const QPointF at = toScreen(m.at);
+            if (at.x() > width() * sweep) continue;   // not reached yet
+            const QColor c = m.level >= 2 ? QColor(220, 50, 40) : m.level == 1 ? QColor(235, 150, 20) : QColor(40, 120, 220);
+            const double pulse = t < 4.0 ? 0.5 + 0.5 * std::sin((t - 0.9) * 2.0 * M_PI * 1.5) : 0.0;
+            QColor halo = c;
+            halo.setAlphaF(static_cast<float>(0.25 + 0.35 * pulse));
+            p.setPen(Qt::NoPen);
+            p.setBrush(halo);
+            p.drawEllipse(at, 11 + 7 * pulse, 11 + 7 * pulse);
+            p.setPen(QPen(c, 2.2));
+            p.setBrush(Qt::NoBrush);
+            p.drawEllipse(at, 9, 9);
+        }
     }
     if (design_->units.empty() && design_->notes.empty()) {
         p.setPen(QColor(120, 128, 140));
@@ -529,6 +737,24 @@ void SystemCanvas::mousePressEvent(QMouseEvent* e) {
             select(unit, port, QString());
             return;
         }
+        // A PORT'S DESIGNATOR: moved where it is dragged.
+        if (labelAt(e->position(), unit, port)) {
+            drag_ = Drag::Label;
+            labelUnit_ = unit;
+            labelPort_ = port;
+            select(unit, port, QString());
+            return;
+        }
+        // A NOTE'S WALL OR CORNER: sized.
+        QString noted;
+        if (const int how = noteHandleAt(pressWorld_, noted); how != 0) {
+            drag_ = Drag::NoteSize;
+            sizeHow_ = how;
+            const SysNote* n = design_->note(noted);
+            sizeFrom_ = QRectF(n->x, n->y, n->w, n->h);
+            selectNote(noted);
+            return;
+        }
         // A UNIT'S CORNER OR EDGE: sized.
         QString sized;
         if (const int how = sizeHandleAt(pressWorld_, sized); how != 0) {
@@ -538,25 +764,32 @@ void SystemCanvas::mousePressEvent(QMouseEvent* e) {
             select(sized, QString(), QString());
             return;
         }
+        // Taken hold of in a zone of more than it: the zone kept, to be moved together.
+        const bool inZone = zoneCount() > 1;
         if (const QString n = noteAt(pressWorld_); !n.isEmpty()) {
             const SysNote* note = design_->note(n);
             drag_ = Drag::Note;
             grabOffset_ = pressWorld_ - QPointF(note->x, note->y);
-            selectNote(n);
+            if (inZone && zoneNotes_.contains(n)) selNote_ = n;
+            else selectNote(n);
             return;
         }
         if (const QString id = unitAt(pressWorld_); !id.isEmpty()) {
             const SysUnit* u = design_->unit(id);
             drag_ = Drag::Unit;
             grabOffset_ = pressWorld_ - QPointF(u->x, u->y);
-            select(id, QString(), QString());
+            if (inZone && zoneUnits_.contains(id)) selUnit_ = id;
+            else select(id, QString(), QString());
             return;
         }
         if (const QString c = cableAt(pressWorld_); !c.isEmpty()) {
             select(QString(), QString(), c);
             return;
         }
+        // ON EMPTY GROUND: a zone dragged out.
         select(QString(), QString(), QString());
+        drag_ = Drag::Zone;
+        zoneFrom_ = zoneTo_ = e->position();
         return;
     }
     }
@@ -593,6 +826,22 @@ void SystemCanvas::mouseMoveEvent(QMouseEvent* e) {
                 nx = std::clamp(nx, m->x, m->x + m->w - u->w);
                 ny = std::clamp(ny, m->y, m->y + m->h - u->h);
             }
+            // A ZONE: everything in it moved alike - the units not inside another of it, and its notes.
+            if (zoneCount() > 1 && zoneUnits_.contains(u->id)) {
+                const double dx = std::round(to.x() / 10.0) * 10.0 - u->x, dy = std::round(to.y() / 10.0) * 10.0 - u->y;
+                for (const QString& z : zoneUnits_) {
+                    bool rooted = true;
+                    for (const QString& other : zoneUnits_) rooted = rooted && !design_->isWithin(z, other);
+                    if (rooted) design_->moveUnit(z, dx, dy);
+                }
+                for (const QString& z : zoneNotes_)
+                    if (SysNote* n = design_->note(z)) {
+                        n->x += dx;
+                        n->y += dy;
+                    }
+                update();
+                break;
+            }
             design_->moveUnit(u->id, nx - u->x, ny - u->y);
             update();
         }
@@ -602,10 +851,55 @@ void SystemCanvas::mouseMoveEvent(QMouseEvent* e) {
             if (!moved_) break;
             announce();
             const QPointF to = w - grabOffset_;
-            n->x = std::round(to.x() / 10.0) * 10.0;
-            n->y = std::round(to.y() / 10.0) * 10.0;
+            const double dx = std::round(to.x() / 10.0) * 10.0 - n->x, dy = std::round(to.y() / 10.0) * 10.0 - n->y;
+            if (zoneCount() > 1 && zoneNotes_.contains(n->id)) {
+                for (const QString& z : zoneNotes_)
+                    if (SysNote* o = design_->note(z)) {
+                        o->x += dx;
+                        o->y += dy;
+                    }
+                for (const QString& z : zoneUnits_) {
+                    bool rooted = true;
+                    for (const QString& other : zoneUnits_) rooted = rooted && !design_->isWithin(z, other);
+                    if (rooted) design_->moveUnit(z, dx, dy);
+                }
+            } else {
+                n->x += dx;
+                n->y += dy;
+            }
             update();
         }
+        break;
+    case Drag::NoteSize:
+        if (SysNote* n = design_->note(selNote_)) {
+            if (!moved_) break;
+            announce();
+            double left = sizeFrom_.left(), top = sizeFrom_.top(), right = sizeFrom_.right(), bottom = sizeFrom_.bottom();
+            const double gx = std::round(w.x() / 10.0) * 10.0, gy = std::round(w.y() / 10.0) * 10.0;
+            if (sizeHow_ & 1) right = std::max(gx, left + 60.0);
+            if (sizeHow_ & 4) left = std::min(gx, right - 60.0);
+            if (sizeHow_ & 2) bottom = std::max(gy, top + 30.0);
+            if (sizeHow_ & 8) top = std::min(gy, bottom - 30.0);
+            n->x = left;
+            n->y = top;
+            n->w = right - left;
+            n->h = bottom - top;
+            update();
+        }
+        break;
+    case Drag::Label:
+        if (SysUnit* u = design_->unit(labelUnit_)) {
+            SysPort* pt = u->port(labelPort_);
+            if (!pt || !moved_) break;
+            announce();
+            pt->labelDx += delta.x() / scale_;
+            pt->labelDy += delta.y() / scale_;
+            update();
+        }
+        break;
+    case Drag::Zone:
+        zoneTo_ = e->position();
+        update();
         break;
     case Drag::Size:
         if (SysUnit* u = design_->unit(selUnit_)) {
@@ -655,7 +949,9 @@ void SystemCanvas::mouseMoveEvent(QMouseEvent* e) {
         break;
     case Drag::None: {
         QString unit, port, sized;
-        const int how = tool_ == SysTool::Select ? sizeHandleAt(w, sized) : 0;
+        QString noted;
+        int how = tool_ == SysTool::Select ? noteHandleAt(w, noted) : 0;
+        if (how == 0 && tool_ == SysTool::Select) how = sizeHandleAt(w, sized);
         setCursor(portAt(w, unit, port) ? (tool_ == SysTool::Select ? Qt::SizeAllCursor : Qt::CrossCursor)
                   : how == 3 || how == 12                           ? Qt::SizeFDiagCursor
                   : how == 6 || how == 9                            ? Qt::SizeBDiagCursor
@@ -673,9 +969,40 @@ void SystemCanvas::mouseReleaseEvent(QMouseEvent* e) {
     if (!design_) return;
     const Drag was = drag_;
     drag_ = Drag::None;
-    if ((was == Drag::Unit || was == Drag::Note || was == Drag::Size || was == Drag::Port) && moveAnnounced_) {
-        // A UNIT DROPPED: into the unit it is now in, or out of the one it was in.
-        if (was == Drag::Unit) settleUnit(selUnit_);
+    if (was == Drag::Zone) {
+        // THE ZONE: a blue window (dragged left to right) takes what is wholly in it, a green crossing what it touches.
+        const QRectF z = QRectF(toWorld(zoneFrom_), toWorld(e->position())).normalized();
+        const bool window = e->position().x() >= zoneFrom_.x();
+        if (z.width() * scale_ < 3 && z.height() * scale_ < 3) return;
+        auto takes = [&](const QRectF& r) { return window ? z.contains(r) : z.intersects(r); };
+        QStringList units, cables, notes;
+        for (const SysUnit& u : design_->units)
+            if (takes(u.rect())) units << u.id;
+        for (const SysNote& n : design_->notes)
+            if (takes(QRectF(n.x, n.y, n.w, n.h))) notes << n.id;
+        for (const SysCable& c : design_->cables) {
+            const std::vector<QPointF> path = cablePath(c);
+            bool all = !path.empty(), any = false;
+            for (size_t i = 0; i < path.size(); ++i) {
+                all = all && z.contains(path[i]);
+                // Along each stretch, a few points: whether any is in it.
+                if (i > 0)
+                    for (int k = 0; k <= 8 && !any; ++k) any = z.contains(path[i - 1] + (path[i] - path[i - 1]) * (k / 8.0));
+            }
+            if (window ? all : any) cables << c.id;
+        }
+        selectZone(units, cables, notes);
+        return;
+    }
+    if ((was == Drag::Unit || was == Drag::Note || was == Drag::Size || was == Drag::Port || was == Drag::NoteSize ||
+         was == Drag::Label) && moveAnnounced_) {
+        // A UNIT DROPPED: into the unit it is now in, or out of the one it was in - each of a zone's.
+        if (was == Drag::Unit) {
+            if (zoneCount() > 1 && zoneUnits_.contains(selUnit_))
+                for (const QString& z : zoneUnits_) settleUnit(z);
+            else
+                settleUnit(selUnit_);
+        }
         // Moved, sized or slid: one change - how it was before kept for Undo by the view, at the first move.
         emit changed();
         return;
