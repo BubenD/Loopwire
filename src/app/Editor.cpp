@@ -17455,7 +17455,7 @@ std::vector<Entity> Editor::lacingTieFromBand(const Vec2& a, const Vec2& b) cons
         if (!entity.points.empty()) { entity.a = entity.points.front(); entity.b = entity.points.back(); }
         result.push_back(std::move(entity));
     };
-    // MASK FIRST, CORD SECOND. The cord's woven strands are drawn over the same narrow mask.
+    // MASK FIRST, CORD SECOND. The cord's diagonal wraps are drawn over the same narrow mask.
     const double bandHalf = cord * 1.7;
     Entity mask;
     mask.type = EntityType::Wipeout;
@@ -17467,20 +17467,17 @@ std::vector<Entity> Editor::lacingTieFromBand(const Vec2& a, const Vec2& b) cons
     line({point(-bandHalf, -half + cord), point(-cord, -half), point(cord, -half),
           point(bandHalf, -half + cord), point(bandHalf, half - cord), point(cord, half),
           point(-cord, half), point(-bandHalf, half - cord)}, true);
-    // TWO WINDING STRANDS give the cord a woven surface, with every stroke above the wipeout.
-    const int samples = std::clamp(static_cast<int>(std::ceil(2.0 * half / (cord * 0.3))), 24, 600);
-    const int turns = std::max(1, static_cast<int>(std::llround(2.0 * half / (cord * 5.0))));
-    for (int strand = 0; strand < 2; ++strand) {
-        Entity detail = result.back();
-        detail.points.clear();
-        detail.meta.insert(QStringLiteral("closed"), false);
-        for (int sample = 0; sample <= samples; ++sample) {
-            const double t = double(sample) / samples;
-            detail.points.push_back(point(cord * 0.85 * std::sin(2.0 * M_PI * turns * t + strand * M_PI),
-                                          -half + 2.0 * half * t));
-        }
-        detail.a = detail.points.front(); detail.b = detail.points.back();
-        result.push_back(std::move(detail));
+    // STRAIGHT CORD WRAPS AT 45 DEGREES, clipped to the band above its wipeout.
+    const double detailAngle = M_PI / 4.0;
+    const double slope = std::tan(detailAngle);
+    const double rise = 2.0 * bandHalf / slope;
+    const double low = -half + cord, high = half - cord;
+    for (double base = low - rise; base < high; base += cord * 2.2) {
+        const double from = std::max(low, base);
+        const double to = std::min(high, base + rise);
+        if (to - from < 1e-7) continue;
+        line({point(-bandHalf + (from - base) * slope, from),
+              point(-bandHalf + (to - base) * slope, to)});
     }
     // THE KNOT AND ITS TWO FREE ENDS distinguish lacing cord from a plastic cable tie.
     line({point(0, half), point(-cord * 2.0, half + cord * 1.1),

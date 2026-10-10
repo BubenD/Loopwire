@@ -600,6 +600,30 @@ std::vector<SysIssue> SystemDesign::check() const {
         if ((!n.unit.isEmpty() && !u) || (!n.port.isEmpty() && (!u || !u->port(n.port))) || (!n.cable.isEmpty() && !cable(n.cable)))
             out.push_back({1, QStringLiteral("Note %1 links to an item that was removed").arg(n.id), {}, {}, QStringLiteral("NOTE-LINK"), {}, n.id});
     }
+    // GRANULAR DISABLES FROM THE EARLIER RULE TABLE still apply to their corresponding findings.
+    // New traffic-light categories remain independent: switching off one old port rule must not
+    // switch off every other port rule in the current category.
+    const auto oldRule = [](const SysIssue& finding) {
+        const QString& what = finding.what;
+        if (finding.rule == QLatin1String("NOTE-LINK")) return QStringLiteral("note-link");
+        if (what.contains(QLatin1String("nothing plugged in"))) return QStringLiteral("port-free");
+        if (what.contains(QLatin1String("cables plugged into"))) return QStringLiteral("port-crowded");
+        if (what.contains(QLatin1String("no connector part number"))) return QStringLiteral("port-connector");
+        if (what.contains(QLatin1String("no part number")))
+            return finding.cable.isEmpty() ? QStringLiteral("unit-pn") : QStringLiteral("cable-pn");
+        if (what.contains(QLatin1String("same part number"))) return QStringLiteral("cable-same-pn");
+        if (what.contains(QLatin1String("no drawing linked"))) return QStringLiteral("cable-drawing");
+        if (finding.rule == QLatin1String("DRAWING-LINK")) {
+            if (what.contains(QLatin1String("not there"))) return QStringLiteral("drawing-missing");
+            if (what.contains(QLatin1String(" - rev "))) return QStringLiteral("drawing-rev");
+            if (what.contains(QLatin1String("its drawing is No."))) return QStringLiteral("drawing-no");
+        }
+        return QString();
+    };
+    out.erase(std::remove_if(out.begin(), out.end(), [&](const SysIssue& finding) {
+        const QString legacy = oldRule(finding);
+        return !legacy.isEmpty() && disabledRules.contains(legacy);
+    }), out.end());
     return out;
 }
 
@@ -778,7 +802,11 @@ QJsonObject SystemDesign::toJson() const {
 SystemDesign SystemDesign::fromJson(const QJsonObject& o) {
     SystemDesign d;
     d.name = o.value(QStringLiteral("name")).toString();
-    for (const QJsonValue& rule : o.value(QStringLiteral("disabledRules")).toArray()) d.disabledRules << rule.toString();
+    // ACCEPT THE EARLIER SYSTEM FILE KEYS while keeping the current settings authoritative.
+    const QJsonArray disabled = o.contains(QStringLiteral("disabledRules"))
+                                   ? o.value(QStringLiteral("disabledRules")).toArray()
+                                   : o.value(QStringLiteral("rulesOff")).toArray();
+    for (const QJsonValue& rule : disabled) d.disabledRules << rule.toString();
     const QJsonObject levels = o.value(QStringLiteral("ruleLevels")).toObject();
     for (auto it = levels.begin(); it != levels.end(); ++it) if (it.value().isDouble()) d.ruleLevels[it.key()] = std::clamp(it.value().toInt(2), 0, 2);
     const QColor background(o.value(QStringLiteral("background")).toString());
@@ -805,9 +833,9 @@ SystemDesign SystemDesign::fromJson(const QJsonObject& o) {
         n.h = std::max(30.0, j.value(QStringLiteral("h")).toDouble(70.0));
         n.w = std::max(60.0, n.w);
         n.color = QColor(j.value(QStringLiteral("color")).toString());
-        n.unit = j.value(QStringLiteral("unit")).toString();
-        n.port = j.value(QStringLiteral("port")).toString();
-        n.cable = j.value(QStringLiteral("cable")).toString();
+        n.unit = j.value(QStringLiteral("unit")).toString(j.value(QStringLiteral("linkUnit")).toString());
+        n.port = j.value(QStringLiteral("port")).toString(j.value(QStringLiteral("linkPort")).toString());
+        n.cable = j.value(QStringLiteral("cable")).toString(j.value(QStringLiteral("linkCable")).toString());
         if (!n.id.isEmpty()) d.notes.push_back(n);
     }
     for (const QJsonValue& v : o.value(QStringLiteral("units")).toArray()) {
@@ -841,8 +869,8 @@ SystemDesign SystemDesign::fromJson(const QJsonObject& o) {
             p.pins = q.value(QStringLiteral("pins")).toInt(0);
             if (p.connector.isEmpty()) p.connector = p.insidePn;
             p.contactPn = q.value(QStringLiteral("contactPn")).toString();
-            p.labelDx = q.value(QStringLiteral("labelDx")).toDouble();
-            p.labelDy = q.value(QStringLiteral("labelDy")).toDouble();
+            p.labelDx = q.value(QStringLiteral("labelDx")).toDouble(q.value(QStringLiteral("ldx")).toDouble());
+            p.labelDy = q.value(QStringLiteral("labelDy")).toDouble(q.value(QStringLiteral("ldy")).toDouble());
             if (!p.id.isEmpty()) u.ports.push_back(p);
         }
         if (!u.id.isEmpty()) d.units.push_back(u);
