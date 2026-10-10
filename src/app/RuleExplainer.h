@@ -4,6 +4,8 @@
 #include <QWidget>
 
 class QTimer;
+class QToolButton;
+class QVBoxLayout;
 
 namespace Edraw_Desktop {
 
@@ -18,6 +20,8 @@ public:
     // The one explainer there is (made on first use), and whether a rule has a picture of its own.
     static RuleExplainer* instance();
     static bool hasScene(const QString& rule);
+    static void paintSeverity(QToolButton* button, int level);
+    static void addSeverityLegend(QVBoxLayout* layout, QWidget* parent);
 
     void showFor(QWidget* anchor, const QString& rule, const QString& title, const QString& text);
     QString rule() const { return rule_; }

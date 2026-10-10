@@ -736,6 +736,8 @@ private:
     void endTemplateEdit();
     QToolButton* makeTemplateSessionButton(QWidget* parent, int which);
     QToolButton* makeMechanicalValidationButton(QWidget* parent);
+    QToolButton* makeDrawingDetailsButton(QWidget* parent, bool iconOnly=false);
+    void showDrawingDetails();
     // The harness DRC's rules and its bypass table, on the ribbon beside it.
     QToolButton* makeDrcRulesButton(QWidget* parent);
     QToolButton* makeDrcBypassButton(QWidget* parent);
@@ -883,6 +885,8 @@ private:
     QWidget* markerGroup_ = nullptr;             // Schematic-build "Marker" size group (contextual)
     // The break mark's own fields, shown while its tool is armed: what a break looks like is decided
     // as it is placed, so the numbers belong beside the button rather than in a dialog.
+    QWidget* shrinkOptionsGroup_ = nullptr;
+    std::function<void()> syncShrinkRibbon_;
     QWidget* breakOptionsGroup_ = nullptr;
     // The twisted bundle's own setting: how many wires it fans out to. Shown only while that tool is
     // armed, like everything else on this tab (see updateMechanicalRibbonGroups).

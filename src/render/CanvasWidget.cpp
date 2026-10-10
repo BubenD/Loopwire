@@ -2,6 +2,8 @@
 #include "render/CanvasWidget.h"
 
 #include "app/Editor.h"
+#include "model/DrawingDetails.h"
+#include <QSettings>
 #include "geometry/Geometry.h"
 
 #include <QApplication>
@@ -75,6 +77,20 @@ private:
 } // namespace
 
 CanvasWidget::CanvasWidget(QWidget* parent) : QWidget(parent) {
+    drawingDetailsVisible_=QSettings().value(QStringLiteral("canvas/showDrawingDetails"),true).toBool();
+    drawingDetailsMinimized_=QSettings().value(QStringLiteral("canvas/minimizeDrawingDetails"),false).toBool();
+    drawingDetailsPinned_=QSettings().value(QStringLiteral("canvas/pinDrawingDetails"),false).toBool();
+    if(drawingDetailsPinned_)drawingDetailsMinimized_=false;
+    drawingDetailsExpandTimer_=new QTimer(this);drawingDetailsExpandTimer_->setSingleShot(true);drawingDetailsExpandTimer_->setInterval(200);
+    drawingDetailsFoldTimer_=new QTimer(this);drawingDetailsFoldTimer_->setSingleShot(true);drawingDetailsFoldTimer_->setInterval(3000);
+    connect(drawingDetailsExpandTimer_,&QTimer::timeout,this,[this]{
+        if(drawingDetailsVisible_&&drawingDetailsMinimized_&&!drawingDetailsPinned_&&cursorInside_&&drawingDetailsFrame_.contains(lastMousePos_)){
+            drawingDetailsHoverExpanded_=true;update();
+        }
+    });
+    connect(drawingDetailsFoldTimer_,&QTimer::timeout,this,[this]{
+        if(drawingDetailsMinimized_&&!drawingDetailsPinned_&&!(cursorInside_&&drawingDetailsFrame_.contains(lastMousePos_))){drawingDetailsHoverExpanded_=false;update();}
+    });
     setMouseTracking(true);
     setFocusPolicy(Qt::StrongFocus);
     setAutoFillBackground(false);
@@ -194,7 +210,7 @@ bool CanvasWidget::eventFilter(QObject* obj, QEvent* e) {
             // it - it is asking for a length the run is no longer taking from the cursor - and the
             // keyboard goes back to the drawing, which is what lets Esc and Enter work again.
             if ((ke->key() == Qt::Key_Tab || ke->key() == Qt::Key_Backtab) && editor_ &&
-                Editor::isTwistedTool(editor_->tool())) {
+                Editor::isParameterRouteTool(editor_->tool())) {
                 editor_->freezeTwistedPreview();
                 hideDynInput();
                 setFocus(Qt::OtherFocusReason);
@@ -945,9 +961,100 @@ void CanvasWidget::paintEvent(QPaintEvent*) {
         p.drawRect(r);
         p.setBrush(Qt::NoBrush);
     }
+    const int badgeTop=drawDrawingDetails(p);
+    // Fixed canvas badges are proof of the last successful check, never drawing entities.
+    if(editor_ && editor_->drawingOwner()) {
+        p.save();
+        p.setBrush(Qt::NoBrush);
+        Document* owner=editor_->drawingOwner();owner->invalidateValidation();
+        int top=badgeTop;
+        for(const auto& kind:{QStringLiteral("schematic"),QStringLiteral("mechanical")}) {
+            if(!owner->validationPassed(kind))continue;
+            const QString label=kind+QStringLiteral(" DRC");
+            const int w=p.fontMetrics().horizontalAdvance(label)+24;
+            const QRect badge(width()-w-12,top,w,25);
+            p.fillRect(badge,QColor("#208447"));p.setPen(QColor("#a9e9ba"));p.drawRect(badge);
+            p.setPen(Qt::white);p.drawText(badge,Qt::AlignCenter,label);top+=31;
+        }
+        p.restore();
+    }
     // The crosshair is painted by the always-on-top `crosshairTop_` overlay (so it
     // stays visible above the inline text editor), not here.
     if (crosshairTop_) crosshairTop_->update();
+}
+
+void CanvasWidget::setDrawingDetailsVisible(bool visible) {
+    if(drawingDetailsVisible_==visible)return;
+    drawingDetailsVisible_=visible;
+    drawingDetailsExpandTimer_->stop();drawingDetailsFoldTimer_->stop();drawingDetailsHoverExpanded_=false;
+    if(!visible){drawingDetailsFrame_={};drawingDetailsMinimize_={};setCursor(inlineEditing_?Qt::ArrowCursor:Qt::BlankCursor);}
+    QSettings().setValue(QStringLiteral("canvas/showDrawingDetails"),visible);
+    update();
+}
+
+void CanvasWidget::updateDrawingDetailsHover() {
+    const bool inside=drawingDetailsVisible_&&cursorInside_&&drawingDetailsFrame_.contains(lastMousePos_);
+    setCursor(inside||inlineEditing_?Qt::ArrowCursor:Qt::BlankCursor);
+    if(inside){
+        drawingDetailsFoldTimer_->stop();
+        if(drawingDetailsMinimized_&&!drawingDetailsPinned_&&!drawingDetailsHoverExpanded_&&drawingDetailsHoverArmed_&&!drawingDetailsExpandTimer_->isActive())drawingDetailsExpandTimer_->start();
+    }else{
+        drawingDetailsHoverArmed_=true;drawingDetailsExpandTimer_->stop();
+        if(drawingDetailsMinimized_&&!drawingDetailsPinned_&&drawingDetailsHoverExpanded_&&!drawingDetailsFoldTimer_->isActive())drawingDetailsFoldTimer_->start();
+    }
+}
+
+int CanvasWidget::drawDrawingDetails(QPainter& painter) const {
+    const Document* owner=editor_?editor_->drawingOwner():drawingDocument();
+    drawingDetailsFrame_={};drawingDetailsMinimize_={};
+    if(!drawingDetailsVisible_||!owner||width()<150)return 12;
+    if(drawingDetailsMinimized_&&!drawingDetailsHoverExpanded_){
+        drawingDetailsFrame_=QRect(width()-84,12,72,72);
+        painter.save();painter.setRenderHint(QPainter::Antialiasing,true);
+        painter.setPen(QPen(QColor(151,177,200,150),1));painter.setBrush(QColor(20,29,40,175));
+        painter.drawRoundedRect(drawingDetailsFrame_,4,4);
+        QFont label=font();label.setPixelSize(12);label.setBold(true);painter.setFont(label);painter.setPen(QColor("#eef4fa"));
+        painter.drawText(drawingDetailsFrame_.adjusted(5,4,-5,-4),Qt::AlignCenter|Qt::TextWordWrap,QStringLiteral("Drawing details"));
+        painter.restore();return drawingDetailsFrame_.bottom()+9;
+    }
+    const QJsonObject details=effectiveDrawingDetails(*owner);
+    const int panelWidth=std::min(290,width()-24);
+    const int valueWidth=panelWidth-98;
+    const QString keys[]={QStringLiteral("drawingNo"),QStringLiteral("revision"),QStringLiteral("title")};
+    const QString labels[]={QStringLiteral("Drawing P/N"),QStringLiteral("Revision"),QStringLiteral("Title")};
+    QString values[3];int heights[3];
+    painter.save();painter.setRenderHint(QPainter::Antialiasing,true);
+    QFont textFont=font();textFont.setPixelSize(12);painter.setFont(textFont);
+    const QFontMetrics metrics(textFont);
+    int panelHeight=38;
+    for(int i=0;i<3;++i){
+        values[i]=details.value(keys[i]).toString().trimmed();
+        if(values[i].isEmpty())values[i]=QStringLiteral("—");
+        heights[i]=std::clamp(metrics.boundingRect(QRect(0,0,valueWidth,1000),Qt::TextWordWrap,values[i]).height(),metrics.height(),72);
+        panelHeight+=heights[i]+7;
+    }
+    const QRect panel(width()-panelWidth-12,12,panelWidth,panelHeight);
+    drawingDetailsFrame_=panel;drawingDetailsMinimize_=QRect(panel.right()-29,panel.top()+6,22,22);
+    painter.setPen(QPen(QColor(151,177,200,150),1));
+    painter.setBrush(QColor(20,29,40,175));painter.drawRoundedRect(panel,4,4);
+    QFont heading=textFont;heading.setBold(true);painter.setFont(heading);painter.setPen(QColor("#eef4fa"));
+    painter.drawText(QRect(panel.x()+12,panel.y()+8,panelWidth-24,19),Qt::AlignLeft|Qt::AlignVCenter,QStringLiteral("Drawing details"));
+    painter.setPen(QPen(QColor("#b6c7d8"),1));painter.setBrush(QColor(100,127,151,70));painter.drawRoundedRect(drawingDetailsMinimize_,3,3);
+    painter.setPen(QPen(QColor("#eef4fa"),2));
+    if(drawingDetailsPinned_){
+        const QPoint c=drawingDetailsMinimize_.center();
+        painter.drawLine(c+QPoint(-4,-5),c+QPoint(4,3));painter.drawLine(c+QPoint(4,3),c+QPoint(-4,3));
+        painter.drawLine(c+QPoint(0,3),c+QPoint(0,7));
+    }else painter.drawLine(drawingDetailsMinimize_.center()+QPoint(-5,2),drawingDetailsMinimize_.center()+QPoint(5,2));
+    painter.setFont(textFont);int top=panel.y()+34;
+    for(int i=0;i<3;++i){
+        painter.setPen(QColor("#b6c7d8"));painter.drawText(QRect(panel.x()+12,top,78,heights[i]),Qt::AlignLeft|Qt::AlignTop,labels[i]);
+        painter.setPen(QColor("#eef4fa"));
+        const QRect valueRect(panel.x()+90,top,valueWidth,heights[i]);
+        painter.save();painter.setClipRect(valueRect);painter.drawText(valueRect,Qt::AlignLeft|Qt::AlignTop|Qt::TextWordWrap,values[i]);painter.restore();
+        top+=heights[i]+7;
+    }
+    painter.restore();return panel.bottom()+9;
 }
 
 // Full-viewport crosshair with a central pick box, AutoCAD style. Tracks the
@@ -1124,6 +1231,22 @@ void CanvasWidget::beginWindowCapture(std::function<void(Vec2, Vec2)> onDone) {
 }
 
 void CanvasWidget::mousePressEvent(QMouseEvent* e) {
+    if(drawingDetailsVisible_&&drawingDetailsFrame_.contains(e->pos())){
+        drawingDetailsPressed_=true;
+        if(e->button()==Qt::LeftButton&&drawingDetailsMinimize_.contains(e->pos())){
+            drawingDetailsPinned_=!drawingDetailsPinned_;
+            if(drawingDetailsPinned_){
+                drawingDetailsMinimized_=false;drawingDetailsHoverExpanded_=false;
+            }else{
+                drawingDetailsMinimized_=true;drawingDetailsHoverExpanded_=true;
+            }
+            drawingDetailsExpandTimer_->stop();drawingDetailsFoldTimer_->stop();
+            QSettings settings;settings.setValue(QStringLiteral("canvas/pinDrawingDetails"),drawingDetailsPinned_);
+            settings.setValue(QStringLiteral("canvas/minimizeDrawingDetails"),drawingDetailsMinimized_);
+            update();
+        }
+        e->accept();return;
+    }
     syncEditorScale();
     // Rubber-band window capture (Export PDF window): the left press anchors the rect.
     if (capturing_ && e->button() == Qt::LeftButton) {
@@ -1235,6 +1358,8 @@ void CanvasWidget::mousePressEvent(QMouseEvent* e) {
 
 void CanvasWidget::mouseMoveEvent(QMouseEvent* e) {
     lastMousePos_ = e->pos();
+    updateDrawingDetailsHover();
+    if(drawingDetailsPressed_||(e->buttons()==Qt::NoButton&&drawingDetailsFrame_.contains(e->pos()))){update();e->accept();return;}
     syncEditorScale();
     if (capturing_) {
         if (captureActive_) { captureCur_ = e->pos(); update(); }
@@ -1382,6 +1507,7 @@ void CanvasWidget::requestRepaint() {
 void CanvasWidget::enterEvent(QEnterEvent* e) {
     cursorInside_ = true;
     lastMousePos_ = e->position().toPoint();
+    updateDrawingDetailsHover();
     // While placing/drawing, take keyboard focus as the cursor enters the canvas so
     // shortcuts (Tab to edit a connector, X/Y flip, typed values) are routed here even
     // if focus was left on the ribbon. Entering never fires mid-edit (the mouse stays
@@ -1395,11 +1521,13 @@ void CanvasWidget::enterEvent(QEnterEvent* e) {
 
 void CanvasWidget::leaveEvent(QEvent* e) {
     cursorInside_ = false;
+    updateDrawingDetailsHover();
     update();
     QWidget::leaveEvent(e);
 }
 
 void CanvasWidget::mouseReleaseEvent(QMouseEvent* e) {
+    if(drawingDetailsPressed_){drawingDetailsPressed_=false;e->accept();return;}
     syncEditorScale();
     if (capturing_ && e->button() == Qt::LeftButton) {
         const ViewTransform vt = transform();
@@ -1457,6 +1585,7 @@ void CanvasWidget::mouseReleaseEvent(QMouseEvent* e) {
 }
 
 void CanvasWidget::mouseDoubleClickEvent(QMouseEvent* e) {
+    if(drawingDetailsFrame_.contains(e->pos())){e->accept();return;}
     syncEditorScale();
     if (layoutMode_ && e->button() == Qt::LeftButton) {
         DrawingLayout* layout = currentLayout();
@@ -1674,7 +1803,7 @@ bool CanvasWidget::focusNextPrevChild(bool next) {
     // the fields and opened the typing box. Only the SECOND Tab, now landing in that box, reached
     // the filter that pins. Pinning took two presses and the first one looked like it had done
     // nothing but pop a box up.
-    if (editor_ && Editor::isTwistedTool(editor_->tool())) {
+    if (editor_ && Editor::isParameterRouteTool(editor_->tool())) {
         if (next) editor_->freezeTwistedPreview();
         // Swallowed either way, pinned or not: traversal would move the keyboard off the canvas and
         // leave a half-drawn run that neither Enter nor Esc could reach.

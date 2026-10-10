@@ -93,19 +93,38 @@ void MainWindow::buildSystemTab() {
             b->setCheckable(true);
             tools->addButton(b, static_cast<int>(t.tool));
             if (t.tool == SysTool::Select) b->setChecked(true);
+            if (t.tool == SysTool::Select) {
+                b->setPopupMode(QToolButton::MenuButtonPopup);
+                b->setToolTip(QStringLiteral("Select and drag objects. Drag an empty area to select a zone: blue encloses objects, green crosses them. The arrow chooses the zone mode."));
+                auto* menu = new QMenu(b);
+                auto* modes = new QActionGroup(menu);
+                const std::pair<const char*, SysSelectionMode> choices[] = {
+                    {"By drag direction (blue / green)", SysSelectionMode::Direction},
+                    {"Blue window: fully enclosed", SysSelectionMode::Window},
+                    {"Green crossing: touched objects", SysSelectionMode::Crossing}
+                };
+                for (const auto& choice : choices) {
+                    auto* action = menu->addAction(QString::fromLatin1(choice.first), this, [this, mode = choice.second] {
+                        systemView_->setTool(SysTool::Select); systemView_->canvas()->setSelectionMode(mode);
+                    });
+                    action->setCheckable(true); action->setChecked(choice.second == SysSelectionMode::Direction); modes->addAction(action);
+                }
+                b->setMenu(menu);
+            }
             // UNIT'S ARROW: what the units put next are.
             if (t.tool == SysTool::Unit) {
                 b->setPopupMode(QToolButton::MenuButtonPopup);
                 auto* kinds = new QMenu(b);
                 kinds->setObjectName(QStringLiteral("systemUnitKinds"));
                 auto* pick = new QActionGroup(kinds);
-                for (const auto& [text, kind] : {std::pair<const char*, const char*>{"Mechanical part", "mech"}, {"PCBA", "pcba"}}) {
+                for (const auto& [text, kind] : {std::pair<const char*, const char*>{"Mechanical part", "mech"}, {"PCBA", "pcba"}, {"System module", "module"}}) {
                     QAction* a = kinds->addAction(QString::fromLatin1(text), this, [this, b, k = QString::fromLatin1(kind)] {
                         if (!systemView_) return;
                         systemView_->canvas()->setNewUnitKind(k);
                         systemView_->setTool(SysTool::Unit);
                         b->setChecked(true);
                     });
+                    a->setIcon(icon3D(QLatin1String(kind)==QLatin1String("module")?QStringLiteral("module"):QStringLiteral("unit"),Chrome::ink()));
                     a->setCheckable(true);
                     a->setChecked(QLatin1String(kind) == QLatin1String("mech"));
                     pick->addAction(a);
@@ -117,12 +136,23 @@ void MainWindow::buildSystemTab() {
         connect(systemView_->canvas(), &SystemCanvas::toolChanged, this, [toolGroup](SysTool tool) {
             if (QAbstractButton* b = toolGroup->button(static_cast<int>(tool))) b->setChecked(true);
         });
+        big(w,row,"systemLinkNote",QStringLiteral("Link note (L)"),QStringLiteral("link"),QStringLiteral("Select a note, then L and click its unit, cable or port"),
+            [this]{if(systemView_&&!systemView_->canvas()->startNoteLink())statusBar()->showMessage(QStringLiteral("Select a note to link first"),4000);});
         big(w, row, "systemDelete", QStringLiteral("Delete"), QStringLiteral("delete"),
             QStringLiteral("Delete the unit, port, cable or note selected (Delete) - a unit or port with cables, or a unit with "
                            "units in it, only once asked; Space does it again"),
             [this] { if (systemView_) systemView_->deleteSelected(); });
         big(w, row, "systemFit", QStringLiteral("Fit"), QStringLiteral("fit"), QStringLiteral("The whole diagram in view"),
             [this] { if (systemView_) systemView_->canvas()->fit(); });
+    });
+    group(QStringLiteral("View"), [&](QWidget* w, QHBoxLayout* row) {
+        auto* colour=big(w,row,"systemCanvasColour",QStringLiteral("Canvas colour"),QStringLiteral("unit"),
+                         QStringLiteral("Choose the project canvas background; the arrow offers dark grey and light presets"),
+                         [this]{if(systemView_) systemView_->askCanvasColour();});
+        colour->setPopupMode(QToolButton::MenuButtonPopup); auto* menu=new QMenu(colour);
+        menu->addAction(QStringLiteral("Dark grey"),this,[this]{if(systemView_)systemView_->setCanvasColour(QColor(48,52,58));});
+        menu->addAction(QStringLiteral("Light"),this,[this]{if(systemView_)systemView_->setCanvasColour(QColor(250,251,252));});
+        menu->addAction(QStringLiteral("Custom colour..."),this,[this]{if(systemView_)systemView_->askCanvasColour();}); colour->setMenu(menu);
     });
     // THE CABLES: their part numbers, and the drawings that define them.
     group(QStringLiteral("Cables"), [&](QWidget* w, QHBoxLayout* row) {
@@ -158,10 +188,20 @@ void MainWindow::buildSystemTab() {
                                                      : QStringLiteral("System design: %1 error(s) - see Check under the diagram").arg(errors),
                                          8000);
             });
-        big(w, row, "systemCheck", QStringLiteral("Check design"), QStringLiteral("measure"),
+        auto* check = big(w, row, "systemCheck", QStringLiteral("Check design"), QStringLiteral("measure"),
             QStringLiteral("Ports with nothing plugged in or more than one cable, cables with no part number, the same part number on "
                            "cables that differ, no drawing linked"),
             [this] { if (systemView_) systemView_->checkDesign(); });
+        check->setPopupMode(QToolButton::MenuButtonPopup);
+        auto* rules = new QMenu(check);
+        rules->addAction(QStringLiteral("Design rules..."), this, [this] { if (systemView_) systemView_->askRules(); });
+        rules->addAction(QStringLiteral("Bypass table"),this,[this]{if(systemView_)systemView_->showBypass();});
+        check->setMenu(rules);
+        big(w,row,"systemBypass",QStringLiteral("Bypass table"),QStringLiteral("check"),QStringLiteral("Review and restore accepted project findings"),
+            [this]{if(systemView_)systemView_->showBypass();});
+        big(w, row, "systemCheckConnections", QStringLiteral("Connections"), QStringLiteral("check"),
+            QStringLiteral("Check named connections in every linked schematic and compare line names at shared unit ports and contacts"),
+            [this] { if (systemView_) systemView_->checkSchematics(); });
     });
     // THE DESIGN AS A FILE OF ITS OWN - saved, opened - and the diagram out for draw.io and Visio.
     group(QStringLiteral("File"), [&](QWidget* w, QHBoxLayout* row) {

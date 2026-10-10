@@ -1,10 +1,35 @@
 #include "model/Document.h"
 
 #include <QJsonArray>
+#include <QJsonDocument>
+#include <QCryptographicHash>
+#include "io/Dwx.h"
 #include <QUuid>
 #include <algorithm>
 
 namespace Edraw_Desktop {
+
+QString Document::validationFingerprint() const {
+    QJsonObject content=dwx::toJson(*this);
+    content.remove(QStringLiteral("validationStamps"));
+    return QString::fromLatin1(QCryptographicHash::hash(QJsonDocument(content).toJson(QJsonDocument::Compact),QCryptographicHash::Sha256).toHex());
+}
+bool Document::validationPassed(const QString& kind) const {
+    const QString stamp=validationStamps_.value(kind).toString();
+    return !stamp.isEmpty() && stamp==validationFingerprint();
+}
+void Document::recordValidation(const QString& kind,bool passed) {
+    if(passed)validationStamps_.insert(kind,validationFingerprint());
+    else validationStamps_.remove(kind);
+    dirty_=true;
+}
+void Document::invalidateValidation() {
+    if(validationStamps_.isEmpty())return;
+    const QString fingerprint=validationFingerprint();
+    for(const QString& key:validationStamps_.keys())
+        if(validationStamps_.value(key).toString()!=fingerprint){validationStamps_.remove(key);dirty_=true;}
+}
+
 
 QJsonObject LayoutViewport::toJson() const {
     return {{QStringLiteral("id"), id},

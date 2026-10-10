@@ -1529,6 +1529,10 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         break;
 
     case EntityType::Polyline:
+        if (e.meta.value(QStringLiteral("lacingTie")).toBool() &&
+            e.meta.value(QStringLiteral("closed")).toBool() && e.points.size() > 2 &&
+            distance(e.points.front(), e.points.back()) > 1e-9)
+            p.drawLine(vt.toScreen(e.points.back()), vt.toScreen(e.points.front()));
         // A SLEEVE, DRAWN FROM ITS ROUTE. The object holds the knees it was drawn along and the outline
         // is worked out here - so pulling a knee re-lays the sleeve instead of dragging one corner of a
         // shape that has forgotten what it is. See shrunkSleeveOutline.

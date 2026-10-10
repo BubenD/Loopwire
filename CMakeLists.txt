@@ -46,6 +46,8 @@ add_library(edraw_core STATIC
     src/model/Picture.cpp
     src/model/Document.h
     src/model/Document.cpp
+    src/model/DrawingDetails.h
+    src/model/DrawingDetails.cpp
     src/commands/UndoStack.h
     src/commands/UndoStack.cpp
     src/io/AppPaths.h
@@ -167,7 +169,13 @@ add_library(edraw_core STATIC
     src/app/SystemCanvas.cpp
     src/app/SystemDesignView.cpp
     src/app/DrawingFinderDialog.cpp
+    src/app/PdfViewer.h
+    src/app/PdfViewer.cpp
+    src/io/NativePdf.h
+    src/io/NativePdf.cpp
     src/system/SystemDesign.cpp
+    src/system/SystemRouting.h
+    src/system/SystemRouting.cpp
     src/system/SystemExport.cpp
     src/system/PnMatch.cpp
     src/system/FileText.cpp
@@ -284,6 +292,7 @@ endif()
 set(EDRAW_WIN_RESOURCES "")
 if(WIN32)
     set(EDRAW_WIN_RESOURCES resources/edraw.rc)
+    target_link_libraries(edraw_core PRIVATE windowsapp)
 endif()
 
 qt_add_executable(Edraw WIN32

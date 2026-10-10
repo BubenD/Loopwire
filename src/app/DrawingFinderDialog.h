@@ -14,10 +14,13 @@ class QLineEdit;
 class QPushButton;
 class QTableWidget;
 class QThread;
+class QProgressBar;
+class QStackedWidget;
 
 namespace Edraw_Desktop {
 
 class DrawingPreview;
+class PdfViewer;
 class OdaConverter;
 
 // FIND DRAWINGS: the files under a folder (and its folders) a part number is in - DWX and DXF drawings (every text,
@@ -105,6 +108,10 @@ private:
     int previewToken_ = 0;
     QTableWidget* table_ = nullptr;
     DrawingPreview* preview_ = nullptr;
+    PdfViewer* pdfView_ = nullptr;
+    QStackedWidget* previewStack_ = nullptr;
+    QProgressBar* progress_ = nullptr;
+    int searchToken_ = 0;
     QLabel* said_ = nullptr;
     QLabel* info_ = nullptr;
     QThread* worker_ = nullptr;

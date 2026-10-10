@@ -1,6 +1,7 @@
 #include "system/FileText.h"
 
 #include "io/PdfText.h"
+#include "io/PdfImport.h"
 
 #include <QFile>
 #include <QFileInfo>
@@ -89,9 +90,10 @@ std::vector<TextPiece> fileText(const QString& path, QString* why) {
         return out;
     }
     if (suffix == QLatin1String("pdf")) {
-        const QString text = PdfText::extractFromFile(path, why);
-        if (!text.trimmed().isEmpty()) out.push_back({QStringLiteral("PDF"), text});
-        else if (why && why->isEmpty()) *why = QStringLiteral("no text in it - a scan needs reading (OCR) first");
+        QFile file(path);if(!file.open(QIODevice::ReadOnly)){if(why)*why=file.errorString();return out;}
+        const auto pages=pdf::readTextPages(file.readAll(),why);
+        for(int page=0;page<static_cast<int>(pages.size());++page)if(!pages[static_cast<size_t>(page)].text.trimmed().isEmpty())
+            out.push_back({pages[static_cast<size_t>(page)].size.isEmpty()?QStringLiteral("PDF"):QStringLiteral("Page %1").arg(page+1),pages[static_cast<size_t>(page)].text});
         return out;
     }
     QFile f(path);

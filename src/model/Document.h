@@ -123,8 +123,16 @@ public:
     QJsonObject& systemDesign() { return systemDesign_; }
     const QJsonObject& systemDesign() const { return systemDesign_; }
 
+    QJsonObject& drawingDetails() { return drawingDetails_; }
+    const QJsonObject& drawingDetails() const { return drawingDetails_; }
+    QJsonObject& validationStamps() { return validationStamps_; }
+    const QJsonObject& validationStamps() const { return validationStamps_; }
+    QString validationFingerprint() const;
+    bool validationPassed(const QString& kind) const;
+    void recordValidation(const QString& kind, bool passed);
+    void invalidateValidation();
     bool dirty() const { return dirty_; }
-    void setDirty(bool d) { dirty_ = d; }
+    void setDirty(bool d) { dirty_ = d; if(d)validationStamps_=QJsonObject{}; }
 
     // Default three-layer set matching Edraw's defaultLayers().
     static std::vector<Layer> defaultLayers();
@@ -145,6 +153,8 @@ private:
     QJsonObject wizards_;
     QJsonObject routing3d_;
     QJsonObject systemDesign_;
+    QJsonObject drawingDetails_;
+    QJsonObject validationStamps_;
     QJsonObject harnessPresets_;
     QJsonObject bundlePresets_;
     std::vector<DrawingLayout> layouts_;

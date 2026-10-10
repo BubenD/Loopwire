@@ -16,6 +16,9 @@ namespace Edraw_Desktop {
 // out of that side, and a cable's square path - out of each port's outside, or in from its inside, `end` beyond it.
 QPointF sysPortPoint(const SysUnit& u, const SysPort& p);
 QPointF sysPortOut(const SysPort& p);
+QRectF sysPortLabelRect(const SysUnit& u, const SysPort& p);
+bool sysNoteTarget(const SystemDesign& d, const SysNote& n, QPointF& target);
+std::vector<QPointF> sysCableBasePath(const SystemDesign& d,const SysCable& c,double end=8.0);
 std::vector<QPointF> sysCablePath(const SystemDesign& d, const SysCable& c, double end = 8.0);
 
 // A FILE OF ITS OWN (.wetsys - Edraw's own extension, Whatson ETS system; .edsys read too): the design as JSON, marked

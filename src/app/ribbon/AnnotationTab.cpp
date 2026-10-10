@@ -57,6 +57,7 @@ void MainWindow::buildAnnotationTab() {
         // Leader = a split-button: click places a TEXT leader (no circle); the
         // fall-menu offers a Balloon leader plus the multileader operations.
         auto* balloonBtn = new QToolButton(page);
+        balloonBtn->setProperty("cadActionIcon",QStringLiteral("leader"));
         balloonBtn->setIcon(makeToolIcon(ToolId::TextLeader));
         balloonBtn->setIconSize(QSize(28, 28));
         balloonBtn->setToolButtonStyle(Qt::ToolButtonIconOnly);
@@ -87,6 +88,7 @@ void MainWindow::buildAnnotationTab() {
         }
         balloonBtn->setMenu(lm);
         auto* tableBtn = new QToolButton(page);
+        tableBtn->setProperty("cadActionIcon",QStringLiteral("table"));
         tableBtn->setIcon(makeToolIcon(ToolId::Table));
         tableBtn->setIconSize(QSize(28, 28));
         tableBtn->setToolButtonStyle(Qt::ToolButtonIconOnly);
@@ -98,6 +100,7 @@ void MainWindow::buildAnnotationTab() {
         addGroup(lay, QStringLiteral("Callouts"),
                  toolRow({ToolId::Note, ToolId::Revision}, {balloonBtn, tableBtn}));
     }
+    addGroup(lay,QStringLiteral("Drawing"),makeDrawingDetailsButton(page));
     lay->addStretch(1);
     ribbon_->addTab(page, QStringLiteral("Annotation"));
 }

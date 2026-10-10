@@ -4,8 +4,28 @@
 #include "app/MainWindow.h"
 #include "app/SystemCanvas.h"
 #include "app/SystemDesignView.h"
+#include "app/RuleExplainer.h"
+#include "app/Editor.h"
+#include "app/PdfViewer.h"
+#include "app/MechanicalValidationDialog.h"
+#include "model/DrawingDetails.h"
+#include "system/SystemRouting.h"
+#include "io/NativePdf.h"
+#include <QPdfWriter>
+#include <QPainter>
+#include <QProgressBar>
+#include <QTabBar>
+#include <future>
+#include <QDialog>
+#include <QMessageBox>
+#include <QPushButton>
+#include <QLabel>
 #include "io/Dwx.h"
+#include "harness/Harness.h"
+#include <QDoubleSpinBox>
 #include <QElapsedTimer>
+#include <QTimer>
+#include <QThread>
 #include "io/PdfImport.h"
 #include "model/Document.h"
 #include "system/PnMatch.h"
@@ -307,15 +327,10 @@ void testFinderInside(const QString& base) {
     }
     {
         // A PDF WITH TEXT IN IT, written as one is: a page, a font, the words shown in its content stream.
-        const QByteArray content = "BT /F1 12 Tf 20 100 Td (Fasten with XK-4417 \(4x\)) Tj ET";
-        QByteArray pdf = "%PDF-1.4\n1 0 obj <</Type/Catalog/Pages 2 0 R>> endobj\n2 0 obj <</Type/Pages/Kids[3 0 R]/Count 1>> endobj\n"
-                         "3 0 obj <</Type/Page/Parent 2 0 R/MediaBox[0 0 300 200]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>> endobj\n";
-        pdf += "4 0 obj <</Length " + QByteArray::number(content.size()) + ">> stream\n" + content + "\nendstream endobj\n";
-        pdf += "5 0 obj <</Type/Font/Subtype/Type1/BaseFont/Helvetica>> endobj\ntrailer <</Root 1 0 R>>\n%%EOF\n";
-        QFile out(QDir(dir).filePath(QStringLiteral("assembly.pdf")));
-        out.open(QIODevice::WriteOnly);
-        out.write(pdf);
-        out.close();
+        {
+            QPdfWriter writer(QDir(dir).filePath(QStringLiteral("assembly.pdf")));writer.setResolution(72);
+            QPainter painter(&writer);painter.setFont(QFont(QStringLiteral("Arial"),12));painter.drawText(30,100,QStringLiteral("Fasten with XK-4417 (4x)"));
+        }
         QFile dwg(QDir(dir).filePath(QStringLiteral("assembly.dwg")));
         dwg.open(QIODevice::WriteOnly);
         dwg.write("AC1027 not really a drawing");
@@ -585,7 +600,7 @@ void testUnitsPortsNotes() {
     bool doubled = false;
     for (const SysIssue& i : d.check()) doubled = doubled || i.what.contains(QLatin1String("cables plugged"));
     check(!doubled, "through the wall: a cable each side of a port is not two cables in one");
-    // The connector P/Ns, outside and inside, in the port list.
+    // One connector P/N and its contact P/N in the port list.
     c->select(housing, QString(), QString());
     auto* ports = view.findChild<QTableWidget*>(QStringLiteral("systemPorts"));
     if (ports && ports->rowCount() > 0) {
@@ -593,8 +608,8 @@ void testUnitsPortsNotes() {
         ports->setItem(0, 3, new QTableWidgetItem(QStringLiteral("HDR-8")));
     }
     check(ports && d.unit(housing)->port(through)->connector == QLatin1String("M12-8F") &&
-              d.unit(housing)->port(through)->insidePn == QLatin1String("HDR-8"),
-          "ports: a connector P/N each for its outside and its inside");
+              d.unit(housing)->port(through)->contactPn == QLatin1String("HDR-8") && ports->columnCount() == 4,
+          "ports: one connector P/N and a contact P/N");
 
     // ---- A NOTE ----
     view.setTool(SysTool::Note);
@@ -951,11 +966,440 @@ void testDeleteKeyAndClickCable() {
     QApplication::processEvents();
 }
 
+void testSystemEditingAndChecks(const QString& dir) {
+    auto drag = [](QWidget* widget, const QPointF& from, const QPointF& to) {
+        mouse(widget, QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
+        mouse(widget, QEvent::MouseMove, to, Qt::LeftButton, Qt::NoButton);
+        mouse(widget, QEvent::MouseButtonRelease, to, Qt::NoButton, Qt::LeftButton);
+        QApplication::processEvents();
+    };
+    SystemDesignView view;
+    view.resize(1150, 780); view.show(); QApplication::processEvents();
+    SystemDesign& d = view.design();
+    const QString a = d.addUnit(60, 70), b = d.addUnit(330, 70);
+    const QString pa = d.addPort(a, QStringLiteral("right"), 0.5, QStringLiteral("X1"));
+    const QString pb = d.addPort(b, QStringLiteral("left"), 0.5, QStringLiteral("X2"));
+    const QString c = d.addCable(a, pa, b, pb);
+    const QString n = d.addNote(80, 300, QStringLiteral("A longwordwithoutspaces must wrap inside this container."));
+    d.note(n)->color = QColor(100, 150, 220); d.note(n)->unit = a; d.note(n)->port = pa;
+    d.unit(a)->port(pa)->contactPn = QStringLiteral("CONTACT-20");
+    auto* canvas = view.canvas(); canvas->update(); QApplication::processEvents();
+    const QPointF label = canvas->portLabelOnScreen(a, pa);
+    drag(canvas, label, label + QPointF(45, -30));
+    check(d.unit(a)->port(pa)->labelDx > 40 && d.unit(a)->port(pa)->labelDy < -25, "port designator: dragged independently above the cable");
+    view.undo(); check(d.unit(a)->port(pa)->labelDx == 0, "port designator: drag undone in one step");
+    canvas->selectNote(n);
+    const QPointF corner = canvas->toScreen({d.note(n)->x + d.note(n)->w, d.note(n)->y + d.note(n)->h});
+    drag(canvas, corner - QPointF(1, 1), corner + QPointF(70, 40));
+    check(d.note(n)->w > 240 && d.note(n)->h > 100, "note: text container resized by its corner");
+    QPointF target;
+    check(sysNoteTarget(d, *d.note(n), target) && target == sysPortPoint(*d.unit(a), *d.unit(a)->port(pa)), "note: leader resolves the exact port");
+    const QJsonObject saved = d.toJson();
+    const SystemDesign back = SystemDesign::fromJson(saved);
+    check(back.note(n)->color == d.note(n)->color && back.note(n)->w == d.note(n)->w && back.note(n)->port == pa &&
+          back.unit(a)->port(pa)->contactPn == QLatin1String("CONTACT-20"), "saved: note appearance/target and contact P/N round trip");
+    const QString xml = systemDrawioXml(d);
+    check(xml.contains(n + QStringLiteral("-leader")) && xml.contains(QStringLiteral("#6496dc"), Qt::CaseInsensitive), "export: note leader and custom fill retained");
+    canvas->select({}, {}, {});
+    drag(canvas, canvas->toScreen({40, 40}), canvas->toScreen({510, 210}));
+    check(canvas->selectedUnits().size() == 2 && canvas->selectedCables().contains(c), "blue window: enclosed units and cable selected");
+    const double ax = d.unit(a)->x, bx = d.unit(b)->x;
+    drag(canvas, canvas->unitOnScreen(a), canvas->unitOnScreen(a) + QPointF(30, 20));
+    check(d.unit(a)->x == ax + 30 && d.unit(b)->x == bx + 30, "zone: selected units moved together");
+    view.undo();
+    check(d.unit(a)->x == ax && d.unit(b)->x == bx, "zone: group move undone in one step");
+    drag(canvas, canvas->toScreen({155, 45}), canvas->toScreen({235, 180}));
+    check(canvas->selectedUnits().isEmpty(), "blue window: partly enclosed unit excluded");
+    drag(canvas, canvas->toScreen({235, 180}), canvas->toScreen({155, 45}));
+    check(canvas->selectedUnits().contains(a), "green crossing: partly crossed unit selected");
+    canvas->setSelectionMode(SysSelectionMode::Crossing);
+    drag(canvas, canvas->toScreen({155, 45}), canvas->toScreen({235, 180}));
+    check(canvas->selectedUnits().contains(a), "green mode: crossing also works left to right when explicitly chosen");
+    canvas->setSelectionMode(SysSelectionMode::Direction);
+    canvas->selectNote(n);
+    auto* noteLink = view.findChild<QComboBox*>(QStringLiteral("systemNoteLink"));
+    const int cableTarget = noteLink ? noteLink->findData(QStringList{{}, {}, c}) : -1;
+    if (noteLink && cableTarget >= 0) { noteLink->setCurrentIndex(cableTarget); noteLink->activated(cableTarget); }
+    check(d.note(n)->cable == c && d.note(n)->unit.isEmpty(), "note link: cable chosen from the target control");
+    view.undo(); check(d.note(n)->port == pa && d.note(n)->cable.isEmpty(), "note link: target change undone in one step");
+    d.unit(b)->name = d.unit(a)->name;
+    bool duplicate = false;
+    for (const SysIssue& issue : d.check()) duplicate |= issue.rule == QLatin1String("DESIGNATOR") && issue.level == 2;
+    check(duplicate, "rules: duplicate unit names identified by stable rule id");
+    d.disabledRules << QStringLiteral("DESIGNATOR");
+    view.checkDesign();
+    bool disabled = false;
+    for (const SysIssue& issue : view.issues()) disabled |= issue.rule == QLatin1String("DESIGNATOR");
+    check(!disabled && view.findChild<QTableWidget*>(QStringLiteral("systemConnections"))->rowCount() == 1,
+          "check: disabled rules excluded, unlinked cable listed in connections");
+    const QImage firstFrame = canvas->grab().toImage();
+    QElapsedTimer reviewWait; reviewWait.start();
+    while (reviewWait.elapsed() < 180) { QApplication::processEvents(); QThread::msleep(10); }
+    auto* animation = canvas->findChild<QTimer*>(QStringLiteral("systemCheckAnimation"));
+    check(animation && animation->isActive() && firstFrame != canvas->grab().toImage(),
+          "rules animation: visible frames change and the review does not finish after a brief flash");
+    canvas->grab().save(QDir(dir).filePath(QStringLiteral("system-editing.png")));
+    const QString preview = qEnvironmentVariable("EDRAW_SYSTEM_PREVIEW");
+    if (!preview.isEmpty()) canvas->grab().save(preview);
+}
+
+void testSystemSchematicConnections(const QString& dir) {
+    Document doc(QStringLiteral("Named paths"));
+    ConnectorSpec sa = defaultConnectorSpec(1), sb = defaultConnectorSpec(1);
+    sa.designator = QStringLiteral("X1"); sb.designator = QStringLiteral("X2");
+    sa.pins = {QStringLiteral("A")}; sb.pins = {QStringLiteral("B")};
+    Entity a; a.id = QStringLiteral("conn-a"); a.type = EntityType::Connector; a.a = {0, 0}; writeConnectorSpec(a.meta, sa);
+    Entity b; b.id = QStringLiteral("conn-b"); b.type = EntityType::Connector; b.a = {250, 0}; writeConnectorSpec(b.meta, sb);
+    doc.entities().push_back(a); doc.entities().push_back(b);
+    const Vec2 ae = connectorGeometry(a.a, sa).pinEnd.front(), be = connectorGeometry(b.a, sb).pinEnd.front();
+    Entity w; w.id = QStringLiteral("wire-a"); w.type = EntityType::Wire; w.points = {ae, {150, 50}};
+    w.meta[QStringLiteral("wireLabel")] = QStringLiteral("SUPPLY"); doc.entities().push_back(w);
+    w.id = QStringLiteral("wire-b"); w.points = {{150, 50}, be}; doc.entities().push_back(w);
+    const QString path = QDir(dir).filePath(QStringLiteral("signal-path.dwx"));
+    check(dwx::save(doc, path), "schematic: named path fixture written");
+    DrawingInfo info = readDrawingInfo(path);
+    check(info.schematic && info.connections.size() == 1 && info.connections[0].level == 0 && info.connections[0].name == QLatin1String("SUPPLY"),
+          "schematic: joined wires form one named connector-to-connector path");
+    check(info.connections[0].fromContact == QLatin1String("A") || info.connections[0].toContact == QLatin1String("A"),
+          "schematic: actual contact labels used instead of numeric indices");
+    for (Entity& e : doc.entities()) if (e.type == EntityType::Wire) e.meta[QStringLiteral("wireLabel")] = QStringLiteral("SUPPLY / RETURN");
+    dwx::save(doc, path); info = readDrawingInfo(path);
+    check(info.connections[0].level == 0, "schematic: a slash in a legitimate line name is not a label conflict");
+    for (Entity& e : doc.entities()) if (e.type == EntityType::Wire) e.meta[QStringLiteral("wireLabel")] = QStringLiteral("SUPPLY");
+    DrawingLayout extra; extra.name = QStringLiteral("Second schematic"); extra.paperEntities = doc.entities();
+    for (Entity& e : extra.paperEntities) if (e.type == EntityType::Wire) e.meta[QStringLiteral("wireLabel")] = QStringLiteral("SECOND-SHEET");
+    doc.layouts().push_back(extra); dwx::save(doc, path); info = readDrawingInfo(path);
+    check(info.connections.size() == 2 && info.connections[0].level == 0 && info.connections[1].level == 0,
+          "schematic: independent sheets at identical coordinates never become one electrical path");
+    doc.layouts().clear();
+    doc.entities().back().meta[QStringLiteral("wireLabel")] = QStringLiteral("RETURN");
+    dwx::save(doc, path); info = readDrawingInfo(path);
+    check(info.connections.size() == 1 && info.connections[0].level == 2, "schematic: names changing across joined wires are errors");
+    doc.entities().back().points.back() = {500, 500}; dwx::save(doc, path);
+    info = readDrawingInfo(path);
+    check(info.connections[0].issue.contains(QStringLiteral("Open")), "schematic: dangling wire reported as unresolved connection");
+
+    SystemDesign d;
+    const QString ua = d.addUnit(0, 0), ub = d.addUnit(300, 0), uc = d.addUnit(600, 0);
+    const QString pa = d.addPort(ua, QStringLiteral("right"), .5, QStringLiteral("X1"));
+    const QString pb = d.addPort(ub, QStringLiteral("left"), .5, QStringLiteral("X2"));
+    const QString pc = d.addPort(uc, QStringLiteral("left"), .5, QStringLiteral("X3"));
+    const QString ca = d.addCable(ua, pa, ub, pb), cb = d.addCable(ub, pb, uc, pc);
+    d.cable(ca)->drawing = QStringLiteral("one"); d.cable(cb)->drawing = QStringLiteral("two");
+    auto reader = [](const QString& file) {
+        DrawingInfo result; result.found = result.schematic = true;
+        if (file == QLatin1String("one")) result.connections.push_back({QStringLiteral("SUPPLY"), QStringLiteral("X2"), QStringLiteral("1"), QStringLiteral("X1"), QStringLiteral("1"), {}, 0});
+        else result.connections.push_back({QStringLiteral("RETURN"), QStringLiteral("X2"), QStringLiteral("1"), QStringLiteral("X3"), QStringLiteral("2"), {}, 0});
+        return result;
+    };
+    const auto rows = d.checkConnections(reader);
+    check(rows.size() == 2 && rows[0].level == 2 && rows[1].level == 2 && rows[0].status.contains(QStringLiteral("shared contact")),
+          "connections: line names inconsistent across drawings at a shared unit contact flagged on both rows");
+    check(rows[0].aUnit == ua && rows[0].bUnit == ub, "connections: reversed schematic endpoints map to the correct units");
+    const auto mismatched = d.checkConnections([](const QString&) {
+        DrawingInfo result; result.found = result.schematic = true;
+        result.connections.push_back({QStringLiteral("SUPPLY"), QStringLiteral("UNKNOWN"), QStringLiteral("1"), QStringLiteral("X2"), QStringLiteral("1"), {}, 0});
+        return result;
+    });
+    check(mismatched[0].level == 2 && mismatched[0].status.contains(QStringLiteral("do not match")),
+          "connections: unmatched connector designators reported, never guessed");
+}
+
+void testSystemDrcWorkflow() {
+    SystemDesignView view; view.resize(1200, 850); view.show(); QApplication::processEvents();
+    SystemDesign& d = view.design();
+    const QString a = d.addUnit(60, 100, QStringLiteral("U1"));
+    const QString b = d.addUnit(4000, 2000, QStringLiteral("U1"));
+    const QString pa = d.addPort(a, QStringLiteral("right"), .5);
+    const QString pb = d.addPort(b, QStringLiteral("left"), .5);
+    const QString c = d.addCable(a, pa, b, pb);
+    const QString n = d.addNote(8000, 4000, QStringLiteral("Relink this installation note"));
+    d.note(n)->unit = QStringLiteral("removed-unit");
+    const QJsonObject before = d.toJson();
+    view.checkDesign();
+    auto* table = view.findChild<QTableWidget*>(QStringLiteral("systemIssues"));
+    check(table && table->rowCount() == static_cast<int>(view.issues().size()) && table->rowCount() > 0,
+          "system DRC: every finding listed after checking");
+    bool sorted = true;
+    for (size_t i=1; i<view.issues().size(); ++i) sorted &= view.issues()[i-1].level >= view.issues()[i].level;
+    check(sorted, "system DRC: errors precede warnings and notes");
+    int portRow=-1, unitRow=-1, cableRow=-1, noteRow=-1;
+    for (int i=0;i<static_cast<int>(view.issues().size());++i) {
+        const SysIssue& issue=view.issues()[static_cast<size_t>(i)];
+        if (issue.unit==b && issue.port==pb) portRow=i;
+        if (issue.unit==b && issue.port.isEmpty()) unitRow=i;
+        if (issue.cable==c) cableRow=i;
+        if (issue.note==n) noteRow=i;
+    }
+    const QPointF centre(view.canvas()->width()/2.0, view.canvas()->height()/2.0);
+    if (table && portRow>=0) table->cellClicked(portRow,2);
+    check(portRow>=0 && view.canvas()->selectedPort()==pb && (view.canvas()->portOnScreen(b,pb)-centre).manhattanLength()<2,
+          "system DRC: single click jumps to an offscreen port and centres it");
+    auto* flash=view.canvas()->findChild<QTimer*>(QStringLiteral("systemIssueFlash"));
+    check(flash && flash->isActive(), "system DRC: the located part flashes like harness DRC");
+    if (unitRow>=0) view.locateIssue(unitRow);
+    check(unitRow>=0 && view.canvas()->selectedUnit()==b && (view.canvas()->unitOnScreen(b)-centre).manhattanLength()<2,
+          "system DRC: unit finding jumps to its unit");
+    if (cableRow>=0) view.locateIssue(cableRow);
+    check(cableRow>=0 && view.canvas()->selectedCable()==c && (view.canvas()->cableOnScreen(c)-centre).manhattanLength()<2,
+          "system DRC: cable finding jumps to its cable");
+    if (noteRow>=0) view.locateIssue(noteRow);
+    check(noteRow>=0 && view.canvas()->selectedNote()==n && (view.canvas()->noteOnScreen(n)-centre).manhattanLength()<2,
+          "system DRC: removed note target still locates the note");
+    check(d.toJson()==before && !view.canUndo(), "system DRC: locating findings never changes or dirties the design");
+    bool hoverAttached=false;
+    QTimer::singleShot(0,&view,[&] {
+        auto* dialog=view.findChild<QDialog*>(QStringLiteral("systemDrcRulesDialog"));
+        if (!dialog) return;
+        auto* title=dialog->findChild<QLabel*>(QStringLiteral("systemDrcRuleName_SCHEMATIC-NAME"));
+        if (title) {
+            QEvent enter(QEvent::Enter); QApplication::sendEvent(title,&enter);
+            hoverAttached=RuleExplainer::instance()->isVisible() && RuleExplainer::instance()->rule()==QLatin1String("SCHEMATIC-NAME");
+            QEvent leave(QEvent::Leave); QApplication::sendEvent(title,&leave);
+        }
+        dialog->reject();
+    });
+    view.askRules(); check(hoverAttached,"system DRC: hovering a rule opens the shared harness rule explainer");
+    for (const char* rule : {"DESIGNATOR","PORT-CONNECTION","PART-NUMBER","DRAWING-LINK","NOTE-LINK","SCHEMATIC-NAME"}) {
+        const QString id=QString::fromLatin1(rule);
+        check(RuleExplainer::hasScene(id),"system DRC: every system rule has a fault/fix illustration");
+    }
+    auto* anchor=new QLabel(QStringLiteral("Rule preview"),&view);
+    RuleExplainer::attach(anchor,QStringLiteral("SCHEMATIC-NAME"),QStringLiteral("Schematic line names"),QStringLiteral("Same contact, same line name."));
+    QEvent enter(QEvent::Enter); QApplication::sendEvent(anchor,&enter);
+    auto* explainer=RuleExplainer::instance(); explainer->setPhase(.2); const QImage fault=explainer->grab().toImage();
+    explainer->setPhase(.75); const QImage fixed=explainer->grab().toImage();
+    check(fault!=fixed,"system DRC: hover animation shows distinct fault and corrected scenes");
+    const QString preview=qEnvironmentVariable("EDRAW_SYSTEM_DRC_PREVIEW");
+    if (!preview.isEmpty()) { fault.save(preview+QStringLiteral("-fault.png")); fixed.save(preview+QStringLiteral("-fix.png")); view.grab().save(preview+QStringLiteral("-locate.png")); }
+    QEvent leave(QEvent::Leave); QApplication::sendEvent(anchor,&leave);
+}
+
+void testProjectTrafficBypassAndAppearance() {
+    SystemDesignView view; view.resize(1300,900); view.show(); QApplication::processEvents();
+    QJsonObject saved; view.setStore([&]{return saved;},[&](const QJsonObject& o){saved=o;});
+    check(view.design().background==QColor(48,52,58) && view.canvas()->grab().toImage().pixelColor(3,3)==QColor(48,52,58),
+          "canvas: project starts with the dark grey background");
+    view.setCanvasColour(QColor(250,251,252));
+    check(!saved.isEmpty() && SystemDesign::fromJson(saved).background==QColor(250,251,252),"canvas: colour saved even in an empty project");
+    view.undo(); check(view.design().background==QColor(48,52,58),"canvas: colour change undone");
+    view.setCanvasColour(QColor(70,80,90));
+    SystemDesign& d=view.design(); const QString a=d.addUnit(50,100,QStringLiteral("U1")), b=d.addUnit(450,100,QStringLiteral("U1"));
+    d.addPort(a,QStringLiteral("right"),.5);
+    view.checkDesign();
+    bool yellow=false, green=false, red=false, legend=false;
+    QTimer::singleShot(0,&view,[&]{
+        auto* dialog=view.findChild<QDialog*>(QStringLiteral("systemDrcRulesDialog")); if(!dialog)return;
+        legend=dialog->findChild<QWidget*>(QStringLiteral("drcTrafficLegend"));
+        auto* square=dialog->findChild<QToolButton*>(QStringLiteral("systemDrcRule_DESIGNATOR"));
+        if(square){ square->click(); yellow=square->property("severity").toInt()==1 && square->styleSheet().contains(QStringLiteral("#e6b84a"));
+                    square->click(); green=square->property("severity").toInt()==0;
+                    bool active=false;for(const SysIssue& i:view.issues())active|=i.rule==QLatin1String("DESIGNATOR");green=green&&!active;
+                    square->click();red=square->property("severity").toInt()==2; }
+        const QString image=qEnvironmentVariable("EDRAW_PROJECT_CONTROLS_PREVIEW");if(!image.isEmpty())dialog->grab().save(image+QStringLiteral("-project-rules.png"));
+        dialog->reject();
+    });
+    view.askRules(); check(legend&&yellow&&green&&red,"project rules: traffic lights cycle warning / not checked / error with a legend");
+    int row=-1;for(int i=0;i<static_cast<int>(view.issues().size());++i)if(view.issues()[static_cast<size_t>(i)].rule==QLatin1String("DESIGNATOR"))row=i;
+    const QString key=row>=0?view.issues()[static_cast<size_t>(row)].key():QString();
+    check(row>=0&&view.bypassIssue(row)&&d.bypassed.size()==1,"project bypass: finding accepted into its own bypass table");
+    bool hidden=true;for(const SysIssue& i:view.issues())hidden&=i.key()!=key;check(hidden,"project bypass: accepted finding removed from active issues");
+    SystemDesignView reopened; reopened.setStore([&]{return saved;},[](const QJsonObject&){}); reopened.checkDesign();
+    bool stillHidden=true;for(const SysIssue& i:reopened.issues())stillHidden&=i.key()!=key;
+    check(stillHidden&&reopened.design().bypassed.size()==1,"project bypass: acceptance survives reopening the project");
+    const SystemDesign copy=SystemDesign::fromJson(saved);
+    check(copy.bypassed.size()==1&&copy.bypassed[0].key()==key&&copy.ruleLevels.value(QStringLiteral("DESIGNATOR")).toInt()==2&&copy.background==QColor(70,80,90),
+          "project settings: bypass, traffic-light level and custom canvas colour round trip");
+    view.showBypass();auto* table=view.findChild<QTableWidget*>(QStringLiteral("systemDrcBypassTable"));
+    check(table&&table->rowCount()==1,"project bypass: accepted finding listed in the bypass window");
+    auto* restore=table? qobject_cast<QPushButton*>(table->cellWidget(0,3)):nullptr;if(restore)restore->click();
+    bool returned=false;for(const SysIssue& i:view.issues())returned|=i.key()==key;
+    check(d.bypassed.empty()&&returned,"project bypass: Restore re-flags the original finding");
+    view.undo();view.checkDesign();check(d.bypassed.size()==1,"project bypass: restoring can be undone");
+    d.unit(b)->name=QStringLiteral("U2");d.addUnit(800,100,QStringLiteral("U2"));view.checkDesign();
+    bool newer=true, fresh=false;for(const SysIssue& i:view.issues()){newer&=i.key()!=key;fresh|=i.rule==QLatin1String("DESIGNATOR");}
+    check(newer&&fresh,"project bypass: a changed design generates new findings instead of reusing an old acceptance");
+    SystemDesign recycled;const QString oldUnit=recycled.addUnit(0,0);
+    recycled.bypassed.push_back({2,QStringLiteral("Accepted unit finding"),oldUnit,{},QStringLiteral("DESIGNATOR"),{}, {}});
+    recycled.removeUnit(oldUnit);check(recycled.addUnit(0,0)!=oldUnit,"project bypass: a removed accepted part's id is not recycled onto a new part");
+    const QString preview=qEnvironmentVariable("EDRAW_PROJECT_CONTROLS_PREVIEW");
+    const QString leader=d.addNote(110,330,QStringLiteral("Unit-linked note: leader meets the unit edge"));d.note(leader)->unit=a;
+    view.canvas()->clearCheck();view.canvas()->selectNote(leader);
+    if(!preview.isEmpty()){view.grab().save(preview+QStringLiteral("-canvas.png"));if(auto* dialog=view.findChild<QDialog*>(QStringLiteral("systemDrcBypassDialog")))dialog->grab().save(preview+QStringLiteral("-bypass.png"));}
+    if(auto* dialog=view.findChild<QDialog*>(QStringLiteral("systemDrcBypassDialog")))dialog->close();
+    // UNIT LEADERS: intersect the unit boundary along the ray towards the note, in every direction.
+    SystemDesign links;const QString uid=links.addUnit(100,100);const QString nid=links.addNote(400,130);links.note(nid)->unit=uid;
+    for(const QPointF& pos:{QPointF(400,130),QPointF(-300,130),QPointF(100,-300),QPointF(100,400),QPointF(400,400)}){
+        links.note(nid)->x=pos.x();links.note(nid)->y=pos.y();QPointF target;sysNoteTarget(links,*links.note(nid),target);
+        const QRectF box=links.unit(uid)->rect();const QPointF ray=QRectF(pos,QSizeF(180,70)).center()-box.center();const QPointF delta=target-box.center();
+        const bool edge=std::abs(target.x()-box.left())<1e-6||std::abs(target.x()-box.right())<1e-6||std::abs(target.y()-box.top())<1e-6||std::abs(target.y()-box.bottom())<1e-6;
+        check(edge&&box.adjusted(-.001,-.001,.001,.001).contains(target)&&std::abs(delta.x()*ray.y()-delta.y()*ray.x())<1e-5,"note leader: stops at the unit's facing edge");
+    }
+    const QString port=links.addPort(uid,QStringLiteral("left"),.3);links.note(nid)->port=port;QPointF target;sysNoteTarget(links,*links.note(nid),target);
+    check(target==sysPortPoint(*links.unit(uid),*links.unit(uid)->port(port)),"note leader: a port target still meets the exact port");
+}
+
+void testSchematicTrafficLights() {
+    Document doc; Editor ed; ed.setDocument(&doc);
+    ConnectorSpec spec=defaultConnectorSpec(1);spec.designator=QStringLiteral("X1");spec.partNumber.clear();
+    Entity connector;connector.id=QStringLiteral("traffic-connector");connector.type=EntityType::Connector;writeConnectorSpec(connector.meta,spec);doc.entities().push_back(connector);
+    ed.setSchematicRuleSeverity(QStringLiteral("nopn"),1);
+    bool warning=false;for(const ValidationIssue& i:ed.validateSchematic())if(i.key.startsWith(QLatin1String("nopn:")))warning=i.level==1;
+    check(warning,"schematic traffic: warning level applied to validation findings");
+    ed.setSchematicRuleSeverity(QStringLiteral("nopn"),0);bool absent=true;for(const ValidationIssue& i:ed.validateSchematic())absent&=!i.key.startsWith(QLatin1String("nopn:"));
+    check(absent,"schematic traffic: green skips the selected rule");
+    ed.setSchematicRuleSeverity(QStringLiteral("nopn"),2);bool error=false;for(const ValidationIssue& i:ed.validateSchematic())if(i.key.startsWith(QLatin1String("nopn:")))error=i.level==2;
+    check(error&&ed.drcRuleEnabled(QStringLiteral("nopart")),"schematic traffic: error restored without changing mechanical rules");
+    MainWindow w;w.show();QApplication::processEvents();auto* rules=w.findChild<QToolButton*>(QStringLiteral("schematicDrcRules"));
+    if(rules)rules->click();auto* dialog=w.findChild<QDialog*>(QStringLiteral("schematicDrcRulesDialog"));
+    auto* square=dialog?dialog->findChild<QToolButton*>(QStringLiteral("schematicDrcRule_nopn")):nullptr;
+    check(dialog&&square&&dialog->findChild<QWidget*>(QStringLiteral("drcTrafficLegend")),"schematic traffic: the rules window uses the shared light controls and legend");
+    if(square){square->click();check(square->property("severity").toInt()==1,"schematic traffic: yellow selected from rules window");square->click();check(square->property("severity").toInt()==0,"schematic traffic: green selected from rules window");square->click();}
+    const QString preview=qEnvironmentVariable("EDRAW_PROJECT_CONTROLS_PREVIEW");if(dialog&&!preview.isEmpty())dialog->grab().save(preview+QStringLiteral("-schematic-rules.png"));
+    if(dialog)dialog->close();
+}
+
+void testDrawingDetailsFields(const QString& directory) {
+    Document doc;Editor ed;ed.setDocument(&doc);
+    const QJsonObject details{{QStringLiteral("drawingNo"),QStringLiteral("CBL-123")},{QStringLiteral("revision"),QStringLiteral("A")},{QStringLiteral("title"),QStringLiteral("Controller harness")}};
+    ed.setDrawingDetails(details);
+    for(const QString& key:{QStringLiteral("drawingNo"),QStringLiteral("revision"),QStringLiteral("title")}){
+        check(ed.placeDrawingField(key),"drawing details: a declared field can be placed");ed.onPointerPress({20,40+20.0*doc.entities().size()},Qt::LeftButton,Qt::NoModifier);
+    }
+    check(doc.entities().size()==3&&checkDrawingDetails(doc).empty(),"drawing details: P/N, revision and title placed as matching fields");
+    Entity repeated=doc.entities()[0];repeated.id=QStringLiteral("paper-number");doc.layouts()[0].paperEntities.push_back(repeated);
+    repeated.id=QStringLiteral("bad-number");repeated.meta[QStringLiteral("text")]=QStringLiteral("CBL-999");doc.layouts()[1].paperEntities.push_back(repeated);
+    const auto problems=checkDrawingDetails(doc);check(problems.size()==1&&problems[0].layout==doc.layouts()[1].name,"drawing details: every sheet checked and a conflicting copy located");
+    bool schematic=false;for(const ValidationIssue& i:ed.validateSchematic())schematic|=i.key.startsWith(QLatin1String("drawing-fields:"));
+    check(schematic,"drawing details: schematic DRC uses the same field consistency check");
+    MechanicalValidationDialog mechanical(&ed);mechanical.revalidate();bool physical=false;for(const BrickIssue& i:mechanical.shownHarnessIssues())physical|=i.rule==QLatin1String("drawing-fields");
+    check(physical,"drawing details: mechanical DRC checks repeated fields too");
+    const QString file=QDir(directory).filePath(QStringLiteral("metadata.dwx"));dwx::save(doc,file);
+    DrawingInfo info=readDrawingInfo(file);check(info.drawingNo==QLatin1String("CBL-123")&&info.revision==QLatin1String("A")&&info.title==QLatin1String("Controller harness")&&!info.fieldIssues.isEmpty(),"drawing details: project reads authoritative data and all conflicting copies");
+    SystemDesignView project;auto& system=project.design();const QString a=system.addUnit(0,0),b=system.addUnit(400,0);const QString pa=system.addPort(a,QStringLiteral("right"),.5),pb=system.addPort(b,QStringLiteral("left"),.5);const QString cable=system.addCable(a,pa,b,pb);
+    project.linkDrawing(cable,file);project.checkDesign();bool flagged=false;for(const SysIssue& i:project.issues())flagged|=i.rule==QLatin1String("DRAWING-FIELDS");check(flagged,"drawing details: linked drawing conflicts appear in project DRC");
+    const QJsonObject revised{{QStringLiteral("drawingNo"),QStringLiteral("CBL-124")},{QStringLiteral("revision"),QStringLiteral("B")},{QStringLiteral("title"),QStringLiteral("Controller harness revised")}};
+    ed.setDrawingDetails(revised);check(checkDrawingDetails(doc).empty()&&doc.layouts()[1].paperEntities[0].meta.value(QStringLiteral("text")).toString()==QLatin1String("CBL-124"),"drawing details: updates reach every copy including inactive sheets");
+    ed.undo();check(doc.drawingDetails()==details&&!checkDrawingDetails(doc).empty()&&doc.layouts()[1].paperEntities[0].meta.value(QStringLiteral("text")).toString()==QLatin1String("CBL-999"),"drawing details: undo restores metadata and previous individual field values atomically");
+    ed.redo();check(doc.drawingDetails()==revised&&checkDrawingDetails(doc).empty(),"drawing details: redo restores all matching field copies");
+    doc.layouts()[0].paperEntities[0].meta[QStringLiteral("text")]=QStringLiteral("wrong");
+    Document paper;paper.entities()=doc.layouts()[0].paperEntities;Editor paperEditor;paperEditor.setDocument(&paper);paperEditor.setDrawingOwner(&doc);
+    paperEditor.setDrawingDetails(details);check(doc.drawingDetails()==details&&paper.entities()[0].meta.value(QStringLiteral("text")).toString()==QLatin1String("CBL-123"),"drawing details: paper editing updates the owning drawing");
+    paperEditor.undo();check(doc.drawingDetails()==revised&&paper.entities()[0].meta.value(QStringLiteral("text")).toString()==QLatin1String("wrong"),"drawing details: paper undo preserves the owner's metadata and paper field state");
+    MainWindow window;window.show();QApplication::processEvents();auto* editor=window.findChild<Editor*>();
+    bool annotation=false, harness=false;for(QToolButton* button:window.findChildren<QToolButton*>(QStringLiteral("drawingDetailsButton"))){annotation|=button->toolButtonStyle()==Qt::ToolButtonTextUnderIcon;harness|=button->toolButtonStyle()==Qt::ToolButtonIconOnly;}
+    check(annotation&&harness&&editor,"drawing details: commands present on Annotation and harness annotation");
+}
+
+void testPdfViewerAndProgress(const QString& directory) {
+    const QString file=QDir(directory).filePath(QStringLiteral("viewer-pages.pdf"));
+    {
+        QPdfWriter writer(file);writer.setResolution(72);QPainter painter(&writer);painter.setFont(QFont(QStringLiteral("Arial"),14));painter.drawText(30,70,QStringLiteral("First page: no requested part"));
+        writer.newPage();painter.drawText(30,70,QStringLiteral("Second page: ABC-123"));painter.fillRect(QRect(40,100,120,60),QColor(30,170,70));
+        writer.newPage();painter.drawText(30,70,QStringLiteral("Third page: ABC 123"));
+    }
+    QFile raw(file);raw.open(QIODevice::ReadOnly);const auto pages=pdf::readTextPages(raw.readAll());
+    check(pages.size()==3&&pages[1].text.contains(QStringLiteral("ABC-123")),"PDF search: text assigned to the actual page with scoped font mappings");
+    const auto rendered=std::async(std::launch::async,[&]{return renderNativePdf(file,1,700);}).get();
+    check(rendered.count==3&&!rendered.image.isNull(),"PDF viewer: Windows renders real pages including images and fonts");
+    DrawingFinderDialog finder;finder.resize(1400,900);finder.show();finder.setFolder(directory);finder.setKinds({QStringLiteral("pdf")});finder.setText(QStringLiteral("ABC-123"));finder.setMatching(false,false,true);finder.search(true);
+    auto* progress=finder.findChild<QProgressBar*>(QStringLiteral("finderProgress"));
+    check(progress&&progress->minimum()==0&&progress->maximum()==100&&progress->value()==100,"finder: completed search reaches a determinate 100 percent");
+    int row=-1;for(int i=0;i<finder.resultCount();++i)if(finder.resultPath(i)==file)row=i;
+    check(row>=0&&finder.resultHits(row)==2,"PDF search: finds inside multiple pages with separator-aware matching like Partseek");
+    if(row>=0)finder.showResult(row);check(finder.previewCount(true)==3,"PDF viewer: finder previews the actual multi-page PDF");
+    auto* viewer=finder.findChild<PdfViewer*>(QStringLiteral("finderPdfViewer"));
+    check(viewer&&viewer->currentPage()==2,"PDF viewer: opens the first page with a match");
+    if(viewer){viewer->jumpHit(1);QElapsedTimer wait;wait.start();while(viewer->loading()&&wait.elapsed()<20000){QApplication::processEvents();QThread::msleep(10);}check(viewer->currentPage()==3&&viewer->ready(),"PDF viewer: next-hit navigation moves to the other matching page");}
+    const QString preview=qEnvironmentVariable("EDRAW_UPGRADE_PREVIEW");if(!preview.isEmpty())finder.grab().save(preview+QStringLiteral("-finder.png"));
+}
+
+void testSystemModuleLinksAndRoutes() {
+    SystemDesignView view;view.resize(1350,1000);view.show();QApplication::processEvents();SystemDesign& d=view.design();auto* canvas=view.canvas();
+    const QString a=d.addUnit(100,100),b=d.addUnit(700,100),obstacle=d.addUnit(370,50);d.unit(obstacle)->w=170;d.unit(obstacle)->h=220;
+    const QString pa=d.addPort(a,QStringLiteral("right"),.5),pb=d.addPort(b,QStringLiteral("left"),.5);const QString c=d.addCable(a,pa,b,pb);
+    const auto routed=sysCablePath(d,*d.cable(c));check(!systemPathCrossesBox(routed,d.unit(obstacle)->rect()),"system routing: connected route avoids an intervening unit body");
+    bool square=true;for(size_t i=1;i<routed.size();++i)square&=std::abs(routed[i].x()-routed[i-1].x())<.001||std::abs(routed[i].y()-routed[i-1].y())<.001;
+    check(square,"system routing: all cable legs remain orthogonal");
+    const QString note=d.addNote(120,390,QStringLiteral("This note follows its linked target"));canvas->selectNote(note);
+    QKeyEvent link(QEvent::KeyPress,Qt::Key_L,Qt::NoModifier);QApplication::sendEvent(canvas,&link);click(canvas,canvas->portOnScreen(a,pa));
+    check(d.note(note)->unit==a&&d.note(note)->port==pa&&canvas->tool()==SysTool::Select,"system link: L links the selected note to the clicked port");
+    view.undo();check(d.note(note)->unit.isEmpty(),"system link: linked target assignment undone in one step");
+    canvas->selectNote(note);canvas->startNoteLink();click(canvas,canvas->cableOnScreen(c));check(d.note(note)->cable==c,"system link: L can link to a particular cable");
+    canvas->selectNote(note);canvas->startNoteLink();click(canvas,canvas->unitOnScreen(b));check(d.note(note)->unit==b&&d.note(note)->port.isEmpty(),"system link: L can link to a particular unit");
+    auto drag=[&](const QPointF& from,const QPointF& to){mouse(canvas,QEvent::MouseButtonPress,from,Qt::LeftButton,Qt::LeftButton);mouse(canvas,QEvent::MouseMove,to,Qt::LeftButton,Qt::NoButton);mouse(canvas,QEvent::MouseButtonRelease,to,Qt::NoButton,Qt::LeftButton);QApplication::processEvents();};
+    const QPointF cable=canvas->cableOnScreen(c);drag(cable,cable+QPointF(0,80));
+    check(!d.cable(c)->waypoints.empty()&&d.cable(c)->aPort==pa&&d.cable(c)->bPort==pb,"system route: a connected cable can be dragged while port identities stay attached");
+    view.undo();check(d.cable(c)->waypoints.empty(),"system route: dragging its bends undone atomically");
+    d.moveUnit(b,-1000,0);arrangeSystemPorts(d,{b});check(d.unit(a)->port(pa)->side==QLatin1String("left")&&d.unit(b)->port(pb)->side==QLatin1String("right"),"system routing: ports move to the nearest clear facing sides when a unit changes sides");
+    check(!systemPathCrossesBox(sysCablePath(d,*d.cable(c)),d.unit(a)->rect()),"system routing: the rerouted cable does not cross its own unit");
+    canvas->setNewUnitKind(QStringLiteral("module"));view.setTool(SysTool::Unit);click(canvas,canvas->toScreen({550,470}));
+    const QString module=canvas->selectedUnit();check(d.unit(module)&&d.unit(module)->kind==QLatin1String("module")&&d.unit(module)->opacity<.2,"system module: dashed grouping unit starts with transparent fill");
+    view.setUnitOpacity(0);const SystemDesign copy=SystemDesign::fromJson(d.toJson());check(copy.unit(module)&&copy.unit(module)->opacity==0,"system module: fully transparent fill persists through save/load");
+    const QString xml=systemDrawioXml(d);check(xml.contains(QStringLiteral("dashed=1"))&&xml.contains(QStringLiteral("[System module]")),"system module: dashed style and module identity preserved in export");
+    const QString preview=qEnvironmentVariable("EDRAW_UPGRADE_PREVIEW");if(!preview.isEmpty()){canvas->fit();view.grab().save(preview+QStringLiteral("-system.png"));}
+}
+
+// Deleting a container must preserve unselected descendants when the user chooses to keep them.
+void testParentDeleteChoices() {
+    SystemDesign original;
+    const QString outer=original.addUnit(10,20,QStringLiteral("Outer"));
+    const QString parent=original.addUnit(40,60,QStringLiteral("Parent"));original.unit(parent)->parent=outer;
+    const QString child=original.addUnit(75,95,QStringLiteral("Child"));original.unit(child)->parent=parent;
+    const QString grandchild=original.addUnit(90,115,QStringLiteral("Grandchild"));original.unit(grandchild)->parent=child;
+    const QString peer=original.addUnit(420,60,QStringLiteral("Peer"));
+    const QString cp=original.addPort(child,QStringLiteral("right"),.5),pp=original.addPort(peer,QStringLiteral("left"),.5);
+    const QString retained=original.addCable(child,cp,peer,pp);
+    original.cable(retained)->waypoints={{250,95},{250,170}};
+    const QString own=original.addPort(parent,QStringLiteral("right"),.5);
+    const QString removed=original.addCable(parent,own,peer,pp);
+    const QString note=original.addNote(200,200,QStringLiteral("Keep this note"));original.note(note)->unit=child;
+    const QRectF childRect=original.unit(child)->rect();
+    SystemDesign model=original;model.removeUnit(parent,false);
+    check(!model.unit(parent)&&model.unit(child)&&model.unit(child)->parent==outer&&model.unit(child)->rect()==childRect,
+          "parent delete: keep contents promotes the child without moving it");
+    check(model.unit(grandchild)&&model.unit(grandchild)->parent==child&&model.cable(retained)&&!model.cable(removed)&&model.note(note)->unit==child,
+          "parent delete: descendants, retained cables and linked notes survive; deleted-unit cables do not");
+    check(model.cable(retained)&&model.cable(retained)->waypoints==original.cable(retained)->waypoints,
+          "parent delete: preserved harness route stays unchanged");
+    model.removeUnit(outer,false);
+    check(model.unit(child)&&model.unit(child)->parent.isEmpty(),"parent delete: removing the outer container promotes children to the canvas");
+    model=original;model.removeUnit(child,false);model.removeUnit(parent,false);
+    check(model.unit(grandchild)&&model.unit(grandchild)->parent==outer,"parent delete: separately selected nested parents promote to the surviving ancestor");
+    const SystemDesign saved=SystemDesign::fromJson(model.toJson());
+    check(saved.unit(grandchild)&&saved.unit(grandchild)->parent==outer,"parent delete: promoted hierarchy survives serialization");
+
+    SystemDesignView view;QJsonObject stored=original.toJson();
+    view.setStore([&]{return stored;},[&](const QJsonObject& next){stored=next;});
+    auto answer=[&](const QString& buttonName){
+        QTimer::singleShot(0,&view,[&,buttonName]{
+            auto* dialog=qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+            check(dialog&&dialog->objectName()==QLatin1String("systemDeleteUnitDialog"),"parent delete: real choice dialog opens");
+            if(!dialog)return;
+            auto* button=dialog->findChild<QPushButton*>(buttonName);
+            check(button!=nullptr,"parent delete: requested action is present");
+            if(button)button->click();else dialog->reject();
+        });
+    };
+    view.canvas()->select(parent,{},{});answer(QStringLiteral("cancelDeleteUnit"));
+    check(!view.deleteSelected()&&view.design().toJson()==original.toJson()&&!view.canUndo(),"parent delete: Cancel changes neither drawing nor undo history");
+    answer(QStringLiteral("deleteUnitKeepContents"));
+    check(view.deleteSelected()&&!view.design().unit(parent)&&view.design().unit(child)&&view.design().unit(child)->parent==outer,
+          "parent delete: selected-only button keeps and reparents the inner units");
+    view.undo();check(view.design().toJson()==original.toJson(),"parent delete: one Undo restores parent, descendants and cables exactly");
+    view.redo();check(!view.design().unit(parent)&&view.design().unit(child),"parent delete: Redo repeats selected-only deletion");
+    view.undo();view.canvas()->select(parent,{},{});answer(QStringLiteral("deleteUnitWithContents"));
+    check(view.deleteSelected()&&!view.design().unit(parent)&&!view.design().unit(child)&&!view.design().unit(grandchild)&&view.design().cables.empty(),
+          "parent delete: all-inside choice removes the complete subtree and its cables");
+    view.undo();check(view.design().toJson()==original.toJson(),"parent delete: recursive deletion also restores in one Undo");
+}
+
 } // namespace
 
 int run_systemdesign_tests() {
     std::printf("system design\n");
     QTemporaryDir dir;
+    if(qEnvironmentVariable("EDRAW_SYSTEM_CASE")==QLatin1String("parent-delete")){testParentDeleteChoices();return g_fail;}
     testModel();
     testDrawings(dir.path());
     testView(dir.path());
@@ -967,7 +1411,16 @@ int run_systemdesign_tests() {
     testUnitsPortsNotes();
     testFilesOut(dir.path());
     testNestingAndLook();
+    testParentDeleteChoices();
     testDeleteKeyAndClickCable();
+    testSystemEditingAndChecks(dir.path());
+    testSystemSchematicConnections(dir.path());
+    testSystemDrcWorkflow();
+    testProjectTrafficBypassAndAppearance();
+    testSchematicTrafficLights();
+    testDrawingDetailsFields(dir.path());
+    testPdfViewerAndProgress(dir.path());
+    testSystemModuleLinksAndRoutes();
     std::printf("  system design: %s\n", g_fail == 0 ? "OK" : "FAILED");
     return g_fail;
 }

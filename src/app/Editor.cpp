@@ -1,4 +1,5 @@
 #include "app/Editor.h"
+#include "model/DrawingDetails.h"
 
 #include "model/EntityRefs.h"
 #include "model/PartSymbols.h"
@@ -1422,6 +1423,9 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
 
 Editor::Editor(QObject* parent) : QObject(parent) {
     hookSelectionCompanions();
+    connect(this,&Editor::changed,this,[this]{
+        if(document() && document()==drawingOwner())document()->invalidateValidation();
+    });
     hatchPreviewTimer_ = new QTimer(this);
     hatchPreviewTimer_->setSingleShot(true);
     hatchPreviewTimer_->setInterval(200);   // the cursor has stopped: now show what a click would fill
@@ -1590,11 +1594,13 @@ void Editor::setDocument(Document* doc) {
     pressed_ = false;
     regionMode_ = RegionMode::None;
     undo_.clear();
+    drawingOwner_=doc_;drawingFieldPending_.clear();
     emit changed();
     emit selectionChanged();
 }
 
 void Editor::setTool(ToolId t) {
+    drawingFieldPending_.clear();
     hatchPreview_ = {};
     if (hatchPreviewTimer_) hatchPreviewTimer_->stop();
     hoverBlockId_.clear();
@@ -1651,7 +1657,7 @@ void Editor::setTool(ToolId t) {
     regionMode_ = RegionMode::None;
     // Starting to draw/place a new primitive clears any current selection (its
     // grips would otherwise linger). Modify tools keep the selection they act on.
-    if ((isDrawTool(t) || isPlacementTool(t)) && !selected_.empty()) {
+    if ((isDrawTool(t) || isPlacementTool(t) || t == ToolId::LacingTie) && !selected_.empty()) {
         selected_.clear();
         emit selectionChanged();
     }
@@ -1706,8 +1712,39 @@ QString Editor::uid() const {
     return QUuid::createUuid().toString(QUuid::WithoutBraces).left(8);
 }
 
+QJsonObject Editor::drawingContext() const {
+    const Document* owner=drawingOwner();if(!owner)return {};
+    QJsonArray fields;
+    auto collect=[&](const std::vector<Entity>& entities,int layout){for(const Entity& e:entities)if(!drawingFieldKey(e.meta.value(QStringLiteral("field")).toString()).isEmpty())
+        fields.append(QJsonObject{{QStringLiteral("layout"),layout},{QStringLiteral("id"),e.id},{QStringLiteral("text"),e.meta.value(QStringLiteral("text"))}});};
+    collect(owner->entities(),-1);for(int i=0;i<static_cast<int>(owner->layouts().size());++i)collect(owner->layouts()[static_cast<size_t>(i)].paperEntities,i);
+    return {{QStringLiteral("drawingDetails"),owner->drawingDetails()},{QStringLiteral("fields"),fields}};
+}
+void Editor::restoreDrawingContext(const QJsonObject& context) {
+    Document* owner=drawingOwner();if(!owner||!context.contains(QStringLiteral("drawingDetails")))return;
+    owner->drawingDetails()=context.value(QStringLiteral("drawingDetails")).toObject();
+    for(const QJsonValue& value:context.value(QStringLiteral("fields")).toArray()){
+        const QJsonObject field=value.toObject();const int layout=field.value(QStringLiteral("layout")).toInt(-1);
+        std::vector<Entity>* entities=layout<0?&owner->entities():layout<static_cast<int>(owner->layouts().size())?&owner->layouts()[static_cast<size_t>(layout)].paperEntities:nullptr;
+        if(entities)for(Entity& e:*entities)if(e.id==field.value(QStringLiteral("id")).toString())e.meta[QStringLiteral("text")]=field.value(QStringLiteral("text"));
+    }
+    if(doc_&&doc_!=owner)doc_->drawingDetails()=owner->drawingDetails();
+    owner->setDirty(true);
+}
+void Editor::setDrawingDetails(const QJsonObject& details) {
+    Document* owner=drawingOwner();if(!owner||!doc_)return;
+    pushUndo();owner->drawingDetails()=details;updateDrawingFields(*owner,details);
+    if(doc_!=owner){doc_->drawingDetails()=details;updateDrawingFields(*doc_,details);}
+    owner->setDirty(true);doc_->setDirty(true);emit drawingDetailsChanged();emit changed();
+}
+bool Editor::placeDrawingField(const QString& field) {
+    const QString key=drawingFieldKey(field);const Document* owner=drawingOwner();if(!owner||key.isEmpty())return false;
+    if(effectiveDrawingDetails(*owner).value(key).toString().trimmed().isEmpty()){emit message(QStringLiteral("Fill %1 in Drawing details before placing the field").arg(drawingFieldLabel(key)));return false;}
+    setTool(ToolId::Text);drawingFieldPending_=key;emit message(QStringLiteral("Click to place the %1 field").arg(drawingFieldLabel(key)));return true;
+}
+
 void Editor::pushUndo() {
-    if (doc_) undo_.push(doc_->entities());
+    if (doc_) undo_.push(doc_->entities(),drawingContext());
 }
 
 int Editor::indexOfId(const QString& id) const {
@@ -4736,7 +4773,7 @@ void Editor::onPointerMove(const Vec2& raw) {
         arrayAwaitingCenter() || // a polar array's centre tracks the cursor until clicked
         harnessPlacing_ ||       // the generated harness ghosts under the cursor
         transitionBandStarted() ||
-        (tool_ == ToolId::LengthBreak && wireBandHasStart_) ||
+        ((tool_ == ToolId::LengthBreak || tool_ == ToolId::LacingTie) && wireBandHasStart_) ||
         alignPick_ != 0 ||   // the line an align will go to follows the cursor
         ((!twistArmType_.isEmpty() || screenArm_) && wireBandHasStart_))
         emit overlayChanged(); // armed connector ghost / twist-screen band preview tracks cursor
@@ -5258,9 +5295,41 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         setTool(ToolId::Select);
         return;
     }
+    // A LACING TIE IS FITTED BY CROSSING THE RUNS, not placed at an arbitrary size on the cursor.
+    if (tool_ == ToolId::LacingTie) {
+        if (!wireBandHasStart_) {
+            wireBandStart_ = raw;
+            wireBandHasStart_ = true;
+            emit message(QStringLiteral("Tie / lacing cord: click the other end of a line across the runs to tie"));
+            emit overlayChanged();
+            return;
+        }
+        auto tie = lacingTieFromBand(wireBandStart_, raw);
+        if (tie.empty()) {
+            emit message(QStringLiteral("Cross the visible wire, cable or heatshrink lines you want to tie"));
+            return;
+        }
+        pushUndo();
+        const QString group = QStringLiteral("lacing-tie:") + uid();
+        for (Entity& entity : tie) {
+            entity.id = uid();
+            entity.layer = doc_->activeLayer();
+            stampEntityGroup(entity, group);
+            addEntity(std::move(entity));
+        }
+        wireBandHasStart_ = false;
+        setTool(ToolId::Select);
+        emit message(QStringLiteral("Lacing cord tie placed with wipeout; undo, move and delete it as one group"));
+        return;
+    }
     // Transition heatshrink is placed by crossing the rails it goes on: first click starts the
     // crossing line, the second finishes it and fits the sleeve at the nearer end.
     if (tool_ == ToolId::HeatshrinkRoute && shrinkMode_ == ShrinkRouteMode::Transition) {
+        if (twistedFrozen_) {
+            twistedFrozen_ = false;
+            emit overlayChanged();
+            return;
+        }
         if (!wireBandHasStart_) {
             wireBandStart_ = raw;
             wireBandHasStart_ = true;
@@ -7556,10 +7625,16 @@ int Editor::assignEntityNumber() const {
 std::vector<ValidationIssue> Editor::validateSchematic() const {
     std::vector<ValidationIssue> issues;
     if (!doc_) return issues;
+    const Document* root=drawingOwner();
+    for(int scope=-1;scope<static_cast<int>(root->layouts().size());++scope) {
+        Document sheet;
+        const Document* validationDoc=root;
+        if(scope>=0){sheet.entities()=root->layouts()[static_cast<size_t>(scope)].paperEntities;validationDoc=&sheet;}
+        const size_t firstIssue=issues.size();
     const double tol = 1e-6;
     // Gather every wire endpoint, splice, and not-connected ("X") marker position.
     std::vector<Vec2> wireEnds, ncMarks, splices;
-    for (const auto& e : doc_->entities()) {
+    for (const auto& e : validationDoc->entities()) {
         if (e.type == EntityType::Wire && e.points.size() >= 2) {
             wireEnds.push_back(e.points.front());
             wireEnds.push_back(e.points.back());
@@ -7573,7 +7648,7 @@ std::vector<ValidationIssue> Editor::validateSchematic() const {
         for (const Vec2& q : pts) if (distance(p, q) < tol) return true;
         return false;
     };
-    for (const auto& e : doc_->entities()) {
+    for (const auto& e : validationDoc->entities()) {
         if (e.type != EntityType::Connector) continue;
         const ConnectorSpec spec = connectorSpecFromMeta(e.meta);
         const ConnectorGeometry g = connectorGeometry(e.a, spec);
@@ -7641,13 +7716,13 @@ std::vector<ValidationIssue> Editor::validateSchematic() const {
     // A shield's drain point is a real connection target (a wire may run from it), so an
     // end landing there is connected, not dangling.
     std::vector<Vec2> shieldDrains;
-    for (const auto& e : doc_->entities()) {
+    for (const auto& e : validationDoc->entities()) {
         if (e.type != EntityType::Screen) continue;
         const int k = std::min(e.meta.value("catch").toInt(static_cast<int>(e.points.size())),
                                static_cast<int>(e.points.size()));
         if (static_cast<int>(e.points.size()) > k) shieldDrains.push_back(e.points.back());
     }
-    for (const auto& w : doc_->entities()) {
+    for (const auto& w : validationDoc->entities()) {
         if (!ruleEnabled("openwire")) break;
         if (w.type != EntityType::Wire || w.points.size() < 2) continue;
         for (int end = 0; end < 2; ++end) {
@@ -7672,17 +7747,17 @@ std::vector<ValidationIssue> Editor::validateSchematic() const {
     auto pairCheck = [&](EntityType type, const char* rule, const char* what) {
         if (!ruleEnabled(QString::fromLatin1(rule))) return;
         QHash<QString, int> countOnWire; // wire id -> number of markers of this type on it
-        for (const auto& e : doc_->entities()) {
+        for (const auto& e : validationDoc->entities()) {
             if (e.type != type) continue;
             for (const auto& v : e.meta.value(QStringLiteral("wires")).toArray())
                 if (!v.toString().isEmpty()) countOnWire[v.toString()] += 1;
         }
         auto wireNum = [&](const QString& id) {
-            for (const auto& w : doc_->entities())
+            for (const auto& w : validationDoc->entities())
                 if (w.id == id) return w.meta.value(QStringLiteral("entNum")).toInt();
             return 0;
         };
-        for (const auto& e : doc_->entities()) {
+        for (const auto& e : validationDoc->entities()) {
             if (e.type != type) continue;
             // Collect the covered wires that lack a pair (only this marker sits on them).
             QStringList pins;
@@ -7706,7 +7781,7 @@ std::vector<ValidationIssue> Editor::validateSchematic() const {
     // (i) A shield's drain lead must end on a wire, splice, X marker, or pin — otherwise
     // the shield is floating (its drain neither connected nor terminated).
     if (ruleEnabled("shielddrain")) {
-        for (const auto& e : doc_->entities()) {
+        for (const auto& e : validationDoc->entities()) {
             if (e.type != EntityType::Screen) continue;
             const int k = std::min(e.meta.value("catch").toInt(static_cast<int>(e.points.size())),
                                    static_cast<int>(e.points.size()));
@@ -7726,6 +7801,14 @@ std::vector<ValidationIssue> Editor::validateSchematic() const {
                               e.id, drain});
         }
     }
+        if(scope>=0)for(size_t i=firstIssue;i<issues.size();++i){
+            issues[i].layout=root->layouts()[static_cast<size_t>(scope)].name;
+            issues[i].key+=QStringLiteral(":sheet:")+issues[i].layout;
+        }
+    }
+    if(ruleEnabled(QStringLiteral("drawing-fields")))for(const DrawingFieldIssue& field:checkDrawingDetails(*drawingOwner()))
+        issues.push_back({field.key,field.message,field.entityId,field.at,2,field.layout});
+    for (ValidationIssue& issue : issues) issue.level=schematicRuleSeverity(issue.key.section(QLatin1Char(':'),0,0));
     return issues;
 }
 
@@ -10373,6 +10456,11 @@ void Editor::handleDrawPress(const Vec2& p) {
     case ToolId::HeatshrinkRoute:
     case ToolId::Spline:
     case ToolId::Wire: {
+        if (tool_ == ToolId::HeatshrinkRoute && twistedFrozen_) {
+            twistedFrozen_ = false;
+            emit overlayChanged();
+            break;
+        }
         // Wire "90° only": snap this vertex to a horizontal/vertical run from the previous
         // one (the cursor itself stayed free). The first point (on a pin, etc.) is kept as-is.
         //
@@ -10469,6 +10557,12 @@ void Editor::handleDrawPress(const Vec2& p) {
                                     "Enter to finish"));
         break;
     case ToolId::Text:
+        if(!drawingFieldPending_.isEmpty()){
+            const QString key=drawingFieldPending_;pushUndo();Entity field;field.id=uid();field.type=EntityType::Text;field.layer=doc_->activeLayer();field.a=p;
+            field.meta={{QStringLiteral("text"),effectiveDrawingDetails(*drawingOwner()).value(key)},{QStringLiteral("field"),key},
+                        {QStringLiteral("fieldLabel"),drawingFieldLabel(key)},{QStringLiteral("drawingDetailField"),true},{QStringLiteral("drawingDetailTextType"),drawingFieldTextType(key)},{QStringLiteral("size"),5.0},{QStringLiteral("font"),QStringLiteral("Arial")}};
+            doc_->entities().push_back(field);selected_={field.id};doc_->setDirty(true);setTool(ToolId::Select);emit selectionChanged();emit changed();return;
+        }
         draftPts_ = {p};
         emit textPromptRequested(QStringLiteral("Text:"));
         break;
@@ -11069,7 +11163,7 @@ void Editor::finishDraw() {
         // The sleeve, along the knees that were clicked - see heatshrinkFromRoute.
         if (draftPts_.size() < 2) { cancelDraw(); return; }
         const Entity sleeve =
-            heatshrinkFromRoute(draftPts_, draftShrinkWidth(), draftCornerRadii_, shrinkMode_);
+            shrinkDraftEntity(draftPts_);
         if (sleeve.points.empty()) { cancelDraw(); return; }
         e.type = sleeve.type;
         e.points = sleeve.points;
@@ -11703,7 +11797,7 @@ void Editor::typedKneeFollows() {
 }
 
 Vec2 Editor::draftAim() const {
-    if (isTwistedTool(tool_) && twistedFrozen_) return twistedFrozenAt_;
+    if (isParameterRouteTool(tool_) && twistedFrozen_) return twistedFrozenAt_;
     if (isTwistedTool(tool_) && twistedHeld_) return twistedHeldAt_;
     return cursor_;
 }
@@ -11736,6 +11830,7 @@ std::vector<QString> Editor::drawInputFieldLabels() const {
     // A MOVE UNDER WAY wants one number: how far. The direction is already pointed - that is what the cursor is
     // for - so the field asks for the distance and nothing else, and the box says so rather than sitting blank.
     if (movingByDistance()) return {QStringLiteral("Distance")};
+    if (tool_ == ToolId::Rotate) return {QStringLiteral("Angle (clockwise)")};
     switch (tool_) {
     case ToolId::Line:
     case ToolId::DoubleLine:
@@ -11786,6 +11881,8 @@ std::vector<QString> Editor::drawInputFieldLabels() const {
 
 QString Editor::drawCommandHint() const {
     switch (tool_) {
+    case ToolId::LacingTie:
+        return QStringLiteral("TIE / LACING CORD: draw a line across the runs to tie. Second click places the tie and wipeout. Esc cancels.");
     case ToolId::Line:
         return QStringLiteral("LINE: click points  ·  Enter ends the run  ·  Esc exits");
     case ToolId::Polyline:
@@ -11817,7 +11914,8 @@ QString Editor::drawCommandHint() const {
                    "Tab pins it to set it up on the ribbon")
             .arg(std::clamp(twistWires_, 2, kTwistedMaxWires));
     case ToolId::HeatshrinkRoute:
-        return QStringLiteral("HEATSHRINK: click along the run  ·  [U]ndo, Enter finishes  ·  "
+        return QStringLiteral("CABLE / HEATSHRINK: click the route  ·  Tab holds it for ribbon edits  ·  "
+                              "Click resumes, Enter finishes  ·  [U]ndo  ·  "
                               "[G] across (%1)  ·  [F] fillet the NEXT knee (%2)")
             .arg(shrinkWidth_, 0, 'f', 1)
             .arg(cornerRadius_, 0, 'f', 1);
@@ -12713,7 +12811,7 @@ void Editor::handleModifyPress(const Vec2& p) {
     // All modify tools are two-click: a reference point, then a finishing point.
     if (modifyPts_.size() < 2) {
         emit message(tool_ == ToolId::Rotate
-                         ? QStringLiteral("Rotate: pick the base point, then click to set the angle")
+                         ? QStringLiteral("Rotate: type an angle in degrees, or click to set the angle")
                      : tool_ == ToolId::Scale
                          ? QStringLiteral("Scale: base point set — type a scale factor (e.g. 2, "
                                           "0.5) or click to set the size")
@@ -12722,6 +12820,7 @@ void Editor::handleModifyPress(const Vec2& p) {
                          : QStringLiteral("%1: pick the destination").arg(toolLabel(tool_)));
         if (tool_ == ToolId::Scale) // pop the factor field at the picked base point
             emit dynamicPrompt(QStringLiteral("Scale factor"));
+
         emit changed();
         return;
     }
@@ -17280,6 +17379,122 @@ bool Editor::breakFromBand(const Vec2& a, const Vec2& b, Entity& out) const {
     return true;
 }
 
+std::vector<Entity> Editor::lacingTieFromBand(const Vec2& a, const Vec2& b) const {
+    if (!doc_ || distance(a, b) < 1e-7) return {};
+    struct Crossing { Vec2 at, direction; };
+    std::vector<Crossing> crossed;
+    const auto path = [&](const std::vector<Vec2>& points) {
+        for (size_t i = 1; i < points.size(); ++i) {
+            const Vec2 delta = points[i] - points[i - 1];
+            if (delta.length() < 1e-7) continue;
+            if (const auto hit = segmentSegmentIntersection(a, b, points[i - 1], points[i])) {
+                bool duplicate = false;
+                for (const auto& existing : crossed)
+                    if (distance(existing.at, *hit) < 1e-6) duplicate = true;
+                if (!duplicate) crossed.push_back({*hit, delta.normalized()});
+            }
+        }
+    };
+    for (const Entity& entity : doc_->entities()) {
+        if (const Layer* layer = doc_->findLayer(entity.layer); layer && !layer->visible) continue;
+        if (entity.meta.value(QStringLiteral("lacingTie")).toBool() ||
+            entity.meta.value(QStringLiteral("labelMask")).toBool() ||
+            entity.meta.contains(QStringLiteral("labelProto"))) continue;
+        switch (entity.type) {
+        case EntityType::Line: path({entity.a, entity.b}); break;
+        case EntityType::DoubleLine: {
+            const Vec2 offset = (entity.b - entity.a).normalized().perp() *
+                                (entity.meta.value(QStringLiteral("gap")).toDouble(10.0) * 0.5);
+            path({entity.a + offset, entity.b + offset});
+            path({entity.a - offset, entity.b - offset});
+            break;
+        }
+        case EntityType::Wire:
+        case EntityType::Spline: path(entity.points); break;
+        case EntityType::TwistedPair:
+            for (const auto& visible : runDrawnLines(entity)) path(visible);
+            break;
+        case EntityType::Polyline:
+            if (entity.meta.value(QStringLiteral("shrunkEnds")).toBool()) {
+                for (const auto& visible : shrunkSleeveRunsOf(entity)) path(visible);
+            } else if (entity.meta.value(QStringLiteral("double")).toBool()) {
+                const double half = entity.meta.value(QStringLiteral("gap")).toDouble(10.0) * 0.5;
+                path(offsetPolyline(entity.points, half));
+                path(offsetPolyline(entity.points, -half));
+            } else if (!entity.meta.value(QStringLiteral("closed")).toBool()) path(entity.points);
+            break;
+        default: break;
+        }
+    }
+    if (crossed.empty()) return {};
+    // EVERY RUN THE STROKE CROSSED IS INCLUDED, even where a fan's wires are not parallel.
+    std::vector<Vec2> directions, hits;
+    for (const Crossing& crossing : crossed) {
+        directions.push_back(crossing.direction);
+        hits.push_back(crossing.at);
+    }
+    const double angle = bundlePerpRot(directions) - M_PI / 2.0;
+    const Vec2 along{std::cos(angle), std::sin(angle)};
+    const Vec2 across = along.perp();
+    Vec2 centre;
+    double span = 0.0;
+    shieldExtent(hits, across, centre, span);
+    const double half = std::max(2.5, span * 0.5 + 1.5);
+    const double cord = std::clamp(span * 0.06, 0.8, 1.8);
+    const auto point = [&](double x, double y) { return centre + along * x + across * y; };
+    std::vector<Entity> result;
+    const auto line = [&](std::initializer_list<Vec2> points, bool closed = false) {
+        Entity entity;
+        entity.type = EntityType::Polyline;
+        entity.points.assign(points);
+        if (closed && entity.points.size() > 2 && distance(entity.points.front(), entity.points.back()) > 1e-9)
+            entity.points.push_back(entity.points.front());
+        entity.meta.insert(QStringLiteral("closed"), closed);
+        entity.meta.insert(QStringLiteral("lacingTie"), true);
+        entity.meta.insert(QStringLiteral("mechRole"), QStringLiteral("fitting"));
+        if (!entity.points.empty()) { entity.a = entity.points.front(); entity.b = entity.points.back(); }
+        result.push_back(std::move(entity));
+    };
+    // MASK FIRST, CORD SECOND. The cord's woven strands are drawn over the same narrow mask.
+    const double bandHalf = cord * 1.7;
+    Entity mask;
+    mask.type = EntityType::Wipeout;
+    mask.points = {point(-bandHalf, -half), point(bandHalf, -half),
+                   point(bandHalf, half), point(-bandHalf, half)};
+    mask.meta.insert(QStringLiteral("noFrame"), true);
+    mask.meta.insert(QStringLiteral("lacingTie"), true);
+    result.push_back(std::move(mask));
+    line({point(-bandHalf, -half + cord), point(-cord, -half), point(cord, -half),
+          point(bandHalf, -half + cord), point(bandHalf, half - cord), point(cord, half),
+          point(-cord, half), point(-bandHalf, half - cord)}, true);
+    // TWO WINDING STRANDS give the cord a woven surface, with every stroke above the wipeout.
+    const int samples = std::clamp(static_cast<int>(std::ceil(2.0 * half / (cord * 0.3))), 24, 600);
+    const int turns = std::max(1, static_cast<int>(std::llround(2.0 * half / (cord * 5.0))));
+    for (int strand = 0; strand < 2; ++strand) {
+        Entity detail = result.back();
+        detail.points.clear();
+        detail.meta.insert(QStringLiteral("closed"), false);
+        for (int sample = 0; sample <= samples; ++sample) {
+            const double t = double(sample) / samples;
+            detail.points.push_back(point(cord * 0.85 * std::sin(2.0 * M_PI * turns * t + strand * M_PI),
+                                          -half + 2.0 * half * t));
+        }
+        detail.a = detail.points.front(); detail.b = detail.points.back();
+        result.push_back(std::move(detail));
+    }
+    // THE KNOT AND ITS TWO FREE ENDS distinguish lacing cord from a plastic cable tie.
+    line({point(0, half), point(-cord * 2.0, half + cord * 1.1),
+          point(-cord * 2.6, half + cord * 2.3), point(-cord * 1.3, half + cord * 2.7),
+          point(0, half + cord * 0.5), point(cord * 1.3, half + cord * 2.7),
+          point(cord * 2.6, half + cord * 2.3), point(cord * 2.0, half + cord * 1.1),
+          point(0, half)}, true);
+    line({point(0, half + cord * 0.5), point(-cord * 1.4, half + cord * 3.6),
+          point(-cord * 2.2, half + cord * 4.0)});
+    line({point(0, half + cord * 0.5), point(cord * 1.5, half + cord * 3.4),
+          point(cord * 2.5, half + cord * 3.9)});
+    return result;
+}
+
 Entity Editor::breakPreview() const {
     Entity e;
     if (tool_ != ToolId::LengthBreak || !doc_ || !wireBandHasStart_) return e;
@@ -17382,7 +17597,47 @@ bool Editor::transitionFromBand(const Vec2& a, const Vec2& b, Entity& out) const
             // A sleeve is itself marked "double", but its centreline is not drawn linework. An
             // ordinary double polyline contributes the rails the eye crossed; any other
             // polyline contributes the segments it actually draws.
-            if (e.meta.value(QStringLiteral("shrunkEnds")).toBool()) break;
+            if (e.meta.value(QStringLiteral("shrunkEnds")).toBool()) {
+                // THE VISIBLE COVER, not its invisible centreline. End faces stay the host's own,
+                // even when its outline has tapers, fillets or separate sleeves at each end.
+                const double total = polylineLength(e.points);
+                for (const auto& rail : shrunkSleeveRunsOf(e)) {
+                    for (size_t segment = 1; segment < rail.size(); ++segment) {
+                        const auto hit = segmentSegmentIntersection(a, b, rail[segment - 1], rail[segment]);
+                        if (!hit) continue;
+                        double best = 1e18, along = 0.0, before = 0.0;
+                        Vec2 unit;
+                        for (size_t k = 1; k < e.points.size(); ++k) {
+                            const auto near = closestPointOnSegment(*hit, e.points[k - 1], e.points[k]);
+                            const double len = distance(e.points[k - 1], e.points[k]);
+                            const double d = distance(*hit, near.point);
+                            if (len > 1e-7 && d < best) {
+                                best = d;
+                                along = before + distance(e.points[k - 1], near.point);
+                                unit = (e.points[k] - e.points[k - 1]).normalized();
+                            }
+                            before += len;
+                        }
+                        const Vec2 visible = (rail[segment] - rail[segment - 1]).normalized();
+                        if (best == 1e18 || std::abs(dot(visible, unit)) < std::cos(12.0 * M_PI / 180.0)) continue;
+                        const bool start = along <= total - along + total * 1e-6;
+                        const Vec2 centre = start ? e.points.front() : e.points.back();
+                        const Vec2 inward = start ? e.points[1] : e.points[e.points.size() - 2];
+                        const Vec2 outward = (centre - inward).normalized();
+                        const double width = e.meta.value(QStringLiteral("shrinkWidth")).toDouble(20.0);
+                        const double face = std::clamp(e.meta.value(start ? QStringLiteral("shrinkFaceStart")
+                                                                         : QStringLiteral("shrinkFaceEnd")).toDouble(width * 0.82), 0.1, width);
+                        const double side = dot(*hit - centre, outward.perp()) >= 0.0 ? 1.0 : -1.0;
+                        const Vec2 end = centre + outward.perp() * (face * side * 0.5);
+                        bool duplicate = false;
+                        for (const auto& old : crossed)
+                            if (old.owner == e.id && distance(old.end, end) < 1e-6) duplicate = true;
+                        if (!duplicate) crossed.push_back({*hit, rail[segment - 1], rail[segment], unit,
+                                                          outward, end, total, start ? along : total - along, e.id});
+                    }
+                }
+                break;
+            }
             if (e.meta.value(QStringLiteral("double")).toBool() && e.points.size() >= 2) {
                 const double gap = e.meta.value(QStringLiteral("gap")).toDouble(10.0);
                 for (double side : {gap / 2.0, -gap / 2.0}) tryPath(e, offsetPolyline(e.points, side));
@@ -17460,18 +17715,54 @@ bool Editor::transitionFromBand(const Vec2& a, const Vec2& b, Entity& out) const
 
     // HOW FAR IT REACHES is still a matter of what it is fitted over, not of how far it stands off it:
     // the standoff is a millimetre or so of clearance, and it has no business lengthening the part.
-    const double length = std::max(8.0, rails * 3.0);
+    const double length = shrinkCover_ > 0.0 ? shrinkCover_ : std::max(8.0, rails * 3.0);
     const std::vector<Vec2> route{attach, attach + on.outward * length};
     out = heatshrinkFromRoute(route, width, {0.0, 0.0}, ShrinkRouteMode::Transition);
+    if (shrinkFaces_[1] > 0.0) out.meta.insert(QStringLiteral("shrinkFaceEnd"), shrinkFaces_[1]);
+    if (shrinkRecover_[1] >= 0.0) out.meta.insert(QStringLiteral("shrinkTaperEnd"), shrinkRecover_[1]);
     out.meta.insert(QStringLiteral("transitionHost"), on.owner);
     return true;
+}
+
+Entity Editor::shrinkDraftEntity(const std::vector<Vec2>& route) const {
+    std::vector<double> radii = draftCornerRadii_;
+    if (route.size() > draftPts_.size() && route.size() >= 3) {
+        radii.resize(route.size(), 0.0);
+        radii[route.size() - 2] = cornerRadius_;
+    }
+    Entity e = heatshrinkFromRoute(route, draftShrinkWidth(), radii, shrinkMode_);
+    if (shrinkMode_ != ShrinkRouteMode::Cable) {
+        for (int end = 0; end < 2; ++end) {
+            const QString suffix = end ? QStringLiteral("End") : QStringLiteral("Start");
+            if (shrinkFaces_[end] > 0.0) e.meta.insert(QStringLiteral("shrinkFace") + suffix, shrinkFaces_[end]);
+            if (shrinkRecover_[end] >= 0.0) e.meta.insert(QStringLiteral("shrinkTaper") + suffix, shrinkRecover_[end]);
+            if (shrinkMode_ == ShrinkRouteMode::CableEnds && shrinkCover_ > 0.0)
+                e.meta.insert(QStringLiteral("shrinkCover") + suffix, shrinkCover_);
+        }
+    }
+    return e;
+}
+
+double Editor::draftRouteAngle() const {
+    if (draftPts_.empty()) return 0.0;
+    const Vec2 delta = draftAim() - draftPts_.back();
+    return std::atan2(delta.y, delta.x) * 180.0 / M_PI;
+}
+
+void Editor::setDraftRouteAngle(double degrees) {
+    if (!hasDraftRouteSegment() || !isParameterRouteTool(tool_)) return;
+    freezeTwistedPreview();
+    const double length = distance(draftPts_.back(), twistedFrozenAt_);
+    const double radians = degrees * M_PI / 180.0;
+    twistedFrozenAt_ = draftPts_.back() + Vec2{std::cos(radians), std::sin(radians)} * length;
+    emit overlayChanged();
 }
 
 Entity Editor::transitionPreview() const {
     Entity e;
     if (!transitionBandStarted()) return e;
     Entity built;
-    if (transitionFromBand(wireBandStart_, cursor_, built)) return built;
+    if (transitionFromBand(wireBandStart_, draftAim(), built)) return built;
     return e;
 }
 
@@ -17881,7 +18172,10 @@ void Editor::setTwistLane(double mm) {
 void Editor::freezeTwistedPreview() {
     // Pins the loose end where it is, so the bundle stops following the cursor while the number of
     // wires and the rest are tried on it. Nothing to pin before it has a start.
-    if (!isTwistedTool(tool_) || twistedFrozen_ || draftPts_.empty()) return;
+    if (!isParameterRouteTool(tool_) || twistedFrozen_) return;
+    if (tool_ == ToolId::HeatshrinkRoute && shrinkMode_ == ShrinkRouteMode::Transition) {
+        if (!wireBandHasStart_) return;
+    } else if (draftPts_.empty()) return;
     twistedFrozen_ = true;
     twistedFrozenAt_ = cursor_;
     emit message(QStringLiteral(
@@ -19219,7 +19513,9 @@ void Editor::togglePasteMirror(bool xAxis) {
 
 void Editor::undo() {
     if (!doc_ || !undo_.canUndo()) return;
-    doc_->entities() = undo_.undo(doc_->entities());
+    doc_->entities() = undo_.undo(doc_->entities(),drawingContext());
+    restoreDrawingContext(undo_.restoredContext());
+    emit drawingDetailsChanged();
     selected_.clear();
     doc_->setDirty(true);
     emit selectionChanged();
@@ -19228,7 +19524,9 @@ void Editor::undo() {
 
 void Editor::redo() {
     if (!doc_ || !undo_.canRedo()) return;
-    doc_->entities() = undo_.redo(doc_->entities());
+    doc_->entities() = undo_.redo(doc_->entities(),drawingContext());
+    restoreDrawingContext(undo_.restoredContext());
+    emit drawingDetailsChanged();
     selected_.clear();
     doc_->setDirty(true);
     emit selectionChanged();
@@ -19497,6 +19795,13 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
             openQuickSelect();
             return true;
         }
+        // A TRANSITION PINNED WHILE ITS FIELDS WERE EDITED: Enter places the same preview.
+        if (transitionBandStarted() && twistedFrozen_) {
+            const Vec2 end = twistedFrozenAt_;
+            twistedFrozen_ = false;
+            onPointerPress(end, Qt::LeftButton, Qt::NoModifier);
+            return true;
+        }
         // A frozen shield preview (Tab): Enter places it at the frozen crossing line.
         if (screenArm_ && screenFrozen_ && wireBandHasStart_) {
             wireBandHasStart_ = false;
@@ -19509,9 +19814,18 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
             finishWireBand(twistFrozenEnd_);
             return true;
         }
+        // A PINNED SLEEVE USES THE ORDINARY VERTEX PATH, including the final knee's fillet.
+        if (tool_ == ToolId::HeatshrinkRoute && drafting_ && twistedFrozen_) {
+            const Vec2 end = twistedFrozenAt_;
+            twistedFrozen_ = false;
+            handleDrawPress(end);
+            finishDraw();
+            return true;
+        }
         // A twisted bundle with only its start down - pinned or not - is finished by Enter, taking
         // the end from where it was pinned or from the cursor.
-        if (isTwistedTool(tool_) && drafting_ && draftPts_.size() == 1) {
+        if (isParameterRouteTool(tool_) && drafting_ && draftPts_.size() == 1 &&
+            (tool_ != ToolId::HeatshrinkRoute || twistedFrozen_)) {
             draftPts_.push_back(twistedFrozen_ ? twistedFrozenAt_ : cursor_);
             twistedFrozen_ = false;
             finishDraw();
@@ -19520,7 +19834,7 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
         // A ROUTED one with knees already down and a PINNED end: Enter finishes it at the pin. The
         // end was pinned so the ribbon could be used on the real thing; without this the run was
         // finished at the knees it had and the pinned end - the one on the screen - was dropped.
-        if (isTwistedTool(tool_) && drafting_ && twistedFrozen_ && draftPts_.size() >= 2) {
+        if (isParameterRouteTool(tool_) && drafting_ && twistedFrozen_ && draftPts_.size() >= 2) {
             draftPts_.push_back(twistedFrozenAt_);
             twistedFrozen_ = false;
             finishDraw();
@@ -19730,6 +20044,19 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         }
     }
 
+    if (tool_ == ToolId::LacingTie && wireBandHasStart_) {
+        p.save();
+        QPen band(paperInk(QColor(120, 200, 255, 200)));
+        band.setCosmetic(true);
+        band.setStyle(Qt::DashLine);
+        p.setPen(band);
+        p.drawLine(vt.toScreen(wireBandStart_), vt.toScreen(cursor_));
+        const auto tie = lacingTieFromBand(wireBandStart_, cursor_);
+        for (const Entity& entity : tie)
+            EntityRenderer::draw(p, entity, *doc_, vt,
+                                 entity.type == EntityType::Wipeout ? QColor() : paperInk(QColor(120, 200, 255)));
+        p.restore();
+    }
     if (transitionBandStarted()) {
         // The marking line says which pair is being fitted; the ghost says which end won.
         p.save();
@@ -19739,7 +20066,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         pv.setStyle(Qt::DashLine);
         p.setPen(pv);
         p.setBrush(Qt::NoBrush);
-        p.drawLine(vt.toScreen(wireBandStart_), vt.toScreen(cursor_));
+        p.drawLine(vt.toScreen(wireBandStart_), vt.toScreen(draftAim()));
         const Entity ghost = transitionPreview();
         if (!ghost.points.empty()) {
             for (const std::vector<Vec2>& run : shrunkSleeveRunsOf(ghost)) {
@@ -20520,7 +20847,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         if (tool_ == ToolId::Wire && wireOrtho_ && !draftPts_.empty())
             pts.push_back(orthoWirePoint(draftPts_.back(), cursor_));
         else
-            pts.push_back(cursor_);
+            pts.push_back(draftAim());
         // Preview the routing clearance too, so the run is shown exactly where it will be
         // placed rather than jumping aside on the click.
         if (tool_ == ToolId::Wire && draftPts_.size() >= 1 && pts.size() >= 2)
@@ -20727,7 +21054,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             // Previewed as the sleeve itself, by the same code that will place it - so what is on
             // screen while it is being drawn is what lands.
             const Entity sleeve =
-                heatshrinkFromRoute(pts, draftShrinkWidth(), draftCornerRadii_, shrinkMode_);
+                shrinkDraftEntity(pts);
             if (!sleeve.points.empty())
                 EntityRenderer::draw(p, sleeve, *doc_, vt, paperInk(QColor("#ffffff")));
         } else if (tool_ == ToolId::VolumeArrow && pts.size() >= 2) {

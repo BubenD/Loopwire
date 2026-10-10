@@ -15,10 +15,8 @@ current. Put the story of a fix in the commit message, not here.
 
 ## Build
 
-1. **Close a running `Edraw.exe` first, without asking.** It holds the exe open, and the link then
-   fails with LNK1104 after everything has compiled. Ask the window to close
-   (`taskkill /IM Edraw.exe`), and force it with `/F` only if it is still there two seconds
-   later.
+1. **Force-close a running `Edraw.exe` before building, without asking.** The user has authorized
+   `taskkill /F /IM Edraw.exe` for builds. It holds the exe open, and linking otherwise fails with LNK1104.
 2. In scripts launched from Git Bash, call `%SystemRoot%\System32\tasklist.exe` and `find.exe` by
    full path. On the Git Bash PATH they resolve to the POSIX tools and the guard silently does
    nothing.
@@ -83,6 +81,10 @@ bridge wire, and check all three:
 
 A test or a look at the PNG covers each point. Say in the reply that all three were checked, or
 which one wasn't and why.
+
+## Drawing validation evidence
+
+Drawing details use DRAWING P/N, REVISION and TITLE; registered canvas fields are checked across model and sheets. Successful schematic and mechanical checks save fingerprinted `validationStamps` in DWX and show green badges at the canvas top right. Every drawing edit clears both passes, including undo/redo; selection does not. Linked project drawings must have current saved passes. Changing rule settings or bypasses requires checking again.
 
 ## Layout
 

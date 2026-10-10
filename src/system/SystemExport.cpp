@@ -22,7 +22,7 @@ QString num(double v) { return QString::number(v, 'f', 4); }
 QString colour(const QColor& c, const QColor& otherwise) { return (c.isValid() ? c : otherwise).name().toUpper(); }
 
 QString unitLabel(const SysUnit& u) {
-    QString kind = u.kind == QLatin1String("pcba") ? QStringLiteral("[PCBA]") : QStringLiteral("[Mechanical]");
+    QString kind = u.kind == QLatin1String("pcba") ? QStringLiteral("[PCBA]") : u.kind==QLatin1String("module") ? QStringLiteral("[System module]") : QStringLiteral("[Mechanical]");
     if (u.shows(QStringLiteral("desc")) && !u.description.isEmpty()) kind += QLatin1Char(' ') + u.description;
     QStringList lines{kind};
     if (u.shows(QStringLiteral("name"))) lines << u.name;
@@ -50,7 +50,10 @@ QString portLabel(const SysPort& p) {
 
 QRectF bounds(const SystemDesign& d) {
     QRectF box;
-    for (const SysUnit& u : d.units) box = box.united(QRectF(u.x, u.y, u.w, u.h));
+    for (const SysUnit& u : d.units) {
+        box = box.united(u.rect());
+        for (const SysPort& p : u.ports) box = box.united(sysPortLabelRect(u, p));
+    }
     for (const SysNote& n : d.notes) box = box.united(QRectF(n.x, n.y, n.w, n.h));
     for (const SysCable& c : d.cables)
         for (const QPointF& p : sysCablePath(d, c)) box = box.united(QRectF(p, QSizeF(1, 1)));
@@ -167,7 +170,38 @@ QPointF sysPortOut(const SysPort& p) {
     return {1, 0};
 }
 
-std::vector<QPointF> sysCablePath(const SystemDesign& d, const SysCable& c, double end) {
+QRectF sysPortLabelRect(const SysUnit& u, const SysPort& p) {
+    const QPointF at = sysPortPoint(u, p) + sysPortOut(p) * 28.0 + QPointF(p.labelDx, p.labelDy);
+    return QRectF(at.x() - 35.0, at.y() - 24.0, 70.0, 18.0);
+}
+
+bool sysNoteTarget(const SystemDesign& d, const SysNote& n, QPointF& target) {
+    if (!n.cable.isEmpty()) {
+        const SysCable* c = d.cable(n.cable);
+        if (!c) return false;
+        const auto path = sysCablePath(d, *c);
+        if (path.size() < 2) return false;
+        target = (path[path.size() / 2 - 1] + path[path.size() / 2]) / 2.0;
+        return true;
+    }
+    const SysUnit* u = d.unit(n.unit);
+    if (!u) return false;
+    if (n.port.isEmpty()) {
+        const QPointF centre = u->rect().center();
+        QPointF direction = QRectF(n.x, n.y, n.w, n.h).center() - centre;
+        if (direction.manhattanLength() < 1e-9) direction = QPointF(0, 1);
+        const double ratio = std::max(std::abs(direction.x()) / std::max(.01, u->w/2),
+                                      std::abs(direction.y()) / std::max(.01, u->h/2));
+        target = centre + direction / ratio;
+        return true;
+    }
+    const SysPort* p = u->port(n.port);
+    if (!p) return false;
+    target = sysPortPoint(*u, *p);
+    return true;
+}
+
+std::vector<QPointF> sysCableBasePath(const SystemDesign& d, const SysCable& c, double end) {
     const SysUnit* ua = d.unit(c.aUnit);
     const SysUnit* ub = d.unit(c.bUnit);
     const SysPort* pa = ua ? ua->port(c.aPort) : nullptr;
@@ -178,6 +212,11 @@ std::vector<QPointF> sysCablePath(const SystemDesign& d, const SysCable& c, doub
     const QPointF a = sysPortPoint(*ua, *pa) + da * end, b = sysPortPoint(*ub, *pb) + db * end;
     const QPointF a1 = a + da * kLead, b1 = b + db * kLead;
     std::vector<QPointF> path{a, a1};
+    if(!c.waypoints.empty()){
+        QPointF current=a1;std::vector<QPointF> goals=c.waypoints;goals.push_back(b1);
+        for(const QPointF& goal:goals){if(std::abs(current.x()-goal.x())>.001&&std::abs(current.y()-goal.y())>.001)path.push_back({goal.x(),current.y()});path.push_back(goal);current=goal;}
+        path.push_back(b);return path;
+    }
     if (std::abs(da.x()) > 0.5 && std::abs(db.x()) > 0.5) {
         const double mx = (a1.x() + b1.x()) / 2.0;
         path.push_back({mx, a1.y()});
@@ -243,19 +282,18 @@ QString systemDrawioXml(const SystemDesign& d) {
         const bool pcba = u->kind == QLatin1String("pcba");
         vertex(u->id, unitLabel(*u),
                QStringLiteral("rounded=1;arcSize=4;whiteSpace=wrap;html=0;verticalAlign=top;spacingTop=6;fontStyle=1;fillColor=%1;"
-                              "fillOpacity=%2;strokeColor=#5A626E;")
+                              "fillOpacity=%2;strokeColor=#5A626E;%3")
                    .arg(colour(u->color, pcba ? QColor(226, 242, 230) : QColor(232, 238, 246)))
-                   .arg(std::lround(u->opacity * 100.0)),
+                   .arg(std::lround(u->opacity * 100.0)).arg(u->kind==QLatin1String("module")?QStringLiteral("dashed=1;"):QString()),
                u->x, u->y, u->w, u->h);
     }
     // THE PORTS: a small square on the side, named; the cables go from and to them.
     for (const SysUnit& u : d.units)
         for (const SysPort& p : u.ports) {
             const QPointF at = sysPortPoint(u, p);
-            const QString side = p.side == QLatin1String("left")  ? QStringLiteral("labelPosition=right;align=left;")
-                                 : p.side == QLatin1String("top") ? QStringLiteral("verticalLabelPosition=bottom;verticalAlign=top;")
-                                 : p.side == QLatin1String("bottom") ? QStringLiteral("verticalLabelPosition=top;verticalAlign=bottom;")
-                                                                     : QStringLiteral("labelPosition=left;align=right;");
+            const QPointF out = sysPortOut(p);
+            const QString side = QStringLiteral("verticalLabelPosition=top;verticalAlign=bottom;align=center;spacingTop=%1;spacingLeft=%2;")
+                                     .arg(num(6.0 - out.y() * 28.0 - p.labelDy)).arg(num(out.x() * 28.0 + p.labelDx));
             vertex(QStringLiteral("%1.%2").arg(u.id, p.id), portLabel(p),
                    QStringLiteral("rounded=0;fillColor=#FFFFFF;strokeColor=#3C424C;fontSize=9;%1").arg(side), at.x() - 4, at.y() - 4, 8, 8);
         }
@@ -275,8 +313,14 @@ QString systemDrawioXml(const SystemDesign& d) {
     for (const SysNote& n : d.notes)
         vertex(n.id, n.text,
                QStringLiteral("shape=note;size=12;whiteSpace=wrap;html=0;align=left;verticalAlign=top;spacingLeft=6;spacingTop=4;"
-                              "fillColor=#FFF7BE;strokeColor=#C8AA3C;"),
+                              "fillColor=%1;strokeColor=#C8AA3C;").arg(colour(n.color, QColor(255, 247, 190))),
                n.x, n.y, n.w, n.h);
+    for (const SysNote& n : d.notes) {
+        QPointF target;
+        if (!sysNoteTarget(d, n, target)) continue;
+        const QString targetId = !n.cable.isEmpty() ? n.cable : !n.port.isEmpty() ? n.unit + QLatin1Char('.') + n.port : n.unit;
+        x += QStringLiteral("<mxCell id=\"%1-leader\" style=\"dashed=1;endArrow=none;strokeColor=#7D828C;\" edge=\"1\" parent=\"1\" source=\"%1\" target=\"%2\"><mxGeometry relative=\"1\" as=\"geometry\"/></mxCell>\n").arg(esc(n.id), esc(targetId));
+    }
     x += QStringLiteral("</root>\n</mxGraphModel>\n</diagram>\n</mxfile>\n");
     return x;
 }
@@ -327,16 +371,21 @@ bool exportSystemVsdx(const SystemDesign& d, const QString& path, QString* error
     std::vector<const SysUnit*> order;
     for (const SysUnit& u : d.units) order.push_back(&u);
     std::stable_sort(order.begin(), order.end(), [&d](const SysUnit* a, const SysUnit* b) { return d.depth(a->id) < d.depth(b->id); });
-    for (const SysUnit* u : order)
+    for (const SysUnit* u : order) {
         rect(u->x, u->y, u->w, u->h, colour(u->color, u->kind == QLatin1String("pcba") ? QColor(226, 242, 230) : QColor(232, 238, 246)),
              QStringLiteral("#5A626E"), unitLabel(*u), 9.0, true);
+        const QString marker=QStringLiteral("<Section N=\"Geometry\" IX=\"0\">");
+        const qsizetype at=shapes.lastIndexOf(marker);
+        if(at>=0)shapes.insert(at,cell(QStringLiteral("FillForegndTrans"),num(1-u->opacity))+
+                               (u->kind==QLatin1String("module")?cell(QStringLiteral("LinePattern"),QStringLiteral("2")):QString()));
+    }
     for (const SysUnit& u : d.units)
         for (const SysPort& p : u.ports) {
             const QPointF at = sysPortPoint(u, p);
             rect(at.x() - 4, at.y() - 4, 8, 8, QStringLiteral("#FFFFFF"), QStringLiteral("#3C424C"), QString(), 7.0, false);
             // Its name just inside the unit.
-            const QPointF in = at - sysPortOut(p) * 34.0;
-            rect(in.x() - 30, in.y() - 7, 60, 14, QStringLiteral("#FFFFFF"), QStringLiteral("#FFFFFF"), portLabel(p), 7.0, false);
+            const QRectF label = sysPortLabelRect(u, p);
+            rect(label.x(), label.y(), label.width(), label.height(), QStringLiteral("#FFFFFF"), QStringLiteral("#FFFFFF"), portLabel(p), 7.0, false);
             shapes.replace(shapes.lastIndexOf(QStringLiteral("<Cell N=\"NoFill\" V=\"0\"/><Cell N=\"NoLine\" V=\"0\"/>")),
                            QStringLiteral("<Cell N=\"NoFill\" V=\"0\"/><Cell N=\"NoLine\" V=\"0\"/>").size(),
                            QStringLiteral("<Cell N=\"NoFill\" V=\"1\"/><Cell N=\"NoLine\" V=\"1\"/>"));
@@ -365,7 +414,28 @@ bool exportSystemVsdx(const SystemDesign& d, const QString& path, QString* error
                                cell(QStringLiteral("Y"), num((around.bottom() - line[i].y()) / perInch)));
         shapes += QStringLiteral("</Section><Text>%1</Text></Shape>").arg(cableLabel(c).toHtmlEscaped());
     }
-    for (const SysNote& n : d.notes) rect(n.x, n.y, n.w, n.h, QStringLiteral("#FFF7BE"), QStringLiteral("#C8AA3C"), n.text, 9.0, true);
+    for (const SysNote& n : d.notes) {
+        QPointF target;
+        if (sysNoteTarget(d, n, target)) {
+            const QPointF edge(std::clamp(target.x(), n.x, n.x + n.w), std::clamp(target.y(), n.y, n.y + n.h));
+            const double left = std::min(edge.x(), target.x()), top = std::min(edge.y(), target.y());
+            const double W = std::max(0.01, std::abs(edge.x() - target.x()) / perInch);
+            const double H = std::max(0.01, std::abs(edge.y() - target.y()) / perInch);
+            shapes += QStringLiteral("<Shape ID=\"%1\" Type=\"Shape\" LineStyle=\"0\" FillStyle=\"0\" TextStyle=\"0\">").arg(++id);
+            shapes += cell(QStringLiteral("PinX"), num(vx(left) + W / 2)) + cell(QStringLiteral("PinY"), num(vy(top) - H / 2)) +
+                      cell(QStringLiteral("Width"), num(W)) + cell(QStringLiteral("Height"), num(H)) +
+                      cell(QStringLiteral("LocPinX"), num(W / 2)) + cell(QStringLiteral("LocPinY"), num(H / 2)) +
+                      cell(QStringLiteral("LineColor"), QStringLiteral("#7D828C")) + cell(QStringLiteral("LinePattern"), QStringLiteral("2"));
+            shapes += QStringLiteral("<Section N=\"Geometry\" IX=\"0\">") + cell(QStringLiteral("NoFill"), QStringLiteral("1"));
+            int point = 0;
+            for (const QPointF& at : {edge, target})
+                shapes += QStringLiteral("<Row T=\"%1\" IX=\"%2\">%3%4</Row>")
+                              .arg(point == 0 ? QStringLiteral("MoveTo") : QStringLiteral("LineTo")).arg(++point)
+                              .arg(cell(QStringLiteral("X"), num((at.x() - left) / perInch)), cell(QStringLiteral("Y"), num(H - (at.y() - top) / perInch)));
+            shapes += QStringLiteral("</Section></Shape>");
+        }
+        rect(n.x, n.y, n.w, n.h, colour(n.color, QColor(255, 247, 190)), QStringLiteral("#C8AA3C"), n.text, 9.0, true);
+    }
 
     const QString xmlHead = QStringLiteral("<?xml version=\"1.0\" encoding=\"utf-8\" standalone=\"yes\"?>\n");
     std::vector<ZipEntry> parts;

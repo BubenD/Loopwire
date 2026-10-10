@@ -1,6 +1,7 @@
 #include "app/DrawingFinderDialog.h"
 
 #include "app/DrawingPreview.h"
+#include "app/PdfViewer.h"
 #include "io/Dwx.h"
 #include "io/Dxf.h"
 #include "io/OdaConverter.h"
@@ -25,6 +26,9 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QProgressBar>
+#include <QStackedWidget>
+#include <QScrollArea>
 #include <QSettings>
 #include <QSplitter>
 #include <QTableWidget>
@@ -161,14 +165,16 @@ DrawingFinderDialog::DrawingFinderDialog(QWidget* parent, bool choosing) : QDial
     preview_ = new DrawingPreview(QString(), right);
     preview_->setObjectName(QStringLiteral("finderPreview"));
     preview_->setEmptyText(QStringLiteral("Choose a file in the list to see it here"));
-    rl->addWidget(preview_, 3);
+    previewStack_=new QStackedWidget(right);previewStack_->addWidget(preview_);
+    pdfView_=new PdfViewer(previewStack_);pdfView_->setObjectName(QStringLiteral("finderPdfViewer"));previewStack_->addWidget(pdfView_);
+    rl->addWidget(previewStack_,3);
     info_ = new QLabel(right);
     info_->setObjectName(QStringLiteral("finderInfo"));
     info_->setWordWrap(true);
     info_->setTextFormat(Qt::RichText);
     info_->setAlignment(Qt::AlignTop | Qt::AlignLeft);
     info_->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    rl->addWidget(info_, 2);
+    auto* infoScroll=new QScrollArea(right);infoScroll->setWidget(info_);infoScroll->setWidgetResizable(true);rl->addWidget(infoScroll,2);
     split->setStretchFactor(0, 3);
     split->setStretchFactor(1, 2);
     lay->addWidget(split, 1);
@@ -177,6 +183,7 @@ DrawingFinderDialog::DrawingFinderDialog(QWidget* parent, bool choosing) : QDial
     said_ = new QLabel(this);
     said_->setObjectName(QStringLiteral("finderSaid"));
     bottom->addWidget(said_, 1);
+    progress_=new QProgressBar(this);progress_->setObjectName(QStringLiteral("finderProgress"));progress_->setRange(0,100);progress_->setValue(0);progress_->setMaximumWidth(170);bottom->addWidget(progress_);
     auto* reveal = new QPushButton(QStringLiteral("Open folder"), this);
     connect(reveal, &QPushButton::clicked, this, [this] {
         const int row = table_->currentRow();
@@ -274,8 +281,9 @@ QString DrawingFinderDialog::ofKind(const QString& path, const QString& kind) co
 int DrawingFinderDialog::previewCount(bool wait) {
     QElapsedTimer clock;
     clock.start();
-    while (wait && preview_->isEmpty() && clock.elapsed() < 20000) QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
-    return preview_->isEmpty() ? 0 : 1;
+    const bool pdf=previewStack_->currentWidget()==pdfView_;
+    while(wait&&clock.elapsed()<20000&&(pdf ? (!pdfView_->ready()&&pdfView_->loading()) : preview_->isEmpty()))QCoreApplication::processEvents(QEventLoop::AllEvents,20);
+    return pdf ? (pdfView_->ready()?pdfView_->pageCount():0) : (preview_->isEmpty()?0:1);
 }
 
 void DrawingFinderDialog::stop() {
@@ -298,6 +306,7 @@ void DrawingFinderDialog::search(bool wait) {
     table_->setRowCount(0);
     found_.clear();
     scanned_ = 0;
+    const int searchToken=++searchToken_;progress_->setRange(0,0);
     unreadable_ = 0;
     QStringList filters;
     if (dwx_->isChecked()) filters << QStringLiteral("*.dwx");
@@ -318,15 +327,20 @@ void DrawingFinderDialog::search(bool wait) {
     go_->setText(QStringLiteral("Stop"));
     said_->setText(QStringLiteral("Searching..."));
     // IN THE BACKGROUND: each file looked at - its name, and inside it where asked - and what is found handed back.
-    worker_ = QThread::create([self, halt, root, filters, terms, options, inside, deep] {
+    worker_ = QThread::create([self, halt, root, filters, terms, options, inside, deep, searchToken] {
         const PnMatcher matcher(terms, options);
         // The name too is matched as a part of it, wherever in the name it is.
         PnOptions loose = options;
         loose.partial = true;
         const PnMatcher byName(terms, loose);
         QDirIterator it(root, filters, QDir::Files, deep ? QDirIterator::Subdirectories : QDirIterator::NoIteratorFlags);
-        while (it.hasNext() && !halt->load()) {
-            const QString path = it.next();
+        QStringList files;
+        while(it.hasNext()&&!halt->load()){const QString path=it.next();if(!QFileInfo(path).fileName().startsWith(QLatin1String("~$")))files<<path;}
+        const int total=static_cast<int>(files.size());
+        QMetaObject::invokeMethod(QCoreApplication::instance(),[self,searchToken]{if(self&&self->searchToken_==searchToken){self->progress_->setRange(0,100);self->progress_->setValue(0);}},Qt::QueuedConnection);
+        int processed=0;
+        for(const QString& path:files){
+            if(halt->load())break;
             const QFileInfo fi(path);
             if (fi.fileName().startsWith(QLatin1String("~$"))) continue;
             Found f;
@@ -347,9 +361,8 @@ void DrawingFinderDialog::search(bool wait) {
                         h.exact = m.exact;
                         PnMatcher::snippet(piece.text, m.start, m.end, h.before, h.match, h.after);
                         f.hits << h;
-                        if (f.hits.size() >= 500) break;
                     }
-                    if (f.hits.size() >= 500 || halt->load()) break;
+                    if (halt->load()) break;
                 }
                 f.why = why;
                 keep = keep || !f.hits.isEmpty();
@@ -363,8 +376,9 @@ void DrawingFinderDialog::search(bool wait) {
             if (keep) f.beside = besideOf(path);
             QMetaObject::invokeMethod(
                 QCoreApplication::instance(),
-                [self, f, keep] {
-                    if (!self) return;
+                [self, f, keep, total, processed=++processed,searchToken] {
+                    if (!self||self->searchToken_!=searchToken) return;
+                    self->progress_->setValue(total?static_cast<int>(100.0*processed/total):100);
                     ++self->scanned_;
                     if (!f.why.isEmpty() && !f.path.endsWith(QLatin1String(".dwg"), Qt::CaseInsensitive)) ++self->unreadable_;
                     if (keep) self->addFound(f);
@@ -372,7 +386,10 @@ void DrawingFinderDialog::search(bool wait) {
                 Qt::QueuedConnection);
         }
     });
-    connect(worker_, &QThread::finished, this, [this] { finished(); });
+    QThread* started=worker_;
+    connect(worker_, &QThread::finished, this, [this,started,searchToken] {
+        if(worker_==started&&searchToken_==searchToken)finished();else started->deleteLater();
+    });
     worker_->start();
     if (wait) {
         worker_->wait();
@@ -424,9 +441,9 @@ void DrawingFinderDialog::finished() {
         worker_->deleteLater();
         worker_ = nullptr;
     }
-    QCoreApplication::processEvents();
     table_->setSortingEnabled(true);
     go_->setText(QStringLiteral("Search"));
+    progress_->setRange(0,100);if(!halt_||!halt_->load())progress_->setValue(100);
     said_->setText(QStringLiteral("%1 file(s) found of %2 looked at%3%4")
                        .arg(table_->rowCount())
                        .arg(scanned_)
@@ -459,6 +476,7 @@ void DrawingFinderDialog::preview(const QString& path) {
     openDwx_->setEnabled(!ofKind(path, QStringLiteral("DWX")).isEmpty());
     openDwg_->setEnabled(!ofKind(path, QStringLiteral("DWG")).isEmpty());
     const int token = ++previewToken_;
+    previewStack_->setCurrentWidget(preview_);pdfView_->clear();
     // WHERE IT IS FOUND, every place: what it is in, and the words round it.
     QString said = QStringLiteral("<b>%1</b><br><span style='color:#7a8696'>%2</span>")
                        .arg(fi.fileName().toHtmlEscaped(), QDir::toNativeSeparators(fi.absolutePath()).toHtmlEscaped());
@@ -470,7 +488,7 @@ void DrawingFinderDialog::preview(const QString& path) {
     if (!f.hits.isEmpty()) {
         said += QStringLiteral("<br><br><b>%1 place(s):</b>").arg(f.hits.size());
         int shown = 0;
-        for (const Hit& h : f.hits) {
+        for (const Hit& h : f.hits.mid(0,100)) {
             if (++shown > 60) {
                 said += QStringLiteral("<br>... and %1 more").arg(f.hits.size() - 60);
                 break;
@@ -507,24 +525,11 @@ void DrawingFinderDialog::preview(const QString& path) {
     }
     // A PDF DRAWN: its pages read as lines and text in the background - a big one takes a moment - shown when read,
     // unless another file has been chosen meanwhile.
-    auto showPdf = [this, token](const QString& pdfPath, const QString& said) {
-        preview_->setEmptyText(said);
-        QPointer<DrawingFinderDialog> self(this);
-        QThread* reader = QThread::create([self, path = pdfPath, token] {
-            auto doc = std::make_shared<Document>(QFileInfo(path).completeBaseName());
-            QString error;
-            const bool ok = pdf::importFile(*doc, path, &error);
-            QMetaObject::invokeMethod(
-                QCoreApplication::instance(),
-                [self, doc, ok, error, token] {
-                    if (!self || token != self->previewToken_) return;
-                    if (ok && !doc->entities().empty()) self->preview_->setEntities(doc->entities());
-                    else self->preview_->setEmptyText(error.isEmpty() ? QStringLiteral("Nothing in the PDF to show") : error);
-                },
-                Qt::QueuedConnection);
-        });
-        connect(reader, &QThread::finished, reader, &QObject::deleteLater);
-        reader->start();
+    auto showPdf = [this,f](const QString& pdfPath,const QString&) {
+        previewStack_->setCurrentWidget(pdfView_);
+        PnOptions options;options.partial=partial_->isChecked();options.caseSensitive=case_->isChecked();options.ignoreSeparators=seps_->isChecked();
+        int page=1;for(const Hit& hit:f.hits)if(hit.where.startsWith(QLatin1String("Page "))){page=hit.where.mid(5).toInt();break;}
+        pdfView_->showFile(pdfPath,PnMatcher::splitTerms(text_->text()),options,page);
     };
     if (suffix == QLatin1String("pdf")) {
         showPdf(path, QStringLiteral("Reading the PDF to show it..."));
@@ -548,7 +553,8 @@ void DrawingFinderDialog::preview(const QString& path) {
     preview_->setEmptyText(QStringLiteral("Converting the DWG to show it..."));
     QString err;
     disconnect(oda_, nullptr, this, nullptr);
-    connect(oda_, &OdaConverter::finished, this, [this, tmp, out, path](bool ok, const QString&) {
+    connect(oda_, &OdaConverter::finished, this, [this, tmp, out, path, token](bool ok, const QString&) {
+        if(token!=previewToken_)return;
         if (!ok) {
             preview_->setEmptyText(QStringLiteral("The DWG could not be converted to show"));
             return;

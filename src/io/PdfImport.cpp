@@ -1057,6 +1057,38 @@ bool parse(const QByteArray& bytes, Document& doc, QString* error, const Progres
     return true;
 }
 
+std::vector<TextPage> readTextPages(const QByteArray& bytes, QString* error) {
+    std::vector<TextPage> result;
+    if(!PdfText::looksLikePdf(bytes)){if(error)*error=QStringLiteral("Not a PDF file");return result;}
+    if(bytes.contains("/Encrypt")){if(error)*error=QStringLiteral("Password-protected PDF");return result;}
+    const PdfObjects objects=readObjects(bytes);const auto pages=findPages(objects);QHash<int,FontInfo> fonts;
+    for(const Page& page:pages){
+        Document scratch; scratch.entities().clear();std::vector<TextPiece> pieces;Context context;
+        context.objs=&objects;context.fonts=&fonts;context.texts=&pieces;
+        parseStream(pageContent(objects,page),scratch,Matrix{},context,page.resources);
+        TextPage text;
+        Bounds bounds;
+        if(page.box.size()==4)for(const Vec2& corner:{Vec2{page.box[0],page.box[1]},Vec2{page.box[2],page.box[1]},Vec2{page.box[2],page.box[3]},Vec2{page.box[0],page.box[3]}})bounds.expand(pageToSheet(corner,page));
+        text.size=QSizeF(bounds.width(),bounds.height());
+        for(const TextPiece& piece:joinPieces(pieces)){
+            Entity entity=textEntity(piece);entity.a=pageToSheet(entity.a,page);entity.rotation-=(((page.rotate%360)+360)%360)/90*M_PI/2.0;
+            const Bounds box=entity.bounds();TextRun run;run.text=entity.meta.value(QStringLiteral("text")).toString();
+            run.horizontal=std::abs(std::sin(entity.rotation))<.2;
+            if(bounds.valid&&box.valid&&bounds.width()>0&&bounds.height()>0)
+                run.bounds=QRectF((box.min.x-bounds.min.x)/bounds.width(),(bounds.max.y-box.max.y)/bounds.height(),box.width()/bounds.width(),box.height()/bounds.height());
+            if(!run.text.isEmpty()){if(!text.text.isEmpty())text.text+=QLatin1Char('\n');text.text+=run.text;text.runs.push_back(run);}
+        }
+        result.push_back(std::move(text));
+    }
+    if(result.empty()){
+        const QString fallback=PdfText::extract(bytes,error);
+        if(!fallback.isEmpty()){if(error)error->clear();TextPage page;page.text=fallback;result.push_back(page);}
+    }
+    bool words=false;for(const TextPage& page:result)words=words||!page.text.trimmed().isEmpty();
+    if(!words&&error)*error=QStringLiteral("No searchable text layer; scanned PDFs need OCR first");
+    return result;
+}
+
 bool importFile(Document& doc, const QString& path, QString* error, const Progress& progress,
                 std::vector<Bounds>* pages) {
     QFile file(path);

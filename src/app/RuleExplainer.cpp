@@ -8,6 +8,10 @@
 #include <QPointer>
 #include <QScreen>
 #include <QTimer>
+#include <QToolButton>
+#include <QHBoxLayout>
+#include <QVBoxLayout>
+#include <QLabel>
 
 #include <cmath>
 #include <functional>
@@ -473,6 +477,56 @@ const QHash<QString, Scene>& scenes() {
             wire(p, {121, 94}, {fixed ? 230.0 : 160.0, fixed ? 105.0 : 115.0}, fixed ? kGood : kBad);
             if (!fixed) bad(p, {160, 115}, pulse, 12);
         });
+        // THE SYSTEM DESIGN RULES: use the harness DRC's fault/fix animation with system-specific pictures.
+        s.insert(QStringLiteral("DESIGNATOR"), [](QPainter& p, bool fixed, double pulse) {
+            part(p, {30, 40, 100, 60}, QStringLiteral("U1"));
+            part(p, {190, 40, 100, 60}, fixed ? QStringLiteral("U2") : QStringLiteral("U1"), fixed ? kInk : kBad);
+            text(p, {160, 125}, fixed ? QStringLiteral("Unique unit / port names") : QStringLiteral("Duplicate designators"), fixed ? kGood : kBad);
+            if (fixed) good(p, {240, 30}); else bad(p, {240, 70}, pulse, 35);
+        });
+        s.insert(QStringLiteral("PORT-CONNECTION"), [](QPainter& p, bool fixed, double pulse) {
+            part(p, {15, 50, 75, 50}, QStringLiteral("U1"));
+            circle(p, {90, 75}, 5, fixed ? kGood : kBad);
+            part(p, {230, 30, 75, 40}, QStringLiteral("U2")); wire(p, {90, 75}, {230, 50});
+            if (!fixed) { part(p, {230, 90, 75, 40}, QStringLiteral("U3")); wire(p, {90, 75}, {230, 110}, kBad); bad(p, {90, 75}, pulse); }
+            else good(p, {110, 55});
+            text(p, {155, 137}, fixed ? QStringLiteral("One cable per port side") : QStringLiteral("Two cables on one port side"), fixed ? kGood : kBad);
+        });
+        s.insert(QStringLiteral("PART-NUMBER"), s.value(QStringLiteral("nopart")));
+        s.insert(QStringLiteral("DRAWING-LINK"), [](QPainter& p, bool fixed, double pulse) {
+            part(p, {20, 25, 100, 55}, QStringLiteral("W1"));
+            text(p, {70, 98}, QStringLiteral("rev A called for"), kInk);
+            part(p, {185, 25, 115, 55}, QStringLiteral("Drawing"));
+            text(p, {240, 98}, fixed ? QStringLiteral("CBL-001 rev A") : QStringLiteral("CBL-001 rev B"), fixed ? kGood : kBad);
+            wire(p, {120, 52}, {185, 52});
+            if (fixed) good(p, {240, 125}); else bad(p, {240, 98}, pulse, 22);
+        });
+        s.insert(QStringLiteral("NOTE-LINK"), [](QPainter& p, bool fixed, double pulse) {
+            part(p, {20, 80, 125, 45}, QStringLiteral("Note"));
+            wire(p, {145, 102}, {230, 55}, fixed ? kWire : kBad);
+            if (fixed) { part(p, {230, 30, 75, 50}, QStringLiteral("U1")); good(p, {260, 100}); }
+            else { circle(p, {230, 55}, 4, kBad); bad(p, {230, 55}, pulse, 22); text(p, {240, 100}, QStringLiteral("Removed unit"), kBad); }
+        });
+        s.insert(QStringLiteral("SCHEMATIC-NAME"), [](QPainter& p, bool fixed, double pulse) {
+            part(p, {15, 45, 55, 50}, QStringLiteral("U1")); part(p, {250, 45, 55, 50}, QStringLiteral("U2"));
+            wire(p, {70, 70}, {160, 70}); wire(p, {160, 70}, {250, 70}, fixed ? kGood : kBad);
+            text(p, {115, 50}, QStringLiteral("SUPPLY"), kInk, 10);
+            text(p, {205, 50}, fixed ? QStringLiteral("SUPPLY") : QStringLiteral("RETURN"), fixed ? kGood : kBad, 10);
+            if (fixed) good(p, {160, 108}); else bad(p, {160, 70}, pulse, 18);
+            text(p, {160, 135}, QStringLiteral("Same contact - same line name"), fixed ? kGood : kBad, 10);
+        });
+        s.insert(QStringLiteral("drawing-fields"),[](QPainter& p,bool fixed,double pulse){
+            part(p,{20,35,125,70},QStringLiteral("Title block"));part(p,{175,35,125,70},QStringLiteral("Drawing field"));
+            text(p,{82,125},QStringLiteral("CBL-001 / A"),kInk,11);
+            text(p,{238,125},fixed?QStringLiteral("CBL-001 / A"):QStringLiteral("CBL-002 / B"),fixed?kGood:kBad,11);
+            if(fixed)good(p,{235,20});else bad(p,{238,125},pulse,18);
+        });
+        s.insert(QStringLiteral("DRAWING-FIELDS"),s.value(QStringLiteral("drawing-fields")));
+        s.insert(QStringLiteral("ROUTING"),[](QPainter& p,bool fixed,double pulse){
+            part(p,{15,60,50,40},QStringLiteral("U1"));part(p,{125,50,70,60},QStringLiteral("Unit"));part(p,{255,60,50,40},QStringLiteral("U2"));
+            if(fixed){wire(p,{65,80},{85,80});wire(p,{85,80},{85,25});wire(p,{85,25},{235,25});wire(p,{235,25},{235,80});wire(p,{235,80},{255,80});good(p,{160,130});}
+            else{wire(p,{65,80},{255,80},kBad);bad(p,{160,80},pulse,25);}
+        });
         return s;
     }();
     return all;
@@ -486,6 +540,29 @@ RuleExplainer* RuleExplainer::instance() {
 }
 
 bool RuleExplainer::hasScene(const QString& rule) { return scenes().contains(rule); }
+
+void RuleExplainer::paintSeverity(QToolButton* button, int level) {
+    const char* colour = level >= 2 ? "#e05a5a" : level == 1 ? "#e6b84a" : "#4cd07a";
+    button->setStyleSheet(QStringLiteral("QToolButton{background:%1;border:1px solid #1a2028;border-radius:2px;}"
+                                         "QToolButton:hover{border:1px solid #ffffff;}").arg(QLatin1String(colour)));
+    button->setProperty("severity", level);
+    button->setToolTip(level >= 2 ? QStringLiteral("Error - click for warning")
+                       : level == 1 ? QStringLiteral("Warning - click for not checked")
+                                    : QStringLiteral("Not checked - click for error"));
+    button->setAccessibleName(button->toolTip());
+}
+
+void RuleExplainer::addSeverityLegend(QVBoxLayout* layout, QWidget* parent) {
+    auto* legend = new QWidget(parent); legend->setObjectName(QStringLiteral("drcTrafficLegend"));
+    auto* row = new QHBoxLayout(legend); row->setContentsMargins(0, 0, 0, 0);
+    for (int level : {2, 1, 0}) {
+        auto* square = new QToolButton(legend); square->setFixedSize(14, 14); square->setEnabled(false);
+        paintSeverity(square, level); row->addWidget(square);
+        row->addWidget(new QLabel(level == 2 ? QStringLiteral("Error") : level == 1 ? QStringLiteral("Warning") : QStringLiteral("Not checked"), legend));
+        row->addSpacing(8);
+    }
+    row->addStretch(1); layout->addWidget(legend);
+}
 
 RuleExplainer::RuleExplainer() : QWidget(nullptr, Qt::ToolTip | Qt::FramelessWindowHint) {
     setObjectName(QStringLiteral("ruleExplainer"));

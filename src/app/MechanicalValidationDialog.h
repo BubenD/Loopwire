@@ -49,6 +49,7 @@ public:
 signals:
     // A finding double-clicked: its part found on the drawing - where it was found, or by its harness and brick.
     void locateRequested(const QString& harness, const QString& brickId, double x, double y, bool located);
+    void drawingFieldLocateRequested(const QString& entityId,const QString& layout,double x,double y);
 
 private:
     void buildUi();

@@ -110,6 +110,7 @@ enum class ToolId {
     DetailView,
     CenterMark,
     CenterLine,
+    LacingTie, // appended so existing tool values remain unchanged
 };
 
 inline bool isPickModifyTool(ToolId t) {
@@ -193,6 +194,7 @@ inline QString toolLabel(ToolId t) {
     case ToolId::NotConnected: return QStringLiteral("Not connected");
     case ToolId::ConnectionPin: return QStringLiteral("Connection pin");
     case ToolId::LengthBreak: return QStringLiteral("Length break");
+    case ToolId::LacingTie: return QStringLiteral("Tie / lacing cord");
     case ToolId::TwistedPair: return QStringLiteral("Twisted pair");
     case ToolId::TwistedRoute: return QStringLiteral("Twisted route");
     case ToolId::TwistedHarness: return QStringLiteral("Twisted bundle");

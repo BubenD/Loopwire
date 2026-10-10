@@ -441,7 +441,8 @@ const std::vector<BrickDrcRule>& brickDrcRules() {
     // hovered and in its explainer.
     auto rule = [](const char* id, const char* label, const char* group, const char* text) {
         // A warning where it is something missing or unfinished; a fail where the harness is wrong.
-        static const QSet<QString> warn = {QStringLiteral("nopart"), QStringLiteral("nodesig"), QStringLiteral("shortrun"),
+        static const QSet<QString> warn = {
+QStringLiteral("nopart"), QStringLiteral("nodesig"), QStringLiteral("shortrun"),
                                            QStringLiteral("nolayerpn"), QStringLiteral("transpn"), QStringLiteral("fanshrinkpn"),
                                            QStringLiteral("notonbom"), QStringLiteral("compat-contacts"), QStringLiteral("compat-data")};
         const QString key = QString::fromLatin1(id);
@@ -449,6 +450,7 @@ const std::vector<BrickDrcRule>& brickDrcRules() {
                             warn.contains(key) ? 1 : 2};
     };
     static const std::vector<BrickDrcRule> rules = {
+        rule("drawing-fields","Drawing details consistency","Logical","Every drawing P/N, revision and title field on the model and sheets must match the drawing details. Historical revision entries are not current-revision copies."),
         // LOGICAL DRC: connectivity, identification, definition, procurement.
         rule("drawn-open", "Part disconnected on the drawing", "Logical",
              "A part on the drawing touches none of its runs - it has been moved off its wires on the sheet. Put it back on the run's end, or place the harness again."),

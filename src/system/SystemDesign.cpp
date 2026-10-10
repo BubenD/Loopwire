@@ -1,10 +1,17 @@
 #include "system/SystemDesign.h"
 
+#include "analysis/VoltageDrop.h"
+#include "harness/Harness.h"
 #include "io/Dwx.h"
 #include "io/Dxf.h"
 #include "model/Document.h"
+#include "model/DrawingDetails.h"
+#include "system/SystemRouting.h"
+#include "system/SystemExport.h"
 
 #include <QFileInfo>
+#include <QCryptographicHash>
+#include <QJsonDocument>
 #include <QHash>
 #include <QJsonArray>
 #include <QRegularExpression>
@@ -94,8 +101,103 @@ DrawingInfo readDrawingInfo(const QString& path) {
     QString fromTable, fromBoxes, fromText;
     readEntities(doc.entities(), info, fromTable, fromBoxes, fromText);
     for (const DrawingLayout& l : doc.layouts()) readEntities(l.paperEntities, info, fromTable, fromBoxes, fromText);
+    // THE ELECTRICAL PATHS, using the same pin/joint resolution as the electrical analysis. A joined path may
+    // branch, but every wire on it must carry the same name. Anonymous entity ids are never signal names.
+    auto readPaths = [&](const Document& sheet) {
+        const VdGraph graph = buildVoltageDropGraph(sheet);
+        info.schematic = info.schematic || !graph.segments.empty();
+        QHash<QString, QString> names;
+        QHash<QString, int> connectorCounts;
+        QSet<QString> conflictingLabels;
+        for (const Entity& e : sheet.entities()) {
+            if (e.type == EntityType::Connector) ++connectorCounts[connectorSpecFromMeta(e.meta).designator];
+            if (e.type == EntityType::Wire) names[e.id] = e.meta.value(QStringLiteral("wireLabel")).toString().trimmed();
+        }
+        for (const Entity& e : sheet.entities()) {
+            if (e.type != EntityType::NetLabel) continue;
+            const QString wid = e.meta.value(QStringLiteral("wireId")).toString();
+            const QString label = e.meta.value(QStringLiteral("text")).toString().trimmed();
+            if (!wid.isEmpty() && !label.isEmpty()) {
+                if (names.value(wid).isEmpty()) names[wid] = label;
+                else if (names.value(wid) != label) { names[wid] += QStringLiteral(" / ") + label; conflictingLabels.insert(wid); }
+            }
+        }
+        QSet<QString> visited;
+        for (const VdSegment& start : graph.segments) {
+            if (visited.contains(start.id)) continue;
+            QStringList todo{start.fromNode}, terminals, signalNames;
+            bool open = false, unnamed = false, conflict = false;
+            QSet<QString> nodes;
+            while (!todo.isEmpty()) {
+                const QString nodeId = todo.takeLast();
+                if (nodes.contains(nodeId)) continue;
+                nodes.insert(nodeId);
+                const VdNode* node = graph.node(nodeId);
+                if (node && node->kind == VdNodeKind::Pin) terminals << nodeId;
+                if (node && node->kind == VdNodeKind::OpenEnd && graph.incidentTo(nodeId).size() < 2) open = true;
+                for (const VdSegment* seg : graph.incidentTo(nodeId)) {
+                    visited.insert(seg->id);
+                    conflict = conflict || conflictingLabels.contains(seg->wireId);
+                    const QString label = names.value(seg->wireId);
+                    if (label.isEmpty()) unnamed = true;
+                    else if (!signalNames.contains(label)) signalNames << label;
+                    todo << VdGraph::other(*seg, nodeId);
+                }
+            }
+            QStringList problems;
+            int level = 0;
+            if (open || terminals.size() < 2) { problems << QStringLiteral("Open or unresolved connection"); level = 2; }
+            if (signalNames.size() > 1 || conflict) {
+                problems << QStringLiteral("Line names differ along the electrical path"); level = 2;
+            }
+            if (unnamed || signalNames.isEmpty()) { problems << QStringLiteral("A wire has no line name"); level = std::max(level, 1); }
+            auto end = [&](const QString& nodeId) {
+                const VdNode* node = graph.node(nodeId);
+                QPair<QString, QString> result;
+                if (!node) return result;
+                for (const Entity& e : sheet.entities()) if (e.id == node->connectorId) {
+                    const ConnectorSpec spec = connectorSpecFromMeta(e.meta);
+                    result.first = spec.designator;
+                    result.second = node->pin <= spec.pins.size() ? spec.pins.value(node->pin - 1) : QString::number(node->pin);
+                    if (result.second.isEmpty()) result.second = connectorPinLabel(node->pin - 1, spec);
+                    break;
+                }
+                return result;
+            };
+            for (const QString& terminal : terminals) {
+                const auto contact = end(terminal);
+                if (contact.first.isEmpty() || connectorCounts.value(contact.first) > 1) {
+                    problems << QStringLiteral("Connector designator is empty or duplicated"); level = 2; break;
+                }
+            }
+            const auto a = terminals.isEmpty() ? QPair<QString, QString>() : end(terminals.first());
+            const int rows = std::max(1, static_cast<int>(terminals.size()) - 1);
+            for (int i = 0; i < rows; ++i) {
+                const auto b = terminals.size() > i + 1 ? end(terminals.at(i + 1)) : QPair<QString, QString>();
+                info.connections.push_back({signalNames.join(QStringLiteral(" / ")), a.first, a.second, b.first, b.second,
+                                            problems.join(QStringLiteral("; ")), level});
+            }
+        }
+    };
+    readPaths(doc);
+    for (const DrawingLayout& layout : doc.layouts()) {
+        Document sheet(layout.name); sheet.entities() = layout.paperEntities; readPaths(sheet);
+    }
     info.revision = !fromTable.isEmpty() ? fromTable : !fromBoxes.isEmpty() ? fromBoxes : fromText;
+    const QJsonObject details=effectiveDrawingDetails(doc);
+    if(details.contains(QStringLiteral("drawingNo")))info.drawingNo=details.value(QStringLiteral("drawingNo")).toString();
+    if(details.contains(QStringLiteral("revision")))info.revision=details.value(QStringLiteral("revision")).toString();
+    if(details.contains(QStringLiteral("title")))info.title=details.value(QStringLiteral("title")).toString();
+    for(const auto& kind:{QStringLiteral("schematic"),QStringLiteral("mechanical")})
+        if(!doc.validationPassed(kind))info.fieldIssues<<QStringLiteral("%1 DRC passed note is missing or outdated; run the check and save the drawing.").arg(kind);
+    for(const DrawingFieldIssue& field:checkDrawingDetails(doc))info.fieldIssues<<field.message+QStringLiteral(" [%1]").arg(field.entityId);
     return info;
+}
+
+QString SysIssue::key() const {
+    const QJsonArray identity{rule, unit, port, cable, note, what};
+    return QString::fromLatin1(QCryptographicHash::hash(QJsonDocument(identity).toJson(QJsonDocument::Compact),
+                                                     QCryptographicHash::Sha256).toHex());
 }
 
 const SysPort* SysUnit::port(const QString& id) const {
@@ -142,6 +244,10 @@ QString SystemDesign::freshId(const QString& prefix) const {
     }
     for (const SysCable& c : cables) taken.insert(c.id);
     for (const SysNote& n : notes) taken.insert(n.id);
+    // ACCEPTED FINDINGS retain their target identity even after a part is removed.
+    for (const SysIssue& accepted : bypassed) {
+        taken.insert(accepted.unit); taken.insert(accepted.port); taken.insert(accepted.cable); taken.insert(accepted.note);
+    }
     for (int n = 1;; ++n) {
         const QString id = prefix + QString::number(n);
         if (!taken.contains(id)) return id;
@@ -266,9 +372,17 @@ QString SystemDesign::unitAround(const QPointF& point, const QString& except) co
     return best;
 }
 
-void SystemDesign::removeUnit(const QString& id) {
-    // EVERYTHING INSIDE IT goes with it.
-    for (const QString& child : childrenOf(id)) removeUnit(child);
+void SystemDesign::removeUnit(const QString& id, bool removeContents) {
+    const SysUnit* removed = unit(id);
+    if (!removed) return;
+    const QString parent = removed->parent;
+    if (removeContents) {
+        for (const QString& child : childrenOf(id)) removeUnit(child);
+    } else {
+        // Positions are in canvas coordinates: only the ownership changes.
+        for (SysUnit& child : units)
+            if (child.parent == id) child.parent = parent;
+    }
     cables.erase(std::remove_if(cables.begin(), cables.end(), [&](const SysCable& c) { return c.aUnit == id || c.bUnit == id; }),
                  cables.end());
     units.erase(std::remove_if(units.begin(), units.end(), [&](const SysUnit& u) { return u.id == id; }), units.end());
@@ -357,6 +471,7 @@ int SystemDesign::refreshDrawings(const std::function<DrawingInfo(const QString&
         const DrawingInfo info = read ? read(c.drawing) : readDrawingInfo(c.drawing);
         c.drawingNo = info.drawingNo;
         c.drawingRev = info.revision;
+        c.drawingTitle=info.title;
         n += info.found ? 1 : 0;
     }
     return n;
@@ -411,11 +526,11 @@ std::vector<SysIssue> SystemDesign::check() const {
         for (const SysPort& p : u.ports) {
             // ONE CABLE A SIDE: a port's inside and its outside each take one.
             const size_t in = cablesAt(u.id, p.id, true).size(), out_ = cablesAt(u.id, p.id, false).size();
-            if (in + out_ == 0) out.push_back({1, QStringLiteral("%1.%2 - nothing plugged in").arg(u.name, p.name), u.id, QString()});
+            if (in + out_ == 0) out.push_back({1, QStringLiteral("%1.%2 - nothing plugged in").arg(u.name, p.name), u.id, QString(), {}, p.id});
             if (out_ > 1)
-                out.push_back({2, QStringLiteral("%1.%2 - %3 cables plugged into one port").arg(u.name, p.name).arg(out_), u.id, QString()});
+                out.push_back({2, QStringLiteral("%1.%2 - %3 cables plugged into one port").arg(u.name, p.name).arg(out_), u.id, QString(), {}, p.id});
             if (in > 1)
-                out.push_back({2, QStringLiteral("%1.%2 - %3 cables plugged into its inside").arg(u.name, p.name).arg(in), u.id, QString()});
+                out.push_back({2, QStringLiteral("%1.%2 - %3 cables plugged into its inside").arg(u.name, p.name).arg(in), u.id, QString(), {}, p.id});
         }
     }
     QHash<QString, const SysCable*> byPn;
@@ -446,7 +561,113 @@ std::vector<SysIssue> SystemDesign::check() const {
         if (!c.drawing.isEmpty() && !c.drawingNo.isEmpty() && !c.pn.isEmpty() && c.drawingNo.compare(c.pn, Qt::CaseInsensitive) != 0)
             out.push_back({1, QStringLiteral("%1 - P/N %2, its drawing is No. %3").arg(ends, c.pn, c.drawingNo), QString(), c.id});
     }
+    for (SysIssue& finding : out) {
+        finding.rule = finding.what.contains(QLatin1String("plugged")) ? QStringLiteral("PORT-CONNECTION")
+                     : finding.what.contains(QLatin1String("drawing")) || finding.what.contains(QLatin1String("rev ")) ? QStringLiteral("DRAWING-LINK")
+                     : QStringLiteral("PART-NUMBER");
+    }
+    for(const SysCable& cable:cables){const auto path=sysCablePath(*this,cable);
+        for(const QRectF& box:systemRouteObstacles(*this,cable,0))if(systemPathCrossesBox(path,box)){
+            out.push_back({1,QStringLiteral("%1: route overlaps a unit; move its route or separate the units").arg(cable.name),{},cable.id,QStringLiteral("ROUTING"),{}});break;}
+    }
+    QSet<QString> unitNames, cableNames;
+    for (const SysUnit& u : units) {
+        const QString key = u.name.trimmed().toCaseFolded();
+        if (key.isEmpty() || unitNames.contains(key))
+            out.push_back({2, QStringLiteral("Unit name is empty or duplicated: %1").arg(u.name), u.id, {}, QStringLiteral("DESIGNATOR"), {}});
+        unitNames.insert(key);
+        QSet<QString> portNames;
+        for (const SysPort& p : u.ports) {
+            if (p.connector.trimmed().isEmpty())
+                out.push_back({1, QStringLiteral("%1.%2 has no connector part number").arg(u.name, p.name), u.id, {}, QStringLiteral("PART-NUMBER"), p.id});
+            if (p.contactPn.trimmed().isEmpty())
+                out.push_back({1, QStringLiteral("%1.%2 has no contact part number").arg(u.name, p.name), u.id, {}, QStringLiteral("PART-NUMBER"), p.id});
+            const QString pk = p.name.trimmed().toCaseFolded();
+            if (pk.isEmpty() || portNames.contains(pk))
+                out.push_back({2, QStringLiteral("%1: port designator is empty or duplicated: %2").arg(u.name, p.name), u.id, {},
+                               QStringLiteral("DESIGNATOR"), p.id});
+            portNames.insert(pk);
+        }
+    }
+    for (const SysCable& c : cables) {
+        const QString key = c.name.trimmed().toCaseFolded();
+        if (key.isEmpty() || cableNames.contains(key))
+            out.push_back({2, QStringLiteral("Cable name is empty or duplicated: %1").arg(c.name), {}, c.id, QStringLiteral("DESIGNATOR"), {}});
+        cableNames.insert(key);
+    }
+    for (const SysNote& n : notes) {
+        const SysUnit* u = unit(n.unit);
+        if ((!n.unit.isEmpty() && !u) || (!n.port.isEmpty() && (!u || !u->port(n.port))) || (!n.cable.isEmpty() && !cable(n.cable)))
+            out.push_back({1, QStringLiteral("Note %1 links to an item that was removed").arg(n.id), {}, {}, QStringLiteral("NOTE-LINK"), {}, n.id});
+    }
     return out;
+}
+
+std::vector<SysConnection> SystemDesign::checkConnections(const std::function<DrawingInfo(const QString&)>& read) const {
+    std::vector<SysConnection> rows;
+    QHash<QString, DrawingInfo> cache;
+    auto endpoint = [this](const QString& uid, const QString& pid, const QString& contact) {
+        const SysUnit* u = unit(uid);
+        const SysPort* p = u ? u->port(pid) : nullptr;
+        return QStringLiteral("%1.%2:%3").arg(u ? u->name : uid, p ? p->name : pid, contact);
+    };
+    for (const SysCable& c : cables) {
+        if (c.drawing.isEmpty()) {
+            rows.push_back({c.id, {}, endpoint(c.aUnit, c.aPort, {}), endpoint(c.bUnit, c.bPort, {}), QStringLiteral("No drawing linked"), 1});
+            continue;
+        }
+        if (!cache.contains(c.drawing)) cache[c.drawing] = read ? read(c.drawing) : readDrawingInfo(c.drawing);
+        const DrawingInfo& info = cache[c.drawing];
+        if (!info.found || !info.schematic || info.connections.empty()) {
+            rows.push_back({c.id, {}, endpoint(c.aUnit, c.aPort, {}), endpoint(c.bUnit, c.bPort, {}),
+                            !info.found ? QStringLiteral("Drawing missing or unreadable") : QStringLiteral("No readable schematic wire connections"),
+                            !info.found ? 2 : 1});
+            continue;
+        }
+        const SysUnit* a = unit(c.aUnit), *b = unit(c.bUnit);
+        const SysPort* pa = a ? a->port(c.aPort) : nullptr, *pb = b ? b->port(c.bPort) : nullptr;
+        if (!pa || !pb) continue;
+        for (const DrawingInfo::Connection& line : info.connections) {
+            SysConnection r;
+            r.cable = c.id; r.line = line.name; r.level = line.level; r.status = line.issue;
+            const bool forward = line.fromConnector == pa->name && line.toConnector == pb->name;
+            const bool reverse = line.fromConnector == pb->name && line.toConnector == pa->name;
+            if (!forward && !reverse) {
+                r.from = line.fromConnector + QLatin1Char(':') + line.fromContact;
+                r.to = line.toConnector + QLatin1Char(':') + line.toContact;
+                if (!r.status.isEmpty()) r.status += QStringLiteral("; ");
+                r.status += QStringLiteral("Schematic ports do not match %1.%2 / %3.%4").arg(a->name, pa->name, b->name, pb->name);
+                r.level = 2;
+            } else {
+                r.aUnit = c.aUnit; r.aPort = c.aPort; r.bUnit = c.bUnit; r.bPort = c.bPort;
+                r.aContact = forward ? line.fromContact : line.toContact;
+                r.bContact = forward ? line.toContact : line.fromContact;
+                r.from = endpoint(r.aUnit, r.aPort, r.aContact); r.to = endpoint(r.bUnit, r.bPort, r.bContact);
+            }
+            if (r.status.isEmpty()) r.status = QStringLiteral("OK");
+            rows.push_back(r);
+        }
+    }
+    // A SHARED CONTACT on a system port must keep its signal name on every drawing that uses it.
+    QHash<QString, QStringList> byContact;
+    for (const SysConnection& r : rows) {
+        if (r.aUnit.isEmpty() || r.line.isEmpty() || r.level == 2) continue;
+        for (const QString& key : {r.aUnit + QLatin1Char('/') + r.aPort + QLatin1Char('/') + r.aContact,
+                                   r.bUnit + QLatin1Char('/') + r.bPort + QLatin1Char('/') + r.bContact})
+            if (!byContact[key].contains(r.line)) byContact[key] << r.line;
+    }
+    for (SysConnection& r : rows) {
+        if (r.aUnit.isEmpty()) continue;
+        for (const QString& key : {r.aUnit + QLatin1Char('/') + r.aPort + QLatin1Char('/') + r.aContact,
+                                   r.bUnit + QLatin1Char('/') + r.bPort + QLatin1Char('/') + r.bContact}) {
+            if (byContact.value(key).size() < 2) continue;
+            if (r.status == QLatin1String("OK")) r.status.clear();
+            if (!r.status.isEmpty()) r.status += QStringLiteral("; ");
+            r.status += QStringLiteral("Line names differ at shared contact: %1").arg(byContact.value(key).join(QStringLiteral(" / ")));
+            r.level = 2;
+        }
+    }
+    return rows;
 }
 
 QString SystemDesign::cableListCsv() const {
@@ -474,6 +695,17 @@ QJsonObject SystemDesign::toJson() const {
     QJsonObject o;
     if (!name.isEmpty()) o[QStringLiteral("name")] = name;
     o[QStringLiteral("pnPrefix")] = pnPrefix;
+    if (!disabledRules.isEmpty()) o[QStringLiteral("disabledRules")] = QJsonArray::fromStringList(disabledRules);
+    if (!ruleLevels.isEmpty()) o[QStringLiteral("ruleLevels")] = ruleLevels;
+    if (background != QColor(48, 52, 58)) o[QStringLiteral("background")] = background.name();
+    if (!bypassed.empty()) {
+        QJsonArray accepted;
+        for (const SysIssue& i : bypassed)
+            accepted.append(QJsonObject{{QStringLiteral("rule"), i.rule}, {QStringLiteral("what"), i.what}, {QStringLiteral("level"), i.level},
+                                        {QStringLiteral("unit"), i.unit}, {QStringLiteral("port"), i.port}, {QStringLiteral("cable"), i.cable},
+                                        {QStringLiteral("note"), i.note}});
+        o[QStringLiteral("bypassed")] = accepted;
+    }
     if (pnDigits != 3) o[QStringLiteral("pnDigits")] = pnDigits;
     QJsonArray us;
     for (const SysUnit& u : units) {
@@ -494,6 +726,9 @@ QJsonObject SystemDesign::toJson() const {
             if (!p.connector.isEmpty()) q[QStringLiteral("connector")] = p.connector;
             if (!p.insidePn.isEmpty()) q[QStringLiteral("insidePn")] = p.insidePn;
             if (p.pins > 0) q[QStringLiteral("pins")] = p.pins;
+            if (!p.contactPn.isEmpty()) q[QStringLiteral("contactPn")] = p.contactPn;
+            if (p.labelDx != 0.0) q[QStringLiteral("labelDx")] = p.labelDx;
+            if (p.labelDy != 0.0) q[QStringLiteral("labelDy")] = p.labelDy;
             ps.append(q);
         }
         j[QStringLiteral("ports")] = ps;
@@ -513,19 +748,28 @@ QJsonObject SystemDesign::toJson() const {
         if (c.bInside) j[QStringLiteral("bIn")] = true;
         if (c.wires > 0) j[QStringLiteral("wires")] = c.wires;
         if (c.color.isValid()) j[QStringLiteral("color")] = c.color.name();
+        if(!c.waypoints.empty()){QJsonArray points;for(const QPointF& point:c.waypoints)points.append(QJsonArray{point.x(),point.y()});j[QStringLiteral("waypoints")]=points;}
         if (!c.drawing.isEmpty()) {
             j[QStringLiteral("drawing")] = c.drawing;
             j[QStringLiteral("drawingNo")] = c.drawingNo;
             j[QStringLiteral("drawingRev")] = c.drawingRev;
+            if(!c.drawingTitle.isEmpty())j[QStringLiteral("drawingTitle")]=c.drawingTitle;
+            if(!c.expectedTitle.isEmpty())j[QStringLiteral("expectedTitle")]=c.expectedTitle;
         }
         cs.append(j);
     }
     o[QStringLiteral("cables")] = cs;
     if (!notes.empty()) {
         QJsonArray ns;
-        for (const SysNote& n : notes)
-            ns.append(QJsonObject{{QStringLiteral("id"), n.id}, {QStringLiteral("text"), n.text}, {QStringLiteral("x"), n.x},
-                                  {QStringLiteral("y"), n.y},   {QStringLiteral("w"), n.w},       {QStringLiteral("h"), n.h}});
+        for (const SysNote& n : notes) {
+            QJsonObject j{{QStringLiteral("id"), n.id}, {QStringLiteral("text"), n.text}, {QStringLiteral("x"), n.x},
+                          {QStringLiteral("y"), n.y}, {QStringLiteral("w"), n.w}, {QStringLiteral("h"), n.h}};
+            if (n.color.isValid()) j[QStringLiteral("color")] = n.color.name();
+            if (!n.unit.isEmpty()) j[QStringLiteral("unit")] = n.unit;
+            if (!n.port.isEmpty()) j[QStringLiteral("port")] = n.port;
+            if (!n.cable.isEmpty()) j[QStringLiteral("cable")] = n.cable;
+            ns.append(j);
+        }
         o[QStringLiteral("notes")] = ns;
     }
     return o;
@@ -534,6 +778,20 @@ QJsonObject SystemDesign::toJson() const {
 SystemDesign SystemDesign::fromJson(const QJsonObject& o) {
     SystemDesign d;
     d.name = o.value(QStringLiteral("name")).toString();
+    for (const QJsonValue& rule : o.value(QStringLiteral("disabledRules")).toArray()) d.disabledRules << rule.toString();
+    const QJsonObject levels = o.value(QStringLiteral("ruleLevels")).toObject();
+    for (auto it = levels.begin(); it != levels.end(); ++it) if (it.value().isDouble()) d.ruleLevels[it.key()] = std::clamp(it.value().toInt(2), 0, 2);
+    const QColor background(o.value(QStringLiteral("background")).toString());
+    if (background.isValid()) d.background = background;
+    for (const QJsonValue& v : o.value(QStringLiteral("bypassed")).toArray()) {
+        const QJsonObject j = v.toObject();
+        SysIssue i;
+        i.rule = j.value(QStringLiteral("rule")).toString(); i.what = j.value(QStringLiteral("what")).toString();
+        i.level = std::clamp(j.value(QStringLiteral("level")).toInt(1), 0, 2);
+        i.unit = j.value(QStringLiteral("unit")).toString(); i.port = j.value(QStringLiteral("port")).toString();
+        i.cable = j.value(QStringLiteral("cable")).toString(); i.note = j.value(QStringLiteral("note")).toString();
+        if (!i.rule.isEmpty() && !i.what.isEmpty()) d.bypassed.push_back(i);
+    }
     d.pnPrefix = o.value(QStringLiteral("pnPrefix")).toString(QStringLiteral("CBL-"));
     d.pnDigits = std::clamp(o.value(QStringLiteral("pnDigits")).toInt(3), 1, 9);
     for (const QJsonValue& v : o.value(QStringLiteral("notes")).toArray()) {
@@ -544,7 +802,12 @@ SystemDesign SystemDesign::fromJson(const QJsonObject& o) {
         n.x = j.value(QStringLiteral("x")).toDouble();
         n.y = j.value(QStringLiteral("y")).toDouble();
         n.w = j.value(QStringLiteral("w")).toDouble(180.0);
-        n.h = j.value(QStringLiteral("h")).toDouble(70.0);
+        n.h = std::max(30.0, j.value(QStringLiteral("h")).toDouble(70.0));
+        n.w = std::max(60.0, n.w);
+        n.color = QColor(j.value(QStringLiteral("color")).toString());
+        n.unit = j.value(QStringLiteral("unit")).toString();
+        n.port = j.value(QStringLiteral("port")).toString();
+        n.cable = j.value(QStringLiteral("cable")).toString();
         if (!n.id.isEmpty()) d.notes.push_back(n);
     }
     for (const QJsonValue& v : o.value(QStringLiteral("units")).toArray()) {
@@ -556,7 +819,7 @@ SystemDesign SystemDesign::fromJson(const QJsonObject& o) {
         u.rev = j.value(QStringLiteral("rev")).toString();
         u.description = j.value(QStringLiteral("description")).toString();
         u.kind = j.value(QStringLiteral("kind")).toString(QStringLiteral("mech"));
-        u.opacity = std::clamp(j.value(QStringLiteral("opacity")).toDouble(1.0), 0.05, 1.0);
+        u.opacity = std::clamp(j.value(QStringLiteral("opacity")).toDouble(1.0),0.0,1.0);
         u.parent = j.value(QStringLiteral("parent")).toString();
         // Saved before units went in units: none is in another yet - found below by where it lies.
         if (!j.contains(QStringLiteral("parent"))) u.parent = QStringLiteral("?");
@@ -576,6 +839,10 @@ SystemDesign SystemDesign::fromJson(const QJsonObject& o) {
             p.connector = q.value(QStringLiteral("connector")).toString();
             p.insidePn = q.value(QStringLiteral("insidePn")).toString();
             p.pins = q.value(QStringLiteral("pins")).toInt(0);
+            if (p.connector.isEmpty()) p.connector = p.insidePn;
+            p.contactPn = q.value(QStringLiteral("contactPn")).toString();
+            p.labelDx = q.value(QStringLiteral("labelDx")).toDouble();
+            p.labelDy = q.value(QStringLiteral("labelDy")).toDouble();
             if (!p.id.isEmpty()) u.ports.push_back(p);
         }
         if (!u.id.isEmpty()) d.units.push_back(u);
@@ -611,9 +878,11 @@ SystemDesign SystemDesign::fromJson(const QJsonObject& o) {
         c.aInside = j.value(QStringLiteral("aIn")).toBool(false);
         c.bInside = j.value(QStringLiteral("bIn")).toBool(false);
         if (j.contains(QStringLiteral("color"))) c.color = QColor(j.value(QStringLiteral("color")).toString());
+        for(const QJsonValue& value:j.value(QStringLiteral("waypoints")).toArray()){const QJsonArray point=value.toArray();if(point.size()==2)c.waypoints.push_back({point[0].toDouble(),point[1].toDouble()});}
         c.drawing = j.value(QStringLiteral("drawing")).toString();
         c.drawingNo = j.value(QStringLiteral("drawingNo")).toString();
         c.drawingRev = j.value(QStringLiteral("drawingRev")).toString();
+        c.drawingTitle=j.value(QStringLiteral("drawingTitle")).toString();c.expectedTitle=j.value(QStringLiteral("expectedTitle")).toString();
         // A cable to a unit or port that is not there is dropped, not kept dangling.
         const SysUnit* a = d.unit(c.aUnit);
         const SysUnit* b = d.unit(c.bUnit);

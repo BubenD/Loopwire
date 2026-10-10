@@ -1,0 +1,4 @@
+# Preserve generated presentation and image bytes across Windows checkouts.
+*.pdf binary
+*.pptx binary
+*.png binary

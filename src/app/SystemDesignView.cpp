@@ -1,9 +1,12 @@
 #include "app/SystemDesignView.h"
 
 #include "app/DrawingFinderDialog.h"
+#include "app/RuleExplainer.h"
 #include "system/SystemExport.h"
 
 #include <QComboBox>
+#include <QCheckBox>
+#include <QJsonArray>
 #include <QDoubleSpinBox>
 #include <QDir>
 #include <QFile>
@@ -31,6 +34,7 @@
 #include <QVBoxLayout>
 #include <QColorDialog>
 #include <QPainter>
+#include <QPalette>
 #include <QPainterPath>
 #include <QSlider>
 #include <QToolButton>
@@ -84,13 +88,14 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
     auto* lay = new QVBoxLayout(this);
     lay->setContentsMargins(0, 0, 0, 0);
     auto* outer = new QSplitter(Qt::Vertical, this);
+    outer->setObjectName(QStringLiteral("systemResultsSplit"));
     auto* split = new QSplitter(Qt::Horizontal, outer);
     canvas_ = new SystemCanvas(split);
     canvas_->setDesign(&design_);
     // ON THE RIGHT: WHAT IS SELECTED.
     panel_ = new QStackedWidget(split);
     panel_->setObjectName(QStringLiteral("systemPanel"));
-    panel_->setMinimumWidth(270);
+    panel_->setMinimumWidth(360);
     nothing_ = new QLabel(QStringLiteral("<b>System design</b><br><br>Put units with <i>Unit</i>, ports on their sides with "
                                          "<i>Port</i>, and draw cables from port to port with <i>Cable</i> (or drag from a "
                                          "port). Click a unit or a cable to see and change what is its own here."),
@@ -112,13 +117,14 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
         unitKind_->setObjectName(QStringLiteral("systemUnitKind"));
         unitKind_->addItem(QStringLiteral("Mechanical part"), QStringLiteral("mech"));
         unitKind_->addItem(QStringLiteral("PCBA"), QStringLiteral("pcba"));
+        unitKind_->addItem(QStringLiteral("System module"),QStringLiteral("module"));
         unitKind_->setToolTip(QStringLiteral("What the unit is - a mechanical part or a printed circuit board assembly; its mark "
                                              "is in its corner on the diagram"));
         connect(unitKind_, &QComboBox::currentIndexChanged, this, [this](int i) {
             SysUnit* u = design_.unit(canvas_->selectedUnit());
             if (filling_ || !u || i < 0 || u->kind == unitKind_->itemData(i).toString()) return;
             aboutToChange();
-            u->kind = unitKind_->itemData(i).toString();
+            u->kind = unitKind_->itemData(i).toString();if(u->kind==QLatin1String("module"))u->opacity=.15;
             commit();
         });
         form->addRow(QStringLiteral("Kind"), unitKind_);
@@ -181,7 +187,7 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
         connect(plain, &QToolButton::clicked, this, [this] { setUnitColour(QColor()); });
         unitOpacity_ = new QSlider(Qt::Horizontal, look);
         unitOpacity_->setObjectName(QStringLiteral("systemUnitOpacity"));
-        unitOpacity_->setRange(5, 100);
+        unitOpacity_->setRange(0,100);
         unitOpacity_->setToolTip(QStringLiteral("How solid the unit is filled - less, and what is behind it shows through"));
         connect(unitOpacity_, &QSlider::valueChanged, this, [this](int v) {
             if (!filling_) setUnitOpacity(v / 100.0);
@@ -191,13 +197,14 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
         lh->addWidget(unitOpacity_, 1);
         form->addRow(QStringLiteral("Look"), look);
         v->addLayout(form);
-        v->addWidget(new QLabel(QStringLiteral("<b>Ports</b> - name, side, the connector P/N outside and inside, pins"), page));
-        ports_ = new QTableWidget(0, 5, page);
+        v->addWidget(new QLabel(QStringLiteral("<b>Ports</b> - connector and contact part numbers"), page));
+        ports_ = new QTableWidget(0, 4, page);
         ports_->setObjectName(QStringLiteral("systemPorts"));
-        ports_->setHorizontalHeaderLabels({QStringLiteral("Name"), QStringLiteral("Side"), QStringLiteral("Outside P/N"),
-                                           QStringLiteral("Inside P/N"), QStringLiteral("Pins")});
-        ports_->setToolTip(QStringLiteral("Each port is a connector through the unit's wall: the connector P/N its outside takes (the "
-                                          "mating one, as the system calls for it) and its inside's"));
+        ports_->setHorizontalHeaderLabels({QStringLiteral("Designator"), QStringLiteral("Side"), QStringLiteral("Connector P/N"),
+                                           QStringLiteral("Contact P/N")});
+        ports_->setToolTip(QStringLiteral("One connector P/N for the port, and the part number of its contacts. Drag the designator on "
+                                          "the diagram to move its label independently."));
+        ports_->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
         ports_->horizontalHeader()->setStretchLastSection(true);
         ports_->verticalHeader()->setVisible(false);
         v->addWidget(ports_, 1);
@@ -229,8 +236,7 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
             const QString text = ports_->item(row, col) ? ports_->item(row, col)->text() : QString();
             if (col == 0) p.name = text;
             else if (col == 2) p.connector = text;
-            else if (col == 3) p.insidePn = text;
-            else p.pins = text.toInt();
+            else if (col == 3) p.contactPn = text;
             commit();
         });
         connect(add, &QPushButton::clicked, this, [this] {
@@ -309,6 +315,12 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
         cableDrawing_ = field(page, "systemCableDrawing", QStringLiteral("The drawing that defines this cable"));
         cableDrawing_->setReadOnly(true);
         v->addWidget(cableDrawing_);
+        cableExpectedTitle_=field(page,"systemExpectedDrawingTitle",QStringLiteral("The title required for the linked drawing"));
+        auto* expected=new QFormLayout;expected->addRow(QStringLiteral("Expected title"),cableExpectedTitle_);v->addLayout(expected);
+        connect(cableExpectedTitle_,&QLineEdit::editingFinished,this,[this]{
+            SysCable* c=design_.cable(canvas_->selectedCable());if(filling_||!c||c->expectedTitle==cableExpectedTitle_->text())return;
+            aboutToChange();c->expectedTitle=cableExpectedTitle_->text().trimmed();commit();
+        });
         auto* buttons = new QHBoxLayout;
         auto* link = new QPushButton(QStringLiteral("Link..."), page);
         link->setToolTip(QStringLiteral("Link a drawing file (DWX, DXF, DWG) to this cable"));
@@ -357,7 +369,60 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
         v->addWidget(new QLabel(QStringLiteral("<b>Note</b> - its text"), page));
         noteText_ = new QPlainTextEdit(page);
         noteText_->setObjectName(QStringLiteral("systemNoteText"));
+        noteText_->setLineWrapMode(QPlainTextEdit::WidgetWidth);
         v->addWidget(noteText_, 1);
+        auto* noteForm = new QFormLayout;
+        noteWidth_ = new QDoubleSpinBox(page);
+        noteHeight_ = new QDoubleSpinBox(page);
+        noteWidth_->setObjectName(QStringLiteral("systemNoteWidth"));
+        noteHeight_->setObjectName(QStringLiteral("systemNoteHeight"));
+        noteWidth_->setRange(60, 10000); noteHeight_->setRange(30, 10000);
+        for (auto* spin : {noteWidth_, noteHeight_}) { spin->setDecimals(0); spin->setSingleStep(10); }
+        noteForm->addRow(QStringLiteral("Width"), noteWidth_);
+        noteForm->addRow(QStringLiteral("Height"), noteHeight_);
+        noteColour_ = new QToolButton(page);
+        noteColour_->setObjectName(QStringLiteral("systemNoteColour"));
+        noteColour_->setText(QStringLiteral("Choose colour..."));
+        auto* noteLook = new QWidget(page);
+        auto* noteLookRow = new QHBoxLayout(noteLook); noteLookRow->setContentsMargins(0, 0, 0, 0);
+        noteLookRow->addWidget(noteColour_);
+        auto* resetColour = new QToolButton(noteLook); resetColour->setText(QStringLiteral("Reset"));
+        resetColour->setObjectName(QStringLiteral("systemNoteColourReset")); noteLookRow->addWidget(resetColour);
+        connect(resetColour, &QToolButton::clicked, this, [this] {
+            SysNote* n = design_.note(canvas_->selectedNote());
+            if (!n || !n->color.isValid()) return;
+            noteTyping_.clear(); aboutToChange(); n->color = QColor(); commit();
+        });
+        noteForm->addRow(QStringLiteral("Colour"), noteLook);
+        noteLink_ = new QComboBox(page);
+        noteLink_->setObjectName(QStringLiteral("systemNoteLink"));
+        noteLink_->setToolTip(QStringLiteral("Attach a leader to a unit, cable or port; it follows that item when it moves."));
+        noteForm->addRow(QStringLiteral("Link to"), noteLink_);
+        v->addLayout(noteForm);
+        auto applyNoteSize = [this] {
+            SysNote* n = design_.note(canvas_->selectedNote());
+            if (filling_ || !n || (n->w == noteWidth_->value() && n->h == noteHeight_->value())) return;
+            noteTyping_.clear(); aboutToChange(); n->w = noteWidth_->value(); n->h = noteHeight_->value(); commit();
+        };
+        connect(noteWidth_, &QDoubleSpinBox::valueChanged, this, applyNoteSize);
+        connect(noteHeight_, &QDoubleSpinBox::valueChanged, this, applyNoteSize);
+        connect(noteColour_, &QToolButton::clicked, this, [this] {
+            const SysNote* n = design_.note(canvas_->selectedNote());
+            if (!n) return;
+            const QString id = n->id;
+            const QColor colour = QColorDialog::getColor(n->color.isValid() ? n->color : QColor(255, 247, 190), this, QStringLiteral("Note colour"));
+            if (!colour.isValid()) return;
+            SysNote* changedNote = design_.note(id);
+            if (!changedNote) return;
+            noteTyping_.clear(); aboutToChange(); changedNote->color = colour; commit();
+        });
+        connect(noteLink_, &QComboBox::activated, this, [this](int index) {
+            SysNote* n = design_.note(canvas_->selectedNote());
+            if (filling_ || !n) return;
+            const QStringList ids = noteLink_->itemData(index).toStringList();
+            noteTyping_.clear(); aboutToChange();
+            n->unit = ids.value(0); n->port = ids.value(1); n->cable = ids.value(2); commit();
+        });
         connect(noteText_, &QPlainTextEdit::textChanged, this, [this] {
             SysNote* n = design_.note(canvas_->selectedNote());
             if (filling_ || !n || n->text == noteText_->toPlainText()) return;
@@ -400,12 +465,49 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
         if (!sel.isEmpty()) canvas_->select(QString(), QString(), cables_->item(sel.first()->row(), 0)->data(Qt::UserRole).toString());
     });
     tabs_->addTab(cables_, QStringLiteral("Cables"));
-    found_ = new QListWidget(tabs_);
+    auto* checkPage = new QWidget(tabs_);
+    auto* checkLayout = new QVBoxLayout(checkPage); checkLayout->setContentsMargins(4, 4, 4, 4);
+    auto* checkHead = new QHBoxLayout;
+    issueSummary_ = new QLabel(checkPage); issueSummary_->setObjectName(QStringLiteral("systemDrcSummary")); issueSummary_->setWordWrap(true); checkHead->addWidget(issueSummary_, 1);
+    auto* checkAgain = new QPushButton(QStringLiteral("Check again"), checkPage);
+    checkAgain->setObjectName(QStringLiteral("systemCheckAgain")); checkHead->addWidget(checkAgain);
+    connect(checkAgain, &QPushButton::clicked, this, [this] { checkDesign(); });
+    auto* ruleButton = new QPushButton(QStringLiteral("Rules..."), checkPage);
+    ruleButton->setObjectName(QStringLiteral("systemDrcRules")); checkHead->addWidget(ruleButton);
+    connect(ruleButton, &QPushButton::clicked, this, [this] { askRules(); });
+    auto* bypassButton = new QPushButton(QStringLiteral("Bypass table"), checkPage);
+    bypassButton->setObjectName(QStringLiteral("systemDrcBypass")); checkHead->addWidget(bypassButton);
+    connect(bypassButton, &QPushButton::clicked, this, [this] { showBypass(); });
+    checkLayout->addLayout(checkHead);
+    found_ = new QTableWidget(0, 4, checkPage);
     found_->setObjectName(QStringLiteral("systemIssues"));
-    connect(found_, &QListWidget::itemClicked, this, [this](QListWidgetItem* it) {
-        canvas_->select(it->data(Qt::UserRole).toString(), QString(), it->data(Qt::UserRole + 1).toString());
+    found_->setHorizontalHeaderLabels({QStringLiteral("Severity"), QStringLiteral("Rule"), QStringLiteral("Issue"), QString()});
+    found_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    found_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    found_->verticalHeader()->hide(); found_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+    found_->setWordWrap(true);
+    found_->setToolTip(QStringLiteral("Click a finding to centre its unit, port, cable or note and flash its location."));
+    connect(found_, &QTableWidget::cellClicked, this, [this](int row, int) { locateIssue(row); });
+    connect(found_, &QTableWidget::cellDoubleClicked, this, [this](int row, int) { locateIssue(row); });
+    checkLayout->addWidget(found_, 1);
+    tabs_->addTab(checkPage, QStringLiteral("Check"));
+    connections_ = new QTableWidget(0, 6, tabs_);
+    connections_->setObjectName(QStringLiteral("systemConnections"));
+    connections_->setHorizontalHeaderLabels({QStringLiteral("Cable"), QStringLiteral("Line name"), QStringLiteral("From unit / port / contact"),
+                                            QStringLiteral("To unit / port / contact"), QStringLiteral("Drawing"), QStringLiteral("Connection / issue")});
+    connections_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    connections_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    connections_->verticalHeader()->hide(); connections_->horizontalHeader()->setStretchLastSection(true);
+    connect(connections_, &QTableWidget::cellClicked, this, [this](int row, int) {
+        const QTableWidgetItem* it = connections_->item(row, 0);
+        if (it) { SysIssue issue; issue.cable = it->data(Qt::UserRole).toString(); canvas_->locateIssue(issue); }
     });
-    tabs_->addTab(found_, QStringLiteral("Check"));
+    connect(connections_, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
+        const QTableWidgetItem* it = connections_->item(row, 0);
+        const SysCable* c = it ? design_.cable(it->data(Qt::UserRole).toString()) : nullptr;
+        if (c && !c->drawing.isEmpty()) emit openRequested(c->drawing);
+    });
+    tabs_->addTab(connections_, QStringLiteral("Connections"));
     outer->addWidget(split);
     outer->addWidget(tabs_);
     outer->setStretchFactor(0, 4);
@@ -429,6 +531,7 @@ void SystemDesignView::reload() {
     history_.clear();
     future_.clear();
     issues_.clear();
+    connectionRows_.clear(); fillConnections();
     canvas_->setDesign(&design_);
     refresh();
     canvas_->fit();
@@ -437,6 +540,7 @@ void SystemDesignView::reload() {
 void SystemDesignView::setTool(SysTool tool) { canvas_->setTool(tool); }
 
 void SystemDesignView::aboutToChange() {
+    noteTyping_.clear();
     history_.push_back(design_.toJson());
     if (history_.size() > 100) history_.erase(history_.begin());
     // Something new done: what Undo took back cannot be put back over it.
@@ -466,11 +570,20 @@ void SystemDesignView::redo() {
 
 bool SystemDesignView::deleteSelected() {
     const QString unit = canvas_->selectedUnit(), port = canvas_->selectedPort();
-    const bool any = !unit.isEmpty() || !canvas_->selectedCable().isEmpty() || !canvas_->selectedNote().isEmpty();
+    const bool any = canvas_->selectionCount() > 0;
     if (!any) return false;
     // CONNECTED: a unit with cables (its own, or those of units inside it) or units in it, or a port with cables - asked
     // first.
     QString question;
+    if (canvas_->selectionCount() > 1) {
+        bool connected = false;
+        for (const QString& id : canvas_->selectedUnits()) {
+            connected = connected || !design_.childrenOf(id).empty();
+            for (const SysCable& c : design_.cables)
+                connected = connected || c.aUnit == id || c.bUnit == id || design_.isWithin(c.aUnit, id) || design_.isWithin(c.bUnit, id);
+        }
+        if (connected) question = QStringLiteral("Delete %1 selected items with the units and cables connected to them?").arg(canvas_->selectionCount());
+    }
     if (const SysUnit* u = design_.unit(unit)) {
         if (!port.isEmpty()) {
             const size_t n = design_.cablesAt(unit, port).size();
@@ -492,13 +605,41 @@ bool SystemDesignView::deleteSelected() {
             }
         }
     }
-    if (!question.isEmpty()) {
+    bool hasContents = false;
+    for (const QString& id : canvas_->selectedUnits())
+        hasContents = hasContents || !design_.childrenOf(id).empty();
+    bool removeContents = true;
+    if (hasContents && !confirm_) {
+        const bool multiple = canvas_->selectedUnits().size() > 1;
+        QMessageBox dialog(QMessageBox::Question, QStringLiteral("Delete parent unit"),
+                           multiple ? QStringLiteral("What should be deleted with the selected parent units?")
+                                    : QStringLiteral("What should be deleted with this parent unit?"),
+                           QMessageBox::NoButton, this);
+        dialog.setObjectName(QStringLiteral("systemDeleteUnitDialog"));
+        dialog.setInformativeText(QStringLiteral(
+            "Only selected unit keeps the units inside, their positions and their remaining cables. "
+            "They move into the enclosing parent, or onto the main canvas.\n\n"
+            "Unit and all inside also deletes every contained unit. "
+            "In either case, cables attached directly to a deleted unit are removed."));
+        auto* keep = dialog.addButton(multiple ? QStringLiteral("Only selected units")
+                                              : QStringLiteral("Only selected unit"), QMessageBox::AcceptRole);
+        keep->setObjectName(QStringLiteral("deleteUnitKeepContents"));
+        auto* all = dialog.addButton(QStringLiteral("Unit and all inside"), QMessageBox::DestructiveRole);
+        all->setObjectName(QStringLiteral("deleteUnitWithContents"));
+        auto* cancel = dialog.addButton(QMessageBox::Cancel);
+        cancel->setObjectName(QStringLiteral("cancelDeleteUnit"));
+        dialog.setDefaultButton(keep);
+        dialog.setEscapeButton(cancel);
+        dialog.exec();
+        if (dialog.clickedButton() != keep && dialog.clickedButton() != all) return false;
+        removeContents = dialog.clickedButton() == all;
+    } else if (!question.isEmpty()) {
         const bool yes = confirm_ ? confirm_(question)
                                   : QMessageBox::question(this, QStringLiteral("Delete"), question, QMessageBox::Yes | QMessageBox::No,
                                                           QMessageBox::No) == QMessageBox::Yes;
         if (!yes) return false;
     }
-    canvas_->deleteSelected();
+    canvas_->deleteSelected(removeContents);
     canvas_->noteDeleteDone();
     return true;
 }
@@ -513,7 +654,7 @@ void SystemDesignView::setUnitColour(const QColor& colour) {
 
 void SystemDesignView::setUnitOpacity(double opacity) {
     SysUnit* u = design_.unit(canvas_->selectedUnit());
-    opacity = std::clamp(opacity, 0.05, 1.0);
+    opacity = std::clamp(opacity,0.0,1.0);
     if (!u || std::abs(u->opacity - opacity) < 1e-9) return;
     // ONE STEP TO UNDO for a slide of it.
     if (opacityDragging_ != u->id) {
@@ -578,10 +719,12 @@ void SystemDesignView::undo() {
 }
 
 void SystemDesignView::refresh() {
+    checked_ = false; checkedFindings_.clear();
+    issues_.clear(); connectionRows_.clear(); fillConnections(); canvas_->clearCheck();
     syncPanel();
     fillCables();
     fillIssues();
-    canvas_->update();
+    canvas_->update(); fillBypass();
 }
 
 QString SystemDesignView::status(const SysCable& c) const {
@@ -604,6 +747,24 @@ void SystemDesignView::syncPanel() {
     if (n) {
         panel_->setCurrentIndex(3);
         if (noteText_->toPlainText() != n->text) noteText_->setPlainText(n->text);
+        noteWidth_->setValue(n->w); noteHeight_->setValue(n->h);
+        noteColour_->setStyleSheet(QStringLiteral("background-color:%1;color:%2;").arg(n->color.isValid() ? n->color.name() : QStringLiteral("#fff7be"),
+                                                 n->color.isValid() && n->color.lightness() < 120 ? QStringLiteral("white") : QStringLiteral("black")));
+        noteLink_->clear();
+        noteLink_->addItem(QStringLiteral("None"), QStringList{});
+        const QStringList current{n->unit, n->port, n->cable};
+        int selected = n->unit.isEmpty() && n->cable.isEmpty() ? 0 : -1;
+        auto addTarget = [&](const QString& label, const QStringList& ids) {
+            noteLink_->addItem(label, ids);
+            if (ids == current) selected = noteLink_->count() - 1;
+        };
+        for (const SysUnit& target : design_.units) {
+            addTarget(QStringLiteral("Unit: %1").arg(target.name), {target.id, {}, {}});
+            for (const SysPort& p : target.ports) addTarget(QStringLiteral("Port: %1.%2").arg(target.name, p.name), {target.id, p.id, {}});
+        }
+        for (const SysCable& target : design_.cables) addTarget(QStringLiteral("Cable: %1").arg(target.name), {{}, {}, target.id});
+        if (selected < 0) { addTarget(QStringLiteral("Missing linked item"), current); selected = noteLink_->count() - 1; }
+        noteLink_->setCurrentIndex(selected);
     } else if (c) {
         panel_->setCurrentIndex(2);
         cableName_->setText(c->name);
@@ -621,6 +782,7 @@ void SystemDesignView::syncPanel() {
         cableEnds_->setText(QStringLiteral("%1.%2 - %3.%4").arg(a ? a->name : QString(), pa ? pa->name : QString(), b ? b->name : QString(),
                                                                 pb ? pb->name : QString()));
         cableDrawing_->setText(c->drawing.isEmpty() ? QString() : QDir::toNativeSeparators(c->drawing));
+        cableExpectedTitle_->setText(c->expectedTitle);
         cableRead_->setText(c->drawing.isEmpty() ? QString()
                                                  : QStringLiteral("Read off it: drawing No. %1, rev %2")
                                                        .arg(c->drawingNo.isEmpty() ? QStringLiteral("(none)") : c->drawingNo,
@@ -636,7 +798,7 @@ void SystemDesignView::syncPanel() {
         unitPn_->setText(u->pn);
         unitRev_->setText(u->rev);
         unitDesc_->setText(u->description);
-        unitKind_->setCurrentIndex(u->kind == QLatin1String("pcba") ? 1 : 0);
+        unitKind_->setCurrentIndex(std::max(0,unitKind_->findData(u->kind)));
         for (int i = 0; i < 4; ++i)
             if (unitEyes_[i]) unitEyes_[i]->setChecked(u->shows(QString::fromLatin1(kShown[i])));
         unitOpacity_->setValue(static_cast<int>(std::lround(u->opacity * 100.0)));
@@ -659,11 +821,12 @@ void SystemDesignView::syncPanel() {
             });
             ports_->setCellWidget(i, 1, side);
             ports_->setItem(i, 2, new QTableWidgetItem(p.connector));
-            ports_->setItem(i, 3, new QTableWidgetItem(p.insidePn));
-            ports_->setItem(i, 4, new QTableWidgetItem(p.pins > 0 ? QString::number(p.pins) : QString()));
+            ports_->setItem(i, 3, new QTableWidgetItem(p.contactPn));
         }
     } else {
         panel_->setCurrentIndex(0);
+        nothing_->setText(canvas_->selectionCount() > 1 ? QStringLiteral("<b>%1 items selected</b><br><br>Drag a selected unit or note to move the selection. Delete removes the selected items.").arg(canvas_->selectionCount())
+                            : QStringLiteral("<b>System design</b><br><br>Draw units, ports, cables and notes. Drag an empty area left to right for blue window selection, or right to left for green crossing selection."));
     }
     filling_ = false;
 }
@@ -697,16 +860,58 @@ void SystemDesignView::fillCables() {
     filling_ = false;
 }
 
+bool SystemDesignView::locateIssue(int row) {
+    if (row < 0 || row >= static_cast<int>(issues_.size())) return false;
+    found_->selectRow(row); found_->scrollToItem(found_->item(row, 0));
+    return canvas_->locateIssue(issues_[static_cast<size_t>(row)]);
+}
+
 void SystemDesignView::fillIssues() {
-    found_->clear();
+    int errors = 0, warnings = 0, notes = 0;
+    for (const SysIssue& i : issues_) { if (i.level == 2) ++errors; else if (i.level == 1) ++warnings; else ++notes; }
+    issueSummary_->setText(!checked_ ? QStringLiteral("Run Check design to list all findings.")
+                           : issues_.empty() ? (design_.bypassed.empty() ? QStringLiteral("Every enabled rule passes.") : QStringLiteral("No active findings (%1 bypassed records).").arg(design_.bypassed.size()))
+                           : QStringLiteral("%1 error(s), %2 warning(s), %3 note(s), %4 bypassed - click a finding to go to its part.").arg(errors).arg(warnings).arg(notes).arg(design_.bypassed.size()));
+    found_->setRowCount(0);
     for (const SysIssue& i : issues_) {
-        auto* it = new QListWidgetItem((i.level == 2 ? QStringLiteral("Error: ") : i.level == 1 ? QStringLiteral("Warning: ") : QStringLiteral("Note: ")) + i.what);
-        it->setForeground(i.level == 2 ? QColor(192, 57, 43) : i.level == 1 ? QColor(176, 122, 16) : QColor(90, 98, 110));
-        it->setData(Qt::UserRole, i.unit);
-        it->setData(Qt::UserRole + 1, i.cable);
-        found_->addItem(it);
+        const int row = found_->rowCount(); found_->insertRow(row);
+        const QStringList values{i.level == 2 ? QStringLiteral("Error") : i.level == 1 ? QStringLiteral("Warning") : QStringLiteral("Note"), i.rule, i.what};
+        for (int col = 0; col < values.size(); ++col) {
+            auto* it = new QTableWidgetItem(values[col]);
+            it->setForeground(i.level == 2 ? QColor("#e05a5a") : i.level == 1 ? QColor("#e6b84a") : found_->palette().color(QPalette::Text));
+            it->setData(Qt::UserRole, i.unit); it->setData(Qt::UserRole + 1, i.cable); it->setData(Qt::UserRole + 2, i.port);
+            it->setToolTip(i.what);
+            found_->setItem(row, col, it);
+        }
     }
+    for (int row = 0; row < static_cast<int>(issues_.size()); ++row) {
+        auto* accept = new QPushButton(QStringLiteral("Bypass"), found_);
+        accept->setObjectName(QStringLiteral("systemBypassRow"));
+        const QString key = issues_[static_cast<size_t>(row)].key();
+        connect(accept, &QPushButton::clicked, this, [this, key] {
+            for (int i=0; i<static_cast<int>(issues_.size()); ++i) if (issues_[static_cast<size_t>(i)].key()==key) { bypassIssue(i); break; }
+        });
+        found_->setCellWidget(row, 3, accept);
+    }
+    found_->setColumnWidth(3, 85);
+    found_->resizeColumnToContents(0); found_->resizeColumnToContents(1); found_->resizeRowsToContents();
     tabs_->setTabText(1, issues_.empty() ? QStringLiteral("Check") : QStringLiteral("Check (%1)").arg(issues_.size()));
+}
+
+void SystemDesignView::fillConnections() {
+    connections_->setRowCount(0);
+    for (const SysConnection& r : connectionRows_) {
+        const SysCable* c = design_.cable(r.cable);
+        const int row = connections_->rowCount(); connections_->insertRow(row);
+        const QStringList values{c ? c->name : r.cable, r.line, r.from, r.to, c ? QFileInfo(c->drawing).fileName() : QString(), r.status};
+        for (int col = 0; col < values.size(); ++col) {
+            auto* it = new QTableWidgetItem(values[col]); it->setData(Qt::UserRole, r.cable);
+            it->setToolTip(col == 4 && c ? c->drawing : values[col]);
+            if (col == 5) it->setForeground(r.level == 2 ? QColor("#e05a5a") : r.level == 1 ? QColor("#e6b84a") : QColor("#4cd07a"));
+            connections_->setItem(row, col, it);
+        }
+    }
+    connections_->resizeColumnsToContents();
 }
 
 int SystemDesignView::numberCables() {
@@ -723,11 +928,12 @@ bool SystemDesignView::linkDrawing(const QString& cable, const QString& path, bo
     aboutToChange();
     c->drawing = path;
     c->drawingNo.clear();
-    c->drawingRev.clear();
+    c->drawingRev.clear();c->drawingTitle.clear();
     if (!path.isEmpty()) {
         const DrawingInfo info = readDrawingInfo(path);
         c->drawingNo = info.drawingNo;
-        c->drawingRev = info.revision;
+        c->drawingRev = info.revision; c->drawingTitle=info.title;
+        if(c->expectedTitle.isEmpty())c->expectedTitle=info.title;
         // A cable with no part number or revision of its own takes the drawing's.
         if (c->pn.isEmpty()) c->pn = info.drawingNo;
         if (c->rev.isEmpty()) c->rev = info.revision;
@@ -783,13 +989,156 @@ int SystemDesignView::checkRevisions() {
 
 int SystemDesignView::checkDesign() {
     issues_ = design_.check();
+    issues_.erase(std::remove_if(issues_.begin(), issues_.end(), [this](const SysIssue& i) { return design_.ruleSeverity(i.rule)==0; }), issues_.end());
+    connectionRows_.clear();
+    if(design_.ruleSeverity(QStringLiteral("DRAWING-FIELDS"))>0)for(const SysCable& cable:design_.cables){
+        if(cable.drawing.isEmpty())continue;const DrawingInfo info=readDrawingInfo(cable.drawing);
+        for(const QString& message:info.fieldIssues)issues_.push_back({2,QStringLiteral("%1: %2").arg(cable.name,message),{},cable.id,QStringLiteral("DRAWING-FIELDS"),{}});
+        if(info.found&&!cable.expectedTitle.isEmpty()&&info.title!=cable.expectedTitle)
+            issues_.push_back({2,QStringLiteral("%1: drawing title '%2', expected '%3'").arg(cable.name,info.title,cable.expectedTitle),{},cable.id,QStringLiteral("DRAWING-FIELDS"),{}});
+    }
+    if (design_.ruleSeverity(QStringLiteral("SCHEMATIC-NAME"))>0) {
+        connectionRows_ = design_.checkConnections();
+        for (const SysConnection& r : connectionRows_) if (r.level > 0)
+            issues_.push_back({r.level, r.line.isEmpty() ? r.status : r.line + QStringLiteral(": ") + r.status, {}, r.cable, QStringLiteral("SCHEMATIC-NAME"), {}});
+    }
+    for (SysIssue& i : issues_) if (design_.ruleLevels.contains(i.rule)) i.level = design_.ruleSeverity(i.rule);
+    checkedFindings_ = issues_;
+    issues_.erase(std::remove_if(issues_.begin(), issues_.end(), [this](const SysIssue& i) {
+        return std::any_of(design_.bypassed.begin(), design_.bypassed.end(), [&](const SysIssue& accepted) { return accepted.key()==i.key(); });
+    }), issues_.end());
+    checked_ = true;
+    fillBypass();
+    std::stable_sort(issues_.begin(), issues_.end(), [](const SysIssue& a, const SysIssue& b) { return a.level > b.level; });
+    fillConnections();
+    canvas_->animateCheck(issues_);
     fillIssues();
     fillCables();
     syncPanel();
     tabs_->setCurrentIndex(1);
+    if (auto* split = findChild<QSplitter*>(QStringLiteral("systemResultsSplit"))) {
+        const int total = split->height();
+        const int desired = std::min(std::max(220, 80 + std::min(8, static_cast<int>(issues_.size())) * 28), std::max(100, total/2));
+        split->setSizes({std::max(200, total-desired), desired});
+    }
     int errors = 0;
     for (const SysIssue& i : issues_) errors += i.level == 2 ? 1 : 0;
     return errors;
+}
+
+int SystemDesignView::checkSchematics() {
+    const int errors = checkDesign(); tabs_->setCurrentIndex(2); return errors;
+}
+
+void SystemDesignView::askRules() {
+    QDialog dialog(this); dialog.setWindowTitle(QStringLiteral("System design rules"));
+    auto* layout = new QVBoxLayout(&dialog);
+    dialog.setObjectName(QStringLiteral("systemDrcRulesDialog"));
+    auto* explanation = new QLabel(QStringLiteral("Click a traffic light to cycle error, warning and not checked. Hover over a rule for its animated fault and fix. Changes apply immediately."), &dialog);
+    explanation->setWordWrap(true); layout->addWidget(explanation);
+    struct Rule { const char* first; const char* second; const char* description; };
+    const Rule rules[] = {
+        {"DESIGNATOR", "Unique designators", "Give every unit and cable a unique name, and every port a unique name on its unit. Empty and duplicated designators make connections ambiguous."},
+        {"PORT-CONNECTION", "Port connections", "Each port side takes one cable. Unused ports are reported; multiple cables on the same side of a connector are errors."},
+        {"PART-NUMBER", "Part numbers", "Units, ports, contacts and cables need their part numbers. Cables sharing a part number must have matching definitions, revisions and drawings."},
+        {"ROUTING","Cable routing clearance","Connected cable routes must avoid unit bodies. Ports move to a nearby clear face; routes remain attached while bends are moved."},
+        {"DRAWING-FIELDS","Drawing details fields","Every P/N, revision and title field in a linked drawing must agree with Drawing details. The drawing title must match the project expectation."},
+        {"DRAWING-LINK", "Drawing links and revisions", "Link each cable to its drawing. The file must be readable, and its drawing number and revision should match the cable definition."},
+        {"NOTE-LINK", "Note links", "A note leader must point to an existing unit, port or cable. Relink the note when its referenced item has been removed."},
+        {"SCHEMATIC-NAME", "Schematic line names", "Named electrical paths must join the expected ports. Every segment and shared unit/port/contact must retain the same line name across linked schematics."}
+    };
+    RuleExplainer::addSeverityLegend(layout, &dialog);
+    for (const auto& rule : rules) {
+        auto* row = new QWidget(&dialog); auto* rowLayout = new QHBoxLayout(row); rowLayout->setContentsMargins(0, 2, 0, 2);
+        auto* box = new QToolButton(row); box->setFixedSize(14, 14); box->setCursor(Qt::PointingHandCursor);
+        const QString id = QString::fromLatin1(rule.first);
+        RuleExplainer::paintSeverity(box, design_.ruleSeverity(id, id==QLatin1String("NOTE-LINK") ? 1 : 2));
+        connect(box, &QToolButton::clicked, this, [this, box, id] {
+            const int level=box->property("severity").toInt(); const int next=level>=2 ? 1 : level==1 ? 0 : 2;
+            setRuleSeverity(id,next); RuleExplainer::paintSeverity(box,next);
+        });
+        auto* title = new QLabel(QString::fromLatin1(rule.second), row);
+        title->setObjectName(QStringLiteral("systemDrcRuleName_") + QString::fromLatin1(rule.first));
+        RuleExplainer::attach(title, QString::fromLatin1(rule.first), QString::fromLatin1(rule.second), QString::fromLatin1(rule.description));
+        RuleExplainer::attach(box, QString::fromLatin1(rule.first), QString::fromLatin1(rule.second), QString::fromLatin1(rule.description));
+        rowLayout->addWidget(box); rowLayout->addWidget(title, 1);
+        box->setObjectName(QStringLiteral("systemDrcRule_") + QString::fromLatin1(rule.first));
+        layout->addWidget(row);
+    }
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    layout->addWidget(buttons); connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    dialog.exec();
+}
+
+void SystemDesignView::setRuleSeverity(const QString& rule, int level) {
+    level=std::clamp(level,0,2);
+    if (design_.ruleLevels.contains(rule) && design_.ruleSeverity(rule)==level) return;
+    aboutToChange(); design_.ruleLevels[rule]=level; design_.disabledRules.removeAll(rule);
+    if (level==0) design_.disabledRules << rule;
+    commit(); checkDesign();
+}
+
+bool SystemDesignView::bypassIssue(int row) {
+    if (row<0 || row>=static_cast<int>(issues_.size())) return false;
+    const SysIssue accepted=issues_[static_cast<size_t>(row)];
+    for (const SysIssue& i : design_.bypassed) if (i.key()==accepted.key()) return false;
+    aboutToChange(); design_.bypassed.push_back(accepted); commit(); checkDesign(); return true;
+}
+
+bool SystemDesignView::restoreIssue(const QString& key) {
+    const auto found=std::find_if(design_.bypassed.begin(),design_.bypassed.end(),[&](const SysIssue& i){return i.key()==key;});
+    if (found==design_.bypassed.end()) return false;
+    aboutToChange(); design_.bypassed.erase(found); commit(); checkDesign(); return true;
+}
+
+void SystemDesignView::showBypass() {
+    if (!bypassDialog_) {
+        bypassDialog_=new QDialog(this); bypassDialog_->setObjectName(QStringLiteral("systemDrcBypassDialog"));
+        bypassDialog_->setWindowTitle(QStringLiteral("Project DRC - bypass table")); bypassDialog_->resize(820,400);
+        bypassDialog_->setAttribute(Qt::WA_DeleteOnClose);
+        connect(bypassDialog_,&QObject::destroyed,this,[this]{bypassDialog_=nullptr;bypassTable_=nullptr;bypassSummary_=nullptr;});
+        auto* layout=new QVBoxLayout(bypassDialog_);
+        bypassSummary_=new QLabel(bypassDialog_); bypassSummary_->setWordWrap(true); layout->addWidget(bypassSummary_);
+        bypassTable_=new QTableWidget(0,4,bypassDialog_); bypassTable_->setObjectName(QStringLiteral("systemDrcBypassTable"));
+        bypassTable_->setHorizontalHeaderLabels({QStringLiteral("Rule"),QStringLiteral("Accepted finding"),QStringLiteral("Status"),QString()});
+        bypassTable_->horizontalHeader()->setSectionResizeMode(1,QHeaderView::Stretch); bypassTable_->verticalHeader()->hide();
+        bypassTable_->setSelectionBehavior(QAbstractItemView::SelectRows); bypassTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        connect(bypassTable_,&QTableWidget::cellClicked,this,[this](int row,int){
+            if(row>=0 && row<static_cast<int>(design_.bypassed.size())) canvas_->locateIssue(design_.bypassed[static_cast<size_t>(row)]);
+        });
+        layout->addWidget(bypassTable_);
+        auto* close=new QDialogButtonBox(QDialogButtonBox::Close,bypassDialog_); layout->addWidget(close);
+        connect(close,&QDialogButtonBox::rejected,bypassDialog_,&QDialog::close);
+    }
+    fillBypass(); bypassDialog_->show(); bypassDialog_->raise();
+}
+
+void SystemDesignView::fillBypass() {
+    if (!bypassTable_) return;
+    bypassSummary_->setText(QStringLiteral("%1 bypassed finding(s). Click a row to locate it; Restore flags it again. Bypasses are saved with the project.").arg(design_.bypassed.size()));
+    bypassTable_->setRowCount(0);
+    for (const SysIssue& i : design_.bypassed) {
+        const int row=bypassTable_->rowCount(); bypassTable_->insertRow(row);
+        const bool present=std::any_of(checkedFindings_.begin(),checkedFindings_.end(),[&](const SysIssue& finding){return finding.key()==i.key();});
+        bypassTable_->setItem(row,0,new QTableWidgetItem(i.rule)); bypassTable_->setItem(row,1,new QTableWidgetItem(i.what));
+        bypassTable_->setItem(row,2,new QTableWidgetItem(design_.ruleSeverity(i.rule)==0 ? QStringLiteral("Rule not checked")
+                                                   : !checked_ ? QStringLiteral("Not checked yet") : present ? QStringLiteral("Still present") : QStringLiteral("Not currently reported")));
+        auto* restore=new QPushButton(QStringLiteral("Restore"),bypassTable_); restore->setObjectName(QStringLiteral("systemRestoreBypassRow"));
+        const QString key=i.key(); connect(restore,&QPushButton::clicked,this,[this,key]{restoreIssue(key);});
+        bypassTable_->setCellWidget(row,3,restore);
+    }
+    bypassTable_->resizeColumnToContents(0); bypassTable_->resizeColumnToContents(2); bypassTable_->resizeColumnToContents(3);
+    bypassTable_->resizeRowsToContents();
+}
+
+void SystemDesignView::setCanvasColour(const QColor& colour) {
+    if(!colour.isValid() || colour==design_.background) return;
+    aboutToChange(); design_.background=colour; design_.background.setAlpha(255); commit();
+}
+
+void SystemDesignView::askCanvasColour() {
+    const QColor colour=QColorDialog::getColor(design_.background,this,QStringLiteral("Project canvas colour"));
+    if(colour.isValid()) setCanvasColour(colour);
 }
 
 namespace {

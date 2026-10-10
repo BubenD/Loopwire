@@ -830,16 +830,16 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
     // Every place the shape is measured: the ends, where the weave starts and stops, and a grid through
     // the weave fine enough that each half crossing is measured the same number of times (so a crossing
     // always lands exactly on a measured place).
-    // 24 places per crossing draws a smooth cosine (15 degrees a step) at any zoom this is read at;
+    // 48 places per turn draw a smooth helix (7.5 degrees a step) at drawing zoom;
     // a long route with a tight weave is measured more coarsely rather than without bound, because
     // everything that asks about the shape walks these places.
-    int perTurn = std::clamp(2400 / std::max(1, f.turns), 8, 24);
-    // A ROPE IS CUT EVERY 1/2N OF A TURN (see twistedPairWeave) - where each wire goes round the side
+    int perTurn = std::clamp(4800 / std::max(1, f.turns), 16, 48);
+    // A BUNDLE IS CUT EVERY 1/4N OF A TURN (see twistedPairWeave) - where each wire goes round the side
     // of it - so every one of those places has to be a measured one, with some between them, or a
     // strand's front half is drawn from whichever places happen to fall inside it, and most of them
     // are drawn as nothing.
     if (!f.straight && f.wires >= 3) {
-        const int q = 2 * f.wires;
+        const int q = 4 * f.wires;
         perTurn = q * std::max(2, (perTurn + q - 1) / q);
     }
     const int grid = f.turns * perTurn;
@@ -1828,24 +1828,16 @@ std::vector<TwistedPairStretch> twistedPairWeave(const Entity& pair) {
     // which wire is in front changes, and cutting it up anyway would only draw the same wires in the
     // same order several times over.
     //
-    // A TWISTED BUNDLE IS A ROPE. Every wire in it goes round the same way, so what is seen of it is
-    // the half of each turn that is at the FRONT - a row of strands all leaning the same way - and the
-    // half at the back is behind the bundle and not seen at all. Drawn with the back halves as well,
-    // three or more wires read as a braid: the back halves lean the other way, and show wherever no
-    // front strand happens to cover them. So the stretches are cut wherever ANY wire goes round the
-    // side (every 1/2N of a turn: the wires are spread evenly round it), and within one a wire is
-    // either at the front, and drawn, or at the back, and left out.
-    //
-    // A PAIR KEEPS ITS CROSSINGS. Two wires round each other is drawn the way a twisted pair is always
-    // drawn - both of them, crossing - and that is the symbol a drawing of one is read by.
+    // EVERY WIRE HAS A PROJECTED HELIX. Depth order gives each crossing its front strand;
+    // the far strand remains visible wherever it is not covered by one nearer the viewer.
     const bool rope = !f.straight && f.wires >= 3;
     std::vector<double> cuts{0.0};
     if (!f.straight || f.lay != RunLay::Straight) {
         cuts.push_back(f.lead);
-        const int perTurn = rope ? 2 * f.wires : 2;
+        const int perTurn = rope ? 4 * f.wires : 2;
         for (int k = 1; k < perTurn * f.turns; ++k)
             cuts.push_back(f.lead + f.turn * k / double(perTurn));
-        cuts.push_back(f.len - f.lead);
+        cuts.push_back(f.len - f.leadB);
     }
     std::sort(cuts.begin(), cuts.end());
     cuts.push_back(f.len);
@@ -1869,10 +1861,7 @@ std::vector<TwistedPairStretch> twistedPairWeave(const Entity& pair) {
         });
         TwistedPairStretch s;
         s.wires.reserve(order.size());
-        const bool woven = mid > f.lead && mid < f.len - f.leadB;
         for (const int k : order) {   // back to front, so the near ones are laid over the far ones
-            // Round the back of a rope: behind the bundle, and not seen.
-            if (rope && woven && twistDepth(f, k, mid) < 0.0) continue;
             // ONLY OVER THE PART OF THE RUN THIS WIRE IS DRAWN ON - the same answer the strands are
             // made from, kept once (see TwistCached::spans). Taking the whole stretch instead drew
             // every wire from one end of the run to the other, body or no body.
@@ -1898,18 +1887,23 @@ std::vector<TwistedPairStretch> twistedPairWeave(const Entity& pair) {
         out.push_back(std::move(s));
         idx = to;
     }
-    // AND THE ROPE'S TWO SIDES. Where a strand goes round the side of the bundle it turns from the
-    // front to the back, and what is seen there is the side of the bundle: a line along each edge of
-    // it, which is what closes each strand off rather than leaving its two edges ending in the air.
-    // Laid last, over the strands, and not filled - there is nothing behind a side to hide.
+    // THE BUNDLE'S SILHOUETTE follows the outer strands as they wind round the route.
+    // Drawn last, it finishes the outline without hiding the wire crossings inside.
     if (rope && !f.cableBody) {
         TwistedPairStretch side;
         TwistedPairStretch::Wire edges;
-        const double half = f.reach + f.thick;
+        // THE ENVELOPE FOLLOWS THE STRANDS instead of being two straight rails. Its shallow
+        // scallops follow the lay, and the held wire positions keep it inside a tight routed knee.
         for (size_t i = 0; i < f.u.size() && i < f.pos.size() && i < f.n.size(); ++i) {
             if (f.u[i] < f.lead - 1e-9 || f.u[i] > f.len - f.leadB + 1e-9) continue;
-            edges.edgeA.push_back(f.pos[i] + f.n[i] * half);
-            edges.edgeB.push_back(f.pos[i] - f.n[i] * half);
+            double high = -1e18, low = 1e18;
+            for (int wire = 0; wire < f.wires; ++wire) {
+                const double offset = dot(twistCentre(f, wire, i) - f.pos[i], f.n[i]);
+                high = std::max(high, offset + f.thick);
+                low = std::min(low, offset - f.thick);
+            }
+            edges.edgeA.push_back(f.pos[i] + f.n[i] * high);
+            edges.edgeB.push_back(f.pos[i] + f.n[i] * low);
         }
         if (edges.edgeA.size() >= 2) {
             side.wires.push_back(std::move(edges));

@@ -17,6 +17,7 @@
 
 class QLineEdit;
 class QCompleter;
+class QTimer;
 
 namespace Edraw_Desktop {
 
@@ -112,6 +113,8 @@ public:
     void setGridSize(double g);
     void setGridVisible(bool v);
     bool gridVisible() const { return gridVisible_; }
+    bool drawingDetailsVisible() const { return drawingDetailsVisible_; }
+    void setDrawingDetailsVisible(bool visible);
 
     // ---- Display options (Options dialog) ----
     int crosshairSize() const { return crosshairPct_; }   // 1..100 (% of viewport)
@@ -218,7 +221,7 @@ public:
     // top-overlay child so the crosshair always renders ABOVE every other child
     // widget (the on-canvas text editor, the flying input field, ...).
     void renderCrosshair(QPainter& p) const {
-        if (cursorInside_ && !panning_ && !inlineEditing_) drawCrosshair(p);
+        if (cursorInside_ && !panning_ && !inlineEditing_ && !drawingDetailsFrame_.contains(lastMousePos_)) drawCrosshair(p);
     }
 
     // Restack the crosshair overlay on top of every sibling. The host calls this
@@ -314,6 +317,8 @@ private:
     // into view. False if there is nothing worth keeping and the whole thing has to be drawn again.
     bool scrollScene(const QPoint& delta);
     void drawOriginMarker(QPainter& p, const ViewTransform& vt) const;
+    int drawDrawingDetails(QPainter& painter) const;
+    void updateDrawingDetailsHover();
     void drawCrosshair(QPainter& p) const; // AutoCAD-style full crosshair + pickbox
     // Pop the field near the cursor. `placeholder` (when non-empty) labels it for
     // an inline value prompt (fillet radius / gap); otherwise the active reference
@@ -335,6 +340,16 @@ private:
     Editor* editor_ = nullptr;
     double gridSize_ = 10.0;
     bool gridVisible_ = true;
+    bool drawingDetailsVisible_ = true;
+    bool drawingDetailsMinimized_ = false;
+    bool drawingDetailsPinned_ = false;
+    bool drawingDetailsHoverExpanded_ = false;
+    bool drawingDetailsHoverArmed_ = true;
+    bool drawingDetailsPressed_ = false;
+    mutable QRect drawingDetailsFrame_;
+    mutable QRect drawingDetailsMinimize_;
+    QTimer* drawingDetailsExpandTimer_ = nullptr;
+    QTimer* drawingDetailsFoldTimer_ = nullptr;
 
     // Display options.
     // Where the canvas sits INSIDE its own window. A panel on the left growing wider moves the canvas

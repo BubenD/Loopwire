@@ -1,4 +1,5 @@
 #include "app/MainWindow.h"
+#include "model/DrawingDetails.h"
 #include <QProgressBar>
 #include <QItemSelectionModel>
 #include <QScopeGuard>
@@ -205,6 +206,7 @@ private:
 // Delete, Fillet radius) — same flat line-art style as the tool icons so they sit
 // alongside them in the ribbon.
 QIcon makeOpIcon(const QString& op, const QColor& ink = QColor("#d6dae1")) {
+    const QIcon cad=makeCadActionIcon(op,ink);if(!cad.isNull())return cad;
     QPixmap pm(24, 24);
     pm.fill(Qt::transparent);
     QPainter p(&pm);
@@ -621,65 +623,7 @@ QIcon makeSplineMethodIcon(int mode) {
 // Icon per dimension mode (Linear/Aligned/Angular/ArcLength/Radius/Diameter/
 // Ordinate/Jogged), matching Editor::DimMode order.
 QIcon makeDimMethodIcon(int mode) {
-    QPixmap pm = geoCanvas();
-    QPainter p(&pm);
-    p.setRenderHint(QPainter::Antialiasing, true);
-    p.scale(2, 2);
-    QPen pen(kGeoBlue);
-    pen.setWidthF(1.4);
-    p.setPen(pen);
-    p.setBrush(Qt::NoBrush);
-    switch (mode) {
-    case 0: // Linear: extension lines + horizontal dimension line
-        p.drawLine(4, 19, 4, 9);
-        p.drawLine(20, 19, 20, 9);
-        p.drawLine(4, 10, 20, 10);
-        break;
-    case 1: // Aligned: diagonal dimension line
-        p.drawLine(4, 20, 8, 16);
-        p.drawLine(16, 8, 20, 4);
-        p.drawLine(6, 18, 18, 6);
-        break;
-    case 2: { // Angular: two rays + arc
-        p.drawLine(12, 20, 4, 6);
-        p.drawLine(12, 20, 20, 6);
-        QPainterPath pa;
-        pa.moveTo(8, 14);
-        pa.arcTo(4, 12, 16, 16, 130, -80);
-        p.drawPath(pa);
-        break;
-    }
-    case 3: { // Arc Length: arc with end ticks
-        QPainterPath pa;
-        pa.moveTo(5, 18);
-        pa.arcTo(5, 5, 16, 16, 200, -140);
-        p.drawPath(pa);
-        break;
-    }
-    case 4: // Radius: circle + radius line
-        p.drawEllipse(QPointF(12, 12), 8, 8);
-        p.drawLine(12, 12, 20, 12);
-        break;
-    case 5: // Diameter: circle + line across
-        p.drawEllipse(QPointF(12, 12), 8, 8);
-        p.drawLine(4, 12, 20, 12);
-        break;
-    case 6: // Ordinate: feature dot + leader
-        p.drawLine(12, 19, 12, 4);
-        geoDot(p, QPointF(12, 19));
-        break;
-    case 7: { // Jogged: circle + jagged radius
-        p.drawEllipse(QPointF(12, 12), 7, 7);
-        QPolygonF z;
-        z << QPointF(12, 12) << QPointF(15, 10) << QPointF(16, 14) << QPointF(21, 12);
-        p.drawPolyline(z);
-        break;
-    }
-    default:
-        break;
-    }
-    p.end();
-    return QIcon(pm);
+    return makeCadActionIcon(QStringLiteral("dimension%1").arg(mode),Chrome::ink());
 }
 
 // The Hatch pattern catalogue (display name + meta key), shared by the ribbon
@@ -2390,6 +2334,15 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
     note(QStringLiteral("Drawing canvas"));
     canvas_ = new CanvasWidget(this);
     editor_ = new Editor(this);
+    connect(editor_,&Editor::drawingDetailsChanged,this,[this]{
+        Document* owner=editor_->drawingOwner();if(!owner)return;
+        for(auto& entry:paperDocs_)if(entry.first.first==owner&&entry.second.get()!=editor_->document()){
+            const int index=entry.first.second;if(index>=0&&index<static_cast<int>(owner->layouts().size())){
+                entry.second->entities()=owner->layouts()[static_cast<size_t>(index)].paperEntities;
+                entry.second->drawingDetails()=owner->drawingDetails();
+            }
+        }
+    });
     canvas_->setEditor(editor_);
     note(QStringLiteral("Document tabs"));
     buildDocumentArea(); // tab bar + canvas as the central widget
@@ -2449,7 +2402,10 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
             canvas_->setFocus(Qt::OtherFocusReason);
         });
     });
+    connect(editor_, &Editor::validationStatusChanged, canvas_, QOverload<>::of(&QWidget::update));
     connect(editor_, &Editor::changed, this, [this] {
+        flushPaperSpace();
+        if(doc_)doc_->invalidateValidation();
         canvas_->update();
         refreshPanels();
         updateActiveTabText(); // reflect the dirty marker
@@ -3212,7 +3168,7 @@ void MainWindow::enteredLayoutViewport(bool inside) {
             8000);
     } else {
         Document* paper = paperSpaceFor(doc_, canvas_->layoutIndex());
-        editor_->setDocument(paper ? paper : doc_);
+        editor_->setDocument(paper ? paper : doc_); editor_->setDrawingOwner(doc_);
         statusBar()->showMessage(tr("Back on the paper."), 3000);
     }
     refreshProperties();
@@ -3767,7 +3723,7 @@ void MainWindow::activateDrawingSpace(int index, bool fitToSpace) {
         paperLoaded_ = {doc_, index - 1};
         canvas_->setDrawingDocument(doc_);
         canvas_->setDocument(paper);
-        if (editor_) editor_->setDocument(paper);
+        if (editor_) { editor_->setDocument(paper); editor_->setDrawingOwner(doc_); }
     } else {
         paperLoaded_ = {nullptr, -1};
         canvas_->setDrawingDocument(nullptr);
@@ -4483,28 +4439,7 @@ QToolButton* MainWindow::makeMatchBtn(QWidget* parent, bool iconOnly) {
         // Latches while the command is armed, so it is clear it is waiting for clicks.
         b->setCheckable(true);
         matchBtns_.append(b);
-        {
-            QPixmap pm(28, 28);
-            pm.fill(Qt::transparent);
-            QPainter ip(&pm);
-            ip.setRenderHint(QPainter::Antialiasing, true);
-            // A paintbrush: handle + ferrule + bristles (the AutoCAD MATCHPROP motif).
-            QPen pen(QColor("#cfe3ff"));
-            pen.setWidthF(2.0);
-            pen.setCapStyle(Qt::RoundCap);
-            pen.setJoinStyle(Qt::RoundJoin);
-            ip.setPen(pen);
-            ip.drawLine(21, 5, 12, 14);            // handle
-            ip.setBrush(QColor("#8fb7ff"));
-            ip.drawRoundedRect(QRectF(8, 12, 8, 6), 1.5, 1.5); // ferrule
-            ip.setBrush(QColor("#ffd27f"));
-            QPolygonF bristles;
-            bristles << QPointF(8, 17) << QPointF(16, 17) << QPointF(13, 24) << QPointF(6, 22);
-            ip.setPen(QPen(QColor("#ffd27f"), 1.0));
-            ip.drawPolygon(bristles);            // bristle tuft
-            ip.end();
-            b->setIcon(QIcon(pm));
-        }
+        b->setIcon(makeCadActionIcon(QStringLiteral("match")));
         connect(b, &QToolButton::clicked, this, [this, b] {
             // Clicking it while armed ends the command (a toggle, like the pin buttons).
             if (!b->isChecked()) {
@@ -4984,14 +4919,15 @@ void MainWindow::updateMechanicalRibbonGroups() {
     // AUTO ROUTE IS A FUNCTION LIKE THE REST OF THEM: armed, it has the ribbon to itself - its own two
     // fields, and none of the tools that cannot be used until it is finished.
     const bool armed = editor_->tool() == ToolId::LengthBreak ||
-                       Editor::isTwistedTool(editor_->tool()) ||
+                       Editor::isParameterRouteTool(editor_->tool()) ||
                        editor_->tool() == ToolId::AutoRoute;
     for (QWidget* g : mechGroups_)
-        if (g && g != mechBreakGroup_) g->setVisible(!armed);
+        if (g && g != mechBreakGroup_ && g != shrinkOptionsGroup_) g->setVisible(!armed);
+    if (shrinkOptionsGroup_) shrinkOptionsGroup_->setVisible(editor_->tool() == ToolId::HeatshrinkRoute);
     // Special is the one group an armed tool does NOT put away - the tool being used is on it. But the
     // label branch above puts away everything, Special included, so it is turned back on here by name:
     // without this, fitting one label hid the button that places the next one.
-    if (mechBreakGroup_) mechBreakGroup_->setVisible(true);
+    if (mechBreakGroup_) mechBreakGroup_->setVisible(editor_->tool() != ToolId::HeatshrinkRoute);
     // AND THE OTHER ICONS ON IT STAND DOWN while one of them is in use. The rule for this tab is that
     // a function in progress shows its own settings and nothing else - every other group obeys it, and
     // this was the one that did not: the two fields that matter appeared beside the whole row of tools
@@ -5008,9 +4944,9 @@ void MainWindow::updateMechanicalRibbonGroups() {
         // that cell while the straight run was armed took the fields away with it - the group came
         // out empty and invisible, which is the opposite of what this is for.
         const bool carriesSettings =
-            (twistOptionsGroup_ && twistOptionsGroup_->isVisible() &&
+            (twistOptionsGroup_ && !twistOptionsGroup_->isHidden() &&
              cell->isAncestorOf(twistOptionsGroup_)) ||
-            (breakOptionsGroup_ && breakOptionsGroup_->isVisible() &&
+            (breakOptionsGroup_ && !breakOptionsGroup_->isHidden() &&
              cell->isAncestorOf(breakOptionsGroup_)) ||
             // Asked of the group's OWN flag, not isVisible(): the cell around it may be hidden from
             // the last function, and isVisible() then says no for a group that is about to be shown.
@@ -5066,6 +5002,7 @@ void MainWindow::syncLabelOptions() {
 
 void MainWindow::syncBreakOptions() {
     if (!editor_) return;
+    if (syncShrinkRibbon_) syncShrinkRibbon_();
     // AUTO ROUTE's two settings, while it is armed, each showing the figure Auto comes to.
     if (autoRouteOptionsGroup_) {
         const bool routing = editor_->tool() == ToolId::AutoRoute;
@@ -7803,6 +7740,12 @@ void MainWindow::applyTheme(bool dark) {
     for (const auto& ob : opButtons_)
         ob.second->setIcon(makeOpIcon(ob.first, ink));
 
+    for(QToolButton* button:matchBtns_)if(button)button->setIcon(makeCadActionIcon(QStringLiteral("match"),ink));
+    for(QToolButton* button:ribbon_->findChildren<QToolButton*>()){
+        const QString key=button->property("cadActionIcon").toString();
+        if(!key.isEmpty())button->setIcon(makeCadActionIcon(key,ink));
+    }
+
     // Status-bar drafting toggles: re-tint the icons and re-style hover/checked so
     // they read on the (now theme-coloured) status bar.
     const QColor stInk = dark ? QColor("#cfd8e6") : QColor("#33373f");
@@ -9835,8 +9778,8 @@ void MainWindow::refreshProperties() {
            sel.empty() ? QStringLiteral("No selection")
                        : (multi ? QStringLiteral("%1 x %2")
                                       .arg(sel.size())
-                                      .arg(entityTypeDisplayName(e->type))
-                                : (e ? entityTypeDisplayName(e->type)
+                                      .arg((e->type==EntityType::Text&&e->meta.value(QStringLiteral("drawingDetailField")).toBool()?QStringLiteral("Drawing Detail text (%1)").arg(drawingFieldTextType(e->meta.value(QStringLiteral("field")).toString())):entityTypeDisplayName(e->type)))
+                                : (e ? (e->type==EntityType::Text&&e->meta.value(QStringLiteral("drawingDetailField")).toBool()?QStringLiteral("Drawing Detail text (%1)").arg(drawingFieldTextType(e->meta.value(QStringLiteral("field")).toString())):entityTypeDisplayName(e->type))
                                      : QStringLiteral("%1 objects (mixed)").arg(sel.size()))));
     if (gen) {
         QStringList layerNames;
@@ -13442,6 +13385,9 @@ void MainWindow::showConnectorDialog() {
 }
 
 void MainWindow::locateIssue(const ValidationIssue& issue) {
+    if(!issue.layout.isEmpty()&&doc_){
+        for(int i=0;i<static_cast<int>(doc_->layouts().size());++i)if(doc_->layouts()[static_cast<size_t>(i)].name==issue.layout){if(drawingSpaceTabs_->currentIndex()!=i+1)drawingSpaceTabs_->setCurrentIndex(i+1);else if(canvas_->activeLayoutViewport()>=0)canvas_->leaveLayoutViewport();break;}
+    } else if(issue.key.startsWith(QLatin1String("drawing-fields:"))&&drawingSpaceTabs_)drawingSpaceTabs_->setCurrentIndex(0);
     if (!issue.entityId.isEmpty()) editor_->selectById(issue.entityId);
     canvas_->centerOn(issue.at, 2.5); // jump the view to the object
     editor_->flashHighlight(issue.at);
@@ -13464,11 +13410,60 @@ static QIcon makeBypassIcon() {
     return QIcon(pm);
 }
 
+QToolButton* MainWindow::makeDrawingDetailsButton(QWidget* parent,bool iconOnly) {
+    auto* button=new QToolButton(parent);button->setObjectName(QStringLiteral("drawingDetailsButton"));
+    button->setProperty("cadActionIcon",QStringLiteral("drawingdetails"));
+    button->setText(QStringLiteral("Drawing details"));button->setIcon(makeCadActionIcon(QStringLiteral("drawingdetails")));button->setIconSize(QSize(26,26));
+    button->setToolButtonStyle(iconOnly?Qt::ToolButtonIconOnly:Qt::ToolButtonTextUnderIcon);button->setAutoRaise(true);button->setFocusPolicy(Qt::NoFocus);
+    button->setToolTip(QStringLiteral("Fill the drawing P/N, revision and title; the arrow places each value as a checked field on the canvas"));
+    button->setPopupMode(QToolButton::MenuButtonPopup);connect(button,&QToolButton::clicked,this,[this]{showDrawingDetails();});
+    auto* menu=new QMenu(button);
+    for(const QString& key:{QStringLiteral("drawingNo"),QStringLiteral("revision"),QStringLiteral("title")})
+        menu->addAction(QStringLiteral("Place %1 field").arg(drawingFieldLabel(key)),this,[this,key]{
+            if(!editor_->placeDrawingField(key)){showDrawingDetails();editor_->placeDrawingField(key);}
+            canvas_->setFocus();
+        });
+    menu->addSeparator();
+    auto* show=menu->addAction(QStringLiteral("Show details on canvas"));
+    show->setObjectName(QStringLiteral("showDrawingDetailsOnCanvas"));show->setCheckable(true);
+    show->setChecked(canvas_->drawingDetailsVisible());
+    connect(show,&QAction::toggled,canvas_,&CanvasWidget::setDrawingDetailsVisible);
+    connect(menu,&QMenu::aboutToShow,this,[this,show]{QSignalBlocker block(show);show->setChecked(canvas_->drawingDetailsVisible());});
+    button->setMenu(menu);return button;
+}
+void MainWindow::showDrawingDetails() {
+    if(!doc_||!editor_)return;
+    QDialog dialog(this);dialog.setObjectName(QStringLiteral("drawingDetailsDialog"));dialog.setWindowTitle(QStringLiteral("Drawing details"));
+    auto* layout=new QVBoxLayout(&dialog);auto* explanation=new QLabel(QStringLiteral("These values are saved with this drawing. Applying them updates every P/N, revision and title field on the model and sheets. Historical revision tables remain a history."),&dialog);
+    explanation->setWordWrap(true);layout->addWidget(explanation);auto* form=new QFormLayout;
+    flushPaperSpace();
+    const QJsonObject details=effectiveDrawingDetails(*doc_);QHash<QString,QLineEdit*> entries;
+    for(const QString& key:{QStringLiteral("drawingNo"),QStringLiteral("revision"),QStringLiteral("title")}){
+        auto* entry=new QLineEdit(details.value(key).toString(),&dialog);entry->setObjectName(QStringLiteral("drawingDetails_")+key);
+        form->addRow(drawingFieldLabel(key),entry);entries[key]=entry;
+    }
+    layout->addLayout(form);
+    auto* show=new QCheckBox(QStringLiteral("Show details on canvas"),&dialog);
+    show->setObjectName(QStringLiteral("drawingDetailsCanvasToggle"));show->setChecked(canvas_->drawingDetailsVisible());
+    layout->addWidget(show);connect(show,&QCheckBox::toggled,canvas_,&CanvasWidget::setDrawingDetailsVisible);
+    auto* buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel,&dialog);layout->addWidget(buttons);
+    connect(buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+    if(dialog.exec()!=QDialog::Accepted)return;
+    QJsonObject updated;for(auto it=entries.begin();it!=entries.end();++it)updated[it.key()]=it.value()->text().trimmed();
+    editor_->setDrawingOwner(doc_);editor_->setDrawingDetails(updated);refreshPanels();
+}
+
 void MainWindow::showValidation(bool revalidate) {
+    flushPaperSpace();
     const std::vector<ValidationIssue> all = editor_->validateSchematic();
     QSet<QString> presentKeys; // discrepancies still detected in the drawing
     for (const auto& is : all) presentKeys.insert(is.key);
     const auto& bypassed = editor_->bypassedIssues();
+
+    bool passed=true;
+    for(const auto& issue:all)if(!bypassed.contains(issue.key)&&editor_->schematicRuleSeverity(issue.key.section(QLatin1Char(':'),0,0))>0){passed=false;break;}
+    if(auto* owner=editor_->drawingOwner())owner->recordValidation(QStringLiteral("schematic"),passed);
+    canvas_->update();
 
     // Tracked set: on a fresh open it's the current (non-bypassed) discrepancies; on
     // Revalidate we KEEP the earlier set and merely add any newly-appeared ones, so a
@@ -13488,6 +13483,8 @@ void MainWindow::showValidation(bool revalidate) {
     std::vector<ValidationIssue> display;
     for (const auto& is : validationSnapshot_)
         if (!bypassed.contains(is.key)) display.push_back(is);
+    for (ValidationIssue& issue : display) issue.level=editor_->schematicRuleSeverity(issue.key.section(QLatin1Char(':'),0,0));
+    std::stable_sort(display.begin(),display.end(),[](const ValidationIssue& a,const ValidationIssue& b){return a.level>b.level;});
     int open = 0, fixed = 0;
     for (const auto& is : display) (presentKeys.contains(is.key) ? open : fixed)++;
 
@@ -13503,6 +13500,7 @@ void MainWindow::showValidation(bool revalidate) {
             validationHeader_ = nullptr;
         });
         dlg->setWindowTitle(QStringLiteral("Schematic validation"));
+        dlg->setObjectName(QStringLiteral("schematicDrc"));
         dlg->setModal(false);
         dlg->resize(600, 400);
         auto* lay = new QVBoxLayout(dlg);
@@ -13512,11 +13510,12 @@ void MainWindow::showValidation(bool revalidate) {
         lay->addWidget(validationHeader_);
 
         validationTable_ = new QTableWidget(dlg);
-        validationTable_->setColumnCount(2);
-        validationTable_->setHorizontalHeaderLabels({QStringLiteral("Discrepancy"), QString()});
-        validationTable_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
-        validationTable_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Fixed);
-        validationTable_->setColumnWidth(1, 92);
+        validationTable_->setObjectName(QStringLiteral("schematicDrcTable"));
+        validationTable_->setColumnCount(3);
+        validationTable_->setHorizontalHeaderLabels({QStringLiteral("Severity"),QStringLiteral("Discrepancy"),QString()});
+        validationTable_->horizontalHeader()->setSectionResizeMode(1,QHeaderView::Stretch);
+        validationTable_->horizontalHeader()->setSectionResizeMode(2,QHeaderView::Fixed);
+        validationTable_->setColumnWidth(0,72); validationTable_->setColumnWidth(2,92);
         validationTable_->verticalHeader()->setVisible(false);
         validationTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
         validationTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -13570,7 +13569,10 @@ void MainWindow::showValidation(bool revalidate) {
             f.setStrikeOut(true);
             item->setFont(f);
         }
-        table->setItem(r, 0, item);
+        if(!isFixed) item->setForeground(display[r].level>=2 ? QColor("#e05a5a") : QColor("#e6b84a"));
+        auto* severity=new QTableWidgetItem(isFixed ? QStringLiteral("Fixed") : display[r].level>=2 ? QStringLiteral("Error") : QStringLiteral("Warning"));
+        severity->setForeground(isFixed ? QColor("#4cd07a") : display[r].level>=2 ? QColor("#e05a5a") : QColor("#e6b84a"));
+        table->setItem(r,0,severity); table->setItem(r,1,item);
         if (!isFixed) { // a still-open issue gets a Bypass button
             auto* by = new QPushButton(QStringLiteral("Bypass"), table);
             const QString key = display[r].key;
@@ -13578,7 +13580,7 @@ void MainWindow::showValidation(bool revalidate) {
                 editor_->bypassIssue(key);
                 showValidation(true); // in-place refresh; no new window
             });
-            table->setCellWidget(r, 1, by);
+            table->setCellWidget(r, 2, by);
         }
     }
 
@@ -13653,6 +13655,7 @@ void MainWindow::showBypassTable() {
 // Editor::validateSchematic) plus a human label for the chooser.
 static const std::vector<std::pair<QString, QString>>& validationRuleDefs() {
     static const std::vector<std::pair<QString, QString>> defs = {
+        {QStringLiteral("drawing-fields"),QStringLiteral("Drawing P/N, revision and title copies agree")},
         {QStringLiteral("nc"), QStringLiteral("Pin not connected (no wire and no X marker)")},
         {QStringLiteral("openwire"), QStringLiteral("Wire with an unconnected end (an "
                                                    "X-terminated end counts as open)")},
@@ -13676,14 +13679,18 @@ void MainWindow::showValidationRules() {
     rulesDlg_ = dlg;
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     connect(dlg, &QObject::destroyed, this, [this] { rulesDlg_ = nullptr; });
-    dlg->setWindowTitle(QStringLiteral("Validation rules"));
+    dlg->setWindowTitle(QStringLiteral("Schematic design rules"));
+    dlg->setObjectName(QStringLiteral("schematicDrcRulesDialog"));
     dlg->setModal(false);
-    dlg->resize(420, 260);
+    dlg->resize(650,450);
     auto* lay = new QVBoxLayout(dlg);
-    lay->addWidget(new QLabel(QStringLiteral("Tick the checks to run when validating:"), dlg));
+    auto* explanation=new QLabel(QStringLiteral("Click a traffic light to cycle error, warning and not checked. Hover over a rule for its animated fault and fix."),dlg);
+    explanation->setWordWrap(true); lay->addWidget(explanation);
+    RuleExplainer::addSeverityLegend(lay,dlg);
 
     // HOVERED, each rule shows the fault and the fix, animated, with what it means.
     static const QHash<QString, QString> meaning = {
+        {QStringLiteral("drawing-fields"),QStringLiteral("Every drawing P/N, revision and title field on the model and sheets must match Drawing details. Historical revision entries retain their individual values and are not compared as current-revision fields.")},
         {QStringLiteral("nc"), QStringLiteral("Every pin either carries a wire or is marked not-connected with an X. "
                                               "A pin with neither is a connection forgotten.")},
         {QStringLiteral("openwire"), QStringLiteral("Both ends of every wire land on a pin. A wire ending in free space "
@@ -13703,16 +13710,19 @@ void MainWindow::showValidationRules() {
                                                        "a drain left free screens nothing.")},
     };
     for (const auto& [id, label] : validationRuleDefs()) {
-        auto* cb = new QCheckBox(label, dlg);
-        cb->setChecked(editor_->ruleEnabled(id));
-        RuleExplainer::attach(cb, id, label, meaning.value(id, label));
-        const QString rid = id;
-        connect(cb, &QCheckBox::toggled, this, [this, rid](bool on) {
-            editor_->setRuleEnabled(rid, on);
-            // Re-run so the open validation window reflects the new rule set.
-            if (validationDlg_) showValidation(false);
+        auto* row=new QWidget(dlg); auto* rl=new QHBoxLayout(row); rl->setContentsMargins(0,2,0,2);
+        auto* square=new QToolButton(row); square->setFixedSize(14,14); square->setCursor(Qt::PointingHandCursor);
+        square->setObjectName(QStringLiteral("schematicDrcRule_")+id);
+        RuleExplainer::paintSeverity(square,editor_->schematicRuleSeverity(id));
+        auto* title=new QLabel(label,row); title->setWordWrap(true); title->setObjectName(QStringLiteral("schematicDrcRuleName_")+id);
+        RuleExplainer::attach(title,id,label,meaning.value(id,label)); RuleExplainer::attach(square,id,label,meaning.value(id,label));
+        const QString rid=id;
+        connect(square,&QToolButton::clicked,this,[this,square,rid]{
+            const int level=square->property("severity").toInt(); const int next=level>=2 ? 1 : level==1 ? 0 : 2;
+            editor_->setSchematicRuleSeverity(rid,next); RuleExplainer::paintSeverity(square,next);
+            if(validationDlg_)showValidation(false);
         });
-        lay->addWidget(cb);
+        rl->addWidget(square); rl->addWidget(title,1); lay->addWidget(row);
     }
     lay->addStretch(1);
     auto* box = new QDialogButtonBox(QDialogButtonBox::Close, dlg);
@@ -14128,10 +14138,12 @@ QToolButton* MainWindow::makeDrcBypassButton(QWidget* parent) {
 }
 
 void MainWindow::prepareMechanicalValidation() {
+    flushPaperSpace();
     // Modeless and kept alive: a gauge is changed on the drawing, Check again is pressed, and the
     // answers follow - which is the whole point of checking against the bundle rather than a figure.
     if (!mechCheckDlg_) {
         mechCheckDlg_ = new MechanicalValidationDialog(editor_, this);
+        connect(mechCheckDlg_,&MechanicalValidationDialog::drawingFieldLocateRequested,this,[this](const QString& id,const QString& layout,double x,double y){locateIssue({QStringLiteral("drawing-fields:locate"),{},id,{x,y},2,layout});});
         // A FINDING DOUBLE-CLICKED: to its part on the sheet - where it was found there, or by the harness and brick it
         // was placed from.
         connect(mechCheckDlg_, &MechanicalValidationDialog::locateRequested, this,
@@ -14954,6 +14966,9 @@ void MainWindow::placeMechModel(MechModelKind kind) {
 
 // A small picture of a kind, drawn as the thing rather than as a symbol for it.
 QIcon MainWindow::makeMechModelIcon(MechModelKind kind) {
+    if(kind==MechModelKind::Label)return makeCadActionIcon(QStringLiteral("label"),Chrome::ink());
+    if(kind==MechModelKind::LabelUnderHeatshrink)return makeCadActionIcon(QStringLiteral("labelclear"),Chrome::ink());
+
     QPixmap pm(28, 28);
     pm.fill(Qt::transparent);
     QPainter p(&pm);

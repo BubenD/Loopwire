@@ -30,6 +30,10 @@
 #include <QPainterPath>
 #include <QPixmap>
 #include <QSpinBox>
+#include <QSignalBlocker>
+#include <QScrollArea>
+#include <QEvent>
+#include <QShowEvent>
 #include <QStatusBar>
 #include <QTabWidget>
 #include <QToolButton>
@@ -39,6 +43,43 @@
 #include <cmath>
 
 namespace Edraw_Desktop {
+namespace {
+// THE LONG PARAMETER STRIP KEEPS ITS FIELD WIDTHS. Only its viewport fits the ribbon, so independent
+// start and finish settings can be scrolled into view without cutting labels or stacking controls.
+class HarnessParameterScroll final : public QScrollArea {
+public:
+    HarnessParameterScroll(QWidget* ribbon, QWidget* parent) : QScrollArea(parent), ribbon_(ribbon) {
+        setFrameShape(QFrame::NoFrame);
+        setWidgetResizable(true);
+        setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        setMinimumWidth(200);
+        setMaximumWidth(std::max(200, ribbon_->width() - 40));
+        setStyleSheet(QStringLiteral("QScrollArea{background:transparent;}"));
+        ribbon_->installEventFilter(this);
+    }
+    QSize sizeHint() const override { return {std::max(200, ribbon_->width() - 40), 100}; }
+protected:
+    bool eventFilter(QObject* object, QEvent* event) override {
+        if (object == ribbon_ && event->type() == QEvent::Resize) {
+            setMaximumWidth(std::max(200, ribbon_->width() - 40));
+            updateGeometry();
+        }
+        return QScrollArea::eventFilter(object, event);
+    }
+    void showEvent(QShowEvent* event) override {
+        if (widget()) {
+            for (QLabel* label : widget()->findChildren<QLabel*>())
+                label->setMinimumWidth(label->fontMetrics().horizontalAdvance(label->text()) + 4);
+            for (QCheckBox* check : widget()->findChildren<QCheckBox*>())
+                check->setMinimumWidth(check->fontMetrics().horizontalAdvance(check->text()) + 28);
+        }
+        QScrollArea::showEvent(event);
+    }
+private:
+    QWidget* ribbon_;
+};
+} // namespace
 
 namespace {
 // Room for an icon and two short lines of caption. The same idea as the model session's own cell: a row of
@@ -96,7 +137,7 @@ void MainWindow::buildHarnessMechanicalTab() {
             lay, QStringLiteral("Annotation"),
             toolRow({ToolId::Text, ToolId::Dimension, ToolId::Balloon, ToolId::TextLeader, ToolId::Note,
                      ToolId::Revision, ToolId::DetailView, ToolId::VolumeArrow},
-                    {tb}));
+                    {tb,makeDrawingDetailsButton(page,true)}));
     }
     // SPECIAL: the marks and symbols that belong to a harness drawing and to nothing else - the break
     // that says a run is longer than the paper, and the twisted pair. They are not drawing tools and
@@ -156,7 +197,7 @@ void MainWindow::buildHarnessMechanicalTab() {
         };
         auto lgAddFirst = [&](QWidget* w) {
             sizeCell(w);
-            specialCells.insert(specialCells.begin(), w);
+            specialCells.insert(specialCells.begin() + 1, w);
             ++specialAt;
         };
         // The break mark, in either style. A harness is drawn shorter than it is built - a two-metre
@@ -176,30 +217,13 @@ void MainWindow::buildHarnessMechanicalTab() {
         breakBtn->setIconSize(QSize(26, 26));
         breakBtn->setAutoRaise(true);
         breakBtn->setFocusPolicy(Qt::NoFocus);
+        breakBtn->setObjectName(QStringLiteral("specialStrokesButton"));
         breakBtn->setPopupMode(QToolButton::MenuButtonPopup);
         auto* breakMenu = new QMenu(breakBtn);
         breakBtn->setMenu(breakMenu);
         // The icon of a style, drawn as the thing it places.
         auto styleIcon = [](bool curved) {
-            QPixmap pm(28, 28);
-            pm.fill(Qt::transparent);
-            QPainter ip(&pm);
-            ip.setRenderHint(QPainter::Antialiasing, true);
-            ip.setPen(QPen(QColor("#cfe3ff"), 1.6));
-            ip.drawLine(2, 14, 26, 14);
-            for (int k = 0; k < 2; ++k) {
-                const double x = 11.0 + k * 7.0;
-                if (!curved) {
-                    ip.drawLine(QPointF(x + 3, 5), QPointF(x - 3, 23));
-                } else {
-                    QPainterPath path(QPointF(x + 3, 5));
-                    path.cubicTo(QPointF(x - 2, 9), QPointF(x + 3, 13), QPointF(x, 14));
-                    path.cubicTo(QPointF(x - 3, 15), QPointF(x + 2, 19), QPointF(x - 3, 23));
-                    ip.drawPath(path);
-                }
-            }
-            ip.end();
-            return QIcon(pm);
+            return makeCadActionIcon(curved?QStringLiteral("breakcurve"):QStringLiteral("break"));
         };
         struct Style {
             const char* key;
@@ -218,6 +242,7 @@ void MainWindow::buildHarnessMechanicalTab() {
         auto showStyle = [this, breakBtn, styleIcon](const QString& key, const char* name) {
             editor_->breakStyle() = key;
             breakBtn->setIcon(styleIcon(key == QLatin1String("curved")));
+            breakBtn->setProperty("cadActionIcon",key==QLatin1String("curved")?QStringLiteral("breakcurve"):QStringLiteral("break"));
             breakBtn->setText(QStringLiteral("Break\n%1").arg(
                 key == QLatin1String("curved") ? QStringLiteral("curved") : QStringLiteral("straight")));
             breakBtn->setToolTip(
@@ -421,6 +446,28 @@ void MainWindow::buildHarnessMechanicalTab() {
                 twistBodyBox_ = bodyBox;
                 og->addWidget(fanBox, 0, 6, 2, 1);
                 og->addWidget(bodyBox, 0, 8, 2, 1);
+                auto* routeAngleLabel = new QLabel(QStringLiteral("Route angle"), optW);
+                routeAngleLabel->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
+                auto* routeAngle = new QDoubleSpinBox(optW);
+                routeAngle->setObjectName(QStringLiteral("harnessRunRouteAngle"));
+                routeAngle->setRange(-360.0, 360.0);
+                routeAngle->setDecimals(1);
+                routeAngle->setSuffix(QString::fromUtf8("\xC2\xB0"));
+                routeAngle->setKeyboardTracking(false);
+                routeAngle->setMinimumWidth(82);
+                routeAngle->setToolTip(QStringLiteral("Angle of the current route segment. Editing holds the preview, preserving its length. Tab holds it, click resumes, Enter finishes."));
+                og->addWidget(routeAngleLabel, 0, 0);
+                og->addWidget(routeAngle, 1, 0);
+                connect(routeAngle, &QDoubleSpinBox::valueChanged, this,
+                        [this](double degrees){ editor_->setDraftRouteAngle(degrees); });
+                auto syncRouteAngle = [this, routeAngle]{
+                    QSignalBlocker blocker(routeAngle);
+                    routeAngle->setEnabled(editor_->hasDraftRouteSegment());
+                    if (editor_->hasDraftRouteSegment()) routeAngle->setValue(editor_->draftRouteAngle());
+                };
+                connect(editor_, &Editor::overlayChanged, this, syncRouteAngle);
+                connect(editor_, &Editor::toolChanged, this, [syncRouteAngle](ToolId){ syncRouteAngle(); });
+                syncRouteAngle();
                 for (int gap : {2, 5, 8, 11}) fg->setColumnMinimumWidth(gap, 10);
                 fg->setColumnMinimumWidth(14, 10);
                 for (int gap : {2, 5, 8, 11}) bg->setColumnMinimumWidth(gap, 10);
@@ -666,7 +713,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                 // it starts, because nearly every run IS drawn alike at both ends - the finish end
                 // repeats the start and there is one set of figures to keep. Unticked, the three
                 // that describe a fan are asked again for the finish end.
-                twistSidesCheck_ = new QCheckBox(QStringLiteral("Both sides same"), optW);
+                twistSidesCheck_ = new QCheckBox(QStringLiteral("Same fan ends"), optW);
                 twistSidesCheck_->setChecked(editor_->twistSidesSame());
                 twistSidesCheck_->setStyleSheet(
                     QStringLiteral("color:#e6e9ef;background:transparent;"));
@@ -674,7 +721,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                     "The finish end of the run repeats the start end. Untick it to give the finish "
                     "end its own pitch, fan length and fan knee - a run out of a header into a ring "
                     "terminal fans quite differently at the two ends."));
-                fg->addWidget(twistSidesCheck_, 0, 9, 1, 2);
+                fg->addWidget(twistSidesCheck_, 1, 15, 1, 2);
                 // WHAT FINISHES A BODY END. Which end is body is said by Spread, above - the one
                 // control for the one question. A transition is a part fitted over the end of a
                 // CABLE; whether a SLEEVE has recovered onto what comes out of it or been cut off
@@ -969,7 +1016,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                         [this](double v) { editor_->setTwistBoot(v); canvas_->update(); });
                 connect(twistBootBSpin_, &QDoubleSpinBox::valueChanged, this,
                         [this](double v) { editor_->setTwistBootFinish(v); canvas_->update(); });
-                twistBodySidesCheck_ = new QCheckBox(QStringLiteral("Cable both sides"), optW);
+                twistBodySidesCheck_ = new QCheckBox(QStringLiteral("Same body ends"), optW);
                 twistBodySidesCheck_->setChecked(editor_->twistBodySidesSame());
                 twistBodySidesCheck_->setStyleSheet(
                     QStringLiteral("color:#e6e9ef;background:transparent;"));
@@ -1122,7 +1169,16 @@ void MainWindow::buildHarnessMechanicalTab() {
                 // either there for a bundle tool or not there at all.
                 optW->setVisible(false);
                 twistOptionsGroup_ = optW;
-                tg->addWidget(optW);
+                og->setSizeConstraint(QLayout::SetMinAndMaxSize);
+                auto* parameterScroll = new HarnessParameterScroll(ribbon_, thW);
+                parameterScroll->setObjectName(QStringLiteral("harnessRunParameterScroll"));
+                parameterScroll->setWidget(optW);
+                parameterScroll->hide();
+                tg->addWidget(parameterScroll);
+                connect(editor_, &Editor::toolChanged, this, [this, parameterScroll, optW](ToolId){
+                    parameterScroll->setVisible(!optW->isHidden());
+                    updateMechanicalRibbonGroups();
+                });
             }
             lgAddFirst(thW);
         }
@@ -1286,6 +1342,7 @@ void MainWindow::buildHarnessMechanicalTab() {
             hsBtn->setIconSize(QSize(26, 26));
             hsBtn->setAutoRaise(true);
             hsBtn->setFocusPolicy(Qt::NoFocus);
+            hsBtn->setObjectName(QStringLiteral("specialHeatshrinkButton"));
             hsBtn->setPopupMode(QToolButton::MenuButtonPopup);
             QAction* hsAct = makeToolAction(toolLabel(ToolId::HeatshrinkRoute),
                                             ToolId::HeatshrinkRoute);
@@ -1380,6 +1437,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                 const QString tip = QString::fromLatin1(sort.tip);
                 connect(a, &QAction::triggered, this, [this, labelBtn, kind, ic, text, tip] {
                     labelBtn->setIcon(ic);            // the button wears what was chosen
+                    labelBtn->setProperty("cadActionIcon",kind==MechModelKind::Label?QStringLiteral("label"):QStringLiteral("labelclear"));
                     labelBtn->setText(text);          // kept for the tooltip, not shown on the button
                     labelBtn->setToolTip(tip);
                     // WHICH sort, held on the button rather than read back out of its caption: the caption
@@ -1389,6 +1447,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                     placeMechModel(kind);
                 });
             }
+            labelBtn->setProperty("cadActionIcon",QStringLiteral("label"));
             labelBtn->setIcon(makeMechModelIcon(sorts[0].kind));   // the first of the list, to begin with
             labelBtn->setToolTip(QString::fromLatin1(sorts[0].tip));
             labelBtn->setMenu(lm);
@@ -1415,6 +1474,15 @@ void MainWindow::buildHarnessMechanicalTab() {
             aaBtn->setFocusPolicy(Qt::NoFocus);
             lgAdd(aaBtn);
         }
+        {
+            auto* tie = new QToolButton(lenW);
+            tie->setObjectName(QStringLiteral("specialLacingTieButton"));
+            tie->setAutoRaise(true);
+            tie->setFocusPolicy(Qt::NoFocus);
+            tie->setDefaultAction(makeToolAction(toolLabel(ToolId::LacingTie), ToolId::LacingTie));
+            tie->setToolTip(QStringLiteral("Tie / lacing cord: draw a line across the wire, cable or heatshrink runs to tie. The cord fits the crossed lines and includes a wipeout underneath."));
+            lgAdd(tie);
+        }
         // TWO EQUAL ROWS. As many columns as it takes to halve them, filled along the top row and then
         // along the bottom - the way a row of pictures is read - so the two rows are the same length and the
         // group is a block rather than a comb. An odd one out goes on the TOP row: the eye starts there.
@@ -1436,6 +1504,151 @@ void MainWindow::buildHarnessMechanicalTab() {
         for (QWidget* w : specialCells) mechSpecialCells_ << w;
         mechBreakGroup_ = addGroupKeep(lay, QStringLiteral("Special"), lenW);
         mechGroups_ << mechBreakGroup_;
+    }
+    // CABLE AND SLEEVE SETTINGS STAY ON THE RIBBON WHILE THE ROUTE IS BEING DRAWN.
+    // Tab holds the last segment, so changing a field works on the same preview as Enter places.
+    {
+        auto* settings = new QWidget(page);
+        settings->setObjectName(QStringLiteral("shrinkRouteParameters"));
+        auto* grid = new QGridLayout(settings);
+        grid->setContentsMargins(2, 0, 2, 0);
+        grid->setHorizontalSpacing(6);
+        grid->setVerticalSpacing(2);
+        struct Field {
+            QWidget* cell;
+            QDoubleSpinBox* spin;
+            QToolButton* automatic;
+            std::function<double()> value;
+            std::function<double()> shown;
+            std::function<void(double)> write;
+            int kind; // 0 = width, 1 = fillet, 2/3 = faces, 4/5 = recovery, 6 = length, 7 = angle
+            double autoValue;
+        };
+        std::vector<Field> fields;
+        auto actual = [this](const QString& key, double fallback) {
+            Entity preview = editor_->shrinkRouteMode() == ShrinkRouteMode::Transition
+                                 ? editor_->transitionPreview()
+                                 : editor_->shrinkDraftEntity({{0.0, 0.0}, {200.0, 0.0}});
+            return preview.meta.value(key).toDouble(fallback);
+        };
+        auto field = [&](const QString& label, const QString& name, int row, int col, int kind,
+                         double maximum, std::function<double()> value,
+                         std::function<double()> shown, std::function<void(double)> write,
+                         bool hasAuto = false, double autoValue = 0.0) {
+            auto* cell = new QWidget(settings);
+            auto* line = new QHBoxLayout(cell);
+            line->setContentsMargins(0, 0, 0, 0);
+            line->setSpacing(3);
+            auto* caption = new QLabel(label, cell);
+            caption->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
+            auto* spin = new QDoubleSpinBox(cell);
+            spin->setObjectName(name);
+            spin->setRange(kind == 7 ? -360.0 : 0.0, maximum);
+            spin->setDecimals(1);
+            spin->setSingleStep(kind == 7 ? 5.0 : 0.5);
+            spin->setSuffix(kind == 7 ? QString::fromUtf8("\xC2\xB0") : QStringLiteral(" mm"));
+            spin->setKeyboardTracking(false);
+            spin->setMinimumWidth(86);
+            spin->setToolTip(label + QStringLiteral(" for the current drawing preview. Tab holds the route, Enter finishes it."));
+            line->addWidget(caption);
+            line->addWidget(spin);
+            QToolButton* automatic = nullptr;
+            if (hasAuto) {
+                automatic = new QToolButton(cell);
+                automatic->setObjectName(name + QStringLiteral("Auto"));
+                automatic->setText(QStringLiteral("A"));
+                automatic->setCheckable(true);
+                automatic->setFixedWidth(22);
+                automatic->setToolTip(QStringLiteral("Automatic ") + label.toLower());
+                line->addWidget(automatic);
+                connect(automatic, &QToolButton::clicked, this,
+                        [this, automatic, spin, write, autoValue](bool on) {
+                    write(on ? autoValue : spin->value());
+                    if (syncShrinkRibbon_) syncShrinkRibbon_();
+                    canvas_->update();
+                });
+            }
+            connect(spin, &QDoubleSpinBox::valueChanged, this, [this, write](double number) {
+                write(number);
+                if (syncShrinkRibbon_) syncShrinkRibbon_();
+                canvas_->update();
+            });
+            fields.push_back({cell, spin, automatic, value, shown, write, kind, autoValue});
+            grid->addWidget(cell, row, col);
+        };
+        field(QStringLiteral("Width"), QStringLiteral("shrinkRouteWidth"), 0, 0, 0, 500.0,
+              [this]{ return editor_->shrinkWidth(); }, [this]{ return editor_->shrinkWidth(); },
+              [this](double v){ editor_->setShrinkWidth(v); });
+        field(QStringLiteral("Fillet"), QStringLiteral("shrinkRouteFillet"), 0, 1, 1, 500.0,
+              [this]{ return editor_->cornerRadius(); }, [this]{ return editor_->cornerRadius(); },
+              [this](double v){ editor_->setCornerRadius(v); });
+        field(QStringLiteral("Angle"), QStringLiteral("shrinkRouteAngle"), 0, 2, 7, 360.0,
+              [this]{ return editor_->draftRouteAngle(); }, [this]{ return editor_->draftRouteAngle(); },
+              [this](double v){ editor_->setDraftRouteAngle(v); });
+        for (int end = 0; end < 2; ++end) {
+            const bool finish = end != 0;
+            const QString side = finish ? QStringLiteral("Finish") : QStringLiteral("Start");
+            const QString suffix = finish ? QStringLiteral("End") : QStringLiteral("Start");
+            field(side + QStringLiteral(" face"), QStringLiteral("shrinkRouteFace") + suffix, 1, end, 2 + end, 500.0,
+                  [this, finish]{ return editor_->shrinkFace(finish); },
+                  [this, actual, suffix]{ return actual(QStringLiteral("shrinkFace") + suffix, editor_->shrinkWidth() * 0.82); },
+                  [this, finish](double v){ editor_->setShrinkFace(finish, v); }, true);
+            field(side + QStringLiteral(" recover"), QStringLiteral("shrinkRouteRecover") + suffix, 2, end, 4 + end, 500.0,
+                  [this, finish]{ return editor_->shrinkRecover(finish); },
+                  [actual, suffix]{ return actual(QStringLiteral("shrinkTaper") + suffix, 4.0); },
+                  [this, finish](double v){ editor_->setShrinkRecover(finish, v); }, true, -1.0);
+        }
+        field(QStringLiteral("Cover / length"), QStringLiteral("shrinkRouteCover"), 1, 2, 6, 2000.0,
+              [this]{ return editor_->shrinkCover(); },
+              [this, actual]{
+                  if (editor_->shrinkRouteMode() == ShrinkRouteMode::Transition) {
+                      const Entity preview = editor_->transitionPreview();
+                      return preview.points.size() >= 2 ? distance(preview.a, preview.b) : 8.0;
+                  }
+                  return actual(QStringLiteral("shrinkCoverStart"), 20.0);
+              }, [this](double v){ editor_->setShrinkCover(v); }, true);
+        auto* finish = new QToolButton(settings);
+        finish->setObjectName(QStringLiteral("shrinkRouteFinish"));
+        finish->setText(QStringLiteral("Finish (Enter)"));
+        finish->setToolTip(QStringLiteral("Finish the route at the endpoint held by Tab."));
+        connect(finish, &QToolButton::clicked, this, [this]{
+            canvas_->setFocus();
+            editor_->onKey(Qt::Key_Return, Qt::NoModifier);
+        });
+        grid->addWidget(finish, 2, 2);
+        shrinkOptionsGroup_ = addGroupKeep(lay, QStringLiteral("Cable / heatshrink parameters"), settings);
+        shrinkOptionsGroup_->setObjectName(QStringLiteral("shrinkRouteRibbonGroup"));
+        mechGroups_ << shrinkOptionsGroup_;
+        syncShrinkRibbon_ = [this, fields, finish] {
+            const bool active = editor_->tool() == ToolId::HeatshrinkRoute;
+            shrinkOptionsGroup_->setVisible(active);
+            if (!active) return;
+            const auto mode = editor_->shrinkRouteMode();
+            for (const Field& f : fields) {
+                const bool transition = mode == ShrinkRouteMode::Transition;
+                const bool visible = f.kind <= 1 ? !transition
+                                     : f.kind == 7 ? !transition
+                                     : f.kind == 6 ? transition || mode == ShrinkRouteMode::CableEnds
+                                     : mode != ShrinkRouteMode::Cable && (!transition || f.kind == 3 || f.kind == 5);
+                f.cell->setVisible(visible);
+                if (!visible) continue;
+                QSignalBlocker blocker(f.spin);
+                const double stored = f.value();
+                const bool automatic = f.automatic && (f.autoValue < 0.0 ? stored < 0.0 : stored <= 0.0);
+                f.spin->setValue(automatic ? f.shown() : stored);
+                f.spin->setEnabled(!automatic && (f.kind != 7 || editor_->hasDraftRouteSegment()));
+                if (f.automatic) {
+                    QSignalBlocker autoBlocker(f.automatic);
+                    f.automatic->setChecked(automatic);
+                }
+            }
+            finish->setEnabled(editor_->twistedFrozen() || editor_->isDrafting());
+        };
+        // A pinned preview may get a new angle or width without a document edit.
+        connect(editor_, &Editor::overlayChanged, this, [this]{
+            if (syncShrinkRibbon_) syncShrinkRibbon_();
+        });
+        syncShrinkRibbon_();
     }
     {
         // THE LABEL, once one is on: the two numbers a stroke cannot settle by itself.

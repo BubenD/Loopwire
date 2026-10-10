@@ -10,6 +10,7 @@
 #include <vector>
 
 class QComboBox;
+class QDialog;
 class QDoubleSpinBox;
 class QPlainTextEdit;
 class QLabel;
@@ -68,6 +69,15 @@ public:
     // EVERY LINKED DRAWING READ AGAIN, and the design checked - what is found listed. How many errors.
     int checkRevisions();
     int checkDesign();
+    int checkSchematics();
+    void askRules();
+    bool locateIssue(int row);
+    void setRuleSeverity(const QString& rule, int level);
+    bool bypassIssue(int row);
+    bool restoreIssue(const QString& key);
+    void showBypass();
+    void setCanvasColour(const QColor& colour);
+    void askCanvasColour();
     // THE CABLE LIST to a CSV file (asked where, when none is given).
     bool exportCableList(const QString& path = QString());
     // THE DESIGN AS A FILE OF ITS OWN (.edsys), and read back from one (one step to undo); THE DIAGRAM FOR DRAW.IO and
@@ -90,6 +100,8 @@ private:
     void syncPanel();
     void fillCables();
     void fillIssues();
+    void fillConnections();
+    void fillBypass();
     QString status(const SysCable& c) const;
 
     SystemDesign design_;
@@ -98,6 +110,10 @@ private:
     std::vector<QJsonObject> history_;
     std::vector<QJsonObject> future_;   // what Undo took back, for Redo
     std::vector<SysIssue> issues_;
+    std::vector<SysIssue> checkedFindings_;
+    QDialog* bypassDialog_ = nullptr;
+    QTableWidget* bypassTable_ = nullptr;
+    QLabel* bypassSummary_ = nullptr;
     std::function<bool(const QString&)> confirm_;
     bool filling_ = false;
 
@@ -126,15 +142,24 @@ private:
     QSpinBox* cableWires_ = nullptr;
     QLabel* cableEnds_ = nullptr;
     QLineEdit* cableDrawing_ = nullptr;
+    QLineEdit* cableExpectedTitle_ = nullptr;
     QLabel* cableRead_ = nullptr;
     QLabel* cableStatus_ = nullptr;
     // A note: its text - one step to undo however much of it is typed at once.
     QPlainTextEdit* noteText_ = nullptr;
     QString noteTyping_;
+    QDoubleSpinBox* noteWidth_ = nullptr;
+    QDoubleSpinBox* noteHeight_ = nullptr;
+    QToolButton* noteColour_ = nullptr;
+    QComboBox* noteLink_ = nullptr;
+    std::vector<SysConnection> connectionRows_;
     // Under the picture.
     QTabWidget* tabs_ = nullptr;
     QTableWidget* cables_ = nullptr;
-    QListWidget* found_ = nullptr;
+    QTableWidget* found_ = nullptr;
+    QLabel* issueSummary_ = nullptr;
+    bool checked_ = false;
+    QTableWidget* connections_ = nullptr;
 };
 
 } // namespace Edraw_Desktop

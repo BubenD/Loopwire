@@ -1,4 +1,5 @@
 #include "model/Entity.h"
+#include "model/DrawingDetails.h"
 
 #include "harness/Harness.h"
 
@@ -48,6 +49,7 @@ const std::array<TypeName, 29> kTypeNames = {{
 
 EntityType entityTypeFromString(const QString& s) {
     const QString key = s.toLower();
+    if(key==QLatin1String("ddpntxt")||key==QLatin1String("ddrvtxt")||key==QLatin1String("ddtltxt"))return EntityType::Text;
     for (const auto& tn : kTypeNames)
         if (key == QLatin1String(tn.name)) return tn.type;
     return EntityType::Unknown;
@@ -780,7 +782,13 @@ bool usesPosition(EntityType t) {
 
 QJsonObject Entity::toJson() const {
     QJsonObject obj = meta; // start from preserved extras, then write known fields
-    obj["type"] = entityTypeToString(type);
+    const QString detailType=type==EntityType::Text&&meta.value(QStringLiteral("drawingDetailField")).toBool()
+        ?drawingFieldTextType(meta.value(QStringLiteral("field")).toString()):QString();
+    obj["type"] = detailType.isEmpty()?entityTypeToString(type):detailType;
+    if(!detailType.isEmpty()) {
+        obj[QStringLiteral("field")]=drawingFieldKey(meta.value(QStringLiteral("field")).toString());
+        obj[QStringLiteral("drawingDetailTextType")]=detailType;
+    }
     if (!id.isEmpty()) obj["id"] = id;
     obj["layer"] = layer;
     if (hasExplicitColor()) obj["color"] = color;
@@ -911,6 +919,14 @@ Entity Entity::fromJson(const QJsonObject& obj) {
 
     // Keep everything else (text content, wire/connector metadata, etc.).
     e.meta = obj;
+    const QString storedType=obj.value(QStringLiteral("type")).toString();
+    if(storedType.startsWith(QLatin1String("DD"),Qt::CaseInsensitive)&&e.type==EntityType::Text){
+        const QString key=drawingFieldKey(storedType);
+        if(!key.isEmpty()){
+            e.meta[QStringLiteral("field")]=key;e.meta[QStringLiteral("drawingDetailField")]=true;
+            e.meta[QStringLiteral("drawingDetailTextType")]=drawingFieldTextType(key);
+        }
+    }
 
     // A linear dimension out of a drawing saved before the axis was written down has it worked out from
     // its geometry, once, here - and then it is the object's, like a newly placed one's. Left to be

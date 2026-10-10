@@ -13,3 +13,12 @@ CMakeFiles/
 /*.pdf
 /*.obj
 /build_smoke/
+
+# Generated presentation workbooks and the user's working drawings.
+/.chart-data-*/
+/tests/test*.dwx
+
+# Superseded presentation exports stay local; Investor.pptx/pdf are the current deck.
+/docs/investor-presentation/Harness_Design_Platform_Investor_Deck.*
+/docs/investor-presentation/Harness_Design_Platform_Investor_Payback_*
+/docs/investor-presentation/Harness_Design_Platform_Investor_Presentation_Light.*

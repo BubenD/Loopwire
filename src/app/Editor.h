@@ -43,6 +43,8 @@ struct ValidationIssue {
     QString message;
     QString entityId;
     Vec2 at{0.0, 0.0};
+    int level = 2;
+    QString layout;
 };
 
 // Which sort of sleeve the Heatshrink tool makes. Sleeve is recovered at both ends; Cable is one
@@ -346,6 +348,9 @@ public:
     // wandered to.
     Vec2 twistedHeldFor(const Vec2& p) const { return twistedHeld_ ? twistedHeldAt_ : p; }
     bool twistedFrozen() const { return twistedFrozen_; }
+    static bool isParameterRouteTool(ToolId t) {
+        return isTwistedTool(t) || t == ToolId::HeatshrinkRoute;
+    }
     // Is a bundle of wires being drawn - laid up (pair / route / harness / harness route) or running
     // straight (wires run)? They are the same object with the same ribbon and the same Tab, so
     // everything that asks this means all of them.
@@ -396,7 +401,18 @@ public:
     std::optional<std::pair<Vec2, Vec2>> entryFaceAt(const Vec2& p) const;
     std::vector<std::pair<Vec2, Vec2>> entryFaces() const;
     double shrinkWidth() const { return shrinkWidth_; }
-    void setShrinkWidth(double mm) { shrinkWidth_ = std::max(0.1, mm); }
+    void setShrinkWidth(double mm) { shrinkWidth_ = std::max(0.1, mm); faceCableWidth_ = 0.0; emit overlayChanged(); }
+    // NOT SAVED: defaults for the next sleeve. Only manual values are written to the existing end keys.
+    double shrinkFace(bool finish) const { return shrinkFaces_[finish ? 1 : 0]; }
+    double shrinkRecover(bool finish) const { return shrinkRecover_[finish ? 1 : 0]; }
+    double shrinkCover() const { return shrinkCover_; }
+    void setShrinkFace(bool finish, double value) { shrinkFaces_[finish ? 1 : 0] = value; emit overlayChanged(); }
+    void setShrinkRecover(bool finish, double value) { shrinkRecover_[finish ? 1 : 0] = value; emit overlayChanged(); }
+    void setShrinkCover(double value) { shrinkCover_ = value; emit overlayChanged(); }
+    Entity shrinkDraftEntity(const std::vector<Vec2>& route) const;
+    void setDraftRouteAngle(double degrees);
+    double draftRouteAngle() const;
+    bool hasDraftRouteSegment() const { return drafting_ && !draftPts_.empty(); }
     void setShrinkSquareEnds(bool on) {
         shrinkMode_ = on ? ShrinkRouteMode::Cable : ShrinkRouteMode::Sleeve;
     }
@@ -473,7 +489,7 @@ public:
     // Modify tools that accept a TYPED numeric value (e.g. Scale factor) even though
     // they are not draw tools — lets a digit pop the flying input field at the cursor.
     bool wantsValueInput() const {
-        return tool_ == ToolId::Scale || tool_ == ToolId::Offset ||
+        return tool_ == ToolId::Rotate || tool_ == ToolId::Scale || tool_ == ToolId::Offset ||
                tool_ == ToolId::Splice || tool_ == ToolId::NotConnected || movingByDistance();
     }
 
@@ -639,29 +655,39 @@ public:
     // filtered out of the active issue list and listed in the bypass table instead.
     // Session-scoped (not written to the drawing file).
     const QSet<QString>& bypassedIssues() const { return bypassed_; }
-    void bypassIssue(const QString& key) { bypassed_.insert(key); }
-    void restoreIssue(const QString& key) { bypassed_.remove(key); }
+    void bypassIssue(const QString& key) { bypassed_.insert(key); clearValidationPass(); }
+    void restoreIssue(const QString& key) { bypassed_.remove(key); clearValidationPass(); }
 
     // THE HARNESS DRC'S OWN RULES AND BYPASSES - kept apart from the schematic's: findings the user has accepted, and
     // the rules turned off (all on by default; session-scoped, not written to the drawing).
     const QSet<QString>& drcBypassed() const { return drcBypassed_; }
-    void drcBypass(const QString& key) { drcBypassed_.insert(key); }
-    void drcRestore(const QString& key) { drcBypassed_.remove(key); }
+    void drcBypass(const QString& key) { drcBypassed_.insert(key); clearValidationPass(); }
+    void drcRestore(const QString& key) { drcBypassed_.remove(key); clearValidationPass(); }
     // EACH RULE'S SEVERITY as the user has set it - 2 fail, 1 warning, 0 pass (not checked) - or, not set, as it comes.
     int drcSeverity(const QString& id, int asItComes) const { return drcSeverity_.value(id, asItComes); }
-    void setDrcSeverity(const QString& id, int level) { drcSeverity_.insert(id, std::clamp(level, 0, 2)); }
+    void setDrcSeverity(const QString& id, int level) { drcSeverity_.insert(id, std::clamp(level, 0, 2)); clearValidationPass(); }
     bool drcRuleEnabled(const QString& id) const { return drcSeverity_.value(id, 1) != 0; }
     void setDrcRuleEnabled(const QString& id, bool on) {
+        clearValidationPass();
         if (on) drcSeverity_.remove(id);
         else drcSeverity_.insert(id, 0);
     }
 
     // Per-rule enable flags for validateSchematic (all on by default; session-scoped).
     // `id` is the rule's key prefix: nc / dup / openwire / mixedpins / norefdes / nopn.
-    bool ruleEnabled(const QString& id) const { return !disabledRules_.contains(id); }
+    int schematicRuleSeverity(const QString& id) const {
+        return disabledRules_.contains(id) ? 0 : schematicSeverity_.value(id, id==QLatin1String("mixedpins") ? 1 : 2);
+    }
+    void setSchematicRuleSeverity(const QString& id, int level) {
+        clearValidationPass();
+        level=std::clamp(level,0,2); schematicSeverity_.insert(id,level);
+        if(level==0) disabledRules_.insert(id); else disabledRules_.remove(id);
+    }
+    bool ruleEnabled(const QString& id) const { return schematicRuleSeverity(id)>0; }
     void setRuleEnabled(const QString& id, bool on) {
-        if (on) disabledRules_.remove(id);
-        else disabledRules_.insert(id);
+        clearValidationPass();
+        if(on) { disabledRules_.remove(id); if(schematicSeverity_.value(id,-1)==0) schematicSeverity_.remove(id); }
+        else { disabledRules_.insert(id); schematicSeverity_.insert(id,0); }
     }
 
     // Briefly flash a highlight ring at a world point (used to locate a discrepancy).
@@ -755,6 +781,8 @@ public:
     // The mark a line drawn from `a` to `b` across the runs describes: where it sits, which way it
     // lies, how far it reaches, and which run it belongs to. False when the line crossed nothing.
     bool breakFromBand(const Vec2& a, const Vec2& b, Entity& out) const;
+    // A CORD TIE FITTED TO THE VISIBLE RUNS CROSSED BY A BAND. Mask first, then the grouped cord.
+    std::vector<Entity> lacingTieFromBand(const Vec2& a, const Vec2& b) const;
     // WHAT A BREAK MARK PLACED NOW WOULD ACTUALLY BE DRAWN TO, so a field left to the drawing can
     // show the figure the drawing works out instead of the word "auto". "Auto" tells nobody how far
     // apart the strokes will be; the number does, and the little A beside it is what says the number
@@ -1062,6 +1090,11 @@ public:
     // How far it has been turned, in radians (a multiple of a quarter turn).
     double placementPreviewRotation() const { return placeRot_; }
     void undo();
+    void setDrawingOwner(Document* owner) { drawingOwner_=owner?owner:doc_; if(doc_&&drawingOwner_&&doc_!=drawingOwner_)doc_->drawingDetails()=drawingOwner_->drawingDetails(); }
+    Document* drawingOwner() const { return drawingOwner_?drawingOwner_:doc_; }
+    void clearValidationPass() { if(auto* owner=drawingOwner())owner->setDirty(true); emit validationStatusChanged(); }
+    void setDrawingDetails(const QJsonObject& details);
+    bool placeDrawingField(const QString& key);
     void redo();
 
     // ---- Array (AutoCAD ARRAY: rectangular / polar / path) -----------------
@@ -1511,7 +1544,9 @@ signals:
     // THE PICKED OBJECTS WERE MOVED, TURNED, SCALED OR MIRRORED: which ones, and where any point went. A model
     // being drawn carries its marks - its connection point, its ends, its output faces - along the same way.
     void selectionTransformed(const std::vector<QString>& ids, const Edraw_Desktop::PointMap& map);
-    void changed();              // geometry/document mutated -> repaint + panels
+    void changed();
+    void validationStatusChanged();
+    void drawingDetailsChanged();              // geometry/document mutated -> repaint + panels
     void overlayChanged();       // interactive preview/cursor moved -> repaint only (no panel rebuild)
     void selectionChanged();
     // A selection zone was closed: the polygon it enclosed, in the coordinates of whatever is being
@@ -1595,6 +1630,8 @@ private:
     double worldTolerance() const;
     QString uid() const;
     void pushUndo();
+    QJsonObject drawingContext() const;
+    void restoreDrawingContext(const QJsonObject& context);
     void addEntity(Entity e);
     void finishDraw();         // commit multi-point tool
     void cancelDraw();
@@ -1810,11 +1847,14 @@ private:
     QSet<QString> drcBypassed_;     // the harness DRC's, likewise
     QHash<QString, int> drcSeverity_;   // the harness DRC rules' severities, where set
     QSet<QString> disabledRules_;   // validation rule ids the user turned off
+    QHash<QString,int> schematicSeverity_;   // schematic traffic-light settings, session-scoped
     bool flashOn_ = false;          // a locate-highlight ring is currently shown
     Vec2 flashPt_{0.0, 0.0};        // where to draw it (world)
     QTimer* flashTimer_ = nullptr;  // clears the flash after a moment
 
     Document* doc_ = nullptr;
+    Document* drawingOwner_=nullptr;
+    QString drawingFieldPending_;
     ToolId tool_ = ToolId::Select;
     ToolId lastTool_ = ToolId::Select; // last non-Select tool, for repeat
     SnapSettings snap_;
@@ -2175,6 +2215,9 @@ private:
     // what goes over a bundle is twenty, and a default nobody would keep is a default that is typed
     // over every single time it is used.
     double shrinkWidth_ = 20.0;
+    double shrinkFaces_[2] = {0.0, 0.0};     // 0 = automatic entry face
+    double shrinkRecover_[2] = {-1.0, -1.0}; // negative = automatic recovery length
+    double shrinkCover_ = 0.0;               // 0 = automatic cover/transition length
     // WHICH SORT OF SLEEVE THE TOOL DRAWS. Sleeve recovers onto what it grips; Cable is square for
     // the whole run; CableEnds leaves the cable bare in the middle and keeps an editable sleeve at
     // each end.

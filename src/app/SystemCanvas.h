@@ -3,7 +3,12 @@
 #include "system/SystemDesign.h"
 
 #include <QPointF>
+#include <QElapsedTimer>
 #include <QWidget>
+#include <QSet>
+#include <QHash>
+
+class QTimer;
 
 #include <vector>
 
@@ -12,7 +17,8 @@ namespace Edraw_Desktop {
 // WHAT A CLICK ON THE SYSTEM DIAGRAM DOES: select (and drag a unit, a note, or a port along its unit's sides; a unit's
 // corner or edge to size it), put a unit, put a port on a unit's side, draw a cable from one port to another (a unit
 // touched where it has no port given one there), put a note.
-enum class SysTool { Select, Unit, Port, Cable, Note };
+enum class SysTool { Select, Unit, Port, Cable, Note, Link };
+enum class SysSelectionMode { Direction, Window, Crossing };
 
 // THE SYSTEM DIAGRAM DRAWN: units as boxes with their name, part number and revision and a mark for what they are (a
 // mechanical part, a PCBA), their ports on their sides - each a connector through the wall, its inside always drawn and
@@ -28,6 +34,8 @@ public:
     void setDesign(SystemDesign* design);
     void setTool(SysTool tool);
     SysTool tool() const { return tool_; }
+    void setSelectionMode(SysSelectionMode mode) { selectionMode_ = mode; }
+    SysSelectionMode selectionMode() const { return selectionMode_; }
     // What the next unit put is: "mech" or "pcba".
     void setNewUnitKind(const QString& kind) { newKind_ = kind; }
     QString newUnitKind() const { return newKind_; }
@@ -38,8 +46,17 @@ public:
     QString selectedNote() const { return selNote_; }
     void select(const QString& unit, const QString& port, const QString& cable);
     void selectNote(const QString& note);
+    bool startNoteLink();
+    const QSet<QString>& selectedUnits() const { return zoneUnits_; }
+    const QSet<QString>& selectedCables() const { return zoneCables_; }
+    const QSet<QString>& selectedNotes() const { return zoneNotes_; }
+    int selectionCount() const;
+    void animateCheck(const std::vector<SysIssue>& issues);
+    void clearCheck();
+    bool locateIssue(const SysIssue& issue);
+    QPointF portLabelOnScreen(const QString& unit, const QString& port) const;
     // What is selected taken away - as it is, no questions (the view asks first: deleteRequested).
-    void deleteSelected();
+    void deleteSelected(bool removeContents = true);
     // Delete was the last thing done - Space does it again.
     void noteDeleteDone() { lastDelete_ = true; }
     // The whole diagram in view.
@@ -81,6 +98,9 @@ private:
     bool portAt(const QPointF& world, QString& unit, QString& port) const;
     QString cableAt(const QPointF& world) const;
     QString noteAt(const QPointF& world) const;
+    bool portLabelAt(const QPointF& world, QString& unit, QString& port) const;
+    void selectZone(const QRectF& zone, bool crossing);
+    bool issueOn(const QString& unit, const QString& cable) const;
     // THE NEAREST SIDE of a unit to a point, and how far along it.
     static void nearestSide(const SysUnit& u, const QPointF& w, QString& side, double& at);
     // A unit's wall or corner under the pointer, to size it by: 1 its right, 2 its bottom, 4 its left, 8 its top - a
@@ -105,10 +125,11 @@ private:
     SysTool lastTool_ = SysTool::Select;
     bool lastDelete_ = false;
     QString selUnit_, selPort_, selCable_, selNote_;
+    QString linkNote_;
     double scale_ = 1.0;
     QPointF offset_{40.0, 40.0};
     // A drag under way: a unit, a note or a port moved, a unit sized, a cable drawn from a port, the view moved.
-    enum class Drag { None, Unit, Note, Port, Size, Cable, Pan };
+    enum class Drag { None, Unit, Note, Port, Size, NoteSize, PortLabel, Zone, Group, CableMove, Cable, Pan };
     Drag drag_ = Drag::None;
     int sizeHow_ = 0;
     QRectF sizeFrom_;
@@ -121,6 +142,24 @@ private:
     QPointF rubber_;
     bool moved_ = false;
     bool moveAnnounced_ = false;
+    QSet<QString> zoneUnits_, zoneCables_, zoneNotes_;
+    QPointF zoneEnd_, groupDelta_;
+    SysSelectionMode selectionMode_ = SysSelectionMode::Direction;
+    bool zoneCrossing() const;
+    QTimer* checkTimer_ = nullptr;
+    std::vector<SysIssue> checkIssues_;
+    int checkStep_ = -1;
+    double checkPhase_ = 0.0;
+    QElapsedTimer checkClock_;
+    bool checkShown_ = false;
+    QRectF checkPanelRect() const;
+    QTimer* locateTimer_ = nullptr;
+    QElapsedTimer locateClock_;
+    QPointF locatePoint_;
+    bool locateOn_ = false;
+    QPointF cableDragA_,cableDragB_;
+    mutable QByteArray routesKey_;
+    mutable QHash<QString,std::vector<QPointF>> routes_;
 };
 
 } // namespace Edraw_Desktop

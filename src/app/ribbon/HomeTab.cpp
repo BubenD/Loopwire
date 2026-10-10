@@ -157,7 +157,7 @@ void MainWindow::buildHomeTab() {
         addGroup(lay, QStringLiteral("Annotation"),
                  toolRow({ToolId::Text, ToolId::Dimension, ToolId::Note, ToolId::Revision,
                           ToolId::CenterMark, ToolId::CenterLine, ToolId::DetailView},
-                         {leaderBtn, tb}));
+                         {leaderBtn, tb, makeDrawingDetailsButton(page, true)}));
     }
 
     // Properties group: Layer + Color dropdowns.

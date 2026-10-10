@@ -51,37 +51,8 @@ void MainWindow::buildSchematicBuildTab() {
     screenBtn->setFixedSize(kRibbonCell);   // the Place group is one grid: this is part of it
     screenBtn->setToolTip(QStringLiteral(
         "Shield: click, then drag a crossing line across the wires to shield them"));
-    {
-        // Braided-shield cable: a cable body with a criss-cross braid mesh in the middle
-        // section (matching the reference picture of a braid shield over a wire).
-        QPixmap pm(28, 28);
-        pm.fill(Qt::transparent);
-        QPainter ip(&pm);
-        ip.setRenderHint(QPainter::Antialiasing, true);
-        // Cable body: top + bottom edges running the full width.
-        QPen body(QColor("#cfe3ff"));
-        body.setWidthF(1.6);
-        ip.setPen(body);
-        ip.drawLine(2, 9, 26, 9);
-        ip.drawLine(2, 19, 26, 19);
-        // Braid mesh: criss-cross diagonals clipped to the middle section of the cable.
-        ip.save();
-        ip.setClipRect(8, 9, 12, 11);
-        QPen mesh(QColor("#8fb7ff"));
-        mesh.setWidthF(1.1);
-        ip.setPen(mesh);
-        for (int x = 0; x <= 26; x += 4) {
-            ip.drawLine(x, 8, x + 11, 20); // "\" strands
-            ip.drawLine(x, 20, x + 11, 8); // "/" strands
-        }
-        ip.restore();
-        // Ticks where the braided section starts / ends.
-        ip.setPen(body);
-        ip.drawLine(8, 8, 8, 20);
-        ip.drawLine(20, 8, 20, 20);
-        ip.end();
-        screenBtn->setIcon(QIcon(pm));
-    }
+    screenBtn->setProperty("cadActionIcon",QStringLiteral("shield"));
+    screenBtn->setIcon(makeCadActionIcon(QStringLiteral("shield")));
     connect(screenBtn, &QToolButton::clicked, this, [this] {
         editor_->beginScreen();
         canvas_->setFocus(Qt::OtherFocusReason);
@@ -99,25 +70,8 @@ void MainWindow::buildSchematicBuildTab() {
     modTwistBtn->setPopupMode(QToolButton::MenuButtonPopup);
     modTwistBtn->setToolTip(QStringLiteral(
         "Twist type: click, then drag a crossing line across the wires (▾ for the type)"));
-    {
-        QPixmap pm(28, 28);
-        pm.fill(Qt::transparent);
-        QPainter ip(&pm);
-        ip.setRenderHint(QPainter::Antialiasing, true);
-        QPen pen(QColor("#cfe3ff"));
-        pen.setWidthF(1.8);
-        ip.setPen(pen);
-        QPolygonF a, b;
-        for (int k = 0; k <= 3; ++k) {
-            const double x = 4 + k * 6.7;
-            a << QPointF(x, (k % 2 == 0) ? 9 : 19);
-            b << QPointF(x, (k % 2 == 0) ? 19 : 9);
-        }
-        ip.drawPolyline(a);
-        ip.drawPolyline(b);
-        ip.end();
-        modTwistBtn->setIcon(QIcon(pm));
-    }
+    modTwistBtn->setProperty("cadActionIcon",QStringLiteral("schematictwist"));
+    modTwistBtn->setIcon(makeCadActionIcon(QStringLiteral("schematictwist")));
     {
         auto* modTm = new QMenu(modTwistBtn);
         modTm->addAction(QStringLiteral("Type 1 (crossed)"), this, [this] {
@@ -225,22 +179,8 @@ void MainWindow::buildSchematicBuildTab() {
     alignBtn->setMinimumWidth(66);
     // Icon: two pin stubs on the left joined by a right-angle (0°/90°) route to a
     // pin stub on the right — the "make wires orthogonal" glyph.
-    {
-        QPixmap pm(28, 28);
-        pm.fill(Qt::transparent);
-        QPainter ip(&pm);
-        ip.setRenderHint(QPainter::Antialiasing, true);
-        QPen pen(QColor("#cfe3ff"));
-        pen.setWidthF(1.8);
-        ip.setPen(pen);
-        ip.drawLine(3, 7, 12, 7);    // top pin exits right
-        ip.drawLine(12, 7, 12, 21);  // vertical run (90°)
-        ip.drawLine(12, 21, 25, 21); // into the lower-right pin
-        ip.drawLine(3, 14, 8, 14);   // a second (straight) pin stub
-        ip.drawLine(8, 14, 8, 21);
-        ip.end();
-        alignBtn->setIcon(QIcon(pm));
-    }
+    alignBtn->setProperty("cadActionIcon",QStringLiteral("alignrouting"));
+    alignBtn->setIcon(makeCadActionIcon(QStringLiteral("alignrouting")));
     alignBtn->setToolTip(QStringLiteral(
         "Click a reference connector; connectors wired to it shift so their wires "
         "become horizontal/vertical"));
@@ -257,24 +197,8 @@ void MainWindow::buildSchematicBuildTab() {
     modCrossBtn->setMinimumWidth(66);
     modCrossBtn->setToolTip(QStringLiteral(
         "Click a wire crossing to toggle it between a bridge (hop) and a plain cross"));
-    {
-        QPixmap pm(28, 28);
-        pm.fill(Qt::transparent);
-        QPainter ip(&pm);
-        ip.setRenderHint(QPainter::Antialiasing, true);
-        QPen pen(QColor("#cfe3ff"));
-        pen.setWidthF(2.0);
-        ip.setPen(pen);
-        ip.drawLine(3, 20, 9, 20);
-        QPainterPath hop;
-        hop.moveTo(9, 20);
-        hop.arcTo(9, 12, 10, 16, 180, -180);
-        ip.drawPath(hop);
-        ip.drawLine(19, 20, 25, 20);
-        ip.drawLine(14, 6, 14, 26);
-        ip.end();
-        modCrossBtn->setIcon(QIcon(pm));
-    }
+    modCrossBtn->setProperty("cadActionIcon",QStringLiteral("crossswitch"));
+    modCrossBtn->setIcon(makeCadActionIcon(QStringLiteral("crossswitch")));
     connect(modCrossBtn, &QToolButton::clicked, this, [this] {
         editor_->beginCrossSwitch();
         canvas_->setFocus(Qt::OtherFocusReason);
@@ -291,27 +215,8 @@ void MainWindow::buildSchematicBuildTab() {
     twistAlignBtn->setToolTip(QStringLiteral(
         "Line up what rides on the wires - twist marks, shields, colour/gauge markings and "
         "wire labels - on one column: select them, click this, then click the column"));
-    {
-        QPixmap pm(28, 28);
-        pm.fill(Qt::transparent);
-        QPainter ip(&pm);
-        ip.setRenderHint(QPainter::Antialiasing, true);
-        QPen pen(QColor("#cfe3ff"));
-        pen.setWidthF(1.8);
-        ip.setPen(pen);
-        // Two small braids (twist marks) with a dashed alignment line through them.
-        for (int cx : {8, 20}) {
-            ip.drawLine(cx - 4, 8, cx + 4, 16);
-            ip.drawLine(cx + 4, 8, cx - 4, 16);
-        }
-        QPen dash(QColor("#8fb7ff"));
-        dash.setWidthF(1.2);
-        dash.setStyle(Qt::DashLine);
-        ip.setPen(dash);
-        ip.drawLine(14, 4, 14, 24);
-        ip.end();
-        twistAlignBtn->setIcon(QIcon(pm));
-    }
+    twistAlignBtn->setProperty("cadActionIcon",QStringLiteral("alignmarks"));
+    twistAlignBtn->setIcon(makeCadActionIcon(QStringLiteral("alignmarks")));
     connect(twistAlignBtn, &QToolButton::clicked, this, [this] {
         editor_->beginTwistAlign();
         canvas_->setFocus(Qt::OtherFocusReason);
@@ -431,6 +336,7 @@ void MainWindow::buildSchematicBuildTab() {
     // Validate button: schematic design-rule check.
     auto* valBtn = new QToolButton(drcW);
     valBtn->setText(QStringLiteral("Validate"));
+    valBtn->setObjectName(QStringLiteral("schematicDrcValidate"));
     valBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
     valBtn->setIconSize(QSize(26, 26));
     valBtn->setMinimumWidth(66);
@@ -457,6 +363,7 @@ void MainWindow::buildSchematicBuildTab() {
     // Bypass table button: review discrepancies the user accepted (bypassed).
     auto* bypassBtn = new QToolButton(drcW);
     bypassBtn->setText(QStringLiteral("Bypass table"));
+    bypassBtn->setObjectName(QStringLiteral("schematicDrcBypass"));
     bypassBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
     bypassBtn->setIconSize(QSize(26, 26));
     bypassBtn->setMinimumWidth(66);
@@ -480,6 +387,7 @@ void MainWindow::buildSchematicBuildTab() {
     // Validation rules button: choose which design-rule checks run.
     auto* rulesBtn = new QToolButton(drcW);
     rulesBtn->setText(QStringLiteral("Rules"));
+    rulesBtn->setObjectName(QStringLiteral("schematicDrcRules"));
     rulesBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
     rulesBtn->setIconSize(QSize(26, 26));
     rulesBtn->setMinimumWidth(66);

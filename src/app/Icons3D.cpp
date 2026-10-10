@@ -357,6 +357,11 @@ void draw(QPainter& p, const QString& k, const QColor& ink, const QColor& acc) {
         arrow(p, QPointF(16, 19), QPointF(16, 30), 4);
         return;
     }
+    if(k==QLatin1String("module")){
+        p.setPen(QPen(ink,1.4,Qt::DashLine));p.setBrush(Qt::NoBrush);p.drawRoundedRect(QRectF(2,2,28,28),3,3);
+        p.setPen(accLine);p.drawRect(QRectF(6,7,7,6));p.drawRect(QRectF(19,7,7,6));p.drawRect(QRectF(12,21,8,5));
+        p.drawLine(9,13,16,21);p.drawLine(23,13,16,21);return;
+    }
     if (k == QLatin1String("unit")) {
         // A unit of a system: a box with a port on each side and a cable out of one.
         p.setPen(QPen(ink, 1.6));

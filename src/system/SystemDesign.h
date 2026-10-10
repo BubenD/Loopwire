@@ -17,16 +17,18 @@ namespace Edraw_Desktop {
 // the revision the system calls for. Saved with the drawing.
 
 // A PORT ON A UNIT: where a cable plugs in - on one of its sides, so far along it (0 to 1), named, with the connector it
-// takes and how many pins. A connector through the unit's wall: its inside (always there, inside the wall) and its
-// outside (drawn once a cable is plugged into it from outside), each with its own connector part number.
+// takes and its contact part number. The inside/outside cable attachment remains physical geometry; the port has
+// one connector P/N. Older inside P/N and contact counts are retained when an existing design is saved.
 struct SysPort {
     QString id;
     QString name;
     QString side = QStringLiteral("right");   // "left", "right", "top", "bottom"
     double at = 0.5;
-    QString connector;   // the outside's mating connector part number, as the system calls for it
-    QString insidePn;    // the inside's connector part number
-    int pins = 0;
+    QString connector;   // the port's connector part number
+    QString insidePn;    // legacy data, retained for older drawings
+    int pins = 0;        // legacy contact count, retained for older drawings
+    QString contactPn;
+    double labelDx = 0.0, labelDy = 0.0;   // designator offset from its default place above the connection
 };
 
 // A UNIT: a box of the system - a controller, a sensor, a panel - where it is drawn, and its ports. What it is: a
@@ -66,9 +68,12 @@ struct SysCable {
     double lengthMm = 0.0;
     int wires = 0;
     QColor color;
+    std::vector<QPointF> waypoints;
     QString drawing;      // the file, as linked
     QString drawingNo;    // read off it at the last check
     QString drawingRev;
+    QString drawingTitle;
+    QString expectedTitle;
     // WHAT IS NOT SHOWN ON ITS LABEL: "name", "pn", "rev", "desc" (its description, as it starts).
     QStringList hidden{QStringLiteral("desc")};
     bool shows(const QString& what) const { return !hidden.contains(what); }
@@ -84,6 +89,14 @@ struct DrawingInfo {
     // THE DESIGNATORS IN IT, in the order they are drawn: its cables' (W1, W2...) and its connectors' (X1, J2...).
     QStringList cables;
     QStringList connectors;
+    struct Connection {
+        QString name, fromConnector, fromContact, toConnector, toContact;
+        QString issue;
+        int level = 0;
+    };
+    std::vector<Connection> connections;
+    bool schematic = false;
+    QStringList fieldIssues;
 };
 
 // A NAME ON THE DIAGRAM THE DRAWING CALLS OTHERWISE: the cable's own, or a port at one of its ends - from what to what.
@@ -100,6 +113,10 @@ struct SysIssue {
     QString what;
     QString unit;
     QString cable;
+    QString rule;
+    QString port;
+    QString note;
+    QString key() const;
 };
 
 // A NOTE ON THE DIAGRAM: text in a box, where it is put.
@@ -107,21 +124,37 @@ struct SysNote {
     QString id;
     QString text;
     double x = 0.0, y = 0.0, w = 180.0, h = 70.0;
+    QColor color;
+    QString unit, port, cable;   // optional leader to one unit, port or cable
 };
 
 // HOW THE LINK OF A CABLE TO ITS DRAWING STANDS: none linked, the file not there, its revision not the one the cable
 // calls for, or matching.
 enum class SysLinkState { None, Missing, Mismatch, Match };
 
+struct SysConnection {
+    QString cable, line, from, to, status;
+    int level = 0;
+    QString aUnit, aPort, aContact, bUnit, bPort, bContact;
+};
+
 struct SystemDesign {
     QString name;
     QString pnPrefix = QStringLiteral("CBL-");
+    QStringList disabledRules;
+    QJsonObject ruleLevels;
+    std::vector<SysIssue> bypassed;
+    QColor background = QColor(48, 52, 58);
+    int ruleSeverity(const QString& rule, int defaultLevel = 2) const {
+        return disabledRules.contains(rule) ? 0 : ruleLevels.value(rule).toInt(defaultLevel);
+    }
     int pnDigits = 3;   // how many digits the number after the prefix has (CBL-001)
     std::vector<SysUnit> units;
     std::vector<SysCable> cables;
     std::vector<SysNote> notes;
 
-    bool empty() const { return units.empty() && cables.empty() && notes.empty(); }
+    bool empty() const { return units.empty() && cables.empty() && notes.empty() && disabledRules.isEmpty()
+                               && ruleLevels.isEmpty() && bypassed.empty() && background == QColor(48, 52, 58); }
     const SysNote* note(const QString& id) const;
     SysNote* note(const QString& id);
     // A NOTE put at a place; its id. One taken away.
@@ -151,7 +184,8 @@ struct SystemDesign {
     // the same port).
     QString addCable(const QString& aUnit, const QString& aPort, const QString& bUnit, const QString& bPort);
     // A unit taken away with its cables and every unit inside it; a port with its cables; a cable.
-    void removeUnit(const QString& id);
+    // Keeping contents promotes immediate children to this unit's parent without moving them.
+    void removeUnit(const QString& id, bool removeContents = true);
     void removePort(const QString& unit, const QString& port);
     void removeCable(const QString& id);
     // The cables plugged into a port.
@@ -176,6 +210,8 @@ struct SystemDesign {
     // on cables that are not alike, no drawing linked, the drawing not found, its revision or number not the cable's;
     // units with no part number.
     std::vector<SysIssue> check() const;
+    // ALL LINKED SCHEMATICS: named electrical paths, and names at shared unit/port/contact interfaces.
+    std::vector<SysConnection> checkConnections(const std::function<DrawingInfo(const QString&)>& read = {}) const;
 
     // THE CABLE LIST, one line a cable, as comma-separated values with a heading line.
     QString cableListCsv() const;

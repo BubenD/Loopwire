@@ -4,6 +4,7 @@
 #include "app/RuleExplainer.h"
 #include "harness/Bom.h"
 #include "model/Document.h"
+#include "model/DrawingDetails.h"
 
 #include <QDialogButtonBox>
 #include <QHash>
@@ -84,7 +85,11 @@ void MechanicalValidationDialog::buildUi() {
     connect(harnessTable_, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
         if (row < 0 || row >= static_cast<int>(harnessRows_.size())) return;
         const BrickIssue& i = harnessRows_[static_cast<size_t>(row)];
-        emit locateRequested(i.harness, i.brickId, i.atX, i.atY, i.located);
+        if(i.rule==QLatin1String("drawing-fields")){
+            QString layout;const Document* owner=editor_?editor_->drawingOwner():nullptr;
+            if(owner)for(const DrawingFieldIssue& field:checkDrawingDetails(*owner))if(field.key==i.key){layout=field.layout;break;}
+            emit drawingFieldLocateRequested(i.brickId,layout,i.atX,i.atY);
+        } else emit locateRequested(i.harness, i.brickId, i.atX, i.atY, i.located);
     });
     root->addWidget(harnessTable_, 3);
 
@@ -123,8 +128,8 @@ void MechanicalValidationDialog::setDefinition(const MechHarnessDef& def) {
 }
 
 void MechanicalValidationDialog::readFromDrawing() {
-    if (!editor_ || !editor_->document()) return;
-    def_ = mechFromDrawing(*editor_->document());
+    if (!editor_ || !editor_->drawingOwner()) return;
+    def_ = mechFromDrawing(*editor_->drawingOwner());
     revalidate();
 }
 
@@ -134,6 +139,13 @@ void MechanicalValidationDialog::revalidate() {
     refreshExplanation();
     checkHarnesses();
     refreshHarnessTable();
+    bool passed=shownHarnessIssues().empty() && countOf(MechIssueKind::Violation)==0 && countOf(MechIssueKind::Gap)==0;
+    const bool checked=!def_.segments.empty() || (openDesign_&&!openDesign_->bricks.empty()) ||
+        (editor_&&editor_->drawingOwner()&&!editor_->drawingOwner()->wizards().value(QStringLiteral("harnesses")).toObject().isEmpty());
+    if(editor_&&editor_->drawingOwner()){
+        editor_->drawingOwner()->recordValidation(QStringLiteral("mechanical"),passed&&checked);
+        emit editor_->validationStatusChanged();
+    }
 }
 
 void MechanicalValidationDialog::setOpenHarness(const BrickDesign* design, const QString& name) {
@@ -142,7 +154,7 @@ void MechanicalValidationDialog::setOpenHarness(const BrickDesign* design, const
 }
 
 int MechanicalValidationDialog::bomItemOf(const QString& partId) const {
-    const Document* doc = editor_ ? editor_->document() : nullptr;
+    const Document* doc = editor_ ? editor_->drawingOwner() : nullptr;
     const LibraryPart* p = merged_.byId(partId);
     if (!doc || !p) return 0;
     return bomItemLookup(*doc, merged_)(partId, p->kind, p->description);
@@ -162,8 +174,10 @@ void MechanicalValidationDialog::checkHarnesses() {
         check(*openDesign_, openName_);
         done << openName_;
     }
-    const Document* doc = editor_ ? editor_->document() : nullptr;
+    const Document* doc = editor_ ? editor_->drawingOwner() : nullptr;
     if (!doc) return;
+    if(const Document* owner=editor_->drawingOwner())for(const DrawingFieldIssue& field:checkDrawingDetails(*owner))
+        harnessIssues_.push_back({field.key,QStringLiteral("drawing-fields"),QStringLiteral("Drawing details"),field.entityId,field.message,2,true,field.at.x,field.at.y});
     const QJsonObject saved = doc->wizards().value(QStringLiteral("harnesses")).toObject();
     for (auto it = saved.begin(); it != saved.end(); ++it)
         if (!done.contains(it.key())) check(BrickDesign::fromJson(it.value().toObject()), it.key());
@@ -205,8 +219,8 @@ void MechanicalValidationDialog::refreshHarnessTable() {
     if (harnessSummary_) {
         harnessSummary_->setText(
             harnessIssues_.empty() && (!openDesign_ || openDesign_->bricks.empty()) &&
-                    !(editor_ && editor_->document() &&
-                      !editor_->document()->wizards().value(QStringLiteral("harnesses")).toObject().isEmpty())
+                    !(editor_ && editor_->drawingOwner() &&
+                      !editor_->drawingOwner()->wizards().value(QStringLiteral("harnesses")).toObject().isEmpty())
                 ? QStringLiteral("Harness wizard: no harness to check yet - build one in the Harness build wizard.")
             : shown.empty()
                 ? QStringLiteral("Harness wizard: every rule passes%1.")
@@ -265,16 +279,7 @@ void MechanicalValidationDialog::showRules() {
                                              "rules, apart from the schematic's:"),
                               dlg));
     // THE SQUARE OF A SEVERITY: red a fail, yellow a warning, green a pass (not checked).
-    auto paint = [](QToolButton* sq, int level) {
-        const char* colour = level >= 2 ? "#e05a5a" : level == 1 ? "#e6b84a" : "#4cd07a";
-        sq->setStyleSheet(QStringLiteral("QToolButton{background:%1;border:1px solid #1a2028;border-radius:2px;}"
-                                         "QToolButton:hover{border:1px solid #ffffff;}")
-                              .arg(QLatin1String(colour)));
-        sq->setProperty("severity", level);
-        sq->setToolTip(level >= 2 ? QStringLiteral("Fail - click for warning")
-                       : level == 1 ? QStringLiteral("Warning - click for pass (not checked)")
-                                    : QStringLiteral("Pass (not checked) - click for fail"));
-    };
+    auto paint = &RuleExplainer::paintSeverity;
     // THE LEGEND.
     {
         auto* legend = new QHBoxLayout;
