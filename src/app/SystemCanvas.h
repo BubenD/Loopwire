@@ -56,6 +56,8 @@ public:
     const QSet<QString>& selectedPorts() const { return zonePorts_; }
     // A BRANCH STARTED FROM A HARNESS (its right-click menu): the next click on a port (or unit) ends it there.
     void startBranch(const QString& cable);
+    // FOR A PAGE OUT (PDF, PNG): no grid, the sheet not tinted - the diagram alone on its ground.
+    void setPlain(bool on) { plain_ = on; update(); }
     // SHIFT+CLICK: what is at a point added to the selection, or taken out of it.
     void toggleAt(const QPointF& world);
     int selectionCount() const;
@@ -146,13 +148,16 @@ private:
     double scale_ = 1.0;
     QPointF offset_{40.0, 40.0};
     // A drag under way: a unit, a note or a port moved, a unit sized, a cable drawn from a port, the view moved.
-    enum class Drag { None, Unit, Note, Port, Size, NoteSize, PortLabel, Zone, Group, CableMove, Cable, Pan };
+    enum class Drag { None, Unit, Note, Port, Size, NoteSize, PortLabel, Zone, Group, CableMove, Cable, Pan, CtrlCopy };
+    // CTRL HELD ON SOMETHING: what it was ("unit", "port", "note", "cable") and which - a new one made once the pointer moves.
+    QString copyKind_, copyUnit_, copyPort_, copyNote_;
     Drag drag_ = Drag::None;
     int sizeHow_ = 0;
     QRectF sizeFrom_;
     QPointF pressWorld_, lastScreen_, grabOffset_;
     QString fromUnit_, fromPort_;
     QString fromCable_;       // a branch being drawn from this harness
+    bool plain_ = false;
     QPointF branchFrom_;      // where on it, in the diagram
     // A unit's picture, read once and kept.
     QImage unitPicture(const SysUnit& u) const;

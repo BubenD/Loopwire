@@ -162,6 +162,7 @@ struct SysSheet {
     double x = 0.0, y = 0.0;    // its top left corner on the diagram
     double scale = 2.0;         // diagram units to the millimetre
     QJsonObject fields;         // "title", "drawingNo", "revision"... written into the template's fields
+    QJsonArray layers;          // the template's layers, its frame's colours with them
     bool empty() const { return name.isEmpty(); }
     QRectF rect() const { return QRectF(x, y, widthMm * scale, heightMm * scale); }
 };

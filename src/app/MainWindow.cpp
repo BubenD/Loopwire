@@ -8284,6 +8284,8 @@ void MainWindow::splitView3D(Qt::Orientation split) {
     }
     view3dSplitMode_ = split;
     view3dSplit_->setOrientation(split == Qt::Horizontal ? Qt::Vertical : Qt::Horizontal);
+    // SIDE BY SIDE: its options in the right-hand panel; one over the other: with it, as they always are.
+    placeView3DOptions(split == Qt::Vertical);
     // HALF AND HALF to start with; the line between them dragged from there, to four fifths either way.
     const int total = split == Qt::Horizontal ? view3dSplit_->height() : view3dSplit_->width();
     view3dSplit_->setSizes({std::max(1, total / 2), std::max(1, total - total / 2)});
@@ -8291,8 +8293,54 @@ void MainWindow::splitView3D(Qt::Orientation split) {
     syncViewPanelButtons();
 }
 
+void MainWindow::placeView3DOptions(bool outside) {
+    if (!view3dPane_) return;
+    if (outside) {
+        if (!view3dOptionsDock_) {
+            view3dOptionsDock_ = new QDockWidget(QStringLiteral("3D OPTIONS"), this);
+            view3dOptionsDock_->setObjectName(QStringLiteral("view3dOptionsDock"));
+            view3dOptionsDock_->setFeatures(QDockWidget::NoDockWidgetFeatures);
+            auto* scroll = new QScrollArea(view3dOptionsDock_);
+            scroll->setWidgetResizable(true);
+            scroll->setFrameShape(QFrame::NoFrame);
+            scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+            auto* host = new QWidget(scroll);
+            host->setObjectName(QStringLiteral("view3dOptionsHost"));
+            auto* column = new QVBoxLayout(host);
+            column->setContentsMargins(6, 6, 6, 6);
+            column->setSpacing(6);
+            scroll->setWidget(host);
+            view3dOptionsDock_->setWidget(scroll);
+            addDockWidget(Qt::RightDockWidgetArea, view3dOptionsDock_);
+            view3dOptionsDock_->hide();
+        }
+        if (view3dPane_->optionsOutside()) return;
+        // THE RIGHT-HAND PANELS PUT AWAY - only the 3D view's options there - given back when the split changes.
+        view3dRightHidden_.clear();
+        for (QDockWidget* d : findChildren<QDockWidget*>(Qt::FindDirectChildrenOnly))
+            if (d != view3dOptionsDock_ && d->isVisible() && !d->isFloating() && dockWidgetArea(d) == Qt::RightDockWidgetArea) {
+                view3dRightHidden_.append(d);
+                d->hide();
+            }
+        auto* scroll = qobject_cast<QScrollArea*>(view3dOptionsDock_->widget());
+        view3dPane_->setOptionsHost(scroll ? scroll->widget() : nullptr);
+        view3dOptionsDock_->show();
+        // AS WIDE AS ITS WIDEST ROW, within reason - scrolled across beyond that.
+        const int widest = scroll && scroll->widget() ? scroll->widget()->sizeHint().width() + 24 : 420;
+        resizeDocks({view3dOptionsDock_}, {std::clamp(widest, 360, std::max(360, width() / 3))}, Qt::Horizontal);
+    } else {
+        if (!view3dPane_->optionsOutside()) return;
+        view3dPane_->setOptionsHost(nullptr);
+        if (view3dOptionsDock_) view3dOptionsDock_->hide();
+        for (const QPointer<QDockWidget>& d : view3dRightHidden_)
+            if (d) d->show();
+        view3dRightHidden_.clear();
+    }
+}
+
 void MainWindow::unsplitView3D() {
     if (!view3dSplitMode_ || !view3dPane_ || !view3dDock_) return;
+    placeView3DOptions(false);
     view3dSplitMode_ = 0;
     view3dPane_->setParent(nullptr);
     view3dDock_->setWidget(view3dPane_);

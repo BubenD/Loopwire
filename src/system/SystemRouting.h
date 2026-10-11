@@ -10,6 +10,10 @@ std::vector<QRectF> systemRouteObstacles(const SystemDesign& design,const SysCab
 // CROSSINGS: how many times the harnesses' lines (their branches too) cross one another - those of the harnesses named, or
 // of all of them where none is.
 int systemCrossings(const SystemDesign& design,const QStringList& cables={});
+// AUTO-ALIGN: small offsets tidied - units (those named, or all) on the grid; a harness almost straight across made straight,
+// its far port slid along its side; its dragged bends brought level with its ports' leads and with one another where they
+// are within `reach` of it. How many things moved.
+int autoAlignSystem(SystemDesign& design,const QStringList& units={},const QStringList& cables={},double reach=12.0);
 // HOW LONG THE HARNESSES RUN on the diagram, branches too - those named, or all.
 double systemHarnessLength(const SystemDesign& design,const QStringList& cables={});
 // FEWER CROSSINGS: the ports at the harnesses' ends put in order along each side - in the order of where each one's harness

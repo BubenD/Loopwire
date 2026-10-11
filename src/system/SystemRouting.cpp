@@ -79,7 +79,7 @@ std::vector<QPointF> systemStraightened(const std::vector<QPointF>& line){
     for(const QPointF& p:line){
         if(!out.empty()&&distance(out.back(),p)<.001)continue;
         if(out.size()>=2){const QPointF a=out[out.size()-1]-out[out.size()-2],b=p-out.back();
-            if(std::abs(a.x()*b.y()-a.y()*b.x())<.001&&a.x()*b.x()+a.y()*b.y()>=0){out.back()=p;continue;}}
+            if(std::abs(a.x()*b.y()-a.y()*b.x())<.001){out.back()=p;continue;}}
         out.push_back(p);
     }
     return out;
@@ -100,6 +100,50 @@ int systemCrossings(const SystemDesign& design,const QStringList& only){
         for(size_t a=1;a<p.size();++a)for(size_t b=1;b<q.size();++b)if(systemSegmentsCross(p[a-1],p[a],q[b-1],q[b]))++count;
     }
     return count;
+}
+
+int autoAlignSystem(SystemDesign& design,const QStringList& units,const QStringList& cables,double reach){
+    int changes=0;
+    auto near=[&](double a,double b){return std::abs(a-b)>1e-6&&std::abs(a-b)<reach;};
+    // UNITS ON THE GRID: their corners and sizes to the nearest ten.
+    for(SysUnit& unit:design.units){
+        if(!units.isEmpty()&&!units.contains(unit.id))continue;
+        const double x=std::round(unit.x/10.0)*10.0,y=std::round(unit.y/10.0)*10.0,w=std::max(60.0,std::round(unit.w/10.0)*10.0),h=std::max(40.0,std::round(unit.h/10.0)*10.0);
+        if(x!=unit.x||y!=unit.y||w!=unit.w||h!=unit.h){unit.x=x;unit.y=y;unit.w=w;unit.h=h;++changes;}
+    }
+    for(SysCable& cable:design.cables){
+        if(!cables.isEmpty()&&!cables.contains(cable.id))continue;
+        SysUnit* ua=design.unit(cable.aUnit);SysUnit* ub=design.unit(cable.bUnit);
+        SysPort* pa=ua?ua->port(cable.aPort):nullptr;SysPort* pb=ub?ub->port(cable.bPort):nullptr;
+        if(!pa||!pb)continue;
+        // A HARNESS ALMOST STRAIGHT ACROSS: its far port slid along its side so it is straight.
+        const QPointF a=sysPortPoint(*ua,*pa),b=sysPortPoint(*ub,*pb);
+        const bool acrossX=(pa->side==QLatin1String("left")||pa->side==QLatin1String("right"))&&(pb->side==QLatin1String("left")||pb->side==QLatin1String("right"));
+        const bool acrossY=(pa->side==QLatin1String("top")||pa->side==QLatin1String("bottom"))&&(pb->side==QLatin1String("top")||pb->side==QLatin1String("bottom"));
+        if(cable.waypoints.empty()&&acrossX&&near(a.y(),b.y())){
+            const double at=(a.y()-ub->y)/std::max(1.0,ub->h);if(at>0.04&&at<0.96){pb->at=at;++changes;}
+        }else if(cable.waypoints.empty()&&acrossY&&near(a.x(),b.x())){
+            const double at=(a.x()-ub->x)/std::max(1.0,ub->w);if(at>0.04&&at<0.96){pb->at=at;++changes;}
+        }
+        // ITS DRAGGED BENDS: level with a port's lead where they nearly are, and one in line with the one before where it
+        // nearly is - small steps and stubs taken out.
+        if(!cable.waypoints.empty()){
+            const QPointF da=sysPortOut(*pa)*(cable.aInside?-1.0:1.0),db=sysPortOut(*pb)*(cable.bInside?-1.0:1.0);
+            const QPointF leadA=sysPortPoint(*ua,*pa)+da*30.0,leadB=sysPortPoint(*ub,*pb)+db*30.0;
+            for(QPointF& w:cable.waypoints){
+                for(const QPointF& lead:{leadA,leadB}){
+                    if(near(w.x(),lead.x())){w.setX(lead.x());++changes;}
+                    if(near(w.y(),lead.y())){w.setY(lead.y());++changes;}
+                }
+            }
+            for(size_t i=1;i<cable.waypoints.size();++i){
+                QPointF& w=cable.waypoints[i];const QPointF& v=cable.waypoints[i-1];
+                if(near(w.x(),v.x())){w.setX(v.x());++changes;}
+                if(near(w.y(),v.y())){w.setY(v.y());++changes;}
+            }
+        }
+    }
+    return changes;
 }
 
 double systemHarnessLength(const SystemDesign& design,const QStringList& only){
@@ -189,9 +233,10 @@ std::vector<QPointF> sysCablePath(const SystemDesign& design,const SysCable& cab
     std::vector<QPointF> result{base.front(),base[1]};QPointF from=base[1];
     for(const QPointF& goal:goals){const auto segment=route(from,goal,boxes,others);for(size_t i=1;i<segment.size();++i)result.push_back(segment[i]);from=goal;}
     result.push_back(base.back());
-    // KEEP THE PORT LEADS, and remove redundant bends only between them.
+    // KEEP THE PORT LEADS, and remove redundant bends only between them - a point where the line goes on straight, and one
+    // where it runs on and comes back the same way (a stub sticking out past a corner).
     for(size_t i=2;i+2<result.size();){const QPointF a=result[i]-result[i-1],b=result[i+1]-result[i];
-        if(std::abs(a.x()*b.y()-a.y()*b.x())<.001&&a.x()*b.x()+a.y()*b.y()>=0)result.erase(result.begin()+static_cast<ptrdiff_t>(i));else ++i;}
+        if(std::abs(a.x()*b.y()-a.y()*b.x())<.001)result.erase(result.begin()+static_cast<ptrdiff_t>(i));else ++i;}
     return result;
 }
 void arrangeSystemPorts(SystemDesign& design,const QStringList& movedUnits){

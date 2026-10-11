@@ -660,6 +660,7 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
 
     // THE PICTURE, and beside it the bundles with their lengths.
     auto* split = new QSplitter(Qt::Horizontal, this);
+    split_ = split;
     // ON THE LEFT, WHAT IS IN VIEW: the model's solids and the harness's parts, each ticked to show - while the 3D
     // Preview tab is open (the panels round the drawing put away).
     solidsPanel_ = new QWidget(split);
@@ -1613,6 +1614,31 @@ void View3DPane::setRowsShown(bool on) {
     rowsShown_ = on;
     applyLayout();
     if (!on) refreshSolids();
+}
+
+void View3DPane::setOptionsHost(QWidget* host) {
+    if (host == optionsHost_) return;
+    auto* lay = qobject_cast<QVBoxLayout*>(layout());
+    if (host) {
+        // INTO THE PANEL: the rows above, the route table under them - the rows flowing to the panel's width, down it.
+        auto* column = qobject_cast<QVBoxLayout*>(host->layout());
+        if (!column || !lay) return;
+        lay->removeWidget(rowsArea_);
+        column->addWidget(rowsArea_);
+        column->addWidget(side_, 1);
+        side_->setVisible(envChoice_);
+    } else {
+        // BACK: the rows on top of the pane, the route table at the right of the picture.
+        if (!lay) return;
+        if (optionsHost_ && optionsHost_->layout()) {
+            optionsHost_->layout()->removeWidget(rowsArea_);
+            optionsHost_->layout()->removeWidget(side_);
+        }
+        lay->insertWidget(0, rowsArea_);
+        split_->addWidget(side_);
+    }
+    optionsHost_ = host;
+    applyLayout();
 }
 
 void View3DPane::setCompact(bool on) {

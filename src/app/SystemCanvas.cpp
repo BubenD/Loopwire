@@ -596,7 +596,7 @@ void SystemCanvas::paintEvent(QPaintEvent*) {
         if(dark && grid.lightness()<20) grid=QColor(28,32,38);
         p.setPen(QPen(grid, 1.0));
         const double step = 20.0 * scale_;
-        if (step > 6.0) {
+        if (step > 6.0 && !plain_) {
             for (double x = std::fmod(offset_.x(), step); x < width(); x += step) p.drawLine(QPointF(x, 0), QPointF(x, height()));
             for (double y = std::fmod(offset_.y(), step); y < height(); y += step) p.drawLine(QPointF(0, y), QPointF(width(), y));
         }
@@ -617,10 +617,16 @@ void SystemCanvas::paintEvent(QPaintEvent*) {
             }
         }
         const QRectF paper(toScreen(sheet.rect().topLeft()), sheet.rect().size() * scale_);
-        p.setPen(Qt::NoPen);
-        p.setBrush(dark ? background.lighter(112) : background.darker(103));
-        p.drawRect(paper);
+        if (!plain_) {
+            p.setPen(Qt::NoPen);
+            p.setBrush(dark ? background.lighter(112) : background.darker(103));
+            p.drawRect(paper);
+        }
         Document holder;
+        if (!sheet.layers.isEmpty()) {
+            holder.layers().clear();
+            for (const QJsonValue v : sheet.layers) holder.layers().push_back(Layer::fromJson(v.toObject()));
+        }
         ViewTransform vt;
         vt.view.scale = sheet.scale * scale_;
         vt.view.x = offset_.x() + sheet.x * scale_;
@@ -749,7 +755,7 @@ void SystemCanvas::paintEvent(QPaintEvent*) {
         const std::vector<QPointF> raw = cablePath(c);
         const QColor ground = raw.size() >= 2 ? behind((raw[raw.size() / 2 - 1] + raw[raw.size() / 2]) / 2.0) : background;
         const QColor ink = on ? QColor(40, 140, 230) : c.color.isValid() ? c.color : ground.lightness() < 128 ? QColor(210, 218, 229) : QColor(60, 66, 76);
-        p.setPen(QPen(ink, on ? 3.0 : 2.0));
+        p.setPen(QPen(ink, on ? 3.0 : 2.0, Qt::SolidLine, Qt::FlatCap, Qt::MiterJoin));
         p.setBrush(Qt::NoBrush);
         p.drawPath(hoppedLine(line, ci, every, hop));
         // ITS BRANCHES: each from the trunk's middle to its port, a dot where they leave it.
@@ -1054,23 +1060,17 @@ void SystemCanvas::mousePressEvent(QMouseEvent* e) {
     case SysTool::Select: {
         const QString hitUnit = unitAt(pressWorld_), hitNote = noteAt(pressWorld_);
         // CTRL+CLICK: a new one of what was clicked, to put - a port, a note, a unit (of the same kind), a cable.
+        // CTRL HELD: dragged, a new one of what was pressed on follows the pointer to be put down - a unit (its kind and
+        // size), a port (on the same unit), a note; clicked without moving, the tool to put one.
         if (e->modifiers() & Qt::ControlModifier) {
             QString cu, cp;
-            if (portAt(pressWorld_, cu, cp)) {
-                setTool(SysTool::Port);
-                return;
-            }
-            if (!hitNote.isEmpty()) {
-                setTool(SysTool::Note);
-                return;
-            }
-            if (!hitUnit.isEmpty()) {
-                setNewUnitKind(design_->unit(hitUnit)->kind);
-                setTool(SysTool::Unit);
-                return;
-            }
-            if (!cableAt(pressWorld_).isEmpty()) {
-                setTool(SysTool::Cable);
+            copyKind_.clear();
+            if (portAt(pressWorld_, cu, cp)) { copyKind_ = QStringLiteral("port"); copyUnit_ = cu; copyPort_ = cp; }
+            else if (!hitNote.isEmpty()) { copyKind_ = QStringLiteral("note"); copyNote_ = hitNote; }
+            else if (!hitUnit.isEmpty()) { copyKind_ = QStringLiteral("unit"); copyUnit_ = hitUnit; }
+            else if (!cableAt(pressWorld_).isEmpty()) copyKind_ = QStringLiteral("cable");
+            if (!copyKind_.isEmpty()) {
+                drag_ = Drag::CtrlCopy;
                 return;
             }
         }
@@ -1169,6 +1169,46 @@ void SystemCanvas::mouseMoveEvent(QMouseEvent* e) {
     };
     const QPointF w = toWorld(e->position());
     switch (drag_) {
+    case Drag::CtrlCopy: {
+        // FAR ENOUGH TO BE A DRAG: the new one made, and dragged from here on as it would be had it been there already.
+        if ((toScreen(w) - toScreen(pressWorld_)).manhattanLength() < 5.0 || copyKind_ == QLatin1String("cable")) break;
+        if (copyKind_ == QLatin1String("unit")) {
+            const SysUnit* from = design_->unit(copyUnit_);
+            if (!from) break;
+            emit aboutToChange();
+            moveAnnounced_ = true;
+            const SysUnit model = *from;
+            const QString id = design_->addUnit(model.x, model.y);
+            SysUnit* u = design_->unit(id);
+            u->kind = model.kind; u->w = model.w; u->h = model.h; u->color = model.color; u->opacity = model.opacity;
+            select(id, QString(), QString());
+            grabOffset_ = pressWorld_ - QPointF(model.x, model.y);
+            drag_ = Drag::Unit;
+        } else if (copyKind_ == QLatin1String("port")) {
+            const SysUnit* from = design_->unit(copyUnit_);
+            const SysPort* port = from ? from->port(copyPort_) : nullptr;
+            if (!port) break;
+            emit aboutToChange();
+            moveAnnounced_ = true;
+            const QString id = design_->addPort(copyUnit_, port->side, port->at);
+            select(copyUnit_, id, QString());
+            drag_ = Drag::Port;
+        } else if (copyKind_ == QLatin1String("note")) {
+            const SysNote* from = design_->note(copyNote_);
+            if (!from) break;
+            emit aboutToChange();
+            moveAnnounced_ = true;
+            const SysNote model = *from;
+            const QString id = design_->addNote(model.x, model.y);
+            SysNote* n = design_->note(id);
+            n->w = model.w; n->h = model.h; n->color = model.color;
+            selectNote(id);
+            grabOffset_ = pressWorld_ - QPointF(model.x, model.y);
+            drag_ = Drag::Note;
+        }
+        update();
+        break;
+    }
     case Drag::Pan:
         offset_ += delta;
         update();
@@ -1321,6 +1361,15 @@ void SystemCanvas::mouseReleaseEvent(QMouseEvent* e) {
             if (!zoneCables_.contains(c)) select(QString(), QString(), c);
         }
         emit contextMenuRequested(e->globalPosition().toPoint(), w);
+        return;
+    }
+    if (was == Drag::CtrlCopy) {
+        // CTRL+CLICK, NOT DRAGGED: the tool to put one of what was clicked.
+        if (copyKind_ == QLatin1String("port")) setTool(SysTool::Port);
+        else if (copyKind_ == QLatin1String("note")) setTool(SysTool::Note);
+        else if (copyKind_ == QLatin1String("cable")) setTool(SysTool::Cable);
+        else if (const SysUnit* u = design_->unit(copyUnit_)) { setNewUnitKind(u->kind); setTool(SysTool::Unit); }
+        copyKind_.clear();
         return;
     }
     if (was == Drag::Zone) {

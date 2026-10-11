@@ -318,6 +318,13 @@ private:
     int view3dSplitMode_ = 0;            // Not saved.
     bool view3dSplitDockWas_ = false;
     QWidget* view3dSplitStandIn_ = nullptr;
+    // SIDE BY SIDE: THE 3D VIEW'S OPTIONS ON THE RIGHT, in a panel of their own, the panels that were there put away meanwhile.
+    QDockWidget* view3dOptionsDock_ = nullptr;
+    QList<QPointer<QDockWidget>> view3dRightHidden_;
+    void placeView3DOptions(bool outside);
+public:
+    QDockWidget* view3dOptionsDock() const { return view3dOptionsDock_; }
+private:
     // THE PANELS PUT AWAY while the System design tab is open, given back as it is left. Not saved.
     QList<QPointer<QDockWidget>> systemDocksHidden_;
     bool systemOn_ = false;

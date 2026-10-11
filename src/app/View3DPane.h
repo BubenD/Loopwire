@@ -42,6 +42,8 @@ class QCloseEvent;
 class QToolButton;
 class QWidget;
 
+class QSplitter;
+
 namespace Edraw_Desktop {
 
 class View3DCanvas;
@@ -148,6 +150,10 @@ public:
     // AT THE SIDE OF THE WINDOW: the picture alone, with a button to open it below (dockBelowRequested); below, a button
     // back to the side it came from (dockSideRequested), shown while `sideDocked` says it came from one.
     void setCompact(bool on);
+    // ITS OPTIONS IN A PANEL OF THEIR OWN: its rows and its route table moved into `host` (a column; its layout a QVBoxLayout),
+    // the picture alone left here - and put back with nullptr.
+    void setOptionsHost(QWidget* host);
+    bool optionsOutside() const { return optionsHost_ != nullptr; }
     bool compact() const { return compact_; }
     void setSideDocked(bool fromSide) {
         sideDocked_ = fromSide;
@@ -352,6 +358,8 @@ private:
     QTableWidget* table_ = nullptr;
     QLabel* totals_ = nullptr;
     QWidget* side_ = nullptr;
+    QSplitter* split_ = nullptr;   // the picture, and the side panels either side of it
+    QWidget* optionsHost_ = nullptr;
     // The harness the route is for.
     std::function<RouteHarness()> harness_;
     std::function<void(const QString&, const BrickDesign&)> applyHarness_;

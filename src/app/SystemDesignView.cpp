@@ -51,6 +51,7 @@
 #include <QMimeData>
 #include "system/SystemRouting.h"
 #include "model/DrawingTemplate.h"
+#include "render/EntityRenderer.h"
 #include "model/Entity.h"
 #include <QPdfWriter>
 #include <QPageSize>
@@ -101,7 +102,39 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
     nothing_->setWordWrap(true);
     nothing_->setAlignment(Qt::AlignTop | Qt::AlignLeft);
     nothing_->setMargin(8);
-    panel_->addWidget(nothing_);
+    {
+        // NOTHING SELECTED: the design's own - and its sheet: the template round it, and what its title block says.
+        auto* page = new QWidget(panel_);
+        auto* v = new QVBoxLayout(page);
+        v->setContentsMargins(0, 0, 0, 0);
+        nothing_->setParent(page);
+        v->addWidget(nothing_);
+        auto* sheetBox = new QGroupBox(QStringLiteral("Sheet (template)"), page);
+        sheetBox->setObjectName(QStringLiteral("systemSheetBox"));
+        auto* sv = new QVBoxLayout(sheetBox);
+        sheetName_ = new QLabel(sheetBox);
+        sheetName_->setObjectName(QStringLiteral("systemSheetName"));
+        sheetName_->setWordWrap(true);
+        sv->addWidget(sheetName_);
+        auto* buttons = new QHBoxLayout;
+        auto* choose = new QPushButton(QStringLiteral("Choose template..."), sheetBox);
+        choose->setObjectName(QStringLiteral("systemSheetChoose"));
+        connect(choose, &QPushButton::clicked, this, [this] { applyTemplate(); });
+        auto* drop = new QPushButton(QStringLiteral("Remove"), sheetBox);
+        drop->setObjectName(QStringLiteral("systemSheetRemove"));
+        connect(drop, &QPushButton::clicked, this, [this] { removeSheet(); });
+        buttons->addWidget(choose);
+        buttons->addWidget(drop);
+        buttons->addStretch(1);
+        sv->addLayout(buttons);
+        sheetFields_ = new QWidget(sheetBox);
+        sheetFields_->setObjectName(QStringLiteral("systemSheetFields"));
+        new QFormLayout(sheetFields_);
+        sv->addWidget(sheetFields_);
+        v->addWidget(sheetBox);
+        v->addStretch(1);
+        panel_->addWidget(page);
+    }
     // A UNIT.
     {
         auto* page = new QWidget(panel_);
@@ -948,6 +981,7 @@ void SystemDesignView::syncPanel() {
         }
     } else {
         panel_->setCurrentIndex(0);
+        fillSheetPanel();
         nothing_->setText(canvas_->selectionCount() > 1 ? QStringLiteral("<b>%1 items selected</b><br><br>Drag a selected unit or note to move the selection. Delete removes the selected items.").arg(canvas_->selectionCount())
                             : QStringLiteral("<b>System design</b><br><br>Draw units, ports, cables and notes. Drag an empty area left to right for blue window selection, or right to left for green crossing selection."));
     }
@@ -1557,6 +1591,7 @@ bool SystemDesignView::exportPng(const QString& given) {
     const QSize size(std::max(200, static_cast<int>(box.width() * k)), std::max(150, static_cast<int>(box.height() * k)));
     SystemCanvas shot;
     shot.setDesign(&design_);
+    shot.setPlain(true);
     shot.resize(size);
     shot.fit();
     QImage image(size, QImage::Format_ARGB32);
@@ -1583,35 +1618,65 @@ bool SystemDesignView::exportPdf(const QString& given) {
         writer.setPageSize(QPageSize(QSizeF(420.0, 297.0), QPageSize::Millimeter, QStringLiteral("A3"), QPageSize::ExactMatch));
     writer.setPageMargins(QMarginsF(0, 0, 0, 0));
     writer.setResolution(96);
+    // ON A CLEAN WHITE PAGE, not the dark canvas: the designators on Auto take dark ink, a white line of the sheet black.
+    SystemDesign paper = design_;
+    paper.background = Qt::white;
     SystemCanvas shot;
-    shot.setDesign(&design_);
+    shot.setDesign(&paper);
+    shot.setPlain(true);
+    const bool whiteWas = EntityRenderer::whitePaper();
+    EntityRenderer::setWhitePaper(true);
     shot.resize(writer.width(), writer.height());
     shot.fit();
     QPainter painter;
-    if (!painter.begin(&writer)) return false;
+    if (!painter.begin(&writer)) { EntityRenderer::setWhitePaper(whiteWas); return false; }
     shot.render(&painter);
     painter.end();
+    EntityRenderer::setWhitePaper(whiteWas);
     return QFileInfo(path).size() > 0;
+}
+
+QList<QPair<QString, QString>> SystemDesignView::templateChoices() const {
+    QList<QPair<QString, QString>> choices;
+    for (const QString& file : DrawingTemplate::installed()) choices.append({QFileInfo(file).completeBaseName(), file});
+    for (const TemplateSheet& s : templateSheets())
+        choices.append({QStringLiteral("%1 sheet (built in)").arg(s.name), QStringLiteral("builtin:") + s.name});
+    return choices;
 }
 
 bool SystemDesignView::applyTemplate(const QString& given) {
     QString path = given;
     if (path.isEmpty()) {
-        // THE TEMPLATES THERE ARE, or one from a file.
-        QStringList names = DrawingTemplate::installed();
+        // THE TEMPLATES INSTALLED, THE PLAIN SHEETS BUILT IN, or one from a file.
+        const QList<QPair<QString, QString>> choices = templateChoices();
+        QStringList names;
+        for (const auto& c : choices) names << c.first;
         const QString other = QStringLiteral("Another file...");
         names << other;
+        const int start = std::max(0, static_cast<int>(names.indexOf(QStringLiteral("A3 sheet (built in)"))));
         bool ok = false;
-        const QString chosen = QInputDialog::getItem(this, QStringLiteral("Template"), QStringLiteral("The sheet round the diagram:"), names, 0, false, &ok);
+        const QString chosen = QInputDialog::getItem(this, QStringLiteral("Template"), QStringLiteral("The sheet round the diagram:"), names,
+                                                     DrawingTemplate::installed().isEmpty() ? start : 0, false, &ok);
         if (!ok || chosen.isEmpty()) return false;
-        path = chosen == other ? QFileDialog::getOpenFileName(this, QStringLiteral("A template"), QString(), DrawingTemplate::fileFilter())
-                               : DrawingTemplate::pathFor(chosen);
+        if (chosen == other) path = QFileDialog::getOpenFileName(this, QStringLiteral("A template"), QString(), DrawingTemplate::fileFilter());
+        for (const auto& c : choices)
+            if (c.first == chosen) path = c.second;
         if (path.isEmpty()) return false;
     }
     DrawingTemplate tpl;
-    if (!tpl.load(path)) return false;
+    if (path.startsWith(QLatin1String("builtin:"))) {
+        // A PLAIN SHEET: the frame, zones, revision table and title block Edraw draws for one of that size.
+        const TemplateSheet* size = templateSheetByName(path.mid(8));
+        if (!size) return false;
+        tpl.name = size->name;
+        tpl.sheet = *size;
+    } else if (!tpl.load(path)) {
+        if (!confirm_) QMessageBox::warning(this, QStringLiteral("Template"), QStringLiteral("%1 could not be read as an Edraw template.").arg(QFileInfo(path).fileName()));
+        return false;
+    }
     SysSheet sheet;
     sheet.name = tpl.name.isEmpty() ? QFileInfo(path).completeBaseName() : tpl.name;
+    for (const Layer& layer : tpl.layers) sheet.layers.append(layer.toJson());
     sheet.content = tpl.hasContent() ? tpl.content : defaultSheetContent(tpl);
     sheet.widthMm = tpl.sheet.drawnWidthMm();
     sheet.heightMm = tpl.sheet.drawnHeightMm();
@@ -1677,6 +1742,35 @@ bool SystemDesignView::askSheetFields() {
     return true;
 }
 
+void SystemDesignView::fillSheetPanel() {
+    if (!sheetName_ || !sheetFields_) return;
+    auto* form = qobject_cast<QFormLayout*>(sheetFields_->layout());
+    while (form && form->rowCount() > 0) form->removeRow(0);
+    if (design_.sheet.empty()) {
+        sheetName_->setText(QStringLiteral("No sheet round the diagram. Choose a template - one of yours, or a plain A4 to A0 sheet - "
+                                           "for its frame and title block; it is in the PDF and the picture too."));
+        return;
+    }
+    sheetName_->setText(QStringLiteral("<b>%1</b> - %2 x %3 mm").arg(design_.sheet.name).arg(design_.sheet.widthMm).arg(design_.sheet.heightMm));
+    // ITS FIELDS, each as its title block has it, written in here.
+    for (const QString& key : sheetFieldKeys()) {
+        auto* edit = new QLineEdit(design_.sheet.fields.value(key).toString(), sheetFields_);
+        edit->setObjectName(QStringLiteral("systemSheetField_") + key);
+        connect(edit, &QLineEdit::editingFinished, this, [this, edit, key] { setSheetField(key, edit->text()); });
+        form->addRow(key, edit);
+    }
+}
+
+int SystemDesignView::autoAlign() {
+    SystemDesign tried = design_;
+    const int moved = autoAlignSystem(tried, selectedIds(0), selectedIds(1));
+    if (moved <= 0) return 0;
+    aboutToChange();
+    design_ = tried;
+    commit();
+    return moved;
+}
+
 void SystemDesignView::removeSheet() {
     if (design_.sheet.empty()) return;
     aboutToChange();
@@ -1714,6 +1808,9 @@ QMenu* SystemDesignView::contextMenu(const QPointF& world) {
     untangle->setObjectName(QStringLiteral("systemMenuMinimize"));
     untangle->setToolTip(QStringLiteral("Reorder the ports at the harnesses' ends along their sides so the harnesses cross less"));
     untangle->setEnabled(!design_.cables.empty());
+    QAction* tidy = menu->addAction(someHarness ? QStringLiteral("Auto-align the selection") : QStringLiteral("Auto-align"), this, [this] { autoAlign(); });
+    tidy->setObjectName(QStringLiteral("systemMenuAutoAlign"));
+    tidy->setToolTip(QStringLiteral("Tidy small offsets: units on the grid, harnesses that are almost straight made straight, their bends lined up"));
     // A HARNESS SPREAD TO ONE MORE PORT: the next click on a port ends its branch there.
     if (const SysCable* c = design_.cable(canvas_->selectedCable()); c && selectedIds(1).size() == 1) {
         const QString id = c->id;

@@ -142,10 +142,16 @@ void MainWindow::buildViewTab() {
                 // made, since the last look would otherwise be missing from a list that was filled at start-up.
                 if (on && key == QLatin1String("parts")) refreshPartsPanel();
                 if (on && key == QLatin1String("blocks")) refreshBlocksPanel();
-                // THE 3D VIEW SPLIT INTO THE DRAWING'S AREA: back into its panel first.
-                if (key == QLatin1String("view3d") && view3dSplit()) {
-                    unsplitView3D();
-                    if (!on) return;
+                // THE 3D VIEW: side by side with the drawing - the drawing's area split, its options on the right - is where
+                // it opens; closed, the area whole again.
+                if (key == QLatin1String("view3d")) {
+                    if (on) {
+                        splitView3D(Qt::Vertical);
+                    } else {
+                        unsplitView3D();
+                        d->hide();
+                    }
+                    return;
                 }
                 d->setVisible(on);
                 if (on) d->raise();
@@ -276,9 +282,6 @@ void MainWindow::buildViewTab() {
         connect(button(splitW, splitRow, "viewSplit3DVertical", QStringLiteral("Split vertical"), 1,
                        QStringLiteral("The drawing's area split in two: the 3D view beside the drawing - drag the line between them to give either as much as four fifths")),
                 &QToolButton::clicked, this, [this] { splitView3D(Qt::Vertical); });
-        connect(button(splitW, splitRow, "viewSplit3DNone", QStringLiteral("No split"), 4,
-                       QStringLiteral("The drawing's area whole again - the 3D view back in its panel")),
-                &QToolButton::clicked, this, [this] { unsplitView3D(); });
         addGroup(lay, QStringLiteral("3D split"), splitW);
 
         auto* tileW = new QWidget(page);
@@ -338,8 +341,11 @@ void MainWindow::syncViewPanelButtons() {
         b->setEnabled(dock != nullptr);
         if (!dock) continue;
         const QSignalBlocker block(b);
-        b->setChecked(dock->isVisible());
-        connect(dock, &QDockWidget::visibilityChanged, b, [b](bool visible) {
+        // THE 3D VIEW, split into the drawing's area, is open though its panel is not.
+        const bool view3d = pair.first == QLatin1String("view3d");
+        b->setChecked(dock->isVisible() || (view3d && view3dSplitMode_));
+        connect(dock, &QDockWidget::visibilityChanged, b, [this, b, view3d](bool visible) {
+            visible = visible || (view3d && view3dSplitMode_);
             if (b->isChecked() == visible) return;
             const QSignalBlocker inner(b);
             b->setChecked(visible);

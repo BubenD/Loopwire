@@ -129,6 +129,11 @@ public:
     void setSheetField(const QString& key, const QString& value);
     QStringList sheetFieldKeys() const;
     void removeSheet();
+    // THE TEMPLATES THERE ARE TO CHOOSE FROM: those installed, by name, each with its file - and the plain sheets built in
+    // ("builtin:A3").
+    QList<QPair<QString, QString>> templateChoices() const;
+    // AUTO-ALIGN the selected units and harnesses (all, where nothing is selected): small offsets tidied. How many moved.
+    int autoAlign();
     // What the check found last.
     const std::vector<SysIssue>& issues() const { return issues_; }
 
@@ -209,6 +214,10 @@ private:
     QLabel* unitPicturePreview_ = nullptr;
     QToolButton* unitPictureEye_ = nullptr;
     QSlider* unitPictureSize_ = nullptr;
+    // THE SHEET, on the panel when nothing is selected: its template and its fields.
+    QLabel* sheetName_ = nullptr;
+    QWidget* sheetFields_ = nullptr;
+    void fillSheetPanel();
     QStringList selectedIds(int what) const;   // 0 units, 1 harnesses, 2 notes
     CheckScope lastScope_ = CheckScope::All;   // what Check again runs: the check last run. Not saved.
     QTableWidget* connections_ = nullptr;

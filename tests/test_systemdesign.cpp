@@ -43,6 +43,7 @@
 #include <QPlainTextEdit>
 #include <QTableWidget>
 #include <QToolButton>
+#include "render/EntityRenderer.h"
 #include "app/View3DPane.h"
 #include "model/DrawingTemplate.h"
 #include <QSlider>
@@ -1963,6 +1964,20 @@ void testViewSplitAndTiles() {
     QApplication::processEvents();
     const bool below = split && split->count() == 2 && split->orientation() == Qt::Vertical && window.view3dSplit() == Qt::Horizontal;
     check(beside && below, "view: Split vertical splits the drawing's area side by side, Split horizontal one over the other");
+    // SIDE BY SIDE: the 3D options in the right-hand panel, the other right-hand panels put away; one over the other: back.
+    splitBeside->click();
+    QApplication::processEvents();
+    QDockWidget* options = window.view3dOptionsDock();
+    int rightOthers = 0;
+    for (QDockWidget* other : window.findChildren<QDockWidget*>(Qt::FindDirectChildrenOnly))
+        if (other != options && other->isVisible() && !other->isFloating() && window.dockWidgetArea(other) == Qt::RightDockWidgetArea) ++rightOthers;
+    const bool optionsRight = options && options->isVisible() && window.dockWidgetArea(options) == Qt::RightDockWidgetArea &&
+                              options->findChild<QWidget*>(QStringLiteral("view3dRows")) != nullptr && rightOthers == 0;
+    splitBelow->click();
+    QApplication::processEvents();
+    const bool optionsBack = options && !options->isVisible() && options->findChild<QWidget*>(QStringLiteral("view3dRows")) == nullptr &&
+                             window.view3dSplitter()->findChild<QWidget*>(QStringLiteral("view3dRows")) != nullptr;
+    check(optionsRight && optionsBack, "view: side by side, the 3D options in the right-hand panel alone; one over the other, back with the 3D view");
     // DRAGGED: either side to four fifths, not past it.
     const QList<int> was = split->sizes();
     const int total = was[0] + was[1];
@@ -1972,10 +1987,20 @@ void testViewSplitAndTiles() {
     const double share = split->sizes()[1] / static_cast<double>(total);
     std::printf("  3D view dragged: %.0f%% of the drawing's area (the drawing keeps %d px)\n", share * 100.0, split->sizes()[0]);
     check(share > 0.7 && share < 0.83, "view: the 3D view dragged to four fifths, the drawing keeping a fifth");
-    if (auto* none = window.findChild<QToolButton*>(QStringLiteral("viewSplit3DNone"))) none->click();
+    // THE 3D VIEW'S OWN BUTTON: closed, the area whole again; opened, side by side - where it opens.
+    QToolButton* view3dButton = nullptr;
+    for (QToolButton* tb : window.findChildren<QToolButton*>()) if (tb->text() == QLatin1String("3D view") && tb->isCheckable()) view3dButton = tb;
+    check(window.findChild<QToolButton*>(QStringLiteral("viewSplit3DNone")) == nullptr && view3dButton && view3dButton->isChecked(),
+          "view: no No split button - the 3D view's own button says it is open");
+    if (view3dButton) view3dButton->click();
     QApplication::processEvents();
-    check(split->count() == 1 && window.view3dSplit() == 0 && qobject_cast<View3DPane*>(dock->widget()) != nullptr,
-          "view: No split - the 3D view back in its panel");
+    const bool closed = split->count() == 1 && window.view3dSplit() == 0 && qobject_cast<View3DPane*>(dock->widget()) != nullptr && !dock->isVisible();
+    if (view3dButton) view3dButton->click();
+    QApplication::processEvents();
+    const bool reopened = window.view3dSplit() == Qt::Vertical && split->count() == 2;
+    check(closed && reopened, "view: the 3D view closed - the drawing's area whole; opened again - side by side");
+    if (view3dButton) view3dButton->click();
+    QApplication::processEvents();
 
     // ---- THE OPEN DRAWINGS TOGETHER ----
     window.newDrawingForTest();
@@ -2248,6 +2273,110 @@ void testSystemTabPanels() {
     check(!bypassUnderCheck && window.findChild<QToolButton*>(QStringLiteral("systemBypass")), "system tab: the Bypass table its own button, not under Check design");
 }
 
+// CTRL+DRAG A NEW ONE; AUTO-ALIGN; THE PDF ON A WHITE PAGE; A BUILT-IN SHEET AND ITS FIELDS ON THE PANEL.
+void testRoundEight(const QString& base) {
+    QJsonObject stored;
+    SystemDesignView view;
+    view.setStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    view.resize(1200, 760);
+    view.show();
+    QApplication::processEvents();
+    {
+        SystemDesign d;
+        const QString a = d.addUnit(13, 7, QStringLiteral("U1")), b = d.addUnit(420, 0, QStringLiteral("U2"));
+        d.unit(a)->kind = QStringLiteral("pcba");
+        // ALMOST STRAIGHT ACROSS: the two ports 5 apart.
+        d.addCable(a, d.addPort(a, QStringLiteral("right"), .5, QStringLiteral("J1")), b, d.addPort(b, QStringLiteral("left"), .5, QStringLiteral("J2")));
+        stored = d.toJson();
+        view.reload();
+    }
+    SystemCanvas* c = view.canvas();
+    c->fit();
+    QApplication::processEvents();
+    const QString a = view.design().units[0].id;
+    auto press = [&](QEvent::Type type, const QPointF& at, Qt::MouseButtons buttons, Qt::MouseButton button) {
+        QMouseEvent ev(type, at, c->mapToGlobal(at), button, buttons, Qt::ControlModifier);
+        QApplication::sendEvent(c, &ev);
+    };
+    // ---- CTRL+DRAG A UNIT: a new one of its kind follows the pointer and is put down where let go ----
+    {
+        const QPointF from = c->unitOnScreen(a), to = from + QPointF(0, 260);
+        press(QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
+        for (int i = 1; i <= 6; ++i) press(QEvent::MouseMove, from + (to - from) * (i / 6.0), Qt::LeftButton, Qt::NoButton);
+        press(QEvent::MouseButtonRelease, to, Qt::NoButton, Qt::LeftButton);
+        QApplication::processEvents();
+        const SysUnit& made = view.design().units.back();
+        std::printf("  ctrl+drag: %d unit(s), the new one %s (%s) at %.0f, %.0f\n", static_cast<int>(view.design().units.size()), qPrintable(made.name),
+                    qPrintable(made.kind), made.x, made.y);
+        check(view.design().units.size() == 3 && made.kind == QLatin1String("pcba") && made.y > 100 && c->tool() == SysTool::Select,
+              "ctrl+drag: a unit - a new one of its kind put down where let go");
+        view.undo();
+        check(view.design().units.size() == 2, "ctrl+drag: one step to undo");
+    }
+    // ---- CTRL+DRAG A PORT: a new port on the same unit, slid to where let go ----
+    {
+        const SysUnit* u = view.design().unit(a);
+        const QPointF from = c->portOnScreen(a, u->ports[0].id), to = c->toScreen(QPointF(u->x + u->w * 0.6, u->y + u->h));
+        press(QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
+        for (int i = 1; i <= 6; ++i) press(QEvent::MouseMove, from + (to - from) * (i / 6.0), Qt::LeftButton, Qt::NoButton);
+        press(QEvent::MouseButtonRelease, to, Qt::NoButton, Qt::LeftButton);
+        QApplication::processEvents();
+        const SysUnit* after = view.design().unit(a);
+        check(after->ports.size() == 2 && after->ports[1].side == QLatin1String("bottom"), "ctrl+drag: a port - a new one on the same unit, where let go");
+        view.undo();
+    }
+    // ---- AUTO-ALIGN: the unit on the grid, the harness straight ----
+    {
+        const int moved = view.autoAlign();
+        const SysUnit* ua = view.design().unit(a);
+        const SysCable& w = view.design().cables[0];
+        const SysUnit* ub = view.design().unit(w.bUnit);
+        const QPointF pa = sysPortPoint(*ua, *ua->port(w.aPort)), pb = sysPortPoint(*ub, *ub->port(w.bPort));
+        std::printf("  auto-align: %d moved; U1 at %.0f, %.0f; the harness ends %.1f and %.1f high\n", moved, ua->x, ua->y, pa.y(), pb.y());
+        check(moved > 0 && std::fmod(ua->x, 10.0) == 0.0 && std::fmod(ua->y, 10.0) == 0.0 && std::abs(pa.y() - pb.y()) < 0.01,
+              "auto-align: units on the grid, a harness almost straight made straight");
+        QMenu* menu = view.contextMenu(QPointF());
+        check(menu->findChild<QAction*>(QStringLiteral("systemMenuAutoAlign")) != nullptr, "auto-align: on the right-click menu");
+        delete menu;
+    }
+    // ---- A BUILT-IN SHEET, ITS FIELDS ON THE PANEL ----
+    {
+        bool builtIn = false;
+        for (const auto& choice : view.templateChoices()) builtIn = builtIn || choice.second == QLatin1String("builtin:A3");
+        check(builtIn && view.applyTemplate(QStringLiteral("builtin:A3")) && view.design().sheet.name == QLatin1String("A3") &&
+                  !view.design().sheet.content.isEmpty(),
+              "template: the plain sheets built in, an A3 put round the diagram");
+        c->select(QString(), QString(), QString());
+        QApplication::processEvents();
+        auto* title = view.findChild<QLineEdit*>(QStringLiteral("systemSheetField_title"));
+        auto* name = view.findChild<QLabel*>(QStringLiteral("systemSheetName"));
+        if (title) {
+            title->setText(QStringLiteral("Bench rig"));
+            emit title->editingFinished();
+        }
+        check(title && name && name->text().contains(QLatin1String("A3")) &&
+                  view.design().sheet.fields.value(QStringLiteral("title")).toString() == QLatin1String("Bench rig"),
+              "template: the sheet and its fields on the panel when nothing is selected, written in there");
+    }
+    // ---- THE PDF ON A CLEAN WHITE PAGE ----
+    {
+        const QString pdf = QDir(base).filePath(QStringLiteral("eight.pdf"));
+        const bool paperWas = EntityRenderer::whitePaper();
+        const bool wrote = view.exportPdf(pdf);
+        const PdfRaster page = renderNativePdf(pdf, 0, 900);
+        int white = 0, total = 0;
+        if (!page.image.isNull())
+            for (int y = 0; y < page.image.height(); y += 7)
+                for (int x = 0; x < page.image.width(); x += 7) {
+                    ++total;
+                    white += page.image.pixelColor(x, y).lightness() > 235 ? 1 : 0;
+                }
+        std::printf("  PDF page: %d%% white (%s)\n", total ? white * 100 / total : -1, qPrintable(page.error));
+        check(wrote && EntityRenderer::whitePaper() == paperWas && (page.image.isNull() ? !page.error.isEmpty() : white * 10 > total * 7),
+              "PDF: on a clean white page, not the dark canvas");
+    }
+}
+
 } // namespace
 
 int run_systemdesign_tests() {
@@ -2281,6 +2410,7 @@ int run_systemdesign_tests() {
     testViewSplitAndTiles();
     testRoundSeven(dir.path());
     testSystemTabPanels();
+    testRoundEight(dir.path());
     std::printf("  system design: %s\n", g_fail == 0 ? "OK" : "FAILED");
     return g_fail;
 }

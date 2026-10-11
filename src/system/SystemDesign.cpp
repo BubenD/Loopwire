@@ -862,7 +862,8 @@ QJsonObject SystemDesign::toJson() const {
         o[QStringLiteral("sheet")] = QJsonObject{{QStringLiteral("name"), sheet.name}, {QStringLiteral("content"), sheet.content},
                                                  {QStringLiteral("w"), sheet.widthMm}, {QStringLiteral("h"), sheet.heightMm},
                                                  {QStringLiteral("x"), sheet.x}, {QStringLiteral("y"), sheet.y},
-                                                 {QStringLiteral("scale"), sheet.scale}, {QStringLiteral("fields"), sheet.fields}};
+                                                 {QStringLiteral("scale"), sheet.scale}, {QStringLiteral("fields"), sheet.fields},
+                                                 {QStringLiteral("layers"), sheet.layers}};
     if (!bypassed.empty()) {
         QJsonArray accepted;
         for (const SysIssue& i : bypassed)
@@ -976,6 +977,7 @@ SystemDesign SystemDesign::fromJson(const QJsonObject& o) {
         d.sheet.y = s.value(QStringLiteral("y")).toDouble();
         d.sheet.scale = std::max(0.05, s.value(QStringLiteral("scale")).toDouble(2.0));
         d.sheet.fields = s.value(QStringLiteral("fields")).toObject();
+        d.sheet.layers = s.value(QStringLiteral("layers")).toArray();
     }
     for (const QJsonValue& v : o.value(QStringLiteral("bypassed")).toArray()) {
         const QJsonObject j = v.toObject();
