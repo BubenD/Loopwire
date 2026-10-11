@@ -4,6 +4,7 @@
 #include "system/SystemDesign.h"
 
 #include <QJsonObject>
+#include <QSet>
 #include <QWidget>
 
 #include <functional>
@@ -76,7 +77,7 @@ public:
     int checkDesign(CheckScope scope = CheckScope::All);
     int checkSchematics();
     void askRules();
-    bool locateIssue(int row);
+    bool locateIssue(int index);   // by its place in issues()
     void setRuleSeverity(const QString& rule, int level);
     bool bypassIssue(int row);
     bool restoreIssue(const QString& key);
@@ -106,10 +107,28 @@ public:
     // A UNIT'S PICTURE, from a file (no more than 400 across, kept in the design) - asked for where none is given; taken out.
     bool setUnitPicture(const QString& unit, const QString& path = QString());
     void removeUnitPicture(const QString& unit);
+    // ITS PICTURE drawn in the unit or not, and how much of the room in it it takes (0.1 to 1); saved to a file.
+    void setUnitPictureShown(const QString& unit, bool shown);
+    void setUnitPictureScale(const QString& unit, double scale);
+    bool saveUnitPicture(const QString& unit, const QString& path = QString());
+    // WHAT A UNIT OR HARNESS SHOWS of itself on the diagram ("name", "pn", "rev", "desc"), as its eyes say.
+    void setShown(const QString& id, const QString& what, bool shown);
+    // The row of the findings table a finding is on (-1: folded away, or none).
+    int rowOfIssue(int issue) const;
     // THE RIGHT-CLICK MENU of the diagram: copy, cut, paste, delete, minimize crossings, the unit's picture.
     QMenu* contextMenu(const QPointF& world);
     bool exportDrawio(const QString& path = QString());
     bool exportVisio(const QString& path = QString());
+    // THE DIAGRAM OUT AS A PICTURE (PNG) or as a PDF - its sheet with it, where it has one.
+    bool exportPng(const QString& path = QString());
+    bool exportPdf(const QString& path = QString());
+    // A TEMPLATE'S SHEET round the diagram: an Edraw drawing template (.etp) - its frame and title block - fitted round what
+    // is drawn, its title filled in; chosen from those installed (or a file) where none is given. Its fields; taken away.
+    bool applyTemplate(const QString& path = QString());
+    bool askSheetFields();
+    void setSheetField(const QString& key, const QString& value);
+    QStringList sheetFieldKeys() const;
+    void removeSheet();
     // What the check found last.
     const std::vector<SysIssue>& issues() const { return issues_; }
 
@@ -185,6 +204,11 @@ private:
     QLabel* issueSummary_ = nullptr;
     bool checked_ = false;
     QJsonObject lastPiece_;   // what was copied last - the clipboard's, kept here too. Not saved.
+    std::vector<int> rowIssue_;     // each findings row's finding (-1: a topic's heading). Not saved.
+    QSet<QString> foldedTopics_;    // topics folded away in the findings table. Not saved.
+    QLabel* unitPicturePreview_ = nullptr;
+    QToolButton* unitPictureEye_ = nullptr;
+    QSlider* unitPictureSize_ = nullptr;
     QStringList selectedIds(int what) const;   // 0 units, 1 harnesses, 2 notes
     CheckScope lastScope_ = CheckScope::All;   // what Check again runs: the check last run. Not saved.
     QTableWidget* connections_ = nullptr;

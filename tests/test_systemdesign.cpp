@@ -43,6 +43,9 @@
 #include <QPlainTextEdit>
 #include <QTableWidget>
 #include <QToolButton>
+#include "app/View3DPane.h"
+#include "model/DrawingTemplate.h"
+#include <QSlider>
 #include <QImage>
 #include <QDockWidget>
 #include <QMenu>
@@ -1130,11 +1133,15 @@ void testSystemDrcWorkflow() {
     const QJsonObject before = d.toJson();
     view.checkDesign();
     auto* table = view.findChild<QTableWidget*>(QStringLiteral("systemIssues"));
-    check(table && table->rowCount() == static_cast<int>(view.issues().size()) && table->rowCount() > 0,
+    // Under their topics now: a heading row for each, then its findings.
+    int findingRows = 0;
+    if (table) for (int r = 0; r < table->rowCount(); ++r) findingRows += table->item(r, 1) ? 1 : 0;
+    check(table && findingRows == static_cast<int>(view.issues().size()) && findingRows > 0,
           "system DRC: every finding listed after checking");
     bool sorted = true;
-    for (size_t i=1; i<view.issues().size(); ++i) sorted &= view.issues()[i-1].level >= view.issues()[i].level;
-    check(sorted, "system DRC: errors precede warnings and notes");
+    for (size_t i=1; i<view.issues().size(); ++i)
+        if (view.issues()[i-1].rule == view.issues()[i].rule) sorted &= view.issues()[i-1].level >= view.issues()[i].level;
+    check(sorted, "system DRC: errors precede warnings and notes within each topic");
     int portRow=-1, unitRow=-1, cableRow=-1, noteRow=-1;
     for (int i=0;i<static_cast<int>(view.issues().size());++i) {
         const SysIssue& issue=view.issues()[static_cast<size_t>(i)];
@@ -1144,7 +1151,7 @@ void testSystemDrcWorkflow() {
         if (issue.note==n) noteRow=i;
     }
     const QPointF centre(view.canvas()->width()/2.0, view.canvas()->height()/2.0);
-    if (table && portRow>=0) table->cellClicked(portRow,2);
+    if (table && portRow>=0) table->cellClicked(view.rowOfIssue(portRow),2);
     check(portRow>=0 && view.canvas()->selectedPort()==pb && (view.canvas()->portOnScreen(b,pb)-centre).manhattanLength()<2,
           "system DRC: single click jumps to an offscreen port and centres it");
     auto* flash=view.canvas()->findChild<QTimer*>(QStringLiteral("systemIssueFlash"));
@@ -1790,10 +1797,11 @@ void testRoundSix(const QString& base) {
     auto* summary = view.findChild<QLabel*>(QStringLiteral("systemDrcSummary"));
     auto* tabs = view.findChild<QTabWidget*>(QStringLiteral("systemTabs"));
     view.checkRevisions();
-    const bool revisionsListed = table && table->rowCount() == static_cast<int>(view.issues().size()) && table->rowCount() > 0 &&
+    auto findingRows = [&] { int n = 0; for (int r = 0; r < table->rowCount(); ++r) n += table->item(r, 1) ? 1 : 0; return n; };
+    const bool revisionsListed = table && findingRows() == static_cast<int>(view.issues().size()) && findingRows() > 0 &&
                                  summary->text().startsWith(QLatin1String("Revision check")) && tabs->currentIndex() == 1;
     view.checkSchematics();
-    const bool connectionsListed = table && table->rowCount() == static_cast<int>(view.issues().size()) &&
+    const bool connectionsListed = table && findingRows() == static_cast<int>(view.issues().size()) &&
                                    summary->text().startsWith(QLatin1String("Connection check")) && tabs->currentIndex() == 1;
     // Check again: the same check once more.
     if (auto* again = view.findChild<QPushButton*>(QStringLiteral("systemCheckAgain"))) again->click();
@@ -1945,22 +1953,29 @@ void testViewSplitAndTiles() {
     auto* splitBeside = window.findChild<QToolButton*>(QStringLiteral("viewSplit3DVertical"));
     check(dock && splitBelow && splitBeside, "view: the 3D split buttons");
     if (!dock || !splitBelow || !splitBeside) return;
+    // THE DRAWING'S OWN AREA SPLIT IN TWO - not the 3D view put in a panel at the side.
+    QSplitter* split = window.view3dSplitter();
     splitBeside->click();
     QApplication::processEvents();
-    const bool beside = window.dockWidgetArea(dock) == Qt::RightDockWidgetArea && dock->isVisible();
+    const bool beside = split && split->count() == 2 && split->orientation() == Qt::Horizontal && !dock->isVisible() &&
+                        window.view3dSplit() == Qt::Vertical;
     splitBelow->click();
     QApplication::processEvents();
+    const bool below = split && split->count() == 2 && split->orientation() == Qt::Vertical && window.view3dSplit() == Qt::Horizontal;
+    check(beside && below, "view: Split vertical splits the drawing's area side by side, Split horizontal one over the other");
+    // DRAGGED: either side to four fifths, not past it.
+    const QList<int> was = split->sizes();
+    const int total = was[0] + was[1];
+    split->setSizes({total / 20, total - total / 20});
+    emit split->splitterMoved(total / 20, 1);
     QApplication::processEvents();
-    const bool below = window.dockWidgetArea(dock) == Qt::BottomDockWidgetArea && dock->isVisible();
-    check(beside && below, "view: Split vertical puts the 3D view beside the drawing, Split horizontal under it");
-    // DRAGGED UP: as far as four fifths of the room, not past it.
-    window.keepCanvasShare();
-    const int room = window.centralWidget()->height() + dock->height();
-    window.resizeDocks({dock}, {room * 9 / 10}, Qt::Vertical);
+    const double share = split->sizes()[1] / static_cast<double>(total);
+    std::printf("  3D view dragged: %.0f%% of the drawing's area (the drawing keeps %d px)\n", share * 100.0, split->sizes()[0]);
+    check(share > 0.7 && share < 0.83, "view: the 3D view dragged to four fifths, the drawing keeping a fifth");
+    if (auto* none = window.findChild<QToolButton*>(QStringLiteral("viewSplit3DNone"))) none->click();
     QApplication::processEvents();
-    const double share = dock->height() / static_cast<double>(window.centralWidget()->height() + dock->height());
-    std::printf("  3D view dragged up: %.0f%% of the room (the drawing keeps %d px)\n", share * 100.0, window.centralWidget()->height());
-    check(share > 0.7 && share < 0.83, "view: the 3D view dragged up to four fifths, the drawing keeping a fifth");
+    check(split->count() == 1 && window.view3dSplit() == 0 && qobject_cast<View3DPane*>(dock->widget()) != nullptr,
+          "view: No split - the 3D view back in its panel");
 
     // ---- THE OPEN DRAWINGS TOGETHER ----
     window.newDrawingForTest();
@@ -2006,6 +2021,233 @@ void testViewSplitAndTiles() {
     check(tiles->count() == 1, "view: back to one drawing at a time");
 }
 
+// THE DEVICE; A UNIT'S PICTURE IN THE PANEL; SHIFT+CLICK; CROSSINGS THROUGH A BEND; MINIMIZE THAT RE-ROUTES; FINDINGS UNDER
+// TOPICS; THE MENU'S EYES AND BRANCH; THE INTERNAL HARNESS; PDF AND PNG; THE TEMPLATE'S SHEET; THE SYSTEM TAB'S PANELS.
+void testRoundSeven(const QString& base) {
+    QJsonObject stored;
+    SystemDesignView view;
+    view.setStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    view.resize(1200, 760);
+    view.show();
+    QApplication::processEvents();
+    {
+        SystemDesign d;
+        const QString a = d.addUnit(0, 0, QStringLiteral("U1")), b = d.addUnit(420, 0, QStringLiteral("U2"));
+        const QString box = d.addUnit(0, 300, QStringLiteral("BOX"));
+        d.unit(box)->w = 400; d.unit(box)->h = 240;
+        const QString board = d.addUnit(220, 380, QStringLiteral("BOARD"));
+        d.unit(board)->kind = QStringLiteral("pcba"); d.unit(board)->parent = box;
+        d.addCable(a, d.addPort(a, QStringLiteral("right"), .5, QStringLiteral("J1")), b, d.addPort(b, QStringLiteral("left"), .5, QStringLiteral("J2")));
+        // AN INTERNAL HARNESS: from the box's wall, inside, to the board within it.
+        const QString in = d.addCable(box, d.addPort(box, QStringLiteral("left"), .5, QStringLiteral("J5")), board,
+                                      d.addPort(board, QStringLiteral("left"), .5, QStringLiteral("J6")));
+        d.cable(in)->aInside = true;
+        d.cable(in)->bInside = false;
+        stored = d.toJson();
+        view.reload();
+    }
+    SystemDesign& d = view.design();
+    const QString a = d.units[0].id, b = d.units[1].id;
+    SystemCanvas* c = view.canvas();
+    c->fit();
+    QApplication::processEvents();
+
+    // ---- THE DEVICE ----
+    auto* kind = view.findChild<QComboBox*>(QStringLiteral("systemUnitKind"));
+    d.unit(a)->kind = QStringLiteral("device");
+    SystemDesign viaDrawio;
+    importSystemDrawioXml(systemDrawioXml(d).toUtf8(), viaDrawio);
+    bool deviceBack = false;
+    for (const SysUnit& u : viaDrawio.units) deviceBack = deviceBack || (u.name == QLatin1String("U1") && u.kind == QLatin1String("device"));
+    check(kind && kind->findData(QStringLiteral("device")) >= 0 && deviceBack, "device: a unit kind of its own, through draw.io and back");
+
+    // ---- A PICTURE: seen in the panel, its eye, its size, saved to a file ----
+    const QString png = QDir(base).filePath(QStringLiteral("seven.png"));
+    { QImage green(80, 60, QImage::Format_RGB32); green.fill(QColor(30, 200, 60)); green.save(png); }
+    view.setUnitPicture(a, png);
+    c->select(a, QString(), QString());
+    QApplication::processEvents();
+    auto* preview = view.findChild<QLabel*>(QStringLiteral("systemUnitPicturePreview"));
+    auto* eye = view.findChild<QToolButton*>(QStringLiteral("systemUnitPictureEye"));
+    auto* size = view.findChild<QSlider*>(QStringLiteral("systemUnitPictureSize"));
+    const bool shownInPanel = preview && !preview->pixmap().isNull();
+    if (eye) eye->click();
+    const bool hidden = !view.design().unit(a)->pictureShown && SystemDesign::fromJson(view.design().toJson()).unit(a)->pictureShown == false;
+    if (size) size->setValue(50);
+    const bool smaller = std::abs(view.design().unit(a)->pictureScale - 0.5) < 1e-9;
+    const QString saved = QDir(base).filePath(QStringLiteral("seven-out.png"));
+    const bool keptToFile = view.saveUnitPicture(a, saved) && !QImage(saved).isNull();
+    check(shownInPanel && hidden && smaller && keptToFile, "picture: in the panel, its eye hides it in the unit, its slider sizes it, saved to a file");
+
+    // ---- SHIFT+CLICK: a unit, a harness and a port together ----
+    c->select(QString(), QString(), QString());
+    c->toggleAt(c->toWorld(c->unitOnScreen(b)));
+    c->toggleAt(c->toWorld(c->cableOnScreen(d.cables[0].id)));
+    const SysUnit* u1 = view.design().unit(a);
+    c->toggleAt(c->toWorld(c->portOnScreen(a, u1->ports[0].id)));
+    std::printf("  shift+click: %d selected (%d port(s))\n", c->selectionCount(), static_cast<int>(c->selectedPorts().size()));
+    check(c->selectionCount() == 3 && c->selectedPorts().size() == 1 && c->selectedUnits().size() == 1 && c->selectedCables().size() == 1,
+          "shift+click: a unit, a harness and a port selected together");
+    c->toggleAt(c->toWorld(c->unitOnScreen(b)));
+    check(c->selectionCount() == 2, "shift+click: clicked again, taken out");
+    c->select(QString(), QString(), QString());
+
+    // ---- A CROSSING THROUGH A BEND: one line going straight on through a corner point of the other ----
+    {
+        const std::vector<QPointF> across{{0, 0}, {5, 0}, {10, 0}}, upright{{5, -5}, {5, 5}};
+        bool raw = false, straight = false;
+        for (size_t i = 1; i < across.size(); ++i) raw = raw || systemSegmentsCross(across[i - 1], across[i], upright[0], upright[1]);
+        const auto line = systemStraightened(across);
+        for (size_t i = 1; i < line.size(); ++i) straight = straight || systemSegmentsCross(line[i - 1], line[i], upright[0], upright[1]);
+        check(!raw && straight && line.size() == 2, "crossings: a crossing through a straight-on point of a line is seen");
+    }
+
+    // ---- MINIMIZE RE-ROUTES: a harness's dragged detour let go ----
+    {
+        SysCable* w = &view.design().cables[0];
+        w->waypoints = {QPointF(200, -300), QPointF(380, -300)};
+        stored = view.design().toJson();
+        view.reload();
+        const double before = systemHarnessLength(view.design());
+        view.minimizeCrossings();
+        const double after = systemHarnessLength(view.design());
+        std::printf("  minimize re-routes: %.0f -> %.0f long, its bends %d\n", before, after, static_cast<int>(view.design().cables[0].waypoints.size()));
+        check(after < before - 100 && view.design().cables[0].waypoints.empty(), "minimize crossings: the harness re-routed, its dragged detour let go");
+    }
+
+    // ---- FINDINGS UNDER THEIR TOPICS, a topic folded ----
+    view.checkDesign();
+    auto* table = view.findChild<QTableWidget*>(QStringLiteral("systemIssues"));
+    int headings = 0, partRow = -1;
+    for (int r = 0; r < table->rowCount(); ++r)
+        if (!table->item(r, 1)) {
+            ++headings;
+            if (table->item(r, 0)->data(Qt::UserRole + 3).toString() == QLatin1String("PART-NUMBER")) partRow = r;
+        }
+    QString lastRule;
+    int topicsSeen = 0;
+    for (const SysIssue& i : view.issues()) if (i.rule != lastRule) { ++topicsSeen; lastRule = i.rule; }
+    const int rowsBefore = table->rowCount();
+    if (partRow >= 0) table->cellClicked(partRow, 0);
+    const int rowsFolded = table->rowCount();
+    std::printf("  findings: %d topic heading(s) over %d finding(s); Part numbers folded %d -> %d rows\n", headings,
+                static_cast<int>(view.issues().size()), rowsBefore, rowsFolded);
+    check(headings == topicsSeen && headings > 1 && partRow >= 0 && rowsFolded < rowsBefore,
+          "findings: under their topics, each topic's heading folds its findings away");
+    if (partRow >= 0) table->cellClicked(partRow, 0);   // opened again
+
+    // ---- THE MENU: what is shown, and a branch ----
+    c->select(a, QString(), QString());
+    QMenu* menu = view.contextMenu(QPointF());
+    QAction* nameEye = menu->findChild<QAction*>(QStringLiteral("systemMenuShow_name"));
+    if (nameEye) nameEye->trigger();
+    const bool nameHidden = view.design().unit(a)->hidden.contains(QStringLiteral("name"));
+    delete menu;
+    c->select(QString(), QString(), view.design().cables[0].id);
+    menu = view.contextMenu(QPointF());
+    QAction* spread = menu->findChild<QAction*>(QStringLiteral("systemMenuBranch"));
+    const bool cableEyes = menu->findChild<QAction*>(QStringLiteral("systemMenuShow_pn")) != nullptr;
+    delete menu;
+    check(nameEye && nameHidden && cableEyes, "menu: what the unit or harness shows, seen or unseen from its right-click menu");
+    {
+        const QString extra = view.design().addUnit(200, -250, QStringLiteral("U7"));
+        const QString port = view.design().addPort(extra, QStringLiteral("bottom"), .5, QStringLiteral("J7"));
+        stored = view.design().toJson();
+        view.reload();
+        c->fit();
+        QApplication::processEvents();
+        const QString trunk = view.design().cables[0].id;
+        c->startBranch(trunk);
+        const QPointF at = c->portOnScreen(extra, port);
+        QMouseEvent click(QEvent::MouseButtonPress, at, c->mapToGlobal(at), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(c, &click);
+        QMouseEvent let(QEvent::MouseButtonRelease, at, c->mapToGlobal(at), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(c, &let);
+        QApplication::processEvents();
+        const SysCable* spreadTo = view.design().cable(trunk);
+        check(spread && spreadTo && spreadTo->branches.size() == 1 && spreadTo->branches[0].unit == extra,
+              "menu: Spread to another port - then a click on the port, a branch to it");
+        view.setTool(SysTool::Select);
+    }
+
+    // ---- THE INTERNAL HARNESS: clicked inside its unit, it is what is selected ----
+    {
+        QString internal;
+        for (const SysCable& k : view.design().cables) if (k.aInside) internal = k.id;
+        const QPointF at = c->cableOnScreen(internal);
+        QMouseEvent down(QEvent::MouseButtonPress, at, c->mapToGlobal(at), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(c, &down);
+        QMouseEvent up(QEvent::MouseButtonRelease, at, c->mapToGlobal(at), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(c, &up);
+        check(!internal.isEmpty() && c->selectedCable() == internal, "internal harness: clicked inside its unit - the harness selected, not the unit");
+    }
+
+    // ---- PDF AND PNG ----
+    const QString pdf = QDir(base).filePath(QStringLiteral("system.pdf")), pic = QDir(base).filePath(QStringLiteral("system.png"));
+    const bool pngOut = view.exportPng(pic) && QImage(pic).width() > 200;
+    QFile pdfFile(pdf);
+    const bool pdfOut = view.exportPdf(pdf) && pdfFile.open(QIODevice::ReadOnly) && pdfFile.read(4) == QByteArray("%PDF");
+    pdfFile.close();
+    std::printf("  exports: PNG %d (%dx%d), PDF %d (%lld bytes)\n", pngOut ? 1 : 0, QImage(pic).width(), QImage(pic).height(), pdfOut ? 1 : 0,
+                static_cast<long long>(QFileInfo(pdf).size()));
+    check(pngOut && pdfOut, "exports: the diagram as a PNG picture and as a PDF");
+
+    // ---- A TEMPLATE'S SHEET ROUND THE DIAGRAM ----
+    {
+        DrawingTemplate tpl;
+        tpl.name = QStringLiteral("Seven A3");
+        const QString etp = QDir(base).filePath(QStringLiteral("seven.etp"));
+        tpl.save(etp);
+        check(view.applyTemplate(etp) && !view.design().sheet.empty() && !view.design().sheet.content.isEmpty(), "template: its sheet put round the diagram");
+        bool inside = true;
+        for (const SysUnit& u : view.design().units) inside = inside && view.design().sheet.rect().contains(u.rect());
+        const QStringList keys = view.sheetFieldKeys();
+        view.setSheetField(QStringLiteral("title"), QStringLiteral("Rig wiring"));
+        const SystemDesign back = SystemDesign::fromJson(view.design().toJson());
+        std::printf("  template: %s, %.0f x %.0f mm at %.2f to the mm, fields %s\n", qPrintable(view.design().sheet.name), view.design().sheet.widthMm,
+                    view.design().sheet.heightMm, view.design().sheet.scale, qPrintable(keys.join(QStringLiteral(", "))));
+        check(inside && keys.contains(QStringLiteral("title")) && back.sheet.fields.value(QStringLiteral("title")).toString() == QLatin1String("Rig wiring") &&
+                  back.sheet.content.size() == view.design().sheet.content.size(),
+              "template: round everything drawn, its title written in, kept with the design");
+        const bool sheetPdf = view.exportPdf(pdf);
+        view.removeSheet();
+        check(sheetPdf && view.design().sheet.empty(), "template: in the PDF; taken away again");
+    }
+}
+
+// THE SYSTEM DESIGN TAB: THE DRAWING'S PANELS PUT AWAY WHILE IT IS OPEN, BACK AFTER; NO BYPASS TABLE UNDER CHECK DESIGN.
+void testSystemTabPanels() {
+    MainWindow window;
+    window.resize(1400, 900);
+    window.show();
+    QApplication::processEvents();
+    auto visibleDocks = [&] {
+        int n = 0;
+        for (QDockWidget* dock : window.findChildren<QDockWidget*>(Qt::FindDirectChildrenOnly)) n += dock->isVisible() && !dock->isFloating() ? 1 : 0;
+        return n;
+    };
+    QTabWidget* ribbon = nullptr;
+    for (QTabWidget* t : window.findChildren<QTabWidget*>())
+        for (int i = 0; i < t->count(); ++i) if (t->tabText(i) == QLatin1String("System design")) ribbon = t;
+    check(ribbon != nullptr, "system tab: on the ribbon");
+    if (!ribbon) return;
+    const int before = visibleDocks();
+    int systemIndex = -1, homeIndex = 0;
+    for (int i = 0; i < ribbon->count(); ++i) if (ribbon->tabText(i) == QLatin1String("System design")) systemIndex = i;
+    ribbon->setCurrentIndex(systemIndex);
+    QApplication::processEvents();
+    const int during = visibleDocks();
+    ribbon->setCurrentIndex(homeIndex);
+    QApplication::processEvents();
+    const int after = visibleDocks();
+    std::printf("  system tab: %d panel(s) before, %d while open, %d after\n", before, during, after);
+    check(before > 0 && during == 0 && after == before, "system tab: the drawing's panels put away while it is open, given back after");
+    bool bypassUnderCheck = false;
+    if (auto* checkButton = window.findChild<QToolButton*>(QStringLiteral("systemCheck")); checkButton && checkButton->menu())
+        for (QAction* act : checkButton->menu()->actions()) bypassUnderCheck = bypassUnderCheck || act->text().contains(QLatin1String("Bypass"));
+    check(!bypassUnderCheck && window.findChild<QToolButton*>(QStringLiteral("systemBypass")), "system tab: the Bypass table its own button, not under Check design");
+}
+
 } // namespace
 
 int run_systemdesign_tests() {
@@ -2037,6 +2279,8 @@ int run_systemdesign_tests() {
     testCheckCardsHelpNotesDesignators();
     testRoundSix(dir.path());
     testViewSplitAndTiles();
+    testRoundSeven(dir.path());
+    testSystemTabPanels();
     std::printf("  system design: %s\n", g_fail == 0 ? "OK" : "FAILED");
     return g_fail;
 }

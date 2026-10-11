@@ -299,9 +299,13 @@ public:
     // THE DRAWING KEEPS A FIFTH OF THE WINDOW: a panel docked below or beside it - the 3D view - can be dragged to take
     // the other four fifths, and no further.
     void keepCanvasShare();
-    // THE 3D VIEW SPLIT FROM THE DRAWING: below it (Qt::Horizontal - the line between them across) or beside it
-    // (Qt::Vertical - the line upright), half and half to start with.
+    // THE 3D VIEW SPLIT FROM THE DRAWING: the drawing's own area split in two - the 3D view below it (Qt::Horizontal: the
+    // line between them across) or beside it (Qt::Vertical: the line upright), half and half to start with, either side
+    // dragged to as much as four fifths. Back into its panel with unsplitView3D.
     void splitView3D(Qt::Orientation split);
+    void unsplitView3D();
+    int view3dSplit() const { return view3dSplitMode_; }   // 0: not split, else the Qt::Orientation asked for
+    QSplitter* view3dSplitter() const { return view3dSplit_; }
     // THE OPEN DRAWINGS SHOWN TOGETHER: the active one to work on, every other one beside it (Qt::Horizontal) or under it
     // (Qt::Vertical) to look at - a double-click on one makes it the drawing worked on. 0: one drawing at a time.
     void tileDrawings(int orientation);
@@ -310,6 +314,13 @@ public:
 private:
     void refreshDrawingTiles();
     QSplitter* drawingTiles_ = nullptr;
+    QSplitter* view3dSplit_ = nullptr;   // the drawing (and its tiles) and, split, the 3D view
+    int view3dSplitMode_ = 0;            // Not saved.
+    bool view3dSplitDockWas_ = false;
+    QWidget* view3dSplitStandIn_ = nullptr;
+    // THE PANELS PUT AWAY while the System design tab is open, given back as it is left. Not saved.
+    QList<QPointer<QDockWidget>> systemDocksHidden_;
+    bool systemOn_ = false;
     int drawingTileMode_ = 0;   // 0, Qt::Horizontal or Qt::Vertical. Not saved.
     // The ribbon's controls of the 3D view tied to the view's own, once.
     void mirrorPreview3D();

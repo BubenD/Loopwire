@@ -142,6 +142,11 @@ void MainWindow::buildViewTab() {
                 // made, since the last look would otherwise be missing from a list that was filled at start-up.
                 if (on && key == QLatin1String("parts")) refreshPartsPanel();
                 if (on && key == QLatin1String("blocks")) refreshBlocksPanel();
+                // THE 3D VIEW SPLIT INTO THE DRAWING'S AREA: back into its panel first.
+                if (key == QLatin1String("view3d") && view3dSplit()) {
+                    unsplitView3D();
+                    if (!on) return;
+                }
                 d->setVisible(on);
                 if (on) d->raise();
             }
@@ -266,11 +271,14 @@ void MainWindow::buildViewTab() {
         splitRow->setContentsMargins(0, 0, 0, 0);
         splitRow->setSpacing(2);
         connect(button(splitW, splitRow, "viewSplit3DHorizontal", QStringLiteral("Split horizontal"), 0,
-                       QStringLiteral("The 3D view under the drawing - drag the line between them up to give it as much as four fifths")),
+                       QStringLiteral("The drawing's area split in two: the 3D view under the drawing - drag the line between them to give either as much as four fifths")),
                 &QToolButton::clicked, this, [this] { splitView3D(Qt::Horizontal); });
         connect(button(splitW, splitRow, "viewSplit3DVertical", QStringLiteral("Split vertical"), 1,
-                       QStringLiteral("The 3D view beside the drawing - drag the line between them to give it as much as four fifths")),
+                       QStringLiteral("The drawing's area split in two: the 3D view beside the drawing - drag the line between them to give either as much as four fifths")),
                 &QToolButton::clicked, this, [this] { splitView3D(Qt::Vertical); });
+        connect(button(splitW, splitRow, "viewSplit3DNone", QStringLiteral("No split"), 4,
+                       QStringLiteral("The drawing's area whole again - the 3D view back in its panel")),
+                &QToolButton::clicked, this, [this] { unsplitView3D(); });
         addGroup(lay, QStringLiteral("3D split"), splitW);
 
         auto* tileW = new QWidget(page);

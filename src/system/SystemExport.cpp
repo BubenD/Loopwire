@@ -24,7 +24,8 @@ QString num(double v) { return QString::number(v, 'f', 4); }
 QString colour(const QColor& c, const QColor& otherwise) { return (c.isValid() ? c : otherwise).name().toUpper(); }
 
 QString unitLabel(const SysUnit& u) {
-    QString kind = u.kind == QLatin1String("pcba") ? QStringLiteral("[PCBA]") : u.kind==QLatin1String("module") ? QStringLiteral("[System module]") : QStringLiteral("[Mechanical]");
+    QString kind = u.kind == QLatin1String("pcba") ? QStringLiteral("[PCBA]") : u.kind==QLatin1String("module") ? QStringLiteral("[System module]")
+                 : u.kind == QLatin1String("device") ? QStringLiteral("[Device]") : QStringLiteral("[Mechanical]");
     if (u.shows(QStringLiteral("desc")) && !u.description.isEmpty()) kind += QLatin1Char(' ') + u.description;
     QStringList lines{kind};
     if (u.shows(QStringLiteral("name"))) lines << u.name;
@@ -336,7 +337,7 @@ QString systemDrawioXml(const SystemDesign& d) {
         vertex(u->id, unitLabel(*u),
                QStringLiteral("rounded=1;arcSize=4;whiteSpace=wrap;html=0;verticalAlign=top;spacingTop=6;fontStyle=1;fillColor=%1;"
                               "fillOpacity=%2;strokeColor=#5A626E;%3")
-                   .arg(colour(u->color, pcba ? QColor(226, 242, 230) : QColor(232, 238, 246)))
+                   .arg(colour(u->color, pcba ? QColor(226, 242, 230) : u->kind == QLatin1String("device") ? QColor(246, 236, 214) : QColor(232, 238, 246)))
                    .arg(std::lround(u->opacity * 100.0)).arg(u->kind==QLatin1String("module")?QStringLiteral("dashed=1;"):QString()),
                u->x, u->y, u->w, u->h);
     }
@@ -436,7 +437,8 @@ bool exportSystemVsdx(const SystemDesign& d, const QString& path, QString* error
     for (const SysUnit& u : d.units) order.push_back(&u);
     std::stable_sort(order.begin(), order.end(), [&d](const SysUnit* a, const SysUnit* b) { return d.depth(a->id) < d.depth(b->id); });
     for (const SysUnit* u : order) {
-        rect(u->x, u->y, u->w, u->h, colour(u->color, u->kind == QLatin1String("pcba") ? QColor(226, 242, 230) : QColor(232, 238, 246)),
+        rect(u->x, u->y, u->w, u->h, colour(u->color, u->kind == QLatin1String("pcba") ? QColor(226, 242, 230)
+                                                     : u->kind == QLatin1String("device") ? QColor(246, 236, 214) : QColor(232, 238, 246)),
              QStringLiteral("#5A626E"), unitLabel(*u), 9.0, true);
         const QString marker=QStringLiteral("<Section N=\"Geometry\" IX=\"0\">");
         const qsizetype at=shapes.lastIndexOf(marker);

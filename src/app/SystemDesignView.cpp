@@ -50,6 +50,10 @@
 #include <QMenu>
 #include <QMimeData>
 #include "system/SystemRouting.h"
+#include "model/DrawingTemplate.h"
+#include "model/Entity.h"
+#include <QPdfWriter>
+#include <QPageSize>
 
 #include <algorithm>
 
@@ -112,6 +116,7 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
         unitKind_->addItem(QStringLiteral("Mechanical part"), QStringLiteral("mech"));
         unitKind_->addItem(QStringLiteral("PCBA"), QStringLiteral("pcba"));
         unitKind_->addItem(QStringLiteral("System module"),QStringLiteral("module"));
+        unitKind_->addItem(QStringLiteral("Device"), QStringLiteral("device"));
         unitKind_->setToolTip(QStringLiteral("What the unit is - a mechanical part or a printed circuit board assembly; its mark "
                                              "is in its corner on the diagram"));
         connect(unitKind_, &QComboBox::currentIndexChanged, this, [this](int i) {
@@ -190,10 +195,33 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
         lh->addWidget(plain);
         lh->addWidget(unitOpacity_, 1);
         form->addRow(QStringLiteral("Look"), look);
-        // ITS PICTURE: one put in it, shown between its mark and its name.
-        auto* pictureRow = new QWidget(page);
+        // ITS PICTURE: seen here, and in the unit between its mark and its name - its eye saying whether, its slider how big.
+        auto* pictureBox = new QWidget(page);
+        auto* pv = new QVBoxLayout(pictureBox);
+        pv->setContentsMargins(0, 0, 0, 0);
+        pv->setSpacing(3);
+        unitPicturePreview_ = new QLabel(pictureBox);
+        unitPicturePreview_->setObjectName(QStringLiteral("systemUnitPicturePreview"));
+        unitPicturePreview_->setAlignment(Qt::AlignCenter);
+        unitPicturePreview_->setMinimumHeight(90);
+        unitPicturePreview_->setStyleSheet(QStringLiteral("QLabel{border:1px solid #4a5260;border-radius:3px;color:#8a93a0;}"));
+        pv->addWidget(unitPicturePreview_);
+        auto* pictureRow = new QWidget(pictureBox);
+        pv->addWidget(pictureRow);
         auto* ph = new QHBoxLayout(pictureRow);
         ph->setContentsMargins(0, 0, 0, 0);
+        unitPictureEye_ = new QToolButton(pictureRow);
+        unitPictureEye_->setObjectName(QStringLiteral("systemUnitPictureEye"));
+        unitPictureEye_->setCheckable(true);
+        unitPictureEye_->setChecked(true);
+        unitPictureEye_->setAutoRaise(true);
+        unitPictureEye_->setIcon(fieldEyeIcon());
+        unitPictureEye_->setIconSize(QSize(18, 18));
+        unitPictureEye_->setToolTip(QStringLiteral("The picture shown in the unit on the diagram - click to hide it there (it is kept)"));
+        connect(unitPictureEye_, &QToolButton::toggled, this, [this](bool on) {
+            if (!filling_) setUnitPictureShown(canvas_->selectedUnit(), on);
+        });
+        ph->addWidget(unitPictureEye_);
         auto* putPicture = new QToolButton(pictureRow);
         putPicture->setObjectName(QStringLiteral("systemUnitPicture"));
         putPicture->setText(QStringLiteral("Insert picture..."));
@@ -203,10 +231,24 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
         dropPicture->setObjectName(QStringLiteral("systemUnitPictureRemove"));
         dropPicture->setText(QStringLiteral("Remove"));
         connect(dropPicture, &QToolButton::clicked, this, [this] { removeUnitPicture(canvas_->selectedUnit()); });
+        auto* keepPicture = new QToolButton(pictureRow);
+        keepPicture->setObjectName(QStringLiteral("systemUnitPictureSave"));
+        keepPicture->setText(QStringLiteral("Save..."));
+        keepPicture->setToolTip(QStringLiteral("Save the unit's picture to a file"));
+        connect(keepPicture, &QToolButton::clicked, this, [this] { saveUnitPicture(canvas_->selectedUnit()); });
         ph->addWidget(putPicture);
+        ph->addWidget(keepPicture);
         ph->addWidget(dropPicture);
         ph->addStretch(1);
-        form->addRow(QStringLiteral("Picture"), pictureRow);
+        unitPictureSize_ = new QSlider(Qt::Horizontal, pictureBox);
+        unitPictureSize_->setObjectName(QStringLiteral("systemUnitPictureSize"));
+        unitPictureSize_->setRange(10, 100);
+        unitPictureSize_->setToolTip(QStringLiteral("How big the picture is in the unit - as much of the room as there is, or less"));
+        connect(unitPictureSize_, &QSlider::valueChanged, this, [this](int v) {
+            if (!filling_) setUnitPictureScale(canvas_->selectedUnit(), v / 100.0);
+        });
+        pv->addWidget(unitPictureSize_);
+        form->addRow(QStringLiteral("Picture"), pictureBox);
         v->addLayout(form);
         v->addWidget(new QLabel(QStringLiteral("<b>Ports</b> - connector and contact part numbers"), page));
         ports_ = new QTableWidget(0, 5, page);
@@ -540,8 +582,17 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
     found_->verticalHeader()->hide(); found_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
     found_->setWordWrap(true);
     found_->setToolTip(QStringLiteral("Click a finding to centre its unit, port, cable or note and flash its location."));
-    connect(found_, &QTableWidget::cellClicked, this, [this](int row, int) { locateIssue(row); });
-    connect(found_, &QTableWidget::cellDoubleClicked, this, [this](int row, int) { locateIssue(row); });
+    // A TOPIC'S HEADING clicked: its findings folded away, or opened again. A finding: its part found on the diagram.
+    connect(found_, &QTableWidget::cellClicked, this, [this](int row, int) {
+        if (row < 0 || row >= static_cast<int>(rowIssue_.size())) return;
+        if (rowIssue_[static_cast<size_t>(row)] >= 0) { locateIssue(rowIssue_[static_cast<size_t>(row)]); return; }
+        const QString topic = found_->item(row, 0) ? found_->item(row, 0)->data(Qt::UserRole + 3).toString() : QString();
+        if (!foldedTopics_.remove(topic)) foldedTopics_.insert(topic);
+        fillIssues();
+    });
+    connect(found_, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
+        if (row >= 0 && row < static_cast<int>(rowIssue_.size()) && rowIssue_[static_cast<size_t>(row)] >= 0) locateIssue(rowIssue_[static_cast<size_t>(row)]);
+    });
     checkLayout->addWidget(found_, 1);
     tabs_->addTab(checkPage, QStringLiteral("Check"));
     connections_ = new QTableWidget(0, 6, tabs_);
@@ -857,6 +908,22 @@ void SystemDesignView::syncPanel() {
         for (int i = 0; i < 4; ++i)
             if (unitEyes_[i]) unitEyes_[i]->setChecked(u->shows(QString::fromLatin1(kShown[i])));
         unitOpacity_->setValue(static_cast<int>(std::lround(u->opacity * 100.0)));
+        // ITS PICTURE in the panel, and what its eye and slider say.
+        {
+            QImage picture;
+            if (!u->picture.isEmpty()) picture.loadFromData(u->picture);
+            if (picture.isNull()) {
+                unitPicturePreview_->setPixmap(QPixmap());
+                unitPicturePreview_->setText(QStringLiteral("No picture - Insert picture..."));
+            } else {
+                unitPicturePreview_->setText(QString());
+                unitPicturePreview_->setPixmap(QPixmap::fromImage(picture.scaled(220, 120, Qt::KeepAspectRatio, Qt::SmoothTransformation)));
+            }
+            unitPictureEye_->setChecked(u->pictureShown);
+            unitPictureEye_->setEnabled(!picture.isNull());
+            unitPictureSize_->setValue(static_cast<int>(std::lround(u->pictureScale * 100.0)));
+            unitPictureSize_->setEnabled(!picture.isNull());
+        }
         if (opacityDragging_ != u->id) opacityDragging_.clear();
         ports_->setRowCount(static_cast<int>(u->ports.size()));
         for (int i = 0; i < static_cast<int>(u->ports.size()); ++i) {
@@ -916,10 +983,32 @@ void SystemDesignView::fillCables() {
     filling_ = false;
 }
 
-bool SystemDesignView::locateIssue(int row) {
-    if (row < 0 || row >= static_cast<int>(issues_.size())) return false;
-    found_->selectRow(row); found_->scrollToItem(found_->item(row, 0));
-    return canvas_->locateIssue(issues_[static_cast<size_t>(row)]);
+int SystemDesignView::rowOfIssue(int issue) const {
+    for (size_t row = 0; row < rowIssue_.size(); ++row)
+        if (rowIssue_[row] == issue) return static_cast<int>(row);
+    return -1;
+}
+
+bool SystemDesignView::locateIssue(int index) {
+    if (index < 0 || index >= static_cast<int>(issues_.size())) return false;
+    if (const int row = rowOfIssue(index); row >= 0) { found_->selectRow(row); found_->scrollToItem(found_->item(row, 0)); }
+    return canvas_->locateIssue(issues_[static_cast<size_t>(index)]);
+}
+
+namespace {
+// THE TOPICS OF THE FINDINGS, in the order the check reviews them, and what each is called.
+const char* const kTopics[][2] = {{"DESIGNATOR", "Designators"}, {"PORT-CONNECTION", "Port connections"}, {"PART-NUMBER", "Part numbers"},
+                                  {"DRAWING-LINK", "Drawing links and revisions"}, {"DRAWING-FIELDS", "Drawing details fields"},
+                                  {"ROUTING", "Cable routing clearance"}, {"NOTE-LINK", "Note links"}, {"SCHEMATIC-NAME", "Schematic line names"}};
+int topicOrder(const QString& rule) {
+    for (int i = 0; i < 8; ++i)
+        if (rule == QLatin1String(kTopics[i][0])) return i;
+    return 8;
+}
+QString topicTitle(const QString& rule) {
+    const int i = topicOrder(rule);
+    return i < 8 ? QString::fromLatin1(kTopics[i][1]) : rule;
+}
 }
 
 void SystemDesignView::fillIssues() {
@@ -932,8 +1021,37 @@ void SystemDesignView::fillIssues() {
     issueSummary_->setText(!checked_ ? QStringLiteral("Run Check design, Check revisions or Connections to list the findings.")
                            : issues_.empty() ? which + (design_.bypassed.empty() ? QStringLiteral("every rule checked passes.") : QStringLiteral("no active findings (%1 bypassed records).").arg(design_.bypassed.size()))
                            : which + QStringLiteral("%1 error(s), %2 warning(s), %3 note(s), %4 bypassed - click a finding to go to its part.").arg(errors).arg(warnings).arg(notes).arg(design_.bypassed.size()));
+    // UNDER THEIR TOPICS: a heading for each rule with findings - how many, of which sort - then its findings, errors first.
+    // A heading clicked folds its findings away.
+    found_->clearSpans();
     found_->setRowCount(0);
-    for (const SysIssue& i : issues_) {
+    rowIssue_.clear();
+    QString topic;
+    for (int index = 0; index < static_cast<int>(issues_.size()); ++index) {
+        const SysIssue& i = issues_[static_cast<size_t>(index)];
+        if (i.rule != topic || rowIssue_.empty()) {
+            topic = i.rule;
+            int count = 0, bad = 0, warn = 0;
+            for (const SysIssue& o : issues_)
+                if (o.rule == topic) { ++count; bad += o.level == 2 ? 1 : 0; warn += o.level == 1 ? 1 : 0; }
+            const int row = found_->rowCount(); found_->insertRow(row);
+            const bool folded = foldedTopics_.contains(topic);
+            QStringList sorts;
+            if (bad) sorts << QStringLiteral("%1 error(s)").arg(bad);
+            if (warn) sorts << QStringLiteral("%1 warning(s)").arg(warn);
+            if (count - bad - warn) sorts << QStringLiteral("%1 note(s)").arg(count - bad - warn);
+            auto* head = new QTableWidgetItem(QStringLiteral("%1  %2 - %3 finding(s): %4").arg(folded ? QStringLiteral("\u25B8") : QStringLiteral("\u25BE"),
+                                                                                             topicTitle(topic)).arg(count).arg(sorts.join(QStringLiteral(", "))));
+            QFont bold = head->font(); bold.setBold(true); head->setFont(bold);
+            head->setForeground(bad ? QColor("#e05a5a") : warn ? QColor("#e6b84a") : found_->palette().color(QPalette::Text));
+            head->setBackground(found_->palette().color(QPalette::AlternateBase));
+            head->setData(Qt::UserRole + 3, topic);
+            head->setToolTip(folded ? QStringLiteral("Click to show these findings") : QStringLiteral("Click to fold these findings away"));
+            found_->setItem(row, 0, head);
+            found_->setSpan(row, 0, 1, 4);
+            rowIssue_.push_back(-1);
+        }
+        if (foldedTopics_.contains(topic)) continue;
         const int row = found_->rowCount(); found_->insertRow(row);
         const QStringList values{i.level == 2 ? QStringLiteral("Error") : i.level == 1 ? QStringLiteral("Warning") : QStringLiteral("Note"), i.rule, i.what};
         for (int col = 0; col < values.size(); ++col) {
@@ -943,15 +1061,14 @@ void SystemDesignView::fillIssues() {
             it->setToolTip(i.what);
             found_->setItem(row, col, it);
         }
-    }
-    for (int row = 0; row < static_cast<int>(issues_.size()); ++row) {
         auto* accept = new QPushButton(QStringLiteral("Bypass"), found_);
         accept->setObjectName(QStringLiteral("systemBypassRow"));
-        const QString key = issues_[static_cast<size_t>(row)].key();
+        const QString key = i.key();
         connect(accept, &QPushButton::clicked, this, [this, key] {
-            for (int i=0; i<static_cast<int>(issues_.size()); ++i) if (issues_[static_cast<size_t>(i)].key()==key) { bypassIssue(i); break; }
+            for (int k=0; k<static_cast<int>(issues_.size()); ++k) if (issues_[static_cast<size_t>(k)].key()==key) { bypassIssue(k); break; }
         });
         found_->setCellWidget(row, 3, accept);
+        rowIssue_.push_back(index);
     }
     found_->setColumnWidth(3, 85);
     found_->resizeColumnToContents(0); found_->resizeColumnToContents(1); found_->resizeRowsToContents();
@@ -1077,7 +1194,11 @@ int SystemDesignView::checkDesign(CheckScope scope) {
     }), issues_.end());
     checked_ = true;
     fillBypass();
-    std::stable_sort(issues_.begin(), issues_.end(), [](const SysIssue& a, const SysIssue& b) { return a.level > b.level; });
+    // BY TOPIC, in the order the rules are reviewed; within each, errors first.
+    std::stable_sort(issues_.begin(), issues_.end(), [](const SysIssue& a, const SysIssue& b) {
+        const int ta = topicOrder(a.rule), tb = topicOrder(b.rule);
+        return ta != tb ? ta < tb : a.level > b.level;
+    });
     fillConnections();
     canvas_->animateCheck(issues_, scope == CheckScope::All ? QStringList{} : scope == CheckScope::Revisions ? revisions : connections,
                           scope == CheckScope::All ? QString{} : scope == CheckScope::Revisions ? QStringLiteral("Revision check")
@@ -1368,6 +1489,201 @@ void SystemDesignView::removeUnitPicture(const QString& unit) {
     commit();
 }
 
+void SystemDesignView::setUnitPictureShown(const QString& unit, bool shown) {
+    SysUnit* u = design_.unit(unit);
+    if (!u || u->pictureShown == shown) return;
+    aboutToChange();
+    design_.unit(unit)->pictureShown = shown;
+    commit();
+}
+
+void SystemDesignView::setUnitPictureScale(const QString& unit, double scale) {
+    SysUnit* u = design_.unit(unit);
+    scale = std::clamp(scale, 0.1, 1.0);
+    if (!u || std::abs(u->pictureScale - scale) < 1e-9) return;
+    // ONE STEP TO UNDO for a slide of it.
+    if (opacityDragging_ != QStringLiteral("picture:") + unit) {
+        aboutToChange();
+        opacityDragging_ = QStringLiteral("picture:") + unit;
+    }
+    design_.unit(unit)->pictureScale = scale;
+    if (save_) save_(design_.toJson());
+    canvas_->update();
+    emit changed();
+}
+
+bool SystemDesignView::saveUnitPicture(const QString& unit, const QString& given) {
+    const SysUnit* u = design_.unit(unit);
+    if (!u || u->picture.isEmpty()) return false;
+    const QString path = given.isEmpty() ? QFileDialog::getSaveFileName(this, QStringLiteral("Save the unit's picture"), u->name + QStringLiteral(".png"),
+                                                                        QStringLiteral("PNG pictures (*.png)"))
+                                         : given;
+    if (path.isEmpty()) return false;
+    QFile f(path);
+    return f.open(QIODevice::WriteOnly) && f.write(u->picture) == u->picture.size();
+}
+
+void SystemDesignView::setShown(const QString& id, const QString& what, bool shown) {
+    QStringList* hidden = nullptr;
+    if (SysUnit* u = design_.unit(id)) hidden = &u->hidden;
+    else if (SysCable* c = design_.cable(id)) hidden = &c->hidden;
+    if (!hidden || hidden->contains(what) != shown) return;
+    aboutToChange();
+    hidden = design_.unit(id) ? &design_.unit(id)->hidden : &design_.cable(id)->hidden;
+    if (shown) hidden->removeAll(what); else hidden->append(what);
+    commit();
+}
+
+namespace {
+// EVERYTHING DRAWN, in the diagram's units: units, notes, harnesses and the sheet.
+QRectF drawnBox(const SystemDesign& d) {
+    QRectF box;
+    for (const SysUnit& u : d.units) box = box.united(u.rect());
+    for (const SysNote& n : d.notes) box = box.united(QRectF(n.x, n.y, n.w, n.h));
+    if (!d.sheet.empty()) box = box.united(d.sheet.rect());
+    return box.isEmpty() ? QRectF(0, 0, 800, 560) : box;
+}
+}
+
+bool SystemDesignView::exportPng(const QString& given) {
+    const QString path = given.isEmpty() ? QFileDialog::getSaveFileName(this, QStringLiteral("The diagram as a picture"),
+                                                                        (design_.name.isEmpty() ? QStringLiteral("system") : design_.name) + QStringLiteral(".png"),
+                                                                        QStringLiteral("PNG pictures (*.png)"))
+                                         : given;
+    if (path.isEmpty()) return false;
+    // TWO PIXELS TO THE DIAGRAM'S UNIT - no more than 8000 across - drawn by a canvas of its own: nothing selected on it.
+    const QRectF box = drawnBox(design_).adjusted(-60, -60, 60, 60);
+    const double k = std::min(2.0, 8000.0 / std::max(box.width(), box.height()));
+    const QSize size(std::max(200, static_cast<int>(box.width() * k)), std::max(150, static_cast<int>(box.height() * k)));
+    SystemCanvas shot;
+    shot.setDesign(&design_);
+    shot.resize(size);
+    shot.fit();
+    QImage image(size, QImage::Format_ARGB32);
+    image.fill(design_.background);
+    QPainter painter(&image);
+    shot.render(&painter);
+    painter.end();
+    return image.save(path, "PNG");
+}
+
+bool SystemDesignView::exportPdf(const QString& given) {
+    const QString path = given.isEmpty() ? QFileDialog::getSaveFileName(this, QStringLiteral("The diagram as a PDF"),
+                                                                        (design_.name.isEmpty() ? QStringLiteral("system") : design_.name) + QStringLiteral(".pdf"),
+                                                                        QStringLiteral("PDF (*.pdf)"))
+                                         : given;
+    if (path.isEmpty()) return false;
+    // A PAGE THE SHEET'S SIZE, where it has one; A3 across, where not. Drawn as lines and text, not as a picture.
+    QPdfWriter writer(path);
+    writer.setTitle(design_.name.isEmpty() ? QStringLiteral("System design") : design_.name);
+    writer.setCreator(QStringLiteral("Edraw"));
+    if (!design_.sheet.empty())
+        writer.setPageSize(QPageSize(QSizeF(design_.sheet.widthMm, design_.sheet.heightMm), QPageSize::Millimeter, QString(), QPageSize::ExactMatch));
+    else
+        writer.setPageSize(QPageSize(QSizeF(420.0, 297.0), QPageSize::Millimeter, QStringLiteral("A3"), QPageSize::ExactMatch));
+    writer.setPageMargins(QMarginsF(0, 0, 0, 0));
+    writer.setResolution(96);
+    SystemCanvas shot;
+    shot.setDesign(&design_);
+    shot.resize(writer.width(), writer.height());
+    shot.fit();
+    QPainter painter;
+    if (!painter.begin(&writer)) return false;
+    shot.render(&painter);
+    painter.end();
+    return QFileInfo(path).size() > 0;
+}
+
+bool SystemDesignView::applyTemplate(const QString& given) {
+    QString path = given;
+    if (path.isEmpty()) {
+        // THE TEMPLATES THERE ARE, or one from a file.
+        QStringList names = DrawingTemplate::installed();
+        const QString other = QStringLiteral("Another file...");
+        names << other;
+        bool ok = false;
+        const QString chosen = QInputDialog::getItem(this, QStringLiteral("Template"), QStringLiteral("The sheet round the diagram:"), names, 0, false, &ok);
+        if (!ok || chosen.isEmpty()) return false;
+        path = chosen == other ? QFileDialog::getOpenFileName(this, QStringLiteral("A template"), QString(), DrawingTemplate::fileFilter())
+                               : DrawingTemplate::pathFor(chosen);
+        if (path.isEmpty()) return false;
+    }
+    DrawingTemplate tpl;
+    if (!tpl.load(path)) return false;
+    SysSheet sheet;
+    sheet.name = tpl.name.isEmpty() ? QFileInfo(path).completeBaseName() : tpl.name;
+    sheet.content = tpl.hasContent() ? tpl.content : defaultSheetContent(tpl);
+    sheet.widthMm = tpl.sheet.drawnWidthMm();
+    sheet.heightMm = tpl.sheet.drawnHeightMm();
+    // ROUND WHAT IS DRAWN: in the open middle of the sheet, left of its tables - the revisions at the top right, the title
+    // block at the bottom right - taking three fifths of it each way at most, in steps of a quarter.
+    QRectF box;
+    for (const SysUnit& u : design_.units) box = box.united(u.rect());
+    for (const SysNote& n : design_.notes) box = box.united(QRectF(n.x, n.y, n.w, n.h));
+    if (box.isEmpty()) box = QRectF(0, 0, 600, 300);
+    sheet.scale = std::max(0.5, std::ceil(std::max(box.width() / (sheet.widthMm * 0.6), box.height() / (sheet.heightMm * 0.6)) * 4.0) / 4.0);
+    sheet.x = box.center().x() - sheet.widthMm * sheet.scale * 0.36;
+    sheet.y = box.center().y() - sheet.heightMm * sheet.scale * 0.46;
+    sheet.fields = design_.sheet.fields;
+    if (!sheet.fields.contains(QStringLiteral("title")))
+        sheet.fields[QStringLiteral("title")] = design_.name.isEmpty() ? QStringLiteral("System design") : design_.name;
+    aboutToChange();
+    design_.sheet = sheet;
+    commit();
+    canvas_->fit();
+    return true;
+}
+
+QStringList SystemDesignView::sheetFieldKeys() const {
+    QStringList keys;
+    for (const QJsonValue v : design_.sheet.content) {
+        const QString key = entityFieldKey(Entity::fromJson(v.toObject()));
+        if (!key.isEmpty() && !keys.contains(key)) keys << key;
+    }
+    return keys;
+}
+
+void SystemDesignView::setSheetField(const QString& key, const QString& value) {
+    if (design_.sheet.empty() || design_.sheet.fields.value(key).toString() == value) return;
+    aboutToChange();
+    design_.sheet.fields[key] = value;
+    commit();
+}
+
+bool SystemDesignView::askSheetFields() {
+    if (design_.sheet.empty()) return false;
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("Sheet fields"));
+    dialog.setObjectName(QStringLiteral("systemSheetFields"));
+    auto* form = new QFormLayout(&dialog);
+    QHash<QString, QLineEdit*> edits;
+    for (const QString& key : sheetFieldKeys()) {
+        auto* edit = new QLineEdit(design_.sheet.fields.value(key).toString(), &dialog);
+        edit->setObjectName(QStringLiteral("systemSheetField_") + key);
+        form->addRow(key, edit);
+        edits.insert(key, edit);
+    }
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    form->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    if (dialog.exec() != QDialog::Accepted) return false;
+    QJsonObject fields = design_.sheet.fields;
+    for (auto it = edits.begin(); it != edits.end(); ++it) fields[it.key()] = it.value()->text();
+    if (fields == design_.sheet.fields) return false;
+    aboutToChange();
+    design_.sheet.fields = fields;
+    commit();
+    return true;
+}
+
+void SystemDesignView::removeSheet() {
+    if (design_.sheet.empty()) return;
+    aboutToChange();
+    design_.sheet = SysSheet();
+    commit();
+}
+
 QMenu* SystemDesignView::contextMenu(const QPointF& world) {
     auto* menu = new QMenu(this);
     menu->setObjectName(QStringLiteral("systemContextMenu"));
@@ -1398,12 +1714,56 @@ QMenu* SystemDesignView::contextMenu(const QPointF& world) {
     untangle->setObjectName(QStringLiteral("systemMenuMinimize"));
     untangle->setToolTip(QStringLiteral("Reorder the ports at the harnesses' ends along their sides so the harnesses cross less"));
     untangle->setEnabled(!design_.cables.empty());
+    // A HARNESS SPREAD TO ONE MORE PORT: the next click on a port ends its branch there.
+    if (const SysCable* c = design_.cable(canvas_->selectedCable()); c && selectedIds(1).size() == 1) {
+        const QString id = c->id;
+        QAction* spread = menu->addAction(QStringLiteral("Spread to another port (branch)..."), this, [this, id] { canvas_->startBranch(id); });
+        spread->setObjectName(QStringLiteral("systemMenuBranch"));
+        spread->setToolTip(QStringLiteral("Then click the port (or the unit) the harness goes on to"));
+    }
+    // SHOWN ON THE DIAGRAM OR NOT: what the unit or harness clicked shows of itself, a note's link line, a unit's picture.
+    auto eyes = [&](const QString& id, const QStringList& hidden) {
+        menu->addSeparator();
+        menu->addSection(QStringLiteral("Show on the diagram"));
+        const char* const what[4][2] = {{"name", "Name"}, {"pn", "P/N"}, {"rev", "Revision"}, {"desc", "Description"}};
+        for (const auto& w : what) {
+            const QString key = QString::fromLatin1(w[0]);
+            QAction* eye = menu->addAction(QString::fromLatin1(w[1]));
+            eye->setObjectName(QStringLiteral("systemMenuShow_") + key);
+            eye->setCheckable(true);
+            eye->setChecked(!hidden.contains(key));
+            connect(eye, &QAction::toggled, this, [this, id, key](bool on) { setShown(id, key, on); });
+        }
+    };
+    if (const SysUnit* u = design_.unit(canvas_->selectedUnit()); u && canvas_->selectedPort().isEmpty() && selectedIds(0).size() == 1)
+        eyes(u->id, u->hidden);
+    else if (const SysCable* c = design_.cable(canvas_->selectedCable()); c && selectedIds(1).size() == 1)
+        eyes(c->id, c->hidden);
+    else if (const SysNote* n = design_.note(canvas_->selectedNote()); n && (!n->unit.isEmpty() || !n->cable.isEmpty())) {
+        menu->addSeparator();
+        menu->addSection(QStringLiteral("Show on the diagram"));
+        QAction* link = menu->addAction(QStringLiteral("Link line"));
+        link->setObjectName(QStringLiteral("systemMenuShow_link"));
+        link->setCheckable(true);
+        link->setChecked(n->showLink);
+        const QString id = n->id;
+        connect(link, &QAction::toggled, this, [this, id](bool on) {
+            SysNote* note = design_.note(id);
+            if (!note || note->showLink == on) return;
+            aboutToChange(); note->showLink = on; commit();
+        });
+    }
     if (const SysUnit* u = design_.unit(canvas_->selectedUnit()); u && canvas_->selectedPort().isEmpty()) {
         menu->addSeparator();
         const QString id = u->id;
         QAction* picture = menu->addAction(QStringLiteral("Insert picture..."), this, [this, id] { setUnitPicture(id); });
         picture->setObjectName(QStringLiteral("systemMenuPicture"));
         if (!u->picture.isEmpty()) {
+            QAction* shown = menu->addAction(QStringLiteral("Show picture"));
+            shown->setObjectName(QStringLiteral("systemMenuShow_picture"));
+            shown->setCheckable(true);
+            shown->setChecked(u->pictureShown);
+            connect(shown, &QAction::toggled, this, [this, id](bool on) { setUnitPictureShown(id, on); });
             QAction* drop = menu->addAction(QStringLiteral("Remove picture"), this, [this, id] { removeUnitPicture(id); });
             drop->setObjectName(QStringLiteral("systemMenuPictureRemove"));
         }

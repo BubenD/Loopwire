@@ -3,6 +3,7 @@
 #include <QColor>
 #include <QRectF>
 #include <QJsonObject>
+#include <QJsonArray>
 #include <QString>
 #include <QStringList>
 
@@ -45,6 +46,8 @@ struct SysUnit {
     QColor color;          // none: as units of its kind are
     double opacity = 1.0;  // how solid its fill is, 0 to 1
     QByteArray picture;    // a picture shown in it (PNG), none: no picture
+    bool pictureShown = true;    // drawn in the unit, or kept but not drawn
+    double pictureScale = 1.0;   // how much of the room in the unit it takes, 0.1 to 1
     // THE UNIT IT IS IN - a PCBA in its housing - kept inside it, moved with it. Empty: in none.
     QString parent;
     // WHAT IS NOT SHOWN ON THE DIAGRAM of its own: "name", "pn", "rev", "desc".
@@ -149,8 +152,23 @@ struct SysConnection {
     QString aUnit, aPort, aContact, bUnit, bPort, bContact;
 };
 
+// A SHEET ROUND THE DIAGRAM: a drawing template's frame and title block - its content kept here, so the design carries it
+// wherever it goes - where it lies on the diagram, how big (the diagram's units to the template's millimetre), and what is
+// written in its fields.
+struct SysSheet {
+    QString name;               // the template's; empty: no sheet
+    QJsonArray content;         // its frame and title block, as the template draws them (millimetres, up the page)
+    double widthMm = 420.0, heightMm = 297.0;
+    double x = 0.0, y = 0.0;    // its top left corner on the diagram
+    double scale = 2.0;         // diagram units to the millimetre
+    QJsonObject fields;         // "title", "drawingNo", "revision"... written into the template's fields
+    bool empty() const { return name.isEmpty(); }
+    QRectF rect() const { return QRectF(x, y, widthMm * scale, heightMm * scale); }
+};
+
 struct SystemDesign {
     QString name;
+    SysSheet sheet;
     QString pnPrefix = QStringLiteral("CBL-");
     QStringList disabledRules;
     QJsonObject ruleLevels;
@@ -169,7 +187,7 @@ struct SystemDesign {
 
     bool empty() const { return units.empty() && cables.empty() && notes.empty() && disabledRules.isEmpty()
                                && ruleLevels.isEmpty() && bypassed.empty() && background == QColor(48, 52, 58)
-                               && !designatorColor.isValid(); }
+                               && !designatorColor.isValid() && sheet.empty(); }
     const SysNote* note(const QString& id) const;
     SysNote* note(const QString& id);
     // A NOTE put at a place; its id. One taken away.

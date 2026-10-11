@@ -3034,7 +3034,22 @@ void MainWindow::buildDocumentArea() {
     drawingTiles_->setObjectName(QStringLiteral("drawingTiles"));
     drawingTiles_->setChildrenCollapsible(false);
     drawingTiles_->addWidget(canvas_);
-    centralStack_->addWidget(drawingTiles_);
+    // AND THE 3D VIEW BESIDE OR UNDER THEM, when the drawing's area is split (View: 3D split).
+    view3dSplit_ = new QSplitter(Qt::Horizontal, centralStack_);
+    view3dSplit_->setObjectName(QStringLiteral("view3dSplit"));
+    view3dSplit_->setChildrenCollapsible(false);
+    view3dSplit_->addWidget(drawingTiles_);
+    // EITHER SIDE TO FOUR FIFTHS AT MOST: the other keeps a fifth.
+    connect(view3dSplit_, &QSplitter::splitterMoved, this, [this] {
+        if (view3dSplit_->count() < 2) return;
+        QList<int> sizes = view3dSplit_->sizes();
+        const int total = sizes[0] + sizes[1], least = total / 5;
+        if (total <= 0 || (sizes[0] >= least && sizes[1] >= least)) return;
+        sizes[0] = std::clamp(sizes[0], least, total - least);
+        sizes[1] = total - sizes[0];
+        view3dSplit_->setSizes(sizes);
+    });
+    centralStack_->addWidget(view3dSplit_);
     preview3dHost_ = new QWidget(centralStack_);
     preview3dHost_->setObjectName(QStringLiteral("preview3dHost"));
     auto* hostLay = new QVBoxLayout(preview3dHost_);
@@ -4652,8 +4667,13 @@ void MainWindow::buildRibbon() {
     // THE 3D PREVIEW TAB OPEN: the 3D view where the drawing is; any other tab, the drawing back. THE SYSTEM DESIGN TAB:
     // the system diagram there instead.
     connect(ribbon_, &QTabWidget::currentChanged, this, [this](int i) {
-        showPreview3D(ribbon_->widget(i) == view3dTabPage_);
-        showSystemDesign(ribbon_->widget(i) == systemTabPage_);
+        // WHAT IS LEFT PUT AWAY FIRST, then what is opened: each gives back the panels it put away before the next one
+        // puts away what it does not want.
+        const bool preview = ribbon_->widget(i) == view3dTabPage_, system = ribbon_->widget(i) == systemTabPage_;
+        if (!preview) showPreview3D(false);
+        if (!system) showSystemDesign(false);
+        if (preview) showPreview3D(true);
+        if (system) showSystemDesign(true);
         syncUndoRedo();
     });
     // THE CORNER'S UNDO AND REDO kept in step with the system diagram and the 3D route as they change.
@@ -8248,21 +8268,37 @@ void MainWindow::keepCanvasShare() {
 }
 
 void MainWindow::splitView3D(Qt::Orientation split) {
-    if (!view3dDock_ || preview3dOn_) return;
-    const Qt::DockWidgetArea area = split == Qt::Horizontal ? Qt::BottomDockWidgetArea : Qt::RightDockWidgetArea;
-    view3dDock_->setFloating(false);
-    addDockWidget(area, view3dDock_);
-    view3dDock_->show();
-    placeView3DDock(area);
-    // HALF AND HALF to start with; the line between them dragged from there, to four fifths either way.
-    if (QWidget* centre = centralWidget()) {
-        if (split == Qt::Horizontal)
-            resizeDocks({view3dDock_}, {std::max(200, (centre->height() + view3dDock_->height()) / 2)}, Qt::Vertical);
-        else
-            resizeDocks({view3dDock_}, {std::max(260, (centre->width() + view3dDock_->width()) / 2)}, Qt::Horizontal);
+    if (!view3dDock_ || !view3dPane_ || !view3dSplit_ || preview3dOn_) return;
+    // OUT OF ITS PANEL INTO THE DRAWING'S AREA - the whole 3D view, its rows and all - the panel put away meanwhile.
+    if (!view3dSplitMode_) {
+        if (view3dPane_->fullScreenView()) view3dPane_->setFullScreen(false);
+        view3dSplitDockWas_ = view3dDock_->isVisible();
+        if (!view3dSplitStandIn_) view3dSplitStandIn_ = new QWidget(view3dDock_);
+        view3dDock_->setWidget(view3dSplitStandIn_);
+        view3dDock_->hide();
+        view3dPane_->setCompact(false);
+        view3dPane_->setSideDocked(false);
+        view3dPane_->setDockedBelow(false);
+        view3dSplit_->addWidget(view3dPane_);
+        view3dPane_->show();
     }
+    view3dSplitMode_ = split;
+    view3dSplit_->setOrientation(split == Qt::Horizontal ? Qt::Vertical : Qt::Horizontal);
+    // HALF AND HALF to start with; the line between them dragged from there, to four fifths either way.
+    const int total = split == Qt::Horizontal ? view3dSplit_->height() : view3dSplit_->width();
+    view3dSplit_->setSizes({std::max(1, total / 2), std::max(1, total - total / 2)});
+    view3dPane_->rebuild(false);
     syncViewPanelButtons();
-    QTimer::singleShot(0, this, [this] { keepCanvasShare(); });
+}
+
+void MainWindow::unsplitView3D() {
+    if (!view3dSplitMode_ || !view3dPane_ || !view3dDock_) return;
+    view3dSplitMode_ = 0;
+    view3dPane_->setParent(nullptr);
+    view3dDock_->setWidget(view3dPane_);
+    view3dDock_->setVisible(view3dSplitDockWas_);
+    placeView3DDock(dockWidgetArea(view3dDock_));
+    syncViewPanelButtons();
 }
 
 void MainWindow::tileDrawings(int orientation) {
@@ -16858,12 +16894,14 @@ QDockWidget* MainWindow::makeView3DPanel() {
     connect(dock, &QDockWidget::visibilityChanged, this, [this](bool) { QTimer::singleShot(0, this, [this] { keepCanvasShare(); }); });
     connect(dock, &QDockWidget::topLevelChanged, this, [this, dock](bool) { placeView3DDock(dockWidgetArea(dock)); });
     connect(view3dPane_, &View3DPane::dockBelowRequested, this, [this, dock] {
+        unsplitView3D();
         dock->setFloating(false);
         addDockWidget(Qt::BottomDockWidgetArea, dock);
         dock->show();
         placeView3DDock(Qt::BottomDockWidgetArea);
     });
     connect(view3dPane_, &View3DPane::dockToSideRequested, this, [this, dock](bool left) {
+        unsplitView3D();
         const Qt::DockWidgetArea side = left ? Qt::LeftDockWidgetArea : Qt::RightDockWidgetArea;
         dock->setFloating(false);
         addDockWidget(side, dock);
@@ -16871,6 +16909,7 @@ QDockWidget* MainWindow::makeView3DPanel() {
         placeView3DDock(side);
     });
     connect(view3dPane_, &View3DPane::dockSideRequested, this, [this, dock] {
+        unsplitView3D();
         const Qt::DockWidgetArea side = view3dSideArea_ != Qt::NoDockWidgetArea ? view3dSideArea_ : Qt::RightDockWidgetArea;
         dock->setFloating(false);
         addDockWidget(side, dock);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "system/SystemDesign.h"
+#include "model/Entity.h"
 
 #include <QPointF>
 #include <QElapsedTimer>
@@ -51,6 +52,12 @@ public:
     const QSet<QString>& selectedUnits() const { return zoneUnits_; }
     const QSet<QString>& selectedCables() const { return zoneCables_; }
     const QSet<QString>& selectedNotes() const { return zoneNotes_; }
+    // PORTS CHOSEN TOGETHER (Shift+click), each "unit/port".
+    const QSet<QString>& selectedPorts() const { return zonePorts_; }
+    // A BRANCH STARTED FROM A HARNESS (its right-click menu): the next click on a port (or unit) ends it there.
+    void startBranch(const QString& cable);
+    // SHIFT+CLICK: what is at a point added to the selection, or taken out of it.
+    void toggleAt(const QPointF& world);
     int selectionCount() const;
     // A ZONE SELECTED: what is wholly inside it (crossing: what it touches).
     void selectZone(const QRectF& zone, bool crossing);
@@ -150,6 +157,9 @@ private:
     // A unit's picture, read once and kept.
     QImage unitPicture(const SysUnit& u) const;
     mutable QHash<QString, QImage> pictures_;
+    // The sheet's frame, read once from its content and kept.
+    mutable std::vector<Entity> sheetEntities_;
+    mutable uint sheetKey_ = 0;
     // A CABLE STARTED ON A UNIT WITH NO PORT THERE: the port it is to have, put when the cable is.
     bool fromNew_ = false;
     QString fromSide_;
@@ -158,6 +168,7 @@ private:
     bool moved_ = false;
     bool moveAnnounced_ = false;
     QSet<QString> zoneUnits_, zoneCables_, zoneNotes_;
+    QSet<QString> zonePorts_;   // ports chosen with Shift, each "unit/port"
     QPointF zoneEnd_, groupDelta_;
     SysSelectionMode selectionMode_ = SysSelectionMode::Direction;
     bool zoneCrossing() const;

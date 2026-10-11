@@ -16,6 +16,8 @@ double systemHarnessLength(const SystemDesign& design,const QStringList& cables=
 // goes - and kept only where that crosses less, or (crossing no more) runs shorter: a harness that went the long way round
 // to keep from crossing straightened too. How many crossings went; `shorter`, if given, how much shorter they run.
 int minimizeSystemCrossings(SystemDesign& design,const QStringList& cables={},double* shorter=nullptr);
+// A line with the points where it goes on straight taken out.
+std::vector<QPointF> systemStraightened(const std::vector<QPointF>& line);
 // Whether two segments cross (not merely touch at an end).
 bool systemSegmentsCross(const QPointF& a,const QPointF& b,const QPointF& c,const QPointF& d);
 }

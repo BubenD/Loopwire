@@ -50,11 +50,13 @@ void unitFromLabel(SysUnit& u, const QString& label) {
     QStringList lines = label.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
     for (QString& l : lines) l = l.trimmed();
     lines.removeAll(QString());
-    static const QRegularExpression kind(QStringLiteral("^\\[(PCBA|Mechanical)\\]\\s*(.*)$"), QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression kind(QStringLiteral("^\\[(PCBA|Mechanical|Device|System module)\\]\\s*(.*)$"), QRegularExpression::CaseInsensitiveOption);
     static const QRegularExpression rev(QStringLiteral("\\brev\\.?\\s*([A-Za-z0-9]{1,3})\\b"), QRegularExpression::CaseInsensitiveOption);
     for (int i = 0; i < lines.size(); ++i)
         if (const QRegularExpressionMatch m = kind.match(lines[i]); m.hasMatch()) {
-            u.kind = m.captured(1).compare(QLatin1String("pcba"), Qt::CaseInsensitive) == 0 ? QStringLiteral("pcba") : QStringLiteral("mech");
+            const QString said = m.captured(1).toLower();
+            u.kind = said == QLatin1String("pcba") ? QStringLiteral("pcba") : said == QLatin1String("device") ? QStringLiteral("device")
+                   : said == QLatin1String("system module") ? QStringLiteral("module") : QStringLiteral("mech");
             u.description = m.captured(2).trimmed();
             lines.removeAt(i);
             break;

@@ -14,6 +14,7 @@
 
 #include <QActionGroup>
 #include <QButtonGroup>
+#include <QDockWidget>
 #include <QMenu>
 #include <QHBoxLayout>
 #include <QMessageBox>
@@ -117,7 +118,7 @@ void MainWindow::buildSystemTab() {
                 auto* kinds = new QMenu(b);
                 kinds->setObjectName(QStringLiteral("systemUnitKinds"));
                 auto* pick = new QActionGroup(kinds);
-                for (const auto& [text, kind] : {std::pair<const char*, const char*>{"Mechanical part", "mech"}, {"PCBA", "pcba"}, {"System module", "module"}}) {
+                for (const auto& [text, kind] : {std::pair<const char*, const char*>{"Mechanical part", "mech"}, {"PCBA", "pcba"}, {"System module", "module"}, {"Device", "device"}}) {
                     QAction* a = kinds->addAction(QString::fromLatin1(text), this, [this, b, k = QString::fromLatin1(kind)] {
                         if (!systemView_) return;
                         systemView_->canvas()->setNewUnitKind(k);
@@ -174,6 +175,17 @@ void MainWindow::buildSystemTab() {
             autoInk->setChecked(!systemView_ || !systemView_->design().designatorColor.isValid());
         });
         names->setMenu(namesMenu);
+        // THE SHEET ROUND THE DIAGRAM: a drawing template's frame and title block.
+        auto* sheet = big(w, row, "systemTemplate", QStringLiteral("Template"), QStringLiteral("display"),
+                          QStringLiteral("Put a drawing template's sheet - its frame and title block - round the diagram; the arrow: "
+                                         "its fields, or take it away"),
+                          [this] { if (systemView_) systemView_->applyTemplate(); });
+        sheet->setPopupMode(QToolButton::MenuButtonPopup);
+        auto* sheetMenu = new QMenu(sheet);
+        sheetMenu->addAction(QStringLiteral("Choose template..."), this, [this] { if (systemView_) systemView_->applyTemplate(); });
+        sheetMenu->addAction(QStringLiteral("Sheet fields..."), this, [this] { if (systemView_) systemView_->askSheetFields(); });
+        sheetMenu->addAction(QStringLiteral("Remove the sheet"), this, [this] { if (systemView_) systemView_->removeSheet(); });
+        sheet->setMenu(sheetMenu);
     });
     // THE CABLES: their part numbers, and the drawings that define them.
     group(QStringLiteral("Cables"), [&](QWidget* w, QHBoxLayout* row) {
@@ -216,7 +228,6 @@ void MainWindow::buildSystemTab() {
         check->setPopupMode(QToolButton::MenuButtonPopup);
         auto* rules = new QMenu(check);
         rules->addAction(QStringLiteral("Design rules..."), this, [this] { if (systemView_) systemView_->askRules(); });
-        rules->addAction(QStringLiteral("Bypass table"),this,[this]{if(systemView_)systemView_->showBypass();});
         check->setMenu(rules);
         big(w,row,"systemBypass",QStringLiteral("Bypass table"),QStringLiteral("check"),QStringLiteral("Review and restore accepted project findings"),
             [this]{if(systemView_)systemView_->showBypass();});
@@ -247,18 +258,36 @@ void MainWindow::buildSystemTab() {
         big(w, row, "systemExportVisio", QStringLiteral("Visio"), QStringLiteral("export"),
             QStringLiteral("The diagram for Microsoft Visio (2013 and on) - units, ports, cables with their labels, and notes - a .vsdx file"),
             [this] { if (systemView_) systemView_->exportVisio(); });
+        big(w, row, "systemExportPdf", QStringLiteral("PDF"), QStringLiteral("export"),
+            QStringLiteral("The diagram as a PDF - on a page the size of its template's sheet, or A3"),
+            [this] { if (systemView_) systemView_->exportPdf(); });
+        big(w, row, "systemExportPng", QStringLiteral("PNG"), QStringLiteral("export"),
+            QStringLiteral("The diagram as a picture (PNG)"),
+            [this] { if (systemView_) systemView_->exportPng(); });
     });
     lay->addStretch(1);
     ribbon_->addTab(page, QStringLiteral("System design"));
 }
 
 void MainWindow::showSystemDesign(bool on) {
-    if (!systemView_ || !centralStack_) return;
+    if (!systemView_ || !centralStack_ || on == systemOn_) return;
+    systemOn_ = on;
     if (on) {
+        // THE DRAWING'S PANELS PUT AWAY - properties, layers, the parts list... the system diagram has its own on the
+        // right - and given back as they were when the tab is left.
+        systemDocksHidden_.clear();
+        for (QDockWidget* d : findChildren<QDockWidget*>(Qt::FindDirectChildrenOnly))
+            if (d->isVisible() && !d->isFloating()) {
+                systemDocksHidden_.append(d);
+                d->hide();
+            }
         centralStack_->setCurrentWidget(systemView_);
         systemView_->canvas()->setFocus();
-    } else if (centralStack_->currentWidget() == systemView_) {
-        centralStack_->setCurrentIndex(0);
+    } else {
+        if (centralStack_->currentWidget() == systemView_) centralStack_->setCurrentIndex(0);
+        for (const QPointer<QDockWidget>& d : systemDocksHidden_)
+            if (d) d->show();
+        systemDocksHidden_.clear();
         canvas_->setFocus();
     }
 }

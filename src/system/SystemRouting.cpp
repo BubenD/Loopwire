@@ -73,12 +73,24 @@ bool systemSegmentsCross(const QPointF& a,const QPointF& b,const QPointF& c,cons
     return t>1e-6&&t<1-1e-6&&u>1e-6&&u<1-1e-6;
 }
 
+std::vector<QPointF> systemStraightened(const std::vector<QPointF>& line){
+    // A POINT WHERE THE LINE GOES ON STRAIGHT is no corner: taken out, so a crossing there is seen as one.
+    std::vector<QPointF> out;
+    for(const QPointF& p:line){
+        if(!out.empty()&&distance(out.back(),p)<.001)continue;
+        if(out.size()>=2){const QPointF a=out[out.size()-1]-out[out.size()-2],b=p-out.back();
+            if(std::abs(a.x()*b.y()-a.y()*b.x())<.001&&a.x()*b.x()+a.y()*b.y()>=0){out.back()=p;continue;}}
+        out.push_back(p);
+    }
+    return out;
+}
+
 int systemCrossings(const SystemDesign& design,const QStringList& only){
     struct Line{QString cable;std::vector<QPointF> points;};
     std::vector<Line> lines;
     for(const SysCable& cable:design.cables){
-        lines.push_back({cable.id,sysCablePath(design,cable)});
-        for(const SysBranch& branch:cable.branches)lines.push_back({cable.id,sysBranchPath(design,cable,branch)});
+        lines.push_back({cable.id,systemStraightened(sysCablePath(design,cable))});
+        for(const SysBranch& branch:cable.branches)lines.push_back({cable.id,systemStraightened(sysBranchPath(design,cable,branch))});
     }
     int count=0;
     for(size_t i=0;i<lines.size();++i)for(size_t j=i+1;j<lines.size();++j){
@@ -120,6 +132,14 @@ int minimizeSystemCrossings(SystemDesign& design,const QStringList& cables,doubl
         return false;
     };
     SystemDesign best=design;int fewest=before;double shortest=longBefore;
+    // TWO STARTS: the harnesses as they are routed, and re-routed - their dragged legs let go - each then reordered.
+    SystemDesign rerouted=design;
+    for(SysCable& cable:rerouted.cables)if(chosen.contains(cable.id))cable.waypoints.clear();
+    const SystemDesign original=design;
+    for(int start=0;start<2;++start){
+    design=start==0?original:rerouted;
+    if(start==1){const int now=systemCrossings(design,cables);const double length=systemHarnessLength(design,cables);
+        if(score(now,length)<score(fewest,shortest)-0.5){fewest=now;shortest=length;best=design;}}
     for(int pass=0;pass<4;++pass){
         bool changed=false;
         for(SysUnit& unit:design.units)for(const QString& side:{QStringLiteral("left"),QStringLiteral("right"),QStringLiteral("top"),QStringLiteral("bottom")}){
@@ -143,6 +163,7 @@ int minimizeSystemCrossings(SystemDesign& design,const QStringList& cables,doubl
         if(!changed)break;
         const int now=systemCrossings(design,cables);const double length=systemHarnessLength(design,cables);
         if(score(now,length)<score(fewest,shortest)-0.5){fewest=now;shortest=length;best=design;}
+    }
     }
     design=best;
     if(shorter)*shorter=longBefore-shortest;

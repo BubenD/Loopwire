@@ -704,6 +704,14 @@ void MainWindow::mirrorPreview3D() {
 
 void MainWindow::showPreview3D(bool on) {
     if (on == preview3dOn_ || !view3dPane_ || !centralStack_ || !preview3dHost_ || !view3dDock_) return;
+    // SPLIT INTO THE DRAWING'S AREA: back in its panel while the tab has it, split again after.
+    static int splitBefore = 0;
+    if (on && view3dSplitMode_) { splitBefore = view3dSplitMode_; unsplitView3D(); }
+    if (!on && splitBefore) {
+        const int again = splitBefore;
+        splitBefore = 0;
+        QTimer::singleShot(0, this, [this, again] { splitView3D(static_cast<Qt::Orientation>(again)); });
+    }
     preview3dOn_ = on;
     if (on) {
         // OUT OF ITS PANEL INTO THE MIDDLE: the panel put away for as long as the tab is open, and given back after.

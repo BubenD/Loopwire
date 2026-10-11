@@ -858,6 +858,11 @@ QJsonObject SystemDesign::toJson() const {
     if (!ruleLevels.isEmpty()) o[QStringLiteral("ruleLevels")] = ruleLevels;
     if (background != QColor(48, 52, 58)) o[QStringLiteral("background")] = background.name();
     if (designatorColor.isValid()) o[QStringLiteral("designatorColor")] = designatorColor.name();
+    if (!sheet.empty())
+        o[QStringLiteral("sheet")] = QJsonObject{{QStringLiteral("name"), sheet.name}, {QStringLiteral("content"), sheet.content},
+                                                 {QStringLiteral("w"), sheet.widthMm}, {QStringLiteral("h"), sheet.heightMm},
+                                                 {QStringLiteral("x"), sheet.x}, {QStringLiteral("y"), sheet.y},
+                                                 {QStringLiteral("scale"), sheet.scale}, {QStringLiteral("fields"), sheet.fields}};
     if (!bypassed.empty()) {
         QJsonArray accepted;
         for (const SysIssue& i : bypassed)
@@ -878,6 +883,8 @@ QJsonObject SystemDesign::toJson() const {
         if (u.kind != QLatin1String("mech")) j[QStringLiteral("kind")] = u.kind;
         if (u.opacity < 1.0) j[QStringLiteral("opacity")] = u.opacity;
         if (!u.picture.isEmpty()) j[QStringLiteral("picture")] = QString::fromLatin1(u.picture.toBase64());
+        if (!u.pictureShown) j[QStringLiteral("pictureHidden")] = true;
+        if (u.pictureScale < 1.0) j[QStringLiteral("pictureScale")] = u.pictureScale;
         j[QStringLiteral("parent")] = u.parent;
         if (!u.hidden.isEmpty()) j[QStringLiteral("hide")] = QJsonArray::fromStringList(u.hidden);
         QJsonArray ps;
@@ -960,6 +967,16 @@ SystemDesign SystemDesign::fromJson(const QJsonObject& o) {
     const QColor background(o.value(QStringLiteral("background")).toString());
     if (background.isValid()) d.background = background;
     d.designatorColor = QColor(o.value(QStringLiteral("designatorColor")).toString());
+    if (const QJsonObject s = o.value(QStringLiteral("sheet")).toObject(); !s.value(QStringLiteral("name")).toString().isEmpty()) {
+        d.sheet.name = s.value(QStringLiteral("name")).toString();
+        d.sheet.content = s.value(QStringLiteral("content")).toArray();
+        d.sheet.widthMm = s.value(QStringLiteral("w")).toDouble(420.0);
+        d.sheet.heightMm = s.value(QStringLiteral("h")).toDouble(297.0);
+        d.sheet.x = s.value(QStringLiteral("x")).toDouble();
+        d.sheet.y = s.value(QStringLiteral("y")).toDouble();
+        d.sheet.scale = std::max(0.05, s.value(QStringLiteral("scale")).toDouble(2.0));
+        d.sheet.fields = s.value(QStringLiteral("fields")).toObject();
+    }
     for (const QJsonValue& v : o.value(QStringLiteral("bypassed")).toArray()) {
         const QJsonObject j = v.toObject();
         SysIssue i;
@@ -999,6 +1016,8 @@ SystemDesign SystemDesign::fromJson(const QJsonObject& o) {
         u.kind = j.value(QStringLiteral("kind")).toString(QStringLiteral("mech"));
         u.opacity = std::clamp(j.value(QStringLiteral("opacity")).toDouble(1.0),0.0,1.0);
         u.picture = QByteArray::fromBase64(j.value(QStringLiteral("picture")).toString().toLatin1());
+        u.pictureShown = !j.value(QStringLiteral("pictureHidden")).toBool(false);
+        u.pictureScale = std::clamp(j.value(QStringLiteral("pictureScale")).toDouble(1.0), 0.1, 1.0);
         u.parent = j.value(QStringLiteral("parent")).toString();
         // Saved before units went in units: none is in another yet - found below by where it lies.
         if (!j.contains(QStringLiteral("parent"))) u.parent = QStringLiteral("?");
