@@ -79,9 +79,9 @@ void MainWindow::buildSystemTab() {
             {SysTool::Unit, "systemUnit", "Unit", "unit",
              "Put a unit of the system where you click (U) - the arrow: a mechanical part or a PCBA"},
             {SysTool::Port, "systemPort", "Port", "connector", "Put a port on the side of the unit you click, where you click (P)"},
-            {SysTool::Cable, "systemCable", "Cable", "route",
-             "Draw a cable - a harness (H): press on a port and let go on another; start or end on a unit where it has no port, "
-             "and a port is put there"},
+            {SysTool::Cable, "systemCable", "Harness", "route",
+             "Draw a harness (H): press on a port and let go on another; start or end on a unit where it has no port, and a port "
+             "is put there. Press on a harness and let go on a port to spread it to that port too - a branch"},
             {SysTool::Note, "systemNote", "Note", "help", "Put a note where you click (N) - its text on the right"},
         };
         auto* toolGroup = tools;

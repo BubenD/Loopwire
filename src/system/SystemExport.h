@@ -20,6 +20,11 @@ QRectF sysPortLabelRect(const SysUnit& u, const SysPort& p);
 bool sysNoteTarget(const SystemDesign& d, const SysNote& n, QPointF& target);
 std::vector<QPointF> sysCableBasePath(const SystemDesign& d,const SysCable& c,double end=8.0);
 std::vector<QPointF> sysCablePath(const SystemDesign& d, const SysCable& c, double end = 8.0);
+// THE BENDS A CABLE WAS DRAGGED TO, kept from turning back at a port: where a unit has been moved past one, the leg out of
+// its port shortens to the lead instead of running out and back again.
+std::vector<QPointF> sysCableWaypoints(const SystemDesign& d, const SysCable& c, double end = 8.0);
+// A BRANCH OF A HARNESS: from the trunk's middle (the first point) square to its port (the last).
+std::vector<QPointF> sysBranchPath(const SystemDesign& d, const SysCable& c, const SysBranch& b, double end = 8.0);
 
 // A FILE OF ITS OWN (.wetsys - Edraw's own extension, Whatson ETS system; .edsys read too): the design as JSON, marked
 // as one. Read back: false where it is not one.

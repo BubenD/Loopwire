@@ -311,6 +311,129 @@ QString SystemDesign::addCable(const QString& aUnit, const QString& aPort, const
     return c.id;
 }
 
+bool SystemDesign::addBranch(const QString& cableId, const QString& unitId, const QString& portId) {
+    SysCable* c = cable(cableId);
+    const SysUnit* u = unit(unitId);
+    if (!c || !u || !u->port(portId)) return false;
+    if ((c->aUnit == unitId && c->aPort == portId) || (c->bUnit == unitId && c->bPort == portId)) return false;
+    for (const SysBranch& b : c->branches)
+        if (b.unit == unitId && b.port == portId) return false;
+    SysBranch b;
+    b.unit = unitId;
+    b.port = portId;
+    // ON THE PORT'S INSIDE where the trunk is within that unit, as for the trunk's own ends.
+    b.inside = unitId == c->aUnit || unitId == c->bUnit || isWithin(c->aUnit, unitId) || isWithin(c->bUnit, unitId);
+    c->branches.push_back(b);
+    return true;
+}
+
+QJsonObject SystemDesign::copyPiece(const QStringList& unitIds, const QStringList& cableIds, const QStringList& noteIds) const {
+    // THE UNITS, with every unit inside them; the cables wholly among them (and those asked for, if their ends come too);
+    // the notes asked for.
+    QSet<QString> taken;
+    for (const SysUnit& u : units)
+        for (const QString& id : unitIds)
+            if (u.id == id || isWithin(u.id, id)) taken.insert(u.id);
+    SystemDesign piece;
+    for (const SysUnit& u : units)
+        if (taken.contains(u.id)) {
+            SysUnit copy = u;
+            if (!taken.contains(copy.parent)) copy.parent.clear();
+            piece.units.push_back(copy);
+        }
+    for (const SysCable& c : cables) {
+        if (!taken.contains(c.aUnit) || !taken.contains(c.bUnit)) continue;
+        Q_UNUSED(cableIds);
+        SysCable copy = c;
+        copy.branches.erase(std::remove_if(copy.branches.begin(), copy.branches.end(), [&](const SysBranch& b) { return !taken.contains(b.unit); }),
+                            copy.branches.end());
+        piece.cables.push_back(copy);
+    }
+    for (const SysNote& n : notes)
+        if (noteIds.contains(n.id)) {
+            SysNote copy = n;
+            if (!taken.contains(copy.unit) && !copy.unit.isEmpty()) { copy.unit.clear(); copy.port.clear(); }
+            bool cableCopied = false;
+            for (const SysCable& c : piece.cables) cableCopied = cableCopied || c.id == copy.cable;
+            if (!cableCopied) copy.cable.clear();
+            piece.notes.push_back(copy);
+        }
+    QJsonObject o = piece.toJson();
+    o[QStringLiteral("piece")] = true;
+    return o;
+}
+
+QStringList SystemDesign::pastePiece(const QJsonObject& o, const QPointF& offset) {
+    const SystemDesign piece = SystemDesign::fromJson(o);
+    QHash<QString, QString> unitOf, portOf, cableOf;
+    QStringList added;
+    QSet<QString> unitNames, cableNames;
+    for (const SysUnit& u : units) unitNames.insert(u.name);
+    for (const SysCable& c : cables) cableNames.insert(c.name);
+    // A NAME THAT IS FREE: the one copied where it is, the next of its kind (U3, W4) where it is taken.
+    auto freeName = [](const QString& name, QSet<QString>& names, const QString& kind) {
+        QString out = name;
+        if (out.isEmpty() || names.contains(out)) {
+            int n = 1;
+            while (names.contains(kind + QString::number(n))) ++n;
+            out = kind + QString::number(n);
+        }
+        names.insert(out);
+        return out;
+    };
+    for (const SysUnit& u : piece.units) {
+        SysUnit copy = u;
+        copy.id = freshId(QStringLiteral("u"));
+        unitOf.insert(u.id, copy.id);
+        copy.name = freeName(u.name, unitNames, QStringLiteral("U"));
+        copy.x += offset.x();
+        copy.y += offset.y();
+        units.push_back(copy);
+        // Its ports' ids fresh too, one by one so none clashes with another just given.
+        for (SysPort& p : units.back().ports) {
+            const QString old = p.id;
+            p.id = QStringLiteral("~");
+            p.id = freshId(QStringLiteral("p"));
+            portOf.insert(u.id + QLatin1Char('/') + old, p.id);
+        }
+        added << copy.id;
+    }
+    for (SysUnit& u : units)
+        if (unitOf.values().contains(u.id) && !u.parent.isEmpty()) u.parent = unitOf.value(u.parent);
+    for (const SysCable& c : piece.cables) {
+        SysCable copy = c;
+        copy.id = freshId(QStringLiteral("c"));
+        cableOf.insert(c.id, copy.id);
+        copy.name = freeName(c.name, cableNames, QStringLiteral("W"));
+        copy.aPort = portOf.value(c.aUnit + QLatin1Char('/') + c.aPort);
+        copy.bPort = portOf.value(c.bUnit + QLatin1Char('/') + c.bPort);
+        copy.aUnit = unitOf.value(c.aUnit);
+        copy.bUnit = unitOf.value(c.bUnit);
+        for (SysBranch& b : copy.branches) {
+            b.port = portOf.value(b.unit + QLatin1Char('/') + b.port);
+            b.unit = unitOf.value(b.unit);
+        }
+        for (QPointF& w : copy.waypoints) w += offset;
+        if (copy.aUnit.isEmpty() || copy.bUnit.isEmpty()) continue;
+        cables.push_back(copy);
+        added << copy.id;
+    }
+    for (const SysNote& n : piece.notes) {
+        SysNote copy = n;
+        copy.id = freshId(QStringLiteral("n"));
+        copy.x += offset.x();
+        copy.y += offset.y();
+        if (!copy.unit.isEmpty()) {
+            copy.port = portOf.value(copy.unit + QLatin1Char('/') + copy.port);
+            copy.unit = unitOf.value(copy.unit);
+        }
+        copy.cable = cableOf.value(copy.cable);
+        notes.push_back(copy);
+        added << copy.id;
+    }
+    return added;
+}
+
 std::vector<QString> SystemDesign::childrenOf(const QString& id) const {
     std::vector<QString> out;
     for (const SysUnit& u : units)
@@ -385,6 +508,8 @@ void SystemDesign::removeUnit(const QString& id, bool removeContents) {
     }
     cables.erase(std::remove_if(cables.begin(), cables.end(), [&](const SysCable& c) { return c.aUnit == id || c.bUnit == id; }),
                  cables.end());
+    for (SysCable& c : cables)
+        c.branches.erase(std::remove_if(c.branches.begin(), c.branches.end(), [&](const SysBranch& b) { return b.unit == id; }), c.branches.end());
     units.erase(std::remove_if(units.begin(), units.end(), [&](const SysUnit& u) { return u.id == id; }), units.end());
 }
 
@@ -394,6 +519,11 @@ void SystemDesign::removePort(const QString& unitId, const QString& port) {
                                     return (c.aUnit == unitId && c.aPort == port) || (c.bUnit == unitId && c.bPort == port);
                                 }),
                  cables.end());
+    // A BRANCH ENDING THERE: that branch only, the harness kept.
+    for (SysCable& c : cables)
+        c.branches.erase(std::remove_if(c.branches.begin(), c.branches.end(),
+                                        [&](const SysBranch& b) { return b.unit == unitId && b.port == port; }),
+                         c.branches.end());
     if (SysUnit* u = unit(unitId))
         u->ports.erase(std::remove_if(u->ports.begin(), u->ports.end(), [&](const SysPort& p) { return p.id == port; }), u->ports.end());
 }
@@ -404,8 +534,11 @@ void SystemDesign::removeCable(const QString& id) {
 
 std::vector<const SysCable*> SystemDesign::cablesAt(const QString& unitId, const QString& port) const {
     std::vector<const SysCable*> out;
-    for (const SysCable& c : cables)
-        if ((c.aUnit == unitId && c.aPort == port) || (c.bUnit == unitId && c.bPort == port)) out.push_back(&c);
+    for (const SysCable& c : cables) {
+        bool at = (c.aUnit == unitId && c.aPort == port) || (c.bUnit == unitId && c.bPort == port);
+        for (const SysBranch& b : c.branches) at = at || (b.unit == unitId && b.port == port);
+        if (at) out.push_back(&c);
+    }
     return out;
 }
 
@@ -437,9 +570,11 @@ void SystemDesign::removeNote(const QString& id) {
 
 std::vector<const SysCable*> SystemDesign::cablesAt(const QString& unitId, const QString& port, bool inside) const {
     std::vector<const SysCable*> out;
-    for (const SysCable& c : cables)
-        if ((c.aUnit == unitId && c.aPort == port && c.aInside == inside) || (c.bUnit == unitId && c.bPort == port && c.bInside == inside))
-            out.push_back(&c);
+    for (const SysCable& c : cables) {
+        bool at = (c.aUnit == unitId && c.aPort == port && c.aInside == inside) || (c.bUnit == unitId && c.bPort == port && c.bInside == inside);
+        for (const SysBranch& b : c.branches) at = at || (b.unit == unitId && b.port == port && b.inside == inside);
+        if (at) out.push_back(&c);
+    }
     return out;
 }
 
@@ -742,6 +877,7 @@ QJsonObject SystemDesign::toJson() const {
         if (u.color.isValid()) j[QStringLiteral("color")] = u.color.name();
         if (u.kind != QLatin1String("mech")) j[QStringLiteral("kind")] = u.kind;
         if (u.opacity < 1.0) j[QStringLiteral("opacity")] = u.opacity;
+        if (!u.picture.isEmpty()) j[QStringLiteral("picture")] = QString::fromLatin1(u.picture.toBase64());
         j[QStringLiteral("parent")] = u.parent;
         if (!u.hidden.isEmpty()) j[QStringLiteral("hide")] = QJsonArray::fromStringList(u.hidden);
         QJsonArray ps;
@@ -772,6 +908,15 @@ QJsonObject SystemDesign::toJson() const {
         if (c.hidden != QStringList{QStringLiteral("desc")}) j[QStringLiteral("hide")] = QJsonArray::fromStringList(c.hidden);
         if (c.aInside) j[QStringLiteral("aIn")] = true;
         if (c.bInside) j[QStringLiteral("bIn")] = true;
+        if (!c.branches.empty()) {
+            QJsonArray branches;
+            for (const SysBranch& b : c.branches) {
+                QJsonObject end{{QStringLiteral("unit"), b.unit}, {QStringLiteral("port"), b.port}};
+                if (b.inside) end[QStringLiteral("in")] = true;
+                branches.append(end);
+            }
+            j[QStringLiteral("branches")] = branches;
+        }
         if (c.wires > 0) j[QStringLiteral("wires")] = c.wires;
         if (c.color.isValid()) j[QStringLiteral("color")] = c.color.name();
         if(!c.waypoints.empty()){QJsonArray points;for(const QPointF& point:c.waypoints)points.append(QJsonArray{point.x(),point.y()});j[QStringLiteral("waypoints")]=points;}
@@ -853,6 +998,7 @@ SystemDesign SystemDesign::fromJson(const QJsonObject& o) {
         u.description = j.value(QStringLiteral("description")).toString();
         u.kind = j.value(QStringLiteral("kind")).toString(QStringLiteral("mech"));
         u.opacity = std::clamp(j.value(QStringLiteral("opacity")).toDouble(1.0),0.0,1.0);
+        u.picture = QByteArray::fromBase64(j.value(QStringLiteral("picture")).toString().toLatin1());
         u.parent = j.value(QStringLiteral("parent")).toString();
         // Saved before units went in units: none is in another yet - found below by where it lies.
         if (!j.contains(QStringLiteral("parent"))) u.parent = QStringLiteral("?");
@@ -911,6 +1057,14 @@ SystemDesign SystemDesign::fromJson(const QJsonObject& o) {
         }
         c.aInside = j.value(QStringLiteral("aIn")).toBool(false);
         c.bInside = j.value(QStringLiteral("bIn")).toBool(false);
+        for (const QJsonValue& value : j.value(QStringLiteral("branches")).toArray()) {
+            const QJsonObject end = value.toObject();
+            SysBranch b;
+            b.unit = end.value(QStringLiteral("unit")).toString();
+            b.port = end.value(QStringLiteral("port")).toString();
+            b.inside = end.value(QStringLiteral("in")).toBool(false);
+            if (!b.unit.isEmpty() && !b.port.isEmpty()) c.branches.push_back(b);
+        }
         if (j.contains(QStringLiteral("color"))) c.color = QColor(j.value(QStringLiteral("color")).toString());
         for(const QJsonValue& value:j.value(QStringLiteral("waypoints")).toArray()){const QJsonArray point=value.toArray();if(point.size()==2)c.waypoints.push_back({point[0].toDouble(),point[1].toDouble()});}
         c.drawing = j.value(QStringLiteral("drawing")).toString();

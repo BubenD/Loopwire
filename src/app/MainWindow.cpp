@@ -5,6 +5,8 @@
 #include <QScopeGuard>
 
 #include "app/Chrome.h"
+#include <QSplitter>
+#include "app/DrawingPreview.h"
 #include "app/OutputDialog.h"
 #include "app/MechWizardDialog.h"
 #include "app/BrickWizardDialog.h"
@@ -3027,7 +3029,12 @@ void MainWindow::buildDocumentArea() {
     v->addWidget(topRow);
     // THE MIDDLE: the drawing - or, while the 3D Preview tab is open, the 3D view in its place.
     centralStack_ = new QStackedWidget(container);
-    centralStack_->addWidget(canvas_);
+    // THE OPEN DRAWINGS TOGETHER, when asked (View: Cascade): the canvas, and the others beside or under it.
+    drawingTiles_ = new QSplitter(Qt::Horizontal, centralStack_);
+    drawingTiles_->setObjectName(QStringLiteral("drawingTiles"));
+    drawingTiles_->setChildrenCollapsible(false);
+    drawingTiles_->addWidget(canvas_);
+    centralStack_->addWidget(drawingTiles_);
     preview3dHost_ = new QWidget(centralStack_);
     preview3dHost_->setObjectName(QStringLiteral("preview3dHost"));
     auto* hostLay = new QVBoxLayout(preview3dHost_);
@@ -8216,7 +8223,93 @@ void MainWindow::leavePropertiesPanel() {
     if (canvas_) canvas_->setFocus(Qt::OtherFocusReason);
 }
 
+void MainWindow::resizeEvent(QResizeEvent* e) {
+    QMainWindow::resizeEvent(e);
+    QTimer::singleShot(0, this, [this] { keepCanvasShare(); });
+}
+
+void MainWindow::keepCanvasShare() {
+    QWidget* centre = centralWidget();
+    if (!centre) return;
+    // THE ROOM THE DRAWING AND ITS DOCKED PANELS SHARE: across, and down - the widest panel of each side counted once.
+    int top = 0, bottom = 0, left = 0, right = 0;
+    for (QDockWidget* d : findChildren<QDockWidget*>(Qt::FindDirectChildrenOnly)) {
+        if (!d->isVisible() || d->isFloating()) continue;
+        switch (dockWidgetArea(d)) {
+        case Qt::TopDockWidgetArea: top = std::max(top, d->height()); break;
+        case Qt::BottomDockWidgetArea: bottom = std::max(bottom, d->height()); break;
+        case Qt::LeftDockWidgetArea: left = std::max(left, d->width()); break;
+        case Qt::RightDockWidgetArea: right = std::max(right, d->width()); break;
+        default: break;
+        }
+    }
+    const int down = centre->height() + top + bottom, across = centre->width() + left + right;
+    centre->setMinimumSize(std::max(80, across / 5), std::max(80, down / 5));
+}
+
+void MainWindow::splitView3D(Qt::Orientation split) {
+    if (!view3dDock_ || preview3dOn_) return;
+    const Qt::DockWidgetArea area = split == Qt::Horizontal ? Qt::BottomDockWidgetArea : Qt::RightDockWidgetArea;
+    view3dDock_->setFloating(false);
+    addDockWidget(area, view3dDock_);
+    view3dDock_->show();
+    placeView3DDock(area);
+    // HALF AND HALF to start with; the line between them dragged from there, to four fifths either way.
+    if (QWidget* centre = centralWidget()) {
+        if (split == Qt::Horizontal)
+            resizeDocks({view3dDock_}, {std::max(200, (centre->height() + view3dDock_->height()) / 2)}, Qt::Vertical);
+        else
+            resizeDocks({view3dDock_}, {std::max(260, (centre->width() + view3dDock_->width()) / 2)}, Qt::Horizontal);
+    }
+    syncViewPanelButtons();
+    QTimer::singleShot(0, this, [this] { keepCanvasShare(); });
+}
+
+void MainWindow::tileDrawings(int orientation) {
+    drawingTileMode_ = orientation == Qt::Horizontal || orientation == Qt::Vertical ? orientation : 0;
+    refreshDrawingTiles();
+    if (drawingTileMode_ && docs_.size() < 2) statusBar()->showMessage(QStringLiteral("Only one drawing is open - open another to see them together"), 6000);
+}
+
+void MainWindow::refreshDrawingTiles() {
+    if (!drawingTiles_) return;
+    // EVERY TILE BUT THE CANVAS taken away - later, as one may be what was just double-clicked - then one for each other
+    // open drawing, in tab order.
+    for (int i = drawingTiles_->count() - 1; i >= 0; --i) {
+        QWidget* tile = drawingTiles_->widget(i);
+        if (tile == canvas_) continue;
+        tile->hide();
+        tile->setParent(nullptr);
+        tile->deleteLater();
+    }
+    if (!drawingTileMode_) return;
+    drawingTiles_->setOrientation(static_cast<Qt::Orientation>(drawingTileMode_));
+    const int active = activeIndex();
+    for (int i = 0; i < docTabs_->count() && i < static_cast<int>(docs_.size()); ++i) {
+        if (i == active) continue;
+        auto* tile = new DrawingPreview(docTabs_->tabText(i), drawingTiles_);
+        tile->setObjectName(QStringLiteral("drawingTile"));
+        tile->setProperty("drawingIndex", i);
+        tile->setEntities(docs_[static_cast<size_t>(i)]->entities());
+        tile->setToolTip(QStringLiteral("%1 - double-click to work on it").arg(docTabs_->tabText(i)));
+        tile->installEventFilter(this);
+        drawingTiles_->addWidget(tile);
+        tile->fitToView();
+    }
+    QList<int> sizes;
+    for (int i = 0; i < drawingTiles_->count(); ++i) sizes << 1000;
+    drawingTiles_->setSizes(sizes);
+}
+
 bool MainWindow::eventFilter(QObject* obj, QEvent* e) {
+    // A DRAWING'S TILE DOUBLE-CLICKED: that drawing worked on, in the canvas.
+    if (e->type() == QEvent::MouseButtonDblClick && obj->objectName() == QLatin1String("drawingTile")) {
+        const int index = obj->property("drawingIndex").toInt();
+        QTimer::singleShot(0, this, [this, index] {
+            if (index >= 0 && index < docTabs_->count()) docTabs_->setCurrentIndex(index);
+        });
+        return true;
+    }
     // A PROPERTIES FIELD THAT BELONGS TO ONE END OF A SLEEVE has that end coloured on the drawing while
     // the keyboard is in it - see Editor::setSleeveEndHighlight. Cleared on the way out whatever the
     // field was, so a stale colour cannot outlive the panel being rebuilt under it.
@@ -15588,6 +15681,8 @@ Document* MainWindow::addDocument(std::unique_ptr<Document> doc, const QString& 
 }
 
 void MainWindow::activateIndex(int index) {
+    // THE OTHER DRAWINGS' TILES made again once this one is in the canvas.
+    if (drawingTileMode_) QTimer::singleShot(0, this, [this] { refreshDrawingTiles(); });
     if (index < 0 || index >= static_cast<int>(docs_.size())) return;
     flushPaperSpace();   // the sheet being left belongs to the drawing being left
     doc_ = docs_[index].get();
@@ -16756,7 +16851,11 @@ QDockWidget* MainWindow::makeView3DPanel() {
     });
     view3dPane_->reloadRouting();
     // AT THE SIDE, THE PICTURE ALONE; BELOW, EVERYTHING - and a button over each to go to the other.
-    connect(dock, &QDockWidget::dockLocationChanged, this, [this](Qt::DockWidgetArea area) { placeView3DDock(area); });
+    connect(dock, &QDockWidget::dockLocationChanged, this, [this](Qt::DockWidgetArea area) {
+        placeView3DDock(area);
+        QTimer::singleShot(0, this, [this] { keepCanvasShare(); });
+    });
+    connect(dock, &QDockWidget::visibilityChanged, this, [this](bool) { QTimer::singleShot(0, this, [this] { keepCanvasShare(); }); });
     connect(dock, &QDockWidget::topLevelChanged, this, [this, dock](bool) { placeView3DDock(dockWidgetArea(dock)); });
     connect(view3dPane_, &View3DPane::dockBelowRequested, this, [this, dock] {
         dock->setFloating(false);

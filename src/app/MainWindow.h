@@ -53,6 +53,8 @@ class QButtonGroup;
 class QHBoxLayout;
 class QDialog;
 class QShortcut;
+class QSplitter;
+class QResizeEvent;
 
 namespace Edraw_Desktop {
 
@@ -257,12 +259,14 @@ public:
     // so a test that wants to open a session first needs one built and pointed at a library of its
     // own - the same thing the ribbon's "Parts library" button does, made reachable without it.
     PartsLibraryDialog* partsLibraryDialogForTest();
+    void newDrawingForTest() { newDrawing(); }
     void savePanelLayout();
     void restorePanelLayout();
 
 protected:
     void closeEvent(QCloseEvent* e) override;
     void showEvent(QShowEvent* e) override;   // the panels take their saved widths once there is a layout
+    void resizeEvent(QResizeEvent* e) override;   // the drawing's fifth of the window kept (keepCanvasShare)
     bool eventFilter(QObject* obj, QEvent* e) override;    // Esc in the PROPERTIES panel: back to Select, with the keyboard on the drawing again.
     void leavePropertiesPanel();
  // inline text editor keys
@@ -291,6 +295,22 @@ private:
     void restylePreview3DIcons();
     // THE 3D VIEW'S PANEL PUT AT A SIDE (the picture alone) or below (everything).
     void placeView3DDock(Qt::DockWidgetArea area);
+public:
+    // THE DRAWING KEEPS A FIFTH OF THE WINDOW: a panel docked below or beside it - the 3D view - can be dragged to take
+    // the other four fifths, and no further.
+    void keepCanvasShare();
+    // THE 3D VIEW SPLIT FROM THE DRAWING: below it (Qt::Horizontal - the line between them across) or beside it
+    // (Qt::Vertical - the line upright), half and half to start with.
+    void splitView3D(Qt::Orientation split);
+    // THE OPEN DRAWINGS SHOWN TOGETHER: the active one to work on, every other one beside it (Qt::Horizontal) or under it
+    // (Qt::Vertical) to look at - a double-click on one makes it the drawing worked on. 0: one drawing at a time.
+    void tileDrawings(int orientation);
+    int drawingTileMode() const { return drawingTileMode_; }
+    QSplitter* drawingTiles() const { return drawingTiles_; }
+private:
+    void refreshDrawingTiles();
+    QSplitter* drawingTiles_ = nullptr;
+    int drawingTileMode_ = 0;   // 0, Qt::Horizontal or Qt::Vertical. Not saved.
     // The ribbon's controls of the 3D view tied to the view's own, once.
     void mirrorPreview3D();
     void setPanelsVisible(bool on);

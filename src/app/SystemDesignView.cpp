@@ -42,6 +42,14 @@
 #include <QPainterPath>
 #include <QSlider>
 #include <QToolButton>
+#include <QApplication>
+#include <QBuffer>
+#include <QClipboard>
+#include <QImage>
+#include <QJsonDocument>
+#include <QMenu>
+#include <QMimeData>
+#include "system/SystemRouting.h"
 
 #include <algorithm>
 
@@ -182,6 +190,23 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
         lh->addWidget(plain);
         lh->addWidget(unitOpacity_, 1);
         form->addRow(QStringLiteral("Look"), look);
+        // ITS PICTURE: one put in it, shown between its mark and its name.
+        auto* pictureRow = new QWidget(page);
+        auto* ph = new QHBoxLayout(pictureRow);
+        ph->setContentsMargins(0, 0, 0, 0);
+        auto* putPicture = new QToolButton(pictureRow);
+        putPicture->setObjectName(QStringLiteral("systemUnitPicture"));
+        putPicture->setText(QStringLiteral("Insert picture..."));
+        putPicture->setToolTip(QStringLiteral("Put a picture (PNG, JPG, BMP...) in the unit - shown in it above its name, kept in the design"));
+        connect(putPicture, &QToolButton::clicked, this, [this] { setUnitPicture(canvas_->selectedUnit()); });
+        auto* dropPicture = new QToolButton(pictureRow);
+        dropPicture->setObjectName(QStringLiteral("systemUnitPictureRemove"));
+        dropPicture->setText(QStringLiteral("Remove"));
+        connect(dropPicture, &QToolButton::clicked, this, [this] { removeUnitPicture(canvas_->selectedUnit()); });
+        ph->addWidget(putPicture);
+        ph->addWidget(dropPicture);
+        ph->addStretch(1);
+        form->addRow(QStringLiteral("Picture"), pictureRow);
         v->addLayout(form);
         v->addWidget(new QLabel(QStringLiteral("<b>Ports</b> - connector and contact part numbers"), page));
         ports_ = new QTableWidget(0, 5, page);
@@ -457,6 +482,16 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
         panel_->addWidget(page);
     }
     connect(canvas_, &SystemCanvas::deleteRequested, this, [this] { deleteSelected(); });
+    connect(canvas_, &SystemCanvas::contextMenuRequested, this, [this](const QPoint& global, const QPointF& world) {
+        QMenu* menu = contextMenu(world);
+        menu->exec(global);
+        menu->deleteLater();
+    });
+    connect(canvas_, &SystemCanvas::editRequested, this, [this](const QString& what) {
+        if (what == QLatin1String("copy")) copySelection();
+        else if (what == QLatin1String("cut")) cutSelection();
+        else if (what == QLatin1String("paste")) paste();
+    });
     connect(canvas_, &SystemCanvas::noteEditRequested, this, [this] {
         noteText_->setFocus();
         noteText_->selectAll();
@@ -489,7 +524,7 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
     issueSummary_ = new QLabel(checkPage); issueSummary_->setObjectName(QStringLiteral("systemDrcSummary")); issueSummary_->setWordWrap(true); checkHead->addWidget(issueSummary_, 1);
     auto* checkAgain = new QPushButton(QStringLiteral("Check again"), checkPage);
     checkAgain->setObjectName(QStringLiteral("systemCheckAgain")); checkHead->addWidget(checkAgain);
-    connect(checkAgain, &QPushButton::clicked, this, [this] { checkDesign(); });
+    connect(checkAgain, &QPushButton::clicked, this, [this] { checkDesign(lastScope_); });
     auto* ruleButton = new QPushButton(QStringLiteral("Rules..."), checkPage);
     ruleButton->setObjectName(QStringLiteral("systemDrcRules")); checkHead->addWidget(ruleButton);
     connect(ruleButton, &QPushButton::clicked, this, [this] { askRules(); });
@@ -890,9 +925,13 @@ bool SystemDesignView::locateIssue(int row) {
 void SystemDesignView::fillIssues() {
     int errors = 0, warnings = 0, notes = 0;
     for (const SysIssue& i : issues_) { if (i.level == 2) ++errors; else if (i.level == 1) ++warnings; else ++notes; }
-    issueSummary_->setText(!checked_ ? QStringLiteral("Run Check design to list all findings.")
-                           : issues_.empty() ? (design_.bypassed.empty() ? QStringLiteral("Every enabled rule passes.") : QStringLiteral("No active findings (%1 bypassed records).").arg(design_.bypassed.size()))
-                           : QStringLiteral("%1 error(s), %2 warning(s), %3 note(s), %4 bypassed - click a finding to go to its part.").arg(errors).arg(warnings).arg(notes).arg(design_.bypassed.size()));
+    // NAMED BY THE CHECK RUN, and what it covered: a revision or connection check lists its own findings here too.
+    const QString which = lastScope_ == CheckScope::Revisions ? QStringLiteral("Revision check (drawing links and revisions, drawing fields): ")
+                        : lastScope_ == CheckScope::Connections ? QStringLiteral("Connection check (port connections, schematic line names): ")
+                                                                : QStringLiteral("Design check: ");
+    issueSummary_->setText(!checked_ ? QStringLiteral("Run Check design, Check revisions or Connections to list the findings.")
+                           : issues_.empty() ? which + (design_.bypassed.empty() ? QStringLiteral("every rule checked passes.") : QStringLiteral("no active findings (%1 bypassed records).").arg(design_.bypassed.size()))
+                           : which + QStringLiteral("%1 error(s), %2 warning(s), %3 note(s), %4 bypassed - click a finding to go to its part.").arg(errors).arg(warnings).arg(notes).arg(design_.bypassed.size()));
     found_->setRowCount(0);
     for (const SysIssue& i : issues_) {
         const int row = found_->rowCount(); found_->insertRow(row);
@@ -1016,6 +1055,7 @@ int SystemDesignView::checkDesign(CheckScope scope) {
     auto inScope = [&](const QString& rule) {
         return scope == CheckScope::All || (scope == CheckScope::Revisions ? revisions.contains(rule) : connections.contains(rule));
     };
+    lastScope_ = scope;
     issues_ = design_.check();
     issues_.erase(std::remove_if(issues_.begin(), issues_.end(), [&](const SysIssue& i) { return design_.ruleSeverity(i.rule)==0 || !inScope(i.rule); }), issues_.end());
     connectionRows_.clear();
@@ -1057,7 +1097,10 @@ int SystemDesignView::checkDesign(CheckScope scope) {
 }
 
 int SystemDesignView::checkSchematics() {
-    const int errors = checkDesign(CheckScope::Connections); tabs_->setCurrentIndex(2); return errors;
+    // THE FINDINGS LISTED on the Check tab, as for any check; the full table of connections on the tab beside it.
+    const int errors = checkDesign(CheckScope::Connections);
+    tabs_->setTabText(2, connectionRows_.empty() ? QStringLiteral("Connections") : QStringLiteral("Connections (%1)").arg(connectionRows_.size()));
+    return errors;
 }
 
 void SystemDesignView::askRules() {
@@ -1209,6 +1252,163 @@ void SystemDesignView::askDesignatorColour() {
     const QColor start = design_.designatorColor.isValid() ? design_.designatorColor : QColor(25, 30, 36);
     const QColor colour = QColorDialog::getColor(start, this, QStringLiteral("Designator colour"));
     if (colour.isValid()) setDesignatorColour(colour);
+}
+
+QStringList SystemDesignView::selectedIds(int what) const {
+    QStringList ids;
+    if (what == 0) {
+        ids = canvas_->selectedUnits().values();
+        if (!canvas_->selectedUnit().isEmpty() && canvas_->selectedPort().isEmpty() && !ids.contains(canvas_->selectedUnit()))
+            ids << canvas_->selectedUnit();
+    } else if (what == 1) {
+        ids = canvas_->selectedCables().values();
+        if (!canvas_->selectedCable().isEmpty() && !ids.contains(canvas_->selectedCable())) ids << canvas_->selectedCable();
+    } else {
+        ids = canvas_->selectedNotes().values();
+        if (!canvas_->selectedNote().isEmpty() && !ids.contains(canvas_->selectedNote())) ids << canvas_->selectedNote();
+    }
+    return ids;
+}
+
+namespace {
+const char kPieceMime[] = "application/x-edraw-system-piece";
+}
+
+bool SystemDesignView::copySelection() {
+    const QJsonObject piece = design_.copyPiece(selectedIds(0), selectedIds(1), selectedIds(2));
+    const SystemDesign check = SystemDesign::fromJson(piece);
+    if (check.units.empty() && check.notes.empty()) return false;
+    lastPiece_ = piece;
+    auto* mime = new QMimeData;
+    mime->setData(QString::fromLatin1(kPieceMime), QJsonDocument(piece).toJson(QJsonDocument::Compact));
+    mime->setText(QStringLiteral("Edraw system design: %1 unit(s), %2 harness(es), %3 note(s)")
+                      .arg(check.units.size()).arg(check.cables.size()).arg(check.notes.size()));
+    QApplication::clipboard()->setMimeData(mime);
+    return true;
+}
+
+bool SystemDesignView::cutSelection() {
+    if (!copySelection()) return false;
+    deleteSelected();
+    return true;
+}
+
+bool SystemDesignView::canPaste() const {
+    const QMimeData* mime = QApplication::clipboard()->mimeData();
+    return (mime && mime->hasFormat(QString::fromLatin1(kPieceMime))) || !lastPiece_.isEmpty();
+}
+
+bool SystemDesignView::paste(const QPointF& at, bool atPoint) {
+    QJsonObject piece = lastPiece_;
+    if (const QMimeData* mime = QApplication::clipboard()->mimeData(); mime && mime->hasFormat(QString::fromLatin1(kPieceMime)))
+        piece = QJsonDocument::fromJson(mime->data(QString::fromLatin1(kPieceMime))).object();
+    const SystemDesign incoming = SystemDesign::fromJson(piece);
+    if (incoming.units.empty() && incoming.notes.empty()) return false;
+    // WHERE IT GOES: its top left corner at the place right-clicked, on the grid - or a little down and right.
+    QRectF box;
+    for (const SysUnit& u : incoming.units) box = box.united(u.rect());
+    for (const SysNote& n : incoming.notes) box = box.united(QRectF(n.x, n.y, n.w, n.h));
+    QPointF offset(40.0, 40.0);
+    if (atPoint) offset = QPointF(std::round((at.x() - box.left()) / 10.0) * 10.0, std::round((at.y() - box.top()) / 10.0) * 10.0);
+    aboutToChange();
+    const QStringList added = design_.pastePiece(piece, offset);
+    commit();
+    for (const QString& id : added)
+        if (design_.unit(id)) { canvas_->select(id, QString(), QString()); return true; }
+    for (const QString& id : added)
+        if (design_.note(id)) { canvas_->selectNote(id); break; }
+    return !added.isEmpty();
+}
+
+int SystemDesignView::minimizeCrossings() {
+    QStringList cables = selectedIds(1);
+    // AT THE SELECTED UNITS: the harnesses plugged into them.
+    if (cables.isEmpty())
+        for (const QString& unit : selectedIds(0))
+            for (const SysCable& c : design_.cables) {
+                bool at = c.aUnit == unit || c.bUnit == unit;
+                for (const SysBranch& b : c.branches) at = at || b.unit == unit;
+                if (at && !cables.contains(c.id)) cables << c.id;
+            }
+    SystemDesign tried = design_;
+    double shorter = 0.0;
+    const int gone = minimizeSystemCrossings(tried, cables, &shorter);
+    if (gone <= 0 && shorter <= 0.5) return 0;
+    aboutToChange();
+    design_ = tried;
+    commit();
+    return gone;
+}
+
+bool SystemDesignView::setUnitPicture(const QString& unit, const QString& given) {
+    if (!design_.unit(unit)) return false;
+    const QString path = given.isEmpty() ? QFileDialog::getOpenFileName(this, QStringLiteral("A picture for the unit"), QString(),
+                                                                        QStringLiteral("Pictures (*.png *.jpg *.jpeg *.bmp *.gif *.svg)"))
+                                         : given;
+    if (path.isEmpty()) return false;
+    QImage image(path);
+    if (image.isNull()) return false;
+    // NO MORE THAN 400 ACROSS: enough for a unit on the diagram, and the design file stays small.
+    if (image.width() > 400 || image.height() > 400) image = image.scaled(400, 400, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    QByteArray bytes;
+    QBuffer buffer(&bytes);
+    buffer.open(QIODevice::WriteOnly);
+    image.save(&buffer, "PNG");
+    aboutToChange();
+    design_.unit(unit)->picture = bytes;
+    commit();
+    return true;
+}
+
+void SystemDesignView::removeUnitPicture(const QString& unit) {
+    SysUnit* u = design_.unit(unit);
+    if (!u || u->picture.isEmpty()) return;
+    aboutToChange();
+    design_.unit(unit)->picture.clear();
+    commit();
+}
+
+QMenu* SystemDesignView::contextMenu(const QPointF& world) {
+    auto* menu = new QMenu(this);
+    menu->setObjectName(QStringLiteral("systemContextMenu"));
+    const bool chosen = !selectedIds(0).isEmpty() || !selectedIds(1).isEmpty() || !selectedIds(2).isEmpty() ||
+                        !canvas_->selectedPort().isEmpty();
+    const bool copyable = !selectedIds(0).isEmpty() || !selectedIds(2).isEmpty();
+    QAction* copy = menu->addAction(QStringLiteral("Copy"), this, [this] { copySelection(); });
+    copy->setObjectName(QStringLiteral("systemMenuCopy"));
+    copy->setShortcut(QKeySequence::Copy);
+    copy->setEnabled(copyable);
+    QAction* cut = menu->addAction(QStringLiteral("Cut"), this, [this] { cutSelection(); });
+    cut->setObjectName(QStringLiteral("systemMenuCut"));
+    cut->setShortcut(QKeySequence::Cut);
+    cut->setEnabled(copyable);
+    QAction* put = menu->addAction(QStringLiteral("Paste here"), this, [this, world] { paste(world, true); });
+    put->setObjectName(QStringLiteral("systemMenuPaste"));
+    put->setShortcut(QKeySequence::Paste);
+    put->setEnabled(canPaste());
+    QAction* remove = menu->addAction(QStringLiteral("Delete"), this, [this] { deleteSelected(); });
+    remove->setObjectName(QStringLiteral("systemMenuDelete"));
+    remove->setShortcut(QKeySequence::Delete);
+    remove->setEnabled(chosen);
+    menu->addSeparator();
+    const bool someHarness = !selectedIds(1).isEmpty() || !selectedIds(0).isEmpty();
+    QAction* untangle = menu->addAction(someHarness ? QStringLiteral("Minimize crossings of the selected harnesses")
+                                                    : QStringLiteral("Minimize crossings"),
+                                        this, [this] { minimizeCrossings(); });
+    untangle->setObjectName(QStringLiteral("systemMenuMinimize"));
+    untangle->setToolTip(QStringLiteral("Reorder the ports at the harnesses' ends along their sides so the harnesses cross less"));
+    untangle->setEnabled(!design_.cables.empty());
+    if (const SysUnit* u = design_.unit(canvas_->selectedUnit()); u && canvas_->selectedPort().isEmpty()) {
+        menu->addSeparator();
+        const QString id = u->id;
+        QAction* picture = menu->addAction(QStringLiteral("Insert picture..."), this, [this, id] { setUnitPicture(id); });
+        picture->setObjectName(QStringLiteral("systemMenuPicture"));
+        if (!u->picture.isEmpty()) {
+            QAction* drop = menu->addAction(QStringLiteral("Remove picture"), this, [this, id] { removeUnitPicture(id); });
+            drop->setObjectName(QStringLiteral("systemMenuPictureRemove"));
+        }
+    }
+    return menu;
 }
 
 void SystemDesignView::askCanvasColour() {

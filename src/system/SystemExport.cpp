@@ -9,6 +9,8 @@
 #include <array>
 #include <cmath>
 
+#include <limits>
+
 namespace Edraw_Desktop {
 
 namespace {
@@ -201,6 +203,57 @@ bool sysNoteTarget(const SystemDesign& d, const SysNote& n, QPointF& target) {
     return true;
 }
 
+std::vector<QPointF> sysCableWaypoints(const SystemDesign& d, const SysCable& c, double end) {
+    std::vector<QPointF> w = c.waypoints;
+    if (w.empty()) return w;
+    auto keepAhead = [&](const QString& unitId, const QString& portId, bool inside, bool first) {
+        const SysUnit* u = d.unit(unitId);
+        const SysPort* p = u ? u->port(portId) : nullptr;
+        if (!p) return;
+        const QPointF dir = sysPortOut(*p) * (inside ? -1.0 : 1.0);
+        const QPointF lead = sysPortPoint(*u, *p) + dir * (end + kLead);
+        const QPointF bend = first ? w.front() : w.back();
+        const double behind = (bend.x() - lead.x()) * dir.x() + (bend.y() - lead.y()) * dir.y();
+        if (behind >= 0.0) return;
+        // The bend, and those level with it across the port's way (the dragged leg), brought up to the lead together.
+        const double level = bend.x() * dir.x() + bend.y() * dir.y();
+        for (QPointF& q : w)
+            if (std::abs(q.x() * dir.x() + q.y() * dir.y() - level) < 0.01) q -= dir * behind;
+    };
+    keepAhead(c.aUnit, c.aPort, c.aInside, true);
+    keepAhead(c.bUnit, c.bPort, c.bInside, false);
+    return w;
+}
+
+std::vector<QPointF> sysBranchPath(const SystemDesign& d, const SysCable& c, const SysBranch& b, double end) {
+    const std::vector<QPointF> trunk = sysCablePath(d, c, end);
+    const SysUnit* u = d.unit(b.unit);
+    const SysPort* p = u ? u->port(b.port) : nullptr;
+    if (trunk.size() < 2 || !p) return {};
+    const QPointF dir = sysPortOut(*p) * (b.inside ? -1.0 : 1.0);
+    const QPointF at = sysPortPoint(*u, *p) + dir * end, lead = at + dir * kLead;
+    // THE SPLIT: the point of the trunk nearest the branch's lead - its port leads at either end left out - so the branch
+    // is short and leaves the trunk clear of its label.
+    QPointF split = (trunk[trunk.size() / 2 - 1] + trunk[trunk.size() / 2]) / 2.0;
+    double nearest = std::numeric_limits<double>::infinity();
+    const size_t first = trunk.size() > 3 ? 1 : 0, last = trunk.size() > 3 ? trunk.size() - 2 : trunk.size() - 1;
+    for (size_t i = first; i < last; ++i) {
+        const QPointF a = trunk[i], e = trunk[i + 1] - a;
+        const double ll = e.x() * e.x() + e.y() * e.y();
+        const double t = ll < 1e-12 ? 0.0 : std::clamp(((lead.x() - a.x()) * e.x() + (lead.y() - a.y()) * e.y()) / ll, 0.0, 1.0);
+        const QPointF q = a + e * t;
+        const double gap = std::abs(q.x() - lead.x()) + std::abs(q.y() - lead.y());
+        if (gap < nearest) { nearest = gap; split = q; }
+    }
+    // OUT OF THE PORT along its way, then across to the split: one corner (none where it lies straight ahead).
+    const QPointF corner = std::abs(dir.x()) > 0.5 ? QPointF(lead.x(), split.y()) : QPointF(split.x(), lead.y());
+    std::vector<QPointF> path{split};
+    for (const QPointF& q : {corner, lead, at})
+        if (std::abs(q.x() - path.back().x()) + std::abs(q.y() - path.back().y()) > 0.01) path.push_back(q);
+    if (path.size() < 2) path.push_back(at);
+    return path;
+}
+
 std::vector<QPointF> sysCableBasePath(const SystemDesign& d, const SysCable& c, double end) {
     const SysUnit* ua = d.unit(c.aUnit);
     const SysUnit* ub = d.unit(c.bUnit);
@@ -213,7 +266,7 @@ std::vector<QPointF> sysCableBasePath(const SystemDesign& d, const SysCable& c, 
     const QPointF a1 = a + da * kLead, b1 = b + db * kLead;
     std::vector<QPointF> path{a, a1};
     if(!c.waypoints.empty()){
-        QPointF current=a1;std::vector<QPointF> goals=c.waypoints;goals.push_back(b1);
+        QPointF current=a1;std::vector<QPointF> goals=sysCableWaypoints(d,c,end);goals.push_back(b1);
         for(const QPointF& goal:goals){if(std::abs(current.x()-goal.x())>.001&&std::abs(current.y()-goal.y())>.001)path.push_back({goal.x(),current.y()});path.push_back(goal);current=goal;}
         path.push_back(b);return path;
     }
@@ -301,13 +354,24 @@ QString systemDrawioXml(const SystemDesign& d) {
     for (const SysCable& c : d.cables) {
         const std::vector<QPointF> path = sysCablePath(d, c);
         if (path.size() < 2) continue;
-        x += QStringLiteral("<mxCell id=\"%1\" value=\"%2\" style=\"edgeStyle=none;rounded=0;endArrow=none;startArrow=none;html=0;"
+        x += QStringLiteral("<mxCell id=\"%1\" value=\"%2\" style=\"edgeStyle=none;rounded=0;endArrow=none;startArrow=none;html=0;jumpStyle=arc;jumpSize=10;"
                             "strokeWidth=2;strokeColor=%3;labelBackgroundColor=#FFFFFF;fontSize=10;\" edge=\"1\" parent=\"1\" "
                             "source=\"%4.%5\" target=\"%6.%7\"><mxGeometry relative=\"1\" as=\"geometry\"><Array as=\"points\">")
                  .arg(esc(c.id), esc(cableLabel(c)), colour(c.color, QColor(60, 66, 76)), esc(c.aUnit), esc(c.aPort), esc(c.bUnit),
                       esc(c.bPort));
         for (size_t i = 0; i < path.size(); ++i) x += QStringLiteral("<mxPoint x=\"%1\" y=\"%2\"/>").arg(num(path[i].x()), num(path[i].y()));
         x += QStringLiteral("</Array></mxGeometry></mxCell>\n");
+        for (size_t k = 0; k < c.branches.size(); ++k) {
+            const std::vector<QPointF> limb = sysBranchPath(d, c, c.branches[k]);
+            if (limb.size() < 2) continue;
+            x += QStringLiteral("<mxCell id=\"%1-b%2\" style=\"edgeStyle=none;rounded=0;endArrow=none;startArrow=none;jumpStyle=arc;jumpSize=10;"
+                                "strokeWidth=2;strokeColor=%3;\" edge=\"1\" parent=\"1\" target=\"%4.%5\"><mxGeometry relative=\"1\" as=\"geometry\">"
+                                "<mxPoint x=\"%6\" y=\"%7\" as=\"sourcePoint\"/><Array as=\"points\">")
+                     .arg(esc(c.id)).arg(k + 1).arg(colour(c.color, QColor(60, 66, 76)), esc(c.branches[k].unit), esc(c.branches[k].port),
+                          num(limb.front().x()), num(limb.front().y()));
+            for (size_t i = 1; i < limb.size(); ++i) x += QStringLiteral("<mxPoint x=\"%1\" y=\"%2\"/>").arg(num(limb[i].x()), num(limb[i].y()));
+            x += QStringLiteral("</Array></mxGeometry></mxCell>\n");
+        }
     }
     // THE NOTES.
     for (const SysNote& n : d.notes)

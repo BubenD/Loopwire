@@ -7,6 +7,7 @@
 #include <QWidget>
 #include <QSet>
 #include <QHash>
+#include <QImage>
 
 class QTimer;
 
@@ -51,6 +52,8 @@ public:
     const QSet<QString>& selectedCables() const { return zoneCables_; }
     const QSet<QString>& selectedNotes() const { return zoneNotes_; }
     int selectionCount() const;
+    // A ZONE SELECTED: what is wholly inside it (crossing: what it touches).
+    void selectZone(const QRectF& zone, bool crossing);
     // The check played over the diagram: the rules it ran (none: all of them), under a title of its own.
     void animateCheck(const std::vector<SysIssue>& issues, const QStringList& rules = {}, const QString& title = {});
     // The rules the last check reviewed, by id - what its card lists.
@@ -82,6 +85,10 @@ signals:
     void toolChanged(SysTool tool);
     void deleteRequested();
     void noteEditRequested(const QString& note);
+    // A RIGHT CLICK (not a drag): what was under it is selected first; the menu, where it was clicked.
+    void contextMenuRequested(const QPoint& global, const QPointF& world);
+    // Ctrl+C, Ctrl+X, Ctrl+V on the diagram: "copy", "cut", "paste".
+    void editRequested(const QString& what);
 
 protected:
     void paintEvent(QPaintEvent*) override;
@@ -90,6 +97,7 @@ protected:
     void mouseReleaseEvent(QMouseEvent* e) override;
     void mouseDoubleClickEvent(QMouseEvent* e) override;
     void wheelEvent(QWheelEvent* e) override;
+    bool event(QEvent* e) override;
     void keyPressEvent(QKeyEvent* e) override;
 
 private:
@@ -102,7 +110,6 @@ private:
     QString cableAt(const QPointF& world) const;
     QString noteAt(const QPointF& world) const;
     bool portLabelAt(const QPointF& world, QString& unit, QString& port) const;
-    void selectZone(const QRectF& zone, bool crossing);
     bool issueOn(const QString& unit, const QString& cable) const;
     // THE NEAREST SIDE of a unit to a point, and how far along it.
     static void nearestSide(const SysUnit& u, const QPointF& w, QString& side, double& at);
@@ -138,6 +145,11 @@ private:
     QRectF sizeFrom_;
     QPointF pressWorld_, lastScreen_, grabOffset_;
     QString fromUnit_, fromPort_;
+    QString fromCable_;       // a branch being drawn from this harness
+    QPointF branchFrom_;      // where on it, in the diagram
+    // A unit's picture, read once and kept.
+    QImage unitPicture(const SysUnit& u) const;
+    mutable QHash<QString, QImage> pictures_;
     // A CABLE STARTED ON A UNIT WITH NO PORT THERE: the port it is to have, put when the cable is.
     bool fromNew_ = false;
     QString fromSide_;

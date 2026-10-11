@@ -5,6 +5,7 @@
 #include <QCryptographicHash>
 
 #include <QKeyEvent>
+#include <QFontMetricsF>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -26,6 +27,62 @@ constexpr int kRuleDuration = 700;
 const char* const kCheckRules[] = {"DESIGNATOR", "PORT-CONNECTION", "PART-NUMBER", "DRAWING-LINK", "DRAWING-FIELDS", "ROUTING", "NOTE-LINK", "SCHEMATIC-NAME"};
 constexpr int kCheckRuleCount=8;
 const char* const kCheckTitles[] = {"Designators", "Port connections", "Part numbers", "Drawing links and revisions", "Drawing details fields", "Cable routing clearance", "Note links", "Schematic line names"};
+
+// WHERE TWO SEGMENTS CROSS, as a share of the first's length (not where they merely touch at an end).
+bool crossAt(const QPointF& a, const QPointF& b, const QPointF& c, const QPointF& d, double& t) {
+    const QPointF r = b - a, s = d - c;
+    const double den = r.x() * s.y() - r.y() * s.x();
+    if (std::abs(den) < 1e-9) return false;
+    const QPointF q = c - a;
+    t = (q.x() * s.y() - q.y() * s.x()) / den;
+    const double u = (q.x() * r.y() - q.y() * r.x()) / den;
+    return t > 1e-6 && t < 1 - 1e-6 && u > 1e-6 && u < 1 - 1e-6;
+}
+
+// A HARNESS'S LINE WITH A JUMP - a half circle, r across - where it crosses another: the flatter of the two segments
+// jumps the steeper one (the one drawn later, where they lie alike), so each crossing is jumped once.
+QPainterPath hoppedLine(const QPolygonF& line, int self, const std::vector<std::pair<int, QPolygonF>>& all, double r) {
+    QPainterPath path;
+    if (line.size() < 2) return path;
+    path.moveTo(line.front());
+    for (int i = 1; i < line.size(); ++i) {
+        const QPointF a = line[i - 1], b = line[i], d = b - a;
+        const double length = std::hypot(d.x(), d.y());
+        if (length < 1e-6) continue;
+        const QPointF u = d / length;
+        const bool flat = std::abs(u.x()) >= std::abs(u.y());
+        std::vector<double> at;
+        for (const auto& [owner, other] : all) {
+            if (owner == self) continue;
+            for (int k = 1; k < other.size(); ++k) {
+                double t = 0.0;
+                if (!crossAt(a, b, other[k - 1], other[k], t)) continue;
+                const QPointF e = other[k] - other[k - 1];
+                const bool otherFlat = std::abs(e.x()) >= std::abs(e.y());
+                if (flat == otherFlat ? self < owner : !flat) continue;
+                const double along = t * length;
+                if (along > r * 1.2 && along < length - r * 1.2) at.push_back(along);
+            }
+        }
+        std::sort(at.begin(), at.end());
+        // OVER THE TOP (or to the left, on an upright line).
+        QPointF n(u.y(), -u.x());
+        if (n.y() > 1e-9 || (std::abs(n.y()) <= 1e-9 && n.x() > 0)) n = -n;
+        double last = -1e9;
+        for (const double s : at) {
+            if (s - last < 2.4 * r) continue;
+            last = s;
+            const QPointF c = a + u * s;
+            path.lineTo(c - u * r);
+            for (int k = 1; k <= 10; ++k) {
+                const double th = M_PI * k / 10.0;
+                path.lineTo(c - u * (r * std::cos(th)) + n * (r * std::sin(th)));
+            }
+        }
+        path.lineTo(b);
+    }
+    return path;
+}
 
 double segDistance(const QPointF& p, const QPointF& a, const QPointF& b) {
     const QPointF e = b - a;
@@ -360,14 +417,16 @@ QString SystemCanvas::cableAt(const QPointF& w) const {
     QString best;
     double nearest = reach;
     for (const SysCable& c : design_->cables) {
-        const std::vector<QPointF> p = cablePath(c);
-        for (size_t i = 1; i < p.size(); ++i) {
-            const double d = segDistance(w, p[i - 1], p[i]);
-            if (d < nearest) {
-                nearest = d;
-                best = c.id;
+        std::vector<std::vector<QPointF>> lines{cablePath(c)};
+        for (const SysBranch& b : c.branches) lines.push_back(sysBranchPath(*design_, c, b, 2 * portHalf()));
+        for (const std::vector<QPointF>& p : lines)
+            for (size_t i = 1; i < p.size(); ++i) {
+                const double d = segDistance(w, p[i - 1], p[i]);
+                if (d < nearest) {
+                    nearest = d;
+                    best = c.id;
+                }
             }
-        }
     }
     return best;
 }
@@ -537,25 +596,58 @@ void SystemCanvas::paintEvent(QPaintEvent*) {
                        p.fontMetrics().elidedText(u.description, Qt::ElideRight, static_cast<int>(beside.width())));
             p.setFont(f);
         }
+        // ITS PICTURE, where it has one: between its mark and its name, kept to its shape - the name and numbers under it.
+        QRectF nameBox = r.adjusted(6, 4, -6, -r.height() / 2), subBox = r.adjusted(6, r.height() / 2 + 2, -6, -4);
+        Qt::Alignment nameAlign = Qt::AlignHCenter | Qt::AlignBottom, subAlign = Qt::AlignHCenter | Qt::AlignTop;
+        if (const QImage picture = unitPicture(u); !picture.isNull()) {
+            const double line = QFontMetricsF(f).height() * 1.05;
+            // ROOM FOR THE WORDS UNDER IT: the name, and a second line only where there is a P/N or revision to show.
+            const bool numbers = (!u.pn.isEmpty() && u.shows(QStringLiteral("pn"))) || (!u.rev.isEmpty() && u.shows(QStringLiteral("rev")));
+            const double bottom = r.bottom() - 3 - line * (numbers ? 2.0 : 1.0);
+            const QRectF room(r.left() + 6, r.top() + mark + 7, r.width() - 12, bottom - (r.top() + mark + 7));
+            if (room.width() > 4 && room.height() > 4) {
+                const QSizeF size = QSizeF(picture.size()).scaled(room.size(), Qt::KeepAspectRatio);
+                p.drawImage(QRectF(room.center() - QPointF(size.width() / 2, size.height() / 2), size), picture);
+            }
+            nameBox = QRectF(r.left() + 6, bottom + 2, r.width() - 12, line);
+            subBox = QRectF(r.left() + 6, bottom + 2 + line, r.width() - 12, line);
+            nameAlign = subAlign = Qt::AlignHCenter | Qt::AlignVCenter;
+        }
         QFont bold = f;
         bold.setBold(true);
         p.setFont(bold);
         p.setPen(setInk.isValid() ? setInk : darkUnit ? QColor(235, 239, 245) : QColor(25, 30, 36));
-        if (u.shows(QStringLiteral("name"))) p.drawText(r.adjusted(6, 4, -6, -r.height() / 2), Qt::AlignHCenter | Qt::AlignBottom, u.name);
+        if (u.shows(QStringLiteral("name"))) p.drawText(nameBox, nameAlign, u.name);
         p.setFont(f);
         QStringList sub;
         if (!u.pn.isEmpty() && u.shows(QStringLiteral("pn"))) sub << u.pn;
         if (!u.rev.isEmpty() && u.shows(QStringLiteral("rev"))) sub << QStringLiteral("rev ") + u.rev;
         p.setPen(setInk.isValid() ? setInk : darkUnit ? QColor(195, 205, 220) : QColor(80, 88, 100));
-        if (!sub.isEmpty()) p.drawText(r.adjusted(6, r.height() / 2 + 2, -6, -4), Qt::AlignHCenter | Qt::AlignTop, sub.join(QStringLiteral("  ")));
+        if (!sub.isEmpty()) p.drawText(subBox, subAlign, sub.join(QStringLiteral("  ")));
     }
-    // THE CABLES, each labelled at its middle with a dot for how its drawing stands.
+    // THE CABLES, each labelled at its middle with a dot for how its drawing stands. Every line - trunks and branches - on
+    // the screen first: where two harnesses cross, one jumps the other.
+    std::vector<QPolygonF> trunks(design_->cables.size());
+    std::vector<std::vector<QPolygonF>> limbs(design_->cables.size());
+    std::vector<std::pair<int, QPolygonF>> every;
+    for (size_t ci = 0; ci < design_->cables.size(); ++ci) {
+        const SysCable& c = design_->cables[ci];
+        for (const QPointF& q : cablePath(c)) trunks[ci] << toScreen(q);
+        if (trunks[ci].size() >= 2) every.push_back({static_cast<int>(ci), trunks[ci]});
+        for (const SysBranch& b : c.branches) {
+            QPolygonF limb;
+            for (const QPointF& q : sysBranchPath(*design_, c, b, 2 * portHalf())) limb << toScreen(q);
+            if (limb.size() < 2) continue;
+            limbs[ci].push_back(limb);
+            every.push_back({static_cast<int>(ci), limb});
+        }
+    }
+    const double hop = 5.0 * std::clamp(scale_, 0.7, 1.6);
     for (const SysCable& c : design_->cables) {
-        const std::vector<QPointF> path = cablePath(c);
-        if (path.size() < 2) continue;
+        const int ci = static_cast<int>(&c - design_->cables.data());
+        const QPolygonF& line = trunks[static_cast<size_t>(ci)];
+        if (line.size() < 2) continue;
         const bool on = zoneCables_.contains(c.id);
-        QPolygonF line;
-        for (const QPointF& q : path) line << toScreen(q);
         const auto index = static_cast<int>(&c - design_->cables.data());
         const bool scanning = checkStep_ == static_cast<int>(design_->units.size()) + index;
         if (scanning || issueOn({}, c.id)) {
@@ -565,9 +657,18 @@ void SystemCanvas::paintEvent(QPaintEvent*) {
             p.setPen(highlight);
             p.drawPolyline(line);
         }
-        p.setPen(QPen(on ? QColor(40, 140, 230) : c.color.isValid() ? c.color : dark ? QColor(210, 218, 229) : QColor(60, 66, 76), on ? 3.0 : 2.0));
+        const QColor ink = on ? QColor(40, 140, 230) : c.color.isValid() ? c.color : dark ? QColor(210, 218, 229) : QColor(60, 66, 76);
+        p.setPen(QPen(ink, on ? 3.0 : 2.0));
         p.setBrush(Qt::NoBrush);
-        p.drawPolyline(line);
+        p.drawPath(hoppedLine(line, ci, every, hop));
+        // ITS BRANCHES: each from the trunk's middle to its port, a dot where they leave it.
+        for (const QPolygonF& limb : limbs[static_cast<size_t>(ci)]) p.drawPath(hoppedLine(limb, ci, every, hop));
+        if (!limbs[static_cast<size_t>(ci)].empty()) {
+            p.setPen(Qt::NoPen);
+            p.setBrush(ink);
+            p.drawEllipse(limbs[static_cast<size_t>(ci)].front().front(), 3.5, 3.5);
+            p.setBrush(Qt::NoBrush);
+        }
         const QPointF mid = (line[line.size() / 2 - 1] + line[line.size() / 2]) / 2.0;
         // ITS LABEL: what of it is to be shown.
         QStringList parts;
@@ -593,8 +694,12 @@ void SystemCanvas::paintEvent(QPaintEvent*) {
         p.setPen(QPen(QColor(60,170,245),2,Qt::DashLine));p.drawLine(edge,rubber_);
         p.setPen(canvasInk);p.drawText(QRectF(12,height()-30,width()-24,22),Qt::AlignLeft|Qt::AlignVCenter,QStringLiteral("Click a unit, cable or port to link this note - Esc cancels"));
     }
-    // THE CABLE BEING DRAWN.
-    if (drag_ == Drag::Cable) {
+    // THE CABLE BEING DRAWN - or a branch, from the harness pressed on.
+    if (drag_ == Drag::Cable && !fromCable_.isEmpty()) {
+        p.setPen(QPen(QColor(40, 140, 230), 2.0, Qt::DashLine));
+        p.drawLine(toScreen(branchFrom_), rubber_);
+    }
+    if (drag_ == Drag::Cable && fromCable_.isEmpty()) {
         QPointF from;
         if (const SysUnit* u = design_->unit(fromUnit_)) {
             if (fromNew_) {
@@ -670,8 +775,6 @@ void SystemCanvas::paintEvent(QPaintEvent*) {
         p.setPen(QPen(colour, 1.2, crossing ? Qt::DashLine : Qt::SolidLine));
         colour.setAlpha(35); p.setBrush(colour);
         const QRectF zone(toScreen(pressWorld_), toScreen(zoneEnd_)); p.drawRect(zone.normalized());
-        p.setPen(canvasInk);
-        p.drawText(zone.normalized().topLeft() - QPointF(0, 5), crossing ? QStringLiteral("Crossing selection") : QStringLiteral("Window selection"));
     }
     // THE CHECK, traced over the real objects; findings stay outlined until the next edit.
     for (size_t i = 0; i < design_->units.size(); ++i) {
@@ -767,6 +870,7 @@ void SystemCanvas::mousePressEvent(QMouseEvent* e) {
     moved_ = false;
     moveAnnounced_ = false;
     fromNew_ = false;
+    fromCable_.clear();
     if (!design_) return;
     if (e->button() == Qt::RightButton || e->button() == Qt::MiddleButton) {
         drag_ = Drag::Pan;
@@ -831,6 +935,16 @@ void SystemCanvas::mousePressEvent(QMouseEvent* e) {
             drag_ = Drag::Cable;
             fromUnit_ = unit;
             fromPort_ = port;
+            rubber_ = e->position();
+            return;
+        }
+        // FROM A HARNESS: a branch of it, to the port (or unit) it is taken to.
+        if (const QString c = cableAt(pressWorld_); !c.isEmpty()) {
+            drag_ = Drag::Cable;
+            fromCable_ = c;
+            branchFrom_ = pressWorld_;
+            fromUnit_.clear();
+            fromPort_.clear();
             rubber_ = e->position();
             return;
         }
@@ -1082,6 +1196,22 @@ void SystemCanvas::mouseReleaseEvent(QMouseEvent* e) {
     if (!design_) return;
     const Drag was = drag_;
     drag_ = Drag::None;
+    if (was == Drag::Pan && e->button() == Qt::RightButton && !moved_) {
+        // A RIGHT CLICK, NOT A DRAG: what is under it selected (unless it is already), and its menu asked for.
+        const QPointF w = toWorld(e->position());
+        QString unit, port;
+        if (portAt(w, unit, port)) {
+            if (selUnit_ != unit || selPort_ != port) select(unit, port, QString());
+        } else if (const QString n = noteAt(w); !n.isEmpty()) {
+            if (!zoneNotes_.contains(n)) selectNote(n);
+        } else if (const QString u = unitAt(w); !u.isEmpty()) {
+            if (!zoneUnits_.contains(u)) select(u, QString(), QString());
+        } else if (const QString c = cableAt(w); !c.isEmpty()) {
+            if (!zoneCables_.contains(c)) select(QString(), QString(), c);
+        }
+        emit contextMenuRequested(e->globalPosition().toPoint(), w);
+        return;
+    }
     if (was == Drag::Zone) {
         zoneEnd_ = toWorld(e->position());
         selectZone(QRectF(pressWorld_, zoneEnd_).normalized(), zoneCrossing()); return;
@@ -1118,6 +1248,41 @@ void SystemCanvas::finishCable(const QMouseEvent* e) {
         const bool same = onPort && unit == fromUnit_ && port == fromPort_ && !fromNew_;
         drag_ = Drag::None;
         pending_ = false;
+        // A BRANCH, from the harness pressed on to the port let go on - or a port put where it ends on a unit.
+        if (!fromCable_.isEmpty()) {
+            const QString cableId = fromCable_;
+            fromCable_.clear();
+            if (onPort || !onUnit.isEmpty()) {
+                emit aboutToChange();
+                QString bu = onPort ? unit : onUnit, bp = port;
+                if (!onPort) {
+                    QString side;
+                    double at = 0.5;
+                    nearestSide(*design_->unit(bu), w, side, at);
+                    bp = design_->addPort(bu, side, at);
+                }
+                design_->addBranch(cableId, bu, bp);
+                select(QString(), QString(), cableId);
+                emit changed();
+                placed(e);
+            }
+            update();
+            return;
+        }
+        // FROM A PORT TO A HARNESS: the port one more end of it.
+        if (!onPort && onUnit.isEmpty()) {
+            if (const QString onCable = cableAt(w); !onCable.isEmpty() && !fromUnit_.isEmpty()) {
+                emit aboutToChange();
+                const QString aPort = fromNew_ ? design_->addPort(fromUnit_, fromSide_, fromAt_) : fromPort_;
+                design_->addBranch(onCable, fromUnit_, aPort);
+                select(QString(), QString(), onCable);
+                emit changed();
+                placed(e);
+                fromNew_ = false;
+                update();
+                return;
+            }
+        }
         // Ended on a port, or on another unit (a port put there); on its own unit's body, or on nothing: given up.
         if (!same && (onPort || (!onUnit.isEmpty() && onUnit != fromUnit_))) {
             emit aboutToChange();
@@ -1166,7 +1331,35 @@ void SystemCanvas::wheelEvent(QWheelEvent* e) {
     update();
 }
 
+bool SystemCanvas::event(QEvent* e) {
+    // CTRL+C, X, V ARE THE DIAGRAM'S while it has the keyboard - not the drawing's, behind it.
+    if (e->type() == QEvent::ShortcutOverride) {
+        const auto* k = static_cast<QKeyEvent*>(e);
+        if ((k->modifiers() & Qt::ControlModifier) && (k->key() == Qt::Key_C || k->key() == Qt::Key_X || k->key() == Qt::Key_V)) {
+            e->accept();
+            return true;
+        }
+    }
+    return QWidget::event(e);
+}
+
+QImage SystemCanvas::unitPicture(const SysUnit& u) const {
+    if (u.picture.isEmpty()) return QImage();
+    const QString key = u.id + QLatin1Char(':') + QString::number(qHash(u.picture));
+    if (const auto it = pictures_.constFind(key); it != pictures_.cend()) return it.value();
+    QImage image;
+    image.loadFromData(u.picture);
+    if (pictures_.size() > 64) pictures_.clear();
+    pictures_.insert(key, image);
+    return image;
+}
+
 void SystemCanvas::keyPressEvent(QKeyEvent* e) {
+    if (e->modifiers() & Qt::ControlModifier) {
+        if (e->key() == Qt::Key_C) { emit editRequested(QStringLiteral("copy")); return; }
+        if (e->key() == Qt::Key_X) { emit editRequested(QStringLiteral("cut")); return; }
+        if (e->key() == Qt::Key_V) { emit editRequested(QStringLiteral("paste")); return; }
+    }
     if (e->key() == Qt::Key_Delete || e->key() == Qt::Key_Backspace) {
         emit deleteRequested();
         return;

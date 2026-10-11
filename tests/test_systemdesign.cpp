@@ -43,6 +43,9 @@
 #include <QPlainTextEdit>
 #include <QTableWidget>
 #include <QToolButton>
+#include <QImage>
+#include <QDockWidget>
+#include <QMenu>
 #include <QVBoxLayout>
 #include <QSplitter>
 #include <QCheckBox>
@@ -1760,6 +1763,249 @@ void testCheckCardsHelpNotesDesignators() {
     }
 }
 
+// FINDINGS OF EVERY CHECK LISTED, A UNIT'S PICTURE, HARNESS JUMPS AND BRANCHES, COPY AND PASTE, FEWER CROSSINGS, BENDS THAT
+// DO NOT FOLD BACK; THE VIEW RIBBON'S 3D SPLIT AND OPEN DRAWINGS TOGETHER.
+void testRoundSix(const QString& base) {
+    QJsonObject stored;
+    SystemDesignView view;
+    view.setStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    view.resize(1200, 760);
+    view.show();
+    QApplication::processEvents();
+    {
+        SystemDesign d;
+        const QString a = d.addUnit(0, 0, QStringLiteral("U1")), b = d.addUnit(400, 0, QStringLiteral("U2"));
+        const QString p1 = d.addPort(a, QStringLiteral("right"), .3, QStringLiteral("J1")), p2 = d.addPort(a, QStringLiteral("right"), .7, QStringLiteral("J2"));
+        const QString q1 = d.addPort(b, QStringLiteral("left"), .3, QStringLiteral("J3")), q2 = d.addPort(b, QStringLiteral("left"), .7, QStringLiteral("J4"));
+        d.addCable(a, p1, b, q2);   // the two cross
+        d.addCable(a, p2, b, q1);
+        stored = d.toJson();
+        view.reload();
+    }
+    SystemDesign& d = view.design();
+    const QString a = d.units[0].id, b = d.units[1].id;
+
+    // ---- 1. EVERY CHECK LISTS ITS FINDINGS ----
+    auto* table = view.findChild<QTableWidget*>(QStringLiteral("systemIssues"));
+    auto* summary = view.findChild<QLabel*>(QStringLiteral("systemDrcSummary"));
+    auto* tabs = view.findChild<QTabWidget*>(QStringLiteral("systemTabs"));
+    view.checkRevisions();
+    const bool revisionsListed = table && table->rowCount() == static_cast<int>(view.issues().size()) && table->rowCount() > 0 &&
+                                 summary->text().startsWith(QLatin1String("Revision check")) && tabs->currentIndex() == 1;
+    view.checkSchematics();
+    const bool connectionsListed = table && table->rowCount() == static_cast<int>(view.issues().size()) &&
+                                   summary->text().startsWith(QLatin1String("Connection check")) && tabs->currentIndex() == 1;
+    // Check again: the same check once more.
+    if (auto* again = view.findChild<QPushButton*>(QStringLiteral("systemCheckAgain"))) again->click();
+    bool againSame = summary->text().startsWith(QLatin1String("Connection check"));
+    for (const SysIssue& i : view.issues()) againSame = againSame && (i.rule == QLatin1String("PORT-CONNECTION") || i.rule == QLatin1String("SCHEMATIC-NAME"));
+    std::printf("  findings listed: revisions %d, connections %d, check again the same %d\n", revisionsListed ? 1 : 0, connectionsListed ? 1 : 0, againSame ? 1 : 0);
+    check(revisionsListed && connectionsListed, "findings: Check revisions and Connections list their findings, named by the check");
+    check(againSame, "findings: Check again runs the check last run");
+
+    // ---- 6. FEWER CROSSINGS: the ports reordered so the two harnesses no longer cross ----
+    // The router keeps them from crossing by sending one the long way round; reordered, both run straight across.
+    const int crossedBefore = systemCrossings(d);
+    const double longBefore = systemHarnessLength(d);
+    view.minimizeCrossings();
+    const int crossedAfter = systemCrossings(view.design());
+    const double longAfter = systemHarnessLength(view.design());
+    const SysUnit* left = view.design().unit(a);
+    const bool swapped = left && left->ports.size() == 2 && left->ports[0].at > left->ports[1].at;
+    std::printf("  minimize crossings: %d -> %d crossing(s), %.0f -> %.0f long, ports swapped %d\n", crossedBefore, crossedAfter, longBefore,
+                longAfter, swapped ? 1 : 0);
+    check(crossedAfter <= crossedBefore && crossedAfter == 0 && longAfter < longBefore - 1 && swapped,
+          "minimize crossings: the ports reordered - the harnesses straight across, crossing none");
+    view.undo();
+    check(std::abs(systemHarnessLength(view.design()) - longBefore) < 0.5, "minimize crossings: one step to undo");
+
+    // ---- 2. A PICTURE IN A UNIT: kept in the design, drawn in it ----
+    const QString png = QDir(base).filePath(QStringLiteral("unit-picture.png"));
+    {
+        QImage red(120, 80, QImage::Format_RGB32);
+        red.fill(QColor(220, 30, 30));
+        red.save(png);
+    }
+    check(view.setUnitPicture(a, png) && !view.design().unit(a)->picture.isEmpty() &&
+              !SystemDesign::fromJson(view.design().toJson()).unit(a)->picture.isEmpty(),
+          "picture: put in a unit and saved with the design");
+    view.canvas()->select(QString(), QString(), QString());
+    view.canvas()->fit();
+    QApplication::processEvents();
+    {
+        const QImage shot = view.canvas()->grab().toImage();
+        const SysUnit* u = view.design().unit(a);
+        const QPointF centre = view.canvas()->unitOnScreen(a);
+        int reddish = 0;
+        const int dpr = static_cast<int>(shot.devicePixelRatio());
+        for (int dy = -20; dy <= 10; ++dy)
+            for (int dx = -20; dx <= 20; ++dx) {
+                const QColor c = shot.pixelColor((static_cast<int>(centre.x()) + dx) * dpr, (static_cast<int>(centre.y()) + dy) * dpr);
+                if (c.red() > 180 && c.green() < 90 && c.blue() < 90) ++reddish;
+            }
+        std::printf("  picture: %d red px round the middle of %s\n", reddish, qPrintable(u->name));
+        check(reddish > 100, "picture: drawn in the unit");
+    }
+    view.removeUnitPicture(a);
+    check(view.design().unit(a)->picture.isEmpty(), "picture: taken out");
+
+    // ---- 5. THE RIGHT-CLICK MENU; COPY AND PASTE ----
+    view.canvas()->select(a, QString(), QString());
+    QMenu* menu = view.contextMenu(QPointF(100, 300));
+    QStringList names;
+    for (QAction* act : menu->actions()) if (!act->objectName().isEmpty()) names << act->objectName();
+    std::printf("  right-click menu: %s\n", qPrintable(names.join(QStringLiteral(", "))));
+    check(names.contains(QLatin1String("systemMenuCopy")) && names.contains(QLatin1String("systemMenuCut")) &&
+              names.contains(QLatin1String("systemMenuPaste")) && names.contains(QLatin1String("systemMenuDelete")) &&
+              names.contains(QLatin1String("systemMenuMinimize")) && names.contains(QLatin1String("systemMenuPicture")),
+          "right-click menu: copy, cut, paste, delete, minimize crossings, a unit's picture");
+    delete menu;
+    // Both units copied (a zone round them) with the harnesses between them, pasted where clicked.
+    view.canvas()->selectZone(QRectF(-50, -50, 700, 300), false);
+    const size_t unitsBefore = view.design().units.size(), cablesBefore = view.design().cables.size();
+    const bool copied = view.copySelection();
+    const bool pasted = view.paste(QPointF(0, 400), true);
+    QSet<QString> unitNames, ids;
+    bool unique = true;
+    for (const SysUnit& u : view.design().units) { unique = unique && !unitNames.contains(u.name) && !ids.contains(u.id); unitNames.insert(u.name); ids.insert(u.id); }
+    bool pastedBelow = false;
+    for (const SysUnit& u : view.design().units) pastedBelow = pastedBelow || (u.y >= 390 && u.y <= 410);
+    std::printf("  copy and paste: %d -> %d unit(s), %d -> %d harness(es)\n", static_cast<int>(unitsBefore), static_cast<int>(view.design().units.size()),
+                static_cast<int>(cablesBefore), static_cast<int>(view.design().cables.size()));
+    check(copied && pasted && view.design().units.size() == unitsBefore * 2 && view.design().cables.size() == cablesBefore * 2 && unique && pastedBelow,
+          "copy and paste: the units and the harnesses between them, new names, where right-clicked");
+    view.undo();
+    check(view.design().units.size() == unitsBefore, "paste: one step to undo");
+
+    // ---- 9. A HARNESS SPREAD TO SEVERAL PORTS ----
+    {
+        SystemDesign& dd = view.design();
+        const QString c3 = dd.addUnit(200, 300, QStringLiteral("U9"));
+        const QString p9 = dd.addPort(c3, QStringLiteral("top"), .5, QStringLiteral("J9"));
+        stored = dd.toJson();
+        view.reload();
+        SysCable& trunk = view.design().cables[0];
+        const QString trunkId = trunk.id;
+        // Drawn with the Harness tool: pressed on the harness, let go on the port.
+        SystemCanvas* c = view.canvas();
+        c->fit();
+        QApplication::processEvents();
+        view.setTool(SysTool::Cable);
+        const QPointF from = c->cableOnScreen(trunkId), to = c->portOnScreen(c3, p9);
+        QMouseEvent down(QEvent::MouseButtonPress, from, c->mapToGlobal(from), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(c, &down);
+        for (int i = 1; i <= 5; ++i) {
+            const QPointF at = from + (to - from) * (i / 5.0);
+            QMouseEvent move(QEvent::MouseMove, at, c->mapToGlobal(at), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(c, &move);
+        }
+        QMouseEvent up(QEvent::MouseButtonRelease, to, c->mapToGlobal(to), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(c, &up);
+        QApplication::processEvents();
+        const SysCable* spread = view.design().cable(trunkId);
+        const bool branched = spread && spread->branches.size() == 1 && spread->branches[0].unit == c3 && spread->branches[0].port == p9;
+        const bool plugged = branched && view.design().cablesAt(c3, p9).size() == 1;
+        const auto limb = branched ? sysBranchPath(view.design(), *spread, spread->branches[0]) : std::vector<QPointF>{};
+        const SystemDesign back = SystemDesign::fromJson(view.design().toJson());
+        std::printf("  branch: %d branch(es), its line %d point(s)\n", spread ? static_cast<int>(spread->branches.size()) : -1, static_cast<int>(limb.size()));
+        check(branched && plugged && limb.size() >= 3 && back.cable(trunkId) && back.cable(trunkId)->branches.size() == 1,
+              "branch: a harness spread to one more port - drawn from the harness to the port, saved, the port plugged");
+        view.setTool(SysTool::Select);
+        view.design().removePort(c3, p9);
+        check(view.design().cable(trunkId) && view.design().cable(trunkId)->branches.empty(), "branch: its port taken away - the branch only, the harness kept");
+    }
+
+    // ---- 8. BENDS THAT DO NOT FOLD BACK: a unit moved past a harness's dragged leg ----
+    {
+        SystemDesign t;
+        const QString lo = t.addUnit(0, 200), hi = t.addUnit(300, -200);
+        const QString up = t.addPort(lo, QStringLiteral("top"), .5), side = t.addPort(hi, QStringLiteral("left"), .5);
+        const QString cable = t.addCable(lo, up, hi, side);
+        t.cable(cable)->waypoints = {QPointF(80, 100), QPointF(250, 100)};   // its leg dragged to y 100
+        t.moveUnit(lo, 0, -250);                                            // the unit moved up past it (top now -50)
+        const std::vector<QPointF> path = sysCablePath(t, *t.cable(cable));
+        // From the port up: never down again before the leg.
+        bool foldsBack = false;
+        for (size_t i = 1; i < path.size() && i < 4; ++i) foldsBack = foldsBack || path[i].y() > path[i - 1].y() + 0.01;
+        const std::vector<QPointF> bends = sysCableWaypoints(t, *t.cable(cable));
+        std::printf("  bends: the leg now at y %.1f (dragged to 100, the port at %.1f)\n", bends.empty() ? 0.0 : bends.front().y(), t.unit(lo)->y);
+        check(!foldsBack && !bends.empty() && bends.front().y() < t.unit(lo)->y && std::abs(bends.front().y() - bends.back().y()) < 0.01,
+              "bends: a unit moved past the dragged leg - the line out of its port shortens, not out and back");
+    }
+}
+
+// THE VIEW RIBBON: THE 3D VIEW SPLIT BELOW OR BESIDE AND DRAGGED TO FOUR FIFTHS; THE OPEN DRAWINGS SHOWN TOGETHER.
+void testViewSplitAndTiles() {
+    MainWindow window;
+    window.resize(1400, 900);
+    window.show();
+    QApplication::processEvents();
+    auto* dock = window.findChild<QDockWidget*>(QStringLiteral("view3dDock"));
+    auto* splitBelow = window.findChild<QToolButton*>(QStringLiteral("viewSplit3DHorizontal"));
+    auto* splitBeside = window.findChild<QToolButton*>(QStringLiteral("viewSplit3DVertical"));
+    check(dock && splitBelow && splitBeside, "view: the 3D split buttons");
+    if (!dock || !splitBelow || !splitBeside) return;
+    splitBeside->click();
+    QApplication::processEvents();
+    const bool beside = window.dockWidgetArea(dock) == Qt::RightDockWidgetArea && dock->isVisible();
+    splitBelow->click();
+    QApplication::processEvents();
+    QApplication::processEvents();
+    const bool below = window.dockWidgetArea(dock) == Qt::BottomDockWidgetArea && dock->isVisible();
+    check(beside && below, "view: Split vertical puts the 3D view beside the drawing, Split horizontal under it");
+    // DRAGGED UP: as far as four fifths of the room, not past it.
+    window.keepCanvasShare();
+    const int room = window.centralWidget()->height() + dock->height();
+    window.resizeDocks({dock}, {room * 9 / 10}, Qt::Vertical);
+    QApplication::processEvents();
+    const double share = dock->height() / static_cast<double>(window.centralWidget()->height() + dock->height());
+    std::printf("  3D view dragged up: %.0f%% of the room (the drawing keeps %d px)\n", share * 100.0, window.centralWidget()->height());
+    check(share > 0.7 && share < 0.83, "view: the 3D view dragged up to four fifths, the drawing keeping a fifth");
+
+    // ---- THE OPEN DRAWINGS TOGETHER ----
+    window.newDrawingForTest();
+    window.newDrawingForTest();
+    QApplication::processEvents();
+    auto* sideBySide = window.findChild<QToolButton*>(QStringLiteral("viewCascadeVertical"));
+    auto* rows = window.findChild<QToolButton*>(QStringLiteral("viewCascadeHorizontal"));
+    auto* single = window.findChild<QToolButton*>(QStringLiteral("viewCascadeSingle"));
+    check(sideBySide && rows && single, "view: the open drawings buttons");
+    if (!sideBySide || !rows || !single) return;
+    sideBySide->click();
+    QApplication::processEvents();
+    QSplitter* tiles = window.drawingTiles();
+    const int shown = tiles ? tiles->count() : 0;
+    const bool columns = tiles && tiles->orientation() == Qt::Horizontal;
+    rows->click();
+    QApplication::processEvents();
+    const bool stacked = tiles && tiles->orientation() == Qt::Vertical && tiles->count() == shown;
+    std::printf("  open drawings together: %d shown, columns %d, rows %d\n", shown, columns ? 1 : 0, stacked ? 1 : 0);
+    check(shown >= 3 && columns && stacked, "view: every open drawing shown together - in columns, or in rows");
+    // A double-click on another: it is worked on, the one before becomes a tile.
+    int before = -1, after = -1;
+    for (int i = 0; i < tiles->count(); ++i)
+        if (tiles->widget(i)->objectName() == QLatin1String("drawingTile")) { before = tiles->widget(i)->property("drawingIndex").toInt(); break; }
+    if (before >= 0) {
+        for (int i = 0; i < tiles->count(); ++i) {
+            QWidget* tile = tiles->widget(i);
+            if (tile->objectName() != QLatin1String("drawingTile") || tile->property("drawingIndex").toInt() != before) continue;
+            const QPointF mid(tile->width() / 2.0, tile->height() / 2.0);
+            QMouseEvent dbl(QEvent::MouseButtonDblClick, mid, tile->mapToGlobal(mid), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(tile, &dbl);
+            break;
+        }
+        for (int k = 0; k < 4; ++k) QApplication::processEvents();
+        bool stillTile = false;
+        for (int i = 0; i < tiles->count(); ++i)
+            if (tiles->widget(i)->objectName() == QLatin1String("drawingTile") && tiles->widget(i)->property("drawingIndex").toInt() == before) stillTile = true;
+        after = stillTile ? before : -2;
+    }
+    check(before >= 0 && after == -2, "view: a drawing double-clicked is the one worked on");
+    single->click();
+    QApplication::processEvents();
+    check(tiles->count() == 1, "view: back to one drawing at a time");
+}
+
 } // namespace
 
 int run_systemdesign_tests() {
@@ -1789,6 +2035,8 @@ int run_systemdesign_tests() {
     testSystemModuleLinksAndRoutes();
     testImportScopesCtrl(dir.path());
     testCheckCardsHelpNotesDesignators();
+    testRoundSix(dir.path());
+    testViewSplitAndTiles();
     std::printf("  system design: %s\n", g_fail == 0 ? "OK" : "FAILED");
     return g_fail;
 }

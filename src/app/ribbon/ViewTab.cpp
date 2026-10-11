@@ -228,6 +228,67 @@ void MainWindow::buildViewTab() {
         addGroup(lay, QStringLiteral("Scheme"), w2);
     }
 
+    {
+        // THE 3D VIEW SPLIT FROM THE DRAWING, and THE OPEN DRAWINGS SHOWN TOGETHER - each button a small picture of it.
+        auto picture = [](int kind) {
+            QPixmap pm(48, 48);
+            pm.fill(Qt::transparent);
+            QPainter p(&pm);
+            p.setRenderHint(QPainter::Antialiasing, true);
+            const QColor ink = Chrome::ink(), accent(232, 128, 34);
+            auto frame = [&](const QRectF& r, bool lit) {
+                p.setPen(QPen(lit ? accent : ink, 2.4));
+                p.setBrush(lit ? QColor(232, 128, 34, 70) : Qt::NoBrush);
+                p.drawRoundedRect(r, 3, 3);
+            };
+            if (kind == 0) { frame(QRectF(5, 6, 38, 20), false); frame(QRectF(5, 28, 38, 14), true); }        // 3D below
+            else if (kind == 1) { frame(QRectF(5, 6, 22, 36), false); frame(QRectF(29, 6, 14, 36), true); }   // 3D beside
+            else if (kind == 2) { frame(QRectF(4, 8, 13, 32), true); frame(QRectF(18, 8, 12, 32), false); frame(QRectF(31, 8, 13, 32), false); }
+            else if (kind == 3) { frame(QRectF(6, 4, 36, 13), true); frame(QRectF(6, 18, 36, 12), false); frame(QRectF(6, 31, 36, 13), false); }
+            else { frame(QRectF(6, 8, 36, 32), true); }
+            return QIcon(pm);
+        };
+        auto button = [&](QWidget* parent, QHBoxLayout* row, const char* name, const QString& text, int kind, const QString& tip) {
+            auto* b = new QToolButton(parent);
+            b->setObjectName(QLatin1String(name));
+            b->setText(text);
+            b->setIcon(picture(kind));
+            b->setIconSize(QSize(24, 24));
+            b->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+            b->setAutoRaise(true);
+            b->setFocusPolicy(Qt::NoFocus);
+            b->setToolTip(tip);
+            row->addWidget(b);
+            return b;
+        };
+        auto* splitW = new QWidget(page);
+        auto* splitRow = new QHBoxLayout(splitW);
+        splitRow->setContentsMargins(0, 0, 0, 0);
+        splitRow->setSpacing(2);
+        connect(button(splitW, splitRow, "viewSplit3DHorizontal", QStringLiteral("Split horizontal"), 0,
+                       QStringLiteral("The 3D view under the drawing - drag the line between them up to give it as much as four fifths")),
+                &QToolButton::clicked, this, [this] { splitView3D(Qt::Horizontal); });
+        connect(button(splitW, splitRow, "viewSplit3DVertical", QStringLiteral("Split vertical"), 1,
+                       QStringLiteral("The 3D view beside the drawing - drag the line between them to give it as much as four fifths")),
+                &QToolButton::clicked, this, [this] { splitView3D(Qt::Vertical); });
+        addGroup(lay, QStringLiteral("3D split"), splitW);
+
+        auto* tileW = new QWidget(page);
+        auto* tileRow = new QHBoxLayout(tileW);
+        tileRow->setContentsMargins(0, 0, 0, 0);
+        tileRow->setSpacing(2);
+        connect(button(tileW, tileRow, "viewCascadeVertical", QStringLiteral("Cascade vertical"), 2,
+                       QStringLiteral("Every open drawing side by side, in columns - the one worked on first; double-click another to work on it")),
+                &QToolButton::clicked, this, [this] { tileDrawings(Qt::Horizontal); });
+        connect(button(tileW, tileRow, "viewCascadeHorizontal", QStringLiteral("Cascade horizontal"), 3,
+                       QStringLiteral("Every open drawing one under another, in rows - the one worked on first; double-click another to work on it")),
+                &QToolButton::clicked, this, [this] { tileDrawings(Qt::Vertical); });
+        connect(button(tileW, tileRow, "viewCascadeSingle", QStringLiteral("One drawing"), 4,
+                       QStringLiteral("Back to one drawing at a time, the others in their tabs")),
+                &QToolButton::clicked, this, [this] { tileDrawings(0); });
+        addGroup(lay, QStringLiteral("Open drawings"), tileW);
+    }
+
     lay->addStretch(1);
     ribbon_->addTab(page, QStringLiteral("View"));
 }

@@ -66,6 +66,89 @@ std::vector<QPointF> route(const QPointF& start,const QPointF& end,const std::ve
     std::reverse(path.begin(),path.end());return path;
 }
 }
+bool systemSegmentsCross(const QPointF& a,const QPointF& b,const QPointF& c,const QPointF& d){
+    const QPointF r=b-a,s=d-c;const double den=r.x()*s.y()-r.y()*s.x();
+    if(std::abs(den)<1e-9)return false;
+    const QPointF q=c-a;const double t=(q.x()*s.y()-q.y()*s.x())/den,u=(q.x()*r.y()-q.y()*r.x())/den;
+    return t>1e-6&&t<1-1e-6&&u>1e-6&&u<1-1e-6;
+}
+
+int systemCrossings(const SystemDesign& design,const QStringList& only){
+    struct Line{QString cable;std::vector<QPointF> points;};
+    std::vector<Line> lines;
+    for(const SysCable& cable:design.cables){
+        lines.push_back({cable.id,sysCablePath(design,cable)});
+        for(const SysBranch& branch:cable.branches)lines.push_back({cable.id,sysBranchPath(design,cable,branch)});
+    }
+    int count=0;
+    for(size_t i=0;i<lines.size();++i)for(size_t j=i+1;j<lines.size();++j){
+        if(lines[i].cable==lines[j].cable)continue;
+        if(!only.isEmpty()&&!only.contains(lines[i].cable)&&!only.contains(lines[j].cable))continue;
+        const auto& p=lines[i].points;const auto& q=lines[j].points;
+        for(size_t a=1;a<p.size();++a)for(size_t b=1;b<q.size();++b)if(systemSegmentsCross(p[a-1],p[a],q[b-1],q[b]))++count;
+    }
+    return count;
+}
+
+double systemHarnessLength(const SystemDesign& design,const QStringList& only){
+    double length=0;
+    auto add=[&](const std::vector<QPointF>& line){for(size_t i=1;i<line.size();++i)length+=distance(line[i-1],line[i]);};
+    for(const SysCable& cable:design.cables){
+        if(!only.isEmpty()&&!only.contains(cable.id))continue;
+        add(sysCablePath(design,cable));
+        for(const SysBranch& branch:cable.branches)add(sysBranchPath(design,cable,branch));
+    }
+    return length;
+}
+
+int minimizeSystemCrossings(SystemDesign& design,const QStringList& cables,double* shorter){
+    QSet<QString> chosen;
+    for(const SysCable& cable:design.cables)if(cables.isEmpty()||cables.contains(cable.id))chosen.insert(cable.id);
+    const int before=systemCrossings(design,cables);
+    const double longBefore=systemHarnessLength(design,cables);
+    // A CROSSING COUNTS FOR MORE THAN ANY LENGTH: fewer crossings first, then the shorter way.
+    auto score=[&](int crossings,double length){return crossings*1e7+length;};
+    // WHERE A HARNESS GOES from one of its ends: the port at its other end, its first bend, or - for a branch - the split.
+    auto farFrom=[&](const SysCable& cable,const QString& unit,const QString& port,QPointF& far){
+        auto portPoint=[&](const QString& u,const QString& p){const SysUnit* su=design.unit(u);const SysPort* sp=su?su->port(p):nullptr;
+            if(!sp)return false;far=sysPortPoint(*su,*sp);return true;};
+        const auto bends=sysCableWaypoints(design,cable);
+        if(cable.aUnit==unit&&cable.aPort==port){if(!bends.empty()){far=bends.front();return true;}return portPoint(cable.bUnit,cable.bPort);}
+        if(cable.bUnit==unit&&cable.bPort==port){if(!bends.empty()){far=bends.back();return true;}return portPoint(cable.aUnit,cable.aPort);}
+        for(const SysBranch& branch:cable.branches)if(branch.unit==unit&&branch.port==port){
+            const auto limb=sysBranchPath(design,cable,branch);if(limb.empty())return false;far=limb.front();return true;}
+        return false;
+    };
+    SystemDesign best=design;int fewest=before;double shortest=longBefore;
+    for(int pass=0;pass<4;++pass){
+        bool changed=false;
+        for(SysUnit& unit:design.units)for(const QString& side:{QStringLiteral("left"),QStringLiteral("right"),QStringLiteral("top"),QStringLiteral("bottom")}){
+            const bool across=side==QLatin1String("left")||side==QLatin1String("right");
+            struct End{SysPort* port;double key;};std::vector<End> ends;
+            for(SysPort& port:unit.ports){
+                if(port.side!=side)continue;double sum=0;int n=0;
+                for(const SysCable* cable:design.cablesAt(unit.id,port.id)){
+                    if(!chosen.contains(cable->id))continue;QPointF far;
+                    if(farFrom(*cable,unit.id,port.id,far)){sum+=across?far.y():far.x();++n;}
+                }
+                if(n)ends.push_back({&port,sum/n});
+            }
+            if(ends.size()<2)continue;
+            // THE SAME PLACES ON THE SIDE, given out again in the order the harnesses go.
+            std::vector<double> places;for(const End& end:ends)places.push_back(end.port->at);
+            std::sort(places.begin(),places.end());
+            std::stable_sort(ends.begin(),ends.end(),[](const End& a,const End& b){return a.key<b.key;});
+            for(size_t i=0;i<ends.size();++i)if(std::abs(ends[i].port->at-places[i])>1e-9){ends[i].port->at=places[i];changed=true;}
+        }
+        if(!changed)break;
+        const int now=systemCrossings(design,cables);const double length=systemHarnessLength(design,cables);
+        if(score(now,length)<score(fewest,shortest)-0.5){fewest=now;shortest=length;best=design;}
+    }
+    design=best;
+    if(shorter)*shorter=longBefore-shortest;
+    return before-fewest;
+}
+
 bool systemPathCrossesBox(const std::vector<QPointF>& path,const QRectF& box){for(size_t i=1;i<path.size();++i)if(segmentBox(path[i-1],path[i],box))return true;return false;}
 std::vector<QRectF> systemRouteObstacles(const SystemDesign& design,const SysCable& cable,double margin){
     std::vector<QRectF> boxes;
@@ -81,7 +164,7 @@ std::vector<QPointF> sysCablePath(const SystemDesign& design,const SysCable& cab
     const auto boxes=systemRouteObstacles(design,cable);
     std::vector<std::vector<QPointF>> others;
     for(const SysCable& other:design.cables)if(other.id!=cable.id)others.push_back(sysCableBasePath(design,other,end));
-    std::vector<QPointF> goals;for(const QPointF& point:cable.waypoints)goals.push_back(clearPoint(point,boxes));goals.push_back(base[base.size()-2]);
+    std::vector<QPointF> goals;for(const QPointF& point:sysCableWaypoints(design,cable,end))goals.push_back(clearPoint(point,boxes));goals.push_back(base[base.size()-2]);
     std::vector<QPointF> result{base.front(),base[1]};QPointF from=base[1];
     for(const QPointF& goal:goals){const auto segment=route(from,goal,boxes,others);for(size_t i=1;i<segment.size();++i)result.push_back(segment[i]);from=goal;}
     result.push_back(base.back());

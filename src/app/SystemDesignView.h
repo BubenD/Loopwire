@@ -24,6 +24,8 @@ class QStackedWidget;
 class QTableWidget;
 class QTabWidget;
 
+class QMenu;
+
 namespace Edraw_Desktop {
 
 // THE SYSTEM DESIGN: the system diagram (SystemCanvas) in the middle; on the right what is selected - a unit's name,
@@ -92,6 +94,20 @@ public:
     bool openDesign(const QString& path = QString());
     // A DIAGRAM FROM DRAW.IO OR VISIO, in place of this one (one step to undo); asked which, when not given.
     bool importDesign(const QString& path = QString());
+    // COPY, CUT AND PASTE what is selected - units with what is inside them, the harnesses among them, notes - by the
+    // clipboard. Pasted where asked (the place right-clicked), or a little down and right of where it was.
+    bool copySelection();
+    bool cutSelection();
+    bool canPaste() const;
+    bool paste(const QPointF& at = QPointF(), bool atPoint = false);
+    // FEWER CROSSINGS: the ports of the selected harnesses (of those at the selected units; of all, where nothing is
+    // selected) put in order along their sides. How many crossings went.
+    int minimizeCrossings();
+    // A UNIT'S PICTURE, from a file (no more than 400 across, kept in the design) - asked for where none is given; taken out.
+    bool setUnitPicture(const QString& unit, const QString& path = QString());
+    void removeUnitPicture(const QString& unit);
+    // THE RIGHT-CLICK MENU of the diagram: copy, cut, paste, delete, minimize crossings, the unit's picture.
+    QMenu* contextMenu(const QPointF& world);
     bool exportDrawio(const QString& path = QString());
     bool exportVisio(const QString& path = QString());
     // What the check found last.
@@ -168,6 +184,9 @@ private:
     QTableWidget* found_ = nullptr;
     QLabel* issueSummary_ = nullptr;
     bool checked_ = false;
+    QJsonObject lastPiece_;   // what was copied last - the clipboard's, kept here too. Not saved.
+    QStringList selectedIds(int what) const;   // 0 units, 1 harnesses, 2 notes
+    CheckScope lastScope_ = CheckScope::All;   // what Check again runs: the check last run. Not saved.
     QTableWidget* connections_ = nullptr;
 };
 

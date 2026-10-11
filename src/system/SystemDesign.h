@@ -44,6 +44,7 @@ struct SysUnit {
     double x = 0.0, y = 0.0, w = 160.0, h = 100.0;
     QColor color;          // none: as units of its kind are
     double opacity = 1.0;  // how solid its fill is, 0 to 1
+    QByteArray picture;    // a picture shown in it (PNG), none: no picture
     // THE UNIT IT IS IN - a PCBA in its housing - kept inside it, moved with it. Empty: in none.
     QString parent;
     // WHAT IS NOT SHOWN ON THE DIAGRAM of its own: "name", "pn", "rev", "desc".
@@ -57,6 +58,12 @@ struct SysUnit {
 
 // A CABLE between two ports: its name (W1, W2...), part number and revision, how long, how many wires, and the drawing
 // that defines it - with the number and revision read off that drawing when it was last checked.
+// A FURTHER END OF A HARNESS: the harness spread to one more port, branching off its trunk.
+struct SysBranch {
+    QString unit, port;
+    bool inside = false;   // on the port's inside, as a cable's end may be
+};
+
 struct SysCable {
     QString id;
     QString name;
@@ -66,6 +73,8 @@ struct SysCable {
     QString aUnit, aPort, bUnit, bPort;
     // AN END ON A PORT'S INSIDE: from within the unit - another port of the same unit, or a unit inside it.
     bool aInside = false, bInside = false;
+    // THE HARNESS SPREAD TO MORE PORTS: each further end a branch off the trunk from a to b.
+    std::vector<SysBranch> branches;
     double lengthMm = 0.0;
     int wires = 0;
     QColor color;
@@ -189,6 +198,12 @@ struct SystemDesign {
     // A NEW CABLE from one port to another, named W1, W2...; its id (empty where either port is not there, or they are
     // the same port).
     QString addCable(const QString& aUnit, const QString& aPort, const QString& bUnit, const QString& bPort);
+    // A FURTHER END for a harness: a branch off it to one more port. False where the port is not there or already an end.
+    bool addBranch(const QString& cable, const QString& unit, const QString& port);
+    // COPY AND PASTE: units (with everything inside them), the cables among them and notes, as a piece of a design; that
+    // piece put in, moved by an offset, everything given fresh ids and names that are free. The ids put in.
+    QJsonObject copyPiece(const QStringList& units, const QStringList& cables, const QStringList& notes) const;
+    QStringList pastePiece(const QJsonObject& piece, const QPointF& offset);
     // A unit taken away with its cables and every unit inside it; a port with its cables; a cable.
     // Keeping contents promotes immediate children to this unit's parent without moving them.
     void removeUnit(const QString& id, bool removeContents = true);
