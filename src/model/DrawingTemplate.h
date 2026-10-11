@@ -90,7 +90,7 @@ struct TemplateField {
 // table with three columns is not a table with seven and four of them blank.
 struct TemplateRevisions {
     bool enabled = true;
-    int rows = 5;                // blank rows to start with
+    int rows = 4;                // blank rows to start with
     double rowHeightMm = 7.0;
     double textHeight = 2.6;
 
@@ -124,6 +124,10 @@ struct TemplateTitleBlock {
     double heightMm = 56.0;
     double captionHeight = 2.6;   // the small printed captions (TITLE, DRAWN, ...)
     double valueHeight = 3.2;     // what is written in the boxes
+    // THE COMPANY BAND across the top of the title block: the logo's box on its left, the company's details - a long
+    // free text - beside it. A template saved before it had one keeps none.
+    bool companyBand = true;
+    double companyHeightMm = 20.0;
 };
 
 struct DrawingTemplate {
@@ -138,6 +142,13 @@ struct DrawingTemplate {
     TemplateSignature drawn;
     TemplateSignature checked;
     TemplateSignature approved;
+
+    // THE DRAWING SCALE written in the title block's SCALE box ("1:1", "1:2", "NTS"), THE COMPANY'S DETAILS for its band
+    // (lines of free text), and THE LOGO in the band's box (the picture's bytes, as they came, and their format).
+    QString scale = QStringLiteral("1:1");
+    QString company;
+    QByteArray logo;
+    QString logoFormat;
 
     // The grid reference frame round the border.
     TemplateZones zones;

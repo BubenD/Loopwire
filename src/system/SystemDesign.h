@@ -171,6 +171,8 @@ struct SysSheet {
     // WHERE A FIELD'S TEXT COMES FROM, by its key: one of sysFieldSources() - the project's name, its drawing number,
     // the latest revision, the date... None: what is typed in `fields`.
     QJsonObject sources;
+    // A LOGO OF ITS OWN in the template's logo box (PNG); none: the template's, where it has one.
+    QByteArray logo;
     QJsonArray layers;          // the template's layers, its frame's colours with them
     bool empty() const { return name.isEmpty(); }
     QRectF rect() const { return QRectF(x, y, widthMm * scale, heightMm * scale); }

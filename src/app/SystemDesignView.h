@@ -20,6 +20,7 @@ class QLineEdit;
 class QListWidget;
 class QPushButton;
 class QSlider;
+class QSplitter;
 class QSpinBox;
 class QToolButton;
 class QStackedWidget;
@@ -40,6 +41,8 @@ struct SysPdfOptions {
     bool portrait = false;
     double marginMm = 0.0;
     bool blackWhite = false;
+    // THE SHEETS THAT GO OUT, in the order they go (0 the first sheet): none - every one, in the design's order.
+    QList<int> sheets;
 };
 
 
@@ -166,6 +169,14 @@ public:
     void setRevisionAlign(int column, const QString& code);
     // A TITLE BLOCK FIELD'S NAME, said plainly ("scale": "Drawing scale"), and what it is for.
     static QString sheetFieldName(const QString& key);
+    // A NEW SHEET'S BOXES the design fills where nothing is typed: SHEET n of m, REV, who drew, checked, approved and when.
+    static void defaultSources(SysSheet& s);
+    // THE SHEET CHOSEN'S OWN LOGO, from a picture file (asked for where none is given); taken away.
+    bool setSheetLogo(const QString& path = QString());
+    void removeSheetLogo();
+    // THE CABLE LIST, THE CHECK AND THE CONNECTIONS in a window of their own, or back under the diagram.
+    void setChecksInWindow(bool on);
+    bool checksInWindow() const { return checksWindow_ != nullptr; }
     static QString sheetFieldTip(const QString& key);
     // THE TEMPLATES THERE ARE TO CHOOSE FROM: those installed, by name, each with its file - and the plain sheets built in
     // ("builtin:A3").
@@ -259,6 +270,10 @@ private:
     QComboBox* sheetPick_ = nullptr;
     QTableWidget* revisions_ = nullptr;
     QComboBox* revisionAlign_ = nullptr;
+    QDialog* checksWindow_ = nullptr;   // the tabs' own window, while they are in it. Not saved.
+    QToolButton* checksPop_ = nullptr;
+    QSplitter* outer_ = nullptr;
+    void putChecksBack();
     int sheetAt_ = 0;   // the sheet the panel works on. Not saved.
     QString designPath_;
     SysSheet* chosenSheet();

@@ -670,6 +670,8 @@ private:
     QDoubleSpinBox* tplZoneSizeSpin_ = nullptr;
     QCheckBox* tplRevChk_ = nullptr;
     QSpinBox* tplRevRowsSpin_ = nullptr;
+    QComboBox* tplScaleBox_ = nullptr;
+    QCheckBox* tplCompanyChk_ = nullptr;
     QLabel* tplRibbonInfo_ = nullptr;
     bool tplRibbonSyncing_ = false;
     // The template being drawn, so the ribbon can change it and the save can write it.

@@ -146,6 +146,17 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
         connect(drop, &QPushButton::clicked, this, [this] { removeSheet(); });
         buttons->addWidget(choose);
         buttons->addWidget(drop);
+        // ITS LOGO, in the template's logo box: one of the sheet's own, or the template's.
+        auto* logo = new QPushButton(QStringLiteral("Logo..."), sheetBox);
+        logo->setObjectName(QStringLiteral("systemSheetLogo"));
+        logo->setToolTip(QStringLiteral("A picture - the company's logo - in the title block's logo box on this sheet"));
+        connect(logo, &QPushButton::clicked, this, [this] { setSheetLogo(); });
+        auto* noLogo = new QPushButton(QStringLiteral("No logo"), sheetBox);
+        noLogo->setObjectName(QStringLiteral("systemSheetLogoRemove"));
+        noLogo->setToolTip(QStringLiteral("This sheet's own logo taken away - the template's shows, where it has one"));
+        connect(noLogo, &QPushButton::clicked, this, [this] { removeSheetLogo(); });
+        buttons->addWidget(logo);
+        buttons->addWidget(noLogo);
         buttons->addStretch(1);
         sv->addLayout(buttons);
         sheetFields_ = new QWidget(sheetBox);
@@ -736,6 +747,16 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
         if (c && !c->drawing.isEmpty()) emit openRequested(c->drawing);
     });
     tabs_->addTab(connections_, QStringLiteral("Connections"));
+    // THE TABS IN A WINDOW OF THEIR OWN, and back.
+    checksPop_ = new QToolButton(tabs_);
+    checksPop_->setObjectName(QStringLiteral("systemChecksPop"));
+    checksPop_->setText(QStringLiteral("Open in a window"));
+    checksPop_->setToolTip(QStringLiteral("The cable list, the check and the connections in a window of their own - to keep in view "
+                                          "or put on another screen; closed, they are back under the diagram"));
+    checksPop_->setAutoRaise(true);
+    connect(checksPop_, &QToolButton::clicked, this, [this] { setChecksInWindow(checksWindow_ == nullptr); });
+    tabs_->setCornerWidget(checksPop_, Qt::TopRightCorner);
+    outer_ = outer;
     outer->addWidget(split);
     outer->addWidget(tabs_);
     outer->setStretchFactor(0, 4);
@@ -1717,9 +1738,15 @@ std::vector<PdfPage> pdfPages(const SystemDesign& d, const SysPdfOptions& o, con
     }
     if (what == SysPdfOptions::Sheets && d.sheetCount() == 0) what = SysPdfOptions::Whole;
     switch (what) {
-    case SysPdfOptions::Sheets:
-        for (int i = 0; i < d.sheetCount(); ++i) pages.push_back({d.sheetAt(i)->rect(), paper(d.sheetAt(i))});
+    case SysPdfOptions::Sheets: {
+        // IN THE ORDER ASKED FOR, those asked for - every sheet, in its own order, where none is said.
+        QList<int> order = o.sheets;
+        if (order.isEmpty())
+            for (int i = 0; i < d.sheetCount(); ++i) order << i;
+        for (const int i : order)
+            if (const SysSheet* s = d.sheetAt(i); s && !s->empty()) pages.push_back({s->rect(), paper(s)});
         break;
+    }
     case SysPdfOptions::Window: pages.push_back({window, paper(nullptr)}); break;
     case SysPdfOptions::Selected: pages.push_back({chosen.adjusted(-40, -40, 40, 40), paper(nullptr)}); break;
     case SysPdfOptions::Whole: pages.push_back({drawnBox(d).adjusted(-40, -40, 40, 40), paper(nullptr)}); break;
@@ -1853,6 +1880,31 @@ bool SystemDesignView::exportPdf(const QString& given) {
     auto* bw = new QCheckBox(QStringLiteral("Black on white"), &dialog);
     bw->setObjectName(QStringLiteral("systemPdfBlackWhite"));
     form->addRow(QString(), bw);
+    // THE SHEETS' ORDER: those ticked go out, top first - moved up and down.
+    auto* order = new QListWidget(&dialog);
+    order->setObjectName(QStringLiteral("systemPdfSheets"));
+    order->setToolTip(QStringLiteral("The sheets that go out, ticked, in the order they go - the top one first"));
+    order->setMaximumHeight(120);
+    for (int i = 0; i < design_.sheetCount(); ++i) {
+        auto* item = new QListWidgetItem(QStringLiteral("Sheet %1 - %2").arg(i + 1).arg(design_.sheetAt(i)->name), order);
+        item->setData(Qt::UserRole, i);
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        item->setCheckState(Qt::Checked);
+    }
+    auto* moves = new QHBoxLayout;
+    auto* up = new QPushButton(QStringLiteral("Up"), &dialog);
+    up->setObjectName(QStringLiteral("systemPdfSheetUp"));
+    auto* down = new QPushButton(QStringLiteral("Down"), &dialog);
+    down->setObjectName(QStringLiteral("systemPdfSheetDown"));
+    moves->addWidget(up);
+    moves->addWidget(down);
+    moves->addStretch(1);
+    auto* orderBox = new QWidget(&dialog);
+    auto* ov = new QVBoxLayout(orderBox);
+    ov->setContentsMargins(0, 0, 0, 0);
+    ov->addWidget(order);
+    ov->addLayout(moves);
+    form->addRow(QStringLiteral("Sheet order"), orderBox);
     auto* pages = new QLabel(&dialog);
     pages->setObjectName(QStringLiteral("systemPdfPages"));
     form->addRow(QStringLiteral("Pages"), pages);
@@ -1888,6 +1940,10 @@ bool SystemDesignView::exportPdf(const QString& given) {
         o.portrait = way->currentIndex() == 1;
         o.marginMm = margin->value();
         o.blackWhite = bw->isChecked();
+        for (int r = 0; r < order->count(); ++r)
+            if (order->item(r)->checkState() == Qt::Checked) o.sheets << order->item(r)->data(Qt::UserRole).toInt();
+        // None ticked: none to put out, not every one.
+        if (o.sheets.isEmpty() && order->count() > 0) o.sheets << -1;
         return o;
     };
     auto show = [&, options] {
@@ -1895,6 +1951,9 @@ bool SystemDesignView::exportPdf(const QString& given) {
         const int count = pdfPageCount(o);
         shown = std::clamp(shown, 0, std::max(0, count - 1));
         way->setEnabled(!o.paper.isEmpty());
+        order->setEnabled(o.what == SysPdfOptions::Sheets);
+        up->setEnabled(o.what == SysPdfOptions::Sheets && order->currentRow() > 0);
+        down->setEnabled(o.what == SysPdfOptions::Sheets && order->currentRow() >= 0 && order->currentRow() + 1 < order->count());
         pages->setText(QString::number(count));
         at->setText(QStringLiteral("Page %1 of %2").arg(count ? shown + 1 : 0).arg(count));
         back->setEnabled(shown > 0);
@@ -1905,6 +1964,18 @@ bool SystemDesignView::exportPdf(const QString& given) {
     for (QComboBox* c : {what, paper, way}) connect(c, &QComboBox::currentIndexChanged, &dialog, [&] { show(); });
     connect(margin, &QDoubleSpinBox::valueChanged, &dialog, [&] { show(); });
     connect(bw, &QCheckBox::toggled, &dialog, [&] { show(); });
+    auto move = [&](int by) {
+        const int row = order->currentRow();
+        if (row < 0 || row + by < 0 || row + by >= order->count()) return;
+        QListWidgetItem* item = order->takeItem(row);
+        order->insertItem(row + by, item);
+        order->setCurrentRow(row + by);
+        show();
+    };
+    connect(up, &QPushButton::clicked, &dialog, [&] { move(-1); });
+    connect(down, &QPushButton::clicked, &dialog, [&] { move(1); });
+    connect(order, &QListWidget::itemChanged, &dialog, [&] { show(); });
+    connect(order, &QListWidget::currentRowChanged, &dialog, [&] { show(); });
     connect(back, &QPushButton::clicked, &dialog, [&] { --shown; show(); });
     connect(next, &QPushButton::clicked, &dialog, [&] { ++shown; show(); });
     connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
@@ -1940,7 +2011,9 @@ QString SystemDesignView::sheetFieldName(const QString& key) {
     // WHAT A TITLE BLOCK'S FIELD IS CALLED HERE: its key said plainly; one of the template's own, as it is.
     static const std::pair<const char*, const char*> names[] = {
         {"title", "Title"}, {"drawingNo", "Drawing P/N"}, {"revision", "Revision"}, {"sheet", "Sheet number"},
-        {"scale", "Drawing scale"}, {"date", "Date"}, {"drawn", "Drawn by"}, {"checked", "Checked by"}, {"approved", "Approved by"}};
+        {"scale", "Drawing scale"}, {"date", "Date"}, {"drawn", "Drawn by"}, {"checked", "Checked by"}, {"approved", "Approved by"},
+        {"drawnBy", "Drawn by"}, {"checkedBy", "Checked by"}, {"approvedBy", "Approved by"}, {"drawnDate", "Drawn - date"},
+        {"checkedDate", "Checked - date"}, {"approvedDate", "Approved - date"}, {"company", "Company details"}};
     for (const auto& [k, name] : names)
         if (key == QLatin1String(k)) return QString::fromLatin1(name);
     return key;
@@ -1954,6 +2027,89 @@ QString SystemDesignView::sheetFieldTip(const QString& key) {
     if (key == QLatin1String("sheet")) return QStringLiteral("Which sheet this is of how many - 1 of 3 - in the title block's SHEET box");
     if (key == QLatin1String("drawingNo")) return QStringLiteral("The drawing's part number, in the title block's DRAWING No. box");
     return QString();
+}
+
+void SystemDesignView::defaultSources(SysSheet& s) {
+    // A NEW SHEET'S BOXES FILLED BY THE DESIGN where nothing is typed in them: the sheet n of m, the latest revision,
+    // and who drew, checked and approved it - the drawing dated with that revision (a check or an approval is dated when
+    // it is given).
+    static const std::pair<const char*, const char*> defaults[] = {
+        {"sheet", "sheet"}, {"revision", "revision"}, {"drawnBy", "drawn"}, {"checkedBy", "checked"}, {"approvedBy", "approved"},
+        {"drawnDate", "revisionDate"}};
+    QStringList keys;
+    for (const QJsonValue v : s.content) {
+        const QString key = v.toObject().value(QStringLiteral("field")).toString();
+        if (!key.isEmpty()) keys << key;
+    }
+    for (const auto& [key, source] : defaults) {
+        const QString k = QString::fromLatin1(key);
+        if (keys.contains(k) && !s.sources.contains(k) && s.fields.value(k).toString().isEmpty())
+            s.sources[k] = QString::fromLatin1(source);
+    }
+}
+
+bool SystemDesignView::setSheetLogo(const QString& given) {
+    SysSheet* s = chosenSheet();
+    if (!s || s->empty()) return false;
+    const QString path = given.isEmpty() ? QFileDialog::getOpenFileName(this, QStringLiteral("A logo"), QString(),
+                                                                        QStringLiteral("Pictures (*.png *.jpg *.jpeg *.bmp *.gif *.svg)"))
+                                         : given;
+    if (path.isEmpty()) return false;
+    const QImage picture(path);
+    if (picture.isNull()) {
+        if (given.isEmpty()) QMessageBox::warning(this, QStringLiteral("Logo"), QStringLiteral("%1 is not a picture").arg(path));
+        return false;
+    }
+    QByteArray png;
+    QBuffer buffer(&png);
+    buffer.open(QIODevice::WriteOnly);
+    picture.save(&buffer, "PNG");
+    aboutToChange();
+    chosenSheet()->logo = png;
+    commit();
+    return true;
+}
+
+void SystemDesignView::removeSheetLogo() {
+    SysSheet* s = chosenSheet();
+    if (!s || s->logo.isEmpty()) return;
+    aboutToChange();
+    chosenSheet()->logo.clear();
+    commit();
+}
+
+void SystemDesignView::setChecksInWindow(bool on) {
+    if (on == (checksWindow_ != nullptr)) return;
+    if (on) {
+        // THE CABLE LIST AND THE CHECK in a window of their own - to put on another screen - back under the diagram
+        // when it is closed.
+        checksWindow_ = new QDialog(this, Qt::Window);
+        checksWindow_->setObjectName(QStringLiteral("systemChecksWindow"));
+        checksWindow_->setWindowTitle(QStringLiteral("System design - cables, check and connections"));
+        checksWindow_->setAttribute(Qt::WA_DeleteOnClose);
+        auto* v = new QVBoxLayout(checksWindow_);
+        v->setContentsMargins(4, 4, 4, 4);
+        v->addWidget(tabs_);
+        tabs_->show();
+        checksWindow_->resize(std::max(700, tabs_->width()), 420);
+        connect(checksWindow_, &QDialog::finished, this, [this] {
+            checksWindow_ = nullptr;
+            putChecksBack();
+        });
+        checksWindow_->show();
+        if (checksPop_) checksPop_->setText(QStringLiteral("Back under the diagram"));
+    } else {
+        checksWindow_->close();
+    }
+}
+
+void SystemDesignView::putChecksBack() {
+    // Taken out of the window before it goes, and put back where it was.
+    if (!tabs_ || !outer_) return;
+    outer_->insertWidget(1, tabs_);
+    tabs_->show();
+    outer_->setSizes({4 * std::max(1, outer_->height()) / 5, std::max(1, outer_->height()) / 5});
+    if (checksPop_) checksPop_->setText(QStringLiteral("Open in a window"));
 }
 
 void SystemDesignView::setRevisionAlign(int column, const QString& code) {
@@ -2023,6 +2179,7 @@ bool SystemDesignView::applyTemplate(const QString& given, bool another) {
             sheet.y = last.y;
             sheet.fields = now->fields;
             sheet.sources = now->sources;
+            defaultSources(sheet);
             design_.moreSheets.push_back(sheet);
             sheetAt_ = design_.sheetCount() - 1;
         } else {
@@ -2032,6 +2189,7 @@ bool SystemDesignView::applyTemplate(const QString& given, bool another) {
             sheet.scale = now->scale;
             sheet.fields = now->fields;
             sheet.sources = now->sources;
+            defaultSources(sheet);
             *now = sheet;
         }
         commit();
@@ -2052,6 +2210,7 @@ bool SystemDesignView::applyTemplate(const QString& given, bool another) {
     if (!sheet.fields.contains(QStringLiteral("title")))
         sheet.fields[QStringLiteral("title")] = design_.name.isEmpty() ? QStringLiteral("System design") : design_.name;
     aboutToChange();
+    defaultSources(sheet);
     design_.sheet = sheet;
     sheetAt_ = 0;
     commit();
@@ -2231,6 +2390,23 @@ void SystemDesignView::fillSheetPanel() {
         });
         rh->addWidget(edit, 1);
         rh->addWidget(from);
+        // THE COMPANY'S DETAILS: lines of free text - written in a window of their own.
+        if (key == QLatin1String("company")) {
+            auto* more = new QToolButton(row);
+            more->setObjectName(QStringLiteral("systemSheetCompanyEdit"));
+            more->setText(QStringLiteral("..."));
+            more->setToolTip(QStringLiteral("The company's details, as many lines as they take"));
+            connect(more, &QToolButton::clicked, this, [this, key] {
+                const SysSheet* s = chosenSheet();
+                if (!s) return;
+                bool ok = false;
+                const QString text = QInputDialog::getMultiLineText(this, QStringLiteral("Company details"),
+                                                                    QStringLiteral("Name, address, phone, web..."),
+                                                                    design_.sheetTexts(*s).value(key).toString(), &ok);
+                if (ok) QTimer::singleShot(0, this, [this, key, text] { setSheetField(key, text); });
+            });
+            rh->addWidget(more);
+        }
         const QString tip = sheetFieldTip(key);
         if (!tip.isEmpty()) edit->setToolTip(tip);
         auto* name = new QLabel(sheetFieldName(key), sheetFields_);

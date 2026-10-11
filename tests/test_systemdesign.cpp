@@ -40,6 +40,8 @@
 #include <QFileInfo>
 #include <QXmlStreamReader>
 #include <QComboBox>
+#include <QBuffer>
+#include <tuple>
 #include <QDate>
 #include <QRegularExpression>
 #include <QSettings>
@@ -2736,6 +2738,121 @@ void testSheetPanelTyping() {
     }
 }
 
+void testTitleBlockAndSheetExtras(const QString& dir) {
+    // ---- THE TITLE BLOCK A TEMPLATE MAKES ----
+    DrawingTemplate tpl;
+    tpl.scale = QStringLiteral("1:5");
+    tpl.company = QStringLiteral("Acme Harness Ltd\n1 Wire Street");
+    auto content = [](const DrawingTemplate& t) {
+        QHash<QString, QString> fields;
+        int logoBoxes = 0, logos = 0, revRows = 0;
+        for (const QJsonValue v : defaultSheetContent(t)) {
+            const QJsonObject e = v.toObject();
+            if (const QString key = e.value(QStringLiteral("field")).toString(); !key.isEmpty())
+                fields.insert(key, e.value(QStringLiteral("text")).toString());
+            if (e.value(QStringLiteral("logoBox")).toBool()) ++logoBoxes;
+            if (e.value(QStringLiteral("logo")).toBool()) ++logos;
+            if (e.value(QStringLiteral("revisionTable")).toBool()) revRows = e.value(QStringLiteral("rows")).toInt() - 1;
+        }
+        return std::tuple{fields, logoBoxes, logos, revRows};
+    };
+    {
+        const auto [fields, logoBoxes, logos, revRows] = content(tpl);
+        check(fields.contains(QStringLiteral("sheet")) && fields.contains(QStringLiteral("revision")) &&
+                  fields.value(QStringLiteral("scale")) == QLatin1String("1:5"),
+              "title block: small boxes of their own for REV, SCALE and SHEET - the scale the template's");
+        bool dated = true;
+        for (const char* k : {"drawnBy", "drawnDate", "checkedBy", "checkedDate", "approvedBy", "approvedDate"})
+            dated = dated && fields.contains(QString::fromLatin1(k));
+        check(dated, "title block: drawn, checked and approved each a name and a date of its own");
+        check(fields.value(QStringLiteral("company")).contains(QLatin1String("Wire Street")) && logoBoxes == 1 && logos == 0,
+              "title block: the company band - the logo's box, and the company's details as written");
+        check(revRows == 4, "title block: the revision table shows four rows");
+    }
+    QImage mark(40, 20, QImage::Format_ARGB32);
+    mark.fill(QColor(200, 30, 40));
+    QByteArray png;
+    {
+        QBuffer buffer(&png);
+        buffer.open(QIODevice::WriteOnly);
+        mark.save(&buffer, "PNG");
+    }
+    tpl.logo = png;
+    tpl.logoFormat = QStringLiteral("png");
+    check(std::get<2>(content(tpl)) == 1, "title block: the template's logo in its box");
+    DrawingTemplate back;
+    back.fromJson(tpl.toJson());
+    check(back.scale == QLatin1String("1:5") && back.company == tpl.company && back.logo == png && back.titleBlock.companyBand,
+          "template: its scale, company, logo and band saved and read back");
+    QJsonObject old = tpl.toJson();
+    old.remove(QStringLiteral("scale"));
+    QJsonObject oldBlock = old.value(QStringLiteral("titleBlock")).toObject();
+    oldBlock.remove(QStringLiteral("companyBand"));
+    old[QStringLiteral("titleBlock")] = oldBlock;
+    DrawingTemplate older;
+    older.fromJson(old);
+    check(!older.titleBlock.companyBand && older.scale.isEmpty(), "template: one saved before - no company band, no scale said");
+
+    // ---- A SYSTEM SHEET: SHEET n of m and the signatures from the design, a logo of its own, the company ----
+    QJsonObject stored;
+    SystemDesignView view;
+    view.setStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    view.resize(1100, 700);
+    view.show();
+    QApplication::processEvents();
+    SystemDesign& d = view.design();
+    d.addUnit(0, 0);
+    view.applyTemplate(QStringLiteral("builtin:A3"));
+    view.addRevision();
+    SysRevision r = d.revisions[0];
+    r.drawn = QStringLiteral("E. Pi");
+    view.setRevision(0, r);
+    view.applyTemplate(QStringLiteral("builtin:A3"), true);
+    check(d.sheet.sources.value(QStringLiteral("sheet")).toString() == QLatin1String("sheet") &&
+              d.sheetTexts(d.moreSheets[0]).value(QStringLiteral("sheet")).toString() == QLatin1String("2 of 2") &&
+              d.sheetTexts(d.sheet).value(QStringLiteral("sheet")).toString() == QLatin1String("1 of 2"),
+          "sheet: its SHEET box says 1 of 2, the next 2 of 2");
+    check(d.sheetTexts(d.sheet).value(QStringLiteral("drawnBy")).toString() == QLatin1String("E. Pi") &&
+              d.sheetTexts(d.sheet).value(QStringLiteral("drawnDate")).toString() == r.date,
+          "sheet: drawn by and its date from the latest revision");
+    const QString logoFile = dir + QStringLiteral("/logo.png");
+    mark.save(logoFile);
+    view.setCurrentSheet(0);
+    check(view.setSheetLogo(logoFile) && !d.sheet.logo.isEmpty(), "sheet: a logo of its own");
+    int logos = 0;
+    for (const QJsonValue v : d.sheetContent(d.sheet)) logos += v.toObject().value(QStringLiteral("logo")).toBool() ? 1 : 0;
+    check(logos == 1, "sheet: the logo in the title block's logo box");
+    view.setSheetField(QStringLiteral("company"), QStringLiteral("Acme\nStreet 1"));
+    check(d.sheetTexts(d.sheet).value(QStringLiteral("company")).toString() == QLatin1String("Acme\nStreet 1"),
+          "sheet: the company's details, two lines");
+    if (const QString shots = qEnvironmentVariable("EDRAW_SHOT_DIR"); !shots.isEmpty()) {
+        SysPdfOptions first;
+        first.sheets = {0};
+        view.pdfPage(first, 0, 1600).save(shots + QStringLiteral("/title-block.png"));
+    }
+
+    // ---- THE PDF: the sheets in the order asked for, only those asked for ----
+    SysPdfOptions all, second;
+    second.sheets = {1};
+    check(view.pdfPageCount(second) == 1 && view.pdfPage(second, 0, 300) == view.pdfPage(all, 1, 300),
+          "pdf: the second sheet alone - its page");
+    SysPdfOptions reversed;
+    reversed.sheets = {1, 0};
+    check(view.pdfPageCount(reversed) == 2 && view.pdfPage(reversed, 0, 300) == view.pdfPage(all, 1, 300) &&
+              view.pdfPage(reversed, 1, 300) == view.pdfPage(all, 0, 300),
+          "pdf: the sheets in the order asked for - the second first");
+
+    // ---- THE CHECK IN A WINDOW OF ITS OWN, and back ----
+    auto* tabs = view.findChild<QTabWidget*>(QStringLiteral("systemTabs"));
+    view.setChecksInWindow(true);
+    QApplication::processEvents();
+    check(view.checksInWindow() && tabs && tabs->window() != view.window(), "check window: the tabs in a window of their own");
+    view.setChecksInWindow(false);
+    QApplication::processEvents();
+    check(!view.checksInWindow() && tabs && tabs->window() == view.window() && view.isAncestorOf(tabs),
+          "check window: closed - the tabs back under the diagram");
+}
+
 void testRecoveryCopies() {
     QTemporaryDir folder;
     QSettings().remove(QStringLiteral("recovery/files"));
@@ -2837,6 +2954,10 @@ int run_systemdesign_tests() {
     testHarnessInkByGround();
     testView3DSideNarrow();
     testSheetPanelTyping();
+    {
+        QTemporaryDir extrasDir;
+        testTitleBlockAndSheetExtras(extrasDir.path());
+    }
     {
         QTemporaryDir pdfDir;
         testSheetsRevisionsAndPdf(pdfDir.path());

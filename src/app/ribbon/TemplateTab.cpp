@@ -21,6 +21,12 @@
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QApplication>
+#include <QFile>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QInputDialog>
+#include <QSignalBlocker>
 #include <QDoubleSpinBox>
 #include <QFrame>
 #include <QGridLayout>
@@ -134,6 +140,69 @@ void MainWindow::buildTemplateRibbonTab() {
         g->addWidget(caption(w, QStringLiteral("Rows")), 1, 0);
         g->addWidget(tplRevRowsSpin_, 1, 1);
         group(QStringLiteral("Revisions"), w);
+    }
+
+    // ---- The title block: its drawing scale, and the company band - a logo and the company's details ----
+    {
+        auto* w = new QWidget(templateTab_);
+        auto* g = new QGridLayout(w);
+        g->setContentsMargins(0, 0, 0, 0);
+        g->setSpacing(2);
+        tplScaleBox_ = new QComboBox(w);
+        tplScaleBox_->setObjectName(QStringLiteral("tplScale"));
+        tplScaleBox_->setEditable(true);
+        tplScaleBox_->addItems({QStringLiteral("1:1"), QStringLiteral("1:2"), QStringLiteral("1:5"), QStringLiteral("1:10"),
+                                QStringLiteral("2:1"), QStringLiteral("5:1"), QStringLiteral("NTS")});
+        tplScaleBox_->setToolTip(QStringLiteral("The drawing scale written in the title block's SCALE box - how big things are on the "
+                                                "paper to how big they are: 1:1, 1:2... NTS: not to scale"));
+        connect(tplScaleBox_, &QComboBox::currentTextChanged, this, [this](const QString&) {
+            if (!tplRibbonSyncing_) applyTemplateRibbon();
+        });
+        tplCompanyChk_ = new QCheckBox(QStringLiteral("Company band"), w);
+        tplCompanyChk_->setObjectName(QStringLiteral("tplCompanyBand"));
+        tplCompanyChk_->setToolTip(QStringLiteral("A band over the title block: the logo's box and the company's details beside it"));
+        connect(tplCompanyChk_, &QCheckBox::toggled, this, [this](bool) {
+            if (!tplRibbonSyncing_) applyTemplateRibbon();
+        });
+        auto* logo = new QToolButton(w);
+        logo->setObjectName(QStringLiteral("tplLogo"));
+        logo->setText(QStringLiteral("Logo..."));
+        logo->setAutoRaise(true);
+        logo->setToolTip(QStringLiteral("A picture for the logo box - a click with Shift held takes it away"));
+        connect(logo, &QToolButton::clicked, this, [this] {
+            if (QApplication::keyboardModifiers() & Qt::ShiftModifier) {
+                tplBeingDrawn_.logo.clear();
+            } else {
+                const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("The logo"), QString(),
+                                                                  QStringLiteral("Pictures (*.png *.jpg *.jpeg *.bmp *.gif)"));
+                QFile f(path);
+                if (path.isEmpty() || !f.open(QIODevice::ReadOnly)) return;
+                tplBeingDrawn_.logo = f.readAll();
+                tplBeingDrawn_.logoFormat = QFileInfo(path).suffix().toLower();
+            }
+            if (tplCompanyChk_) { const QSignalBlocker quiet(tplCompanyChk_); tplCompanyChk_->setChecked(true); }
+            applyTemplateRibbon();
+        });
+        auto* company = new QToolButton(w);
+        company->setObjectName(QStringLiteral("tplCompany"));
+        company->setText(QStringLiteral("Company..."));
+        company->setAutoRaise(true);
+        company->setToolTip(QStringLiteral("The company's details in the band - name, address, phone, web - as many lines as they take"));
+        connect(company, &QToolButton::clicked, this, [this] {
+            bool ok = false;
+            const QString text = QInputDialog::getMultiLineText(this, QStringLiteral("Company details"),
+                                                                QStringLiteral("Name, address, phone, web..."), tplBeingDrawn_.company, &ok);
+            if (!ok) return;
+            tplBeingDrawn_.company = text;
+            if (tplCompanyChk_) { const QSignalBlocker quiet(tplCompanyChk_); tplCompanyChk_->setChecked(true); }
+            applyTemplateRibbon();
+        });
+        g->addWidget(caption(w, QStringLiteral("Scale")), 0, 0);
+        g->addWidget(tplScaleBox_, 0, 1);
+        g->addWidget(tplCompanyChk_, 1, 0, 1, 2);
+        g->addWidget(logo, 0, 2);
+        g->addWidget(company, 1, 2);
+        group(QStringLiteral("Title block"), w);
     }
 
     // ---- What it came out as, and everything else in the template window ----
@@ -395,6 +464,8 @@ void MainWindow::syncTemplateRibbon() {
         tplZoneSizeSpin_->setValue(tplBeingDrawn_.zones.sizeMm);
         tplZoneSizeSpin_->setEnabled(tplBeingDrawn_.zones.enabled);
     }
+    if (tplScaleBox_) tplScaleBox_->setCurrentText(tplBeingDrawn_.scale);
+    if (tplCompanyChk_) tplCompanyChk_->setChecked(tplBeingDrawn_.titleBlock.companyBand);
     if (tplRevChk_) tplRevChk_->setChecked(tplBeingDrawn_.revisions.enabled);
     if (tplRevRowsSpin_) {
         tplRevRowsSpin_->setValue(tplBeingDrawn_.revisions.rows);
@@ -428,6 +499,8 @@ void MainWindow::applyTemplateRibbon() {
     if (tplZoneSizeSpin_) tplBeingDrawn_.zones.sizeMm = tplZoneSizeSpin_->value();
     if (tplRevChk_) tplBeingDrawn_.revisions.enabled = tplRevChk_->isChecked();
     if (tplRevRowsSpin_) tplBeingDrawn_.revisions.rows = tplRevRowsSpin_->value();
+    if (tplScaleBox_) tplBeingDrawn_.scale = tplScaleBox_->currentText().trimmed();
+    if (tplCompanyChk_) tplBeingDrawn_.titleBlock.companyBand = tplCompanyChk_->isChecked();
 
     // Only what is still exactly as the generator made it is replaced. Anything drawn by hand - a
     // logo, a note, a border of someone's own - is kept, and so is any generated line the user has

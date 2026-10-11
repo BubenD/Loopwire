@@ -2,6 +2,7 @@
 
 #include "io/AppPaths.h"
 #include "model/Document.h"
+#include "model/Picture.h"
 
 #include <QDate>
 #include <QDir>
@@ -207,6 +208,12 @@ QJsonObject DrawingTemplate::toJson() const {
     writeSig("checked", checked);
     writeSig("approved", approved);
     o[QStringLiteral("signatures")] = sigs;
+    o[QStringLiteral("scale")] = scale;
+    if (!company.isEmpty()) o[QStringLiteral("company")] = company;
+    if (!logo.isEmpty()) {
+        o[QStringLiteral("logo")] = QString::fromLatin1(logo.toBase64());
+        o[QStringLiteral("logoFormat")] = logoFormat;
+    }
 
     QJsonObject z;
     z[QStringLiteral("enabled")] = zones.enabled;
@@ -239,6 +246,8 @@ QJsonObject DrawingTemplate::toJson() const {
     tb[QStringLiteral("heightMm")] = titleBlock.heightMm;
     tb[QStringLiteral("captionHeight")] = titleBlock.captionHeight;
     tb[QStringLiteral("valueHeight")] = titleBlock.valueHeight;
+    tb[QStringLiteral("companyBand")] = titleBlock.companyBand;
+    tb[QStringLiteral("companyHeightMm")] = titleBlock.companyHeightMm;
     o[QStringLiteral("titleBlock")] = tb;
 
     QJsonArray fs;
@@ -299,6 +308,11 @@ void DrawingTemplate::fromJson(const QJsonObject& root) {
     drawn = readSig("drawn");
     checked = readSig("checked");
     approved = readSig("approved");
+    // A TEMPLATE FROM BEFORE: no scale said, no company, no logo.
+    scale = root.value(QStringLiteral("scale")).toString();
+    company = root.value(QStringLiteral("company")).toString();
+    logo = QByteArray::fromBase64(root.value(QStringLiteral("logo")).toString().toLatin1());
+    logoFormat = root.value(QStringLiteral("logoFormat")).toString(QStringLiteral("png"));
 
     const QJsonObject z = root.value(QStringLiteral("zones")).toObject();
     zones.enabled = z.value(QStringLiteral("enabled")).toBool(true);
@@ -333,6 +347,8 @@ void DrawingTemplate::fromJson(const QJsonObject& root) {
     titleBlock.heightMm = tb.value(QStringLiteral("heightMm")).toDouble(56.0);
     titleBlock.captionHeight = tb.value(QStringLiteral("captionHeight")).toDouble(2.6);
     titleBlock.valueHeight = tb.value(QStringLiteral("valueHeight")).toDouble(3.2);
+    titleBlock.companyBand = tb.value(QStringLiteral("companyBand")).toBool(false);
+    titleBlock.companyHeightMm = tb.value(QStringLiteral("companyHeightMm")).toDouble(20.0);
 
     fields.clear();
     for (const auto v : root.value(QStringLiteral("fields")).toArray()) {
@@ -591,13 +607,17 @@ QJsonArray defaultSheetContent(const DrawingTemplate& tpl) {
     // Bottom band first, so approval sits at the bottom the way it is signed.
     const Row rows[] = {{"APPROVED", &tpl.approved}, {"CHECKED", &tpl.checked},
                         {"DRAWN", &tpl.drawn}};
+    // EACH SIGNATURE ITS NAME AND ITS OWN DATE, boxes to fill in ("drawnBy", "drawnDate"...): the template's name and date
+    // to start with, where it says them; otherwise left empty to be filled in, as an unapproved drawing should look.
+    const char* sigKeys[] = {"approved", "checked", "drawn"};
     for (int i = 0; i < 3; ++i) {
         const double top = tbY + (i + 1) * band - pad;
         add(text(tbX + pad, top, QString::fromLatin1(rows[i].label), capH));
-        // The name and the date go in only when the template says them; otherwise the cell is left
-        // empty to be filled in on the sheet, which is what an unapproved drawing should look like.
-        if (!rows[i].sig->name.isEmpty()) add(text(nameX + pad, top, rows[i].sig->name, valH));
-        if (!rows[i].sig->date.isEmpty()) add(text(dateX + pad, top, rows[i].sig->date, valH));
+        add(text(dateX + pad, top, QStringLiteral("DATE"), capH));
+        const QString key = QString::fromLatin1(sigKeys[i]);
+        add(field(nameX + pad, top - 1.0, {key + QStringLiteral("By"), QString::fromLatin1(rows[i].label), rows[i].sig->name, valH, true}));
+        add(field(dateX + pad, top - capH - 1.5, {key + QStringLiteral("Date"), QString::fromLatin1(rows[i].label) + QStringLiteral(" DATE"),
+                                                  rows[i].sig->date, valH * 0.9, true}));
     }
     // The top band, and the numbering column beside it.
     const double titleTop = tbY + tbH - pad;
@@ -610,19 +630,65 @@ QJsonArray defaultSheetContent(const DrawingTemplate& tpl) {
         add(text(tbX + sigW + pad, titleTop, f->label, capH));
         add(field(tbX + sigW + pad + 2.0, titleTop - capH - 1.5, *f));
     }
-    add(text(tbX + sigW + pad, tbY + tbH / 2.0 - pad, QStringLiteral("REV / SHEET"), capH));
-    double revLine = tbY + tbH / 2.0 - pad - capH - 1.0;
-    if (!tpl.revision.isEmpty()) {
-        add(text(tbX + sigW + pad, revLine, QStringLiteral("Rev %1").arg(tpl.revision), valH));
-        revLine -= valH + 1.0;
+    // THE NUMBERING COLUMN'S LOWER HALF: three small boxes of their own - REV, SCALE (the template's drawing scale, to
+    // start with) and SHEET (n of m) - each its caption over its value.
+    {
+        const double numX = tbX + sigW, numW = w - inset - numX, cellW = numW / 3.0, cellTop = tbY + tbH / 2.0;
+        add(line(numX + cellW, tbY, numX + cellW, cellTop));
+        add(line(numX + 2.0 * cellW, tbY, numX + 2.0 * cellW, cellTop));
+        TemplateField rev{QStringLiteral("revision"), QStringLiteral("REV"), QString(), valH, true};
+        TemplateField scaleField{QStringLiteral("scale"), QStringLiteral("SCALE"), tpl.scale, valH, true};
+        if (const TemplateField* f = fieldByKey("scale")) {
+            scaleField.label = f->label;
+            if (!f->value.isEmpty()) scaleField.value = f->value;
+        }
+        TemplateField sheetField{QStringLiteral("sheet"), QStringLiteral("SHEET"), QString(), valH, true};
+        if (const TemplateField* f = fieldByKey("sheet")) sheetField.value = f->value;
+        const TemplateField* cells[] = {&rev, &scaleField, &sheetField};
+        for (int i = 0; i < 3; ++i) {
+            if (!cells[i]) continue;
+            const double x = numX + i * cellW;
+            add(text(x + pad, cellTop - pad, cells[i]->label, capH));
+            TemplateField value = *cells[i];
+            value.textHeight = valH;
+            add(field(x + pad + 1.0, cellTop - pad - capH - 2.0, value));
+        }
     }
-    if (const TemplateField* f = fieldByKey("sheet")) add(field(tbX + sigW + pad, revLine, *f));
-    if (const TemplateField* f = fieldByKey("scale"))
-        add(field(tbX + sigW + pad + 34.0, revLine, *f));
+    // THE COMPANY BAND over the title block: the logo's box on the left - the template's logo in it, where it has one -
+    // and the company's details, a free text of as many lines as it takes, beside it.
+    double above = tbY + tbH;
+    if (tpl.titleBlock.companyBand) {
+        const double cH = std::clamp(tpl.titleBlock.companyHeightMm, 8.0, h * 0.3);
+        const double logoW = std::min(cH * 1.8, tbW * 0.3);
+        add(rect(tbX, above, w - inset, above + cH));
+        Entity box = rect(tbX, above, tbX + logoW, above + cH);
+        box.meta.insert(QStringLiteral("logoBox"), true);   // so the logo can be put in it, the template's or a sheet's
+        add(box);
+        if (!tpl.logo.isEmpty()) {
+            Entity logo = makePictureEntity(tpl.logo, tpl.logoFormat.isEmpty() ? QStringLiteral("png") : tpl.logoFormat,
+                                            QStringLiteral("Logo"));
+            if (logo.type == EntityType::Image) {
+                const double pw = logo.meta.value(QStringLiteral("imagePixW")).toDouble(1.0);
+                const double ph = logo.meta.value(QStringLiteral("imagePixH")).toDouble(1.0);
+                const double room = 1.5, bw = logoW - 2 * room, bh = cH - 2 * room;
+                const double k = std::min(bw / std::max(1.0, pw), bh / std::max(1.0, ph));
+                const double lw = pw * k, lh = ph * k, lx = tbX + room + (bw - lw) / 2.0, ly = above + room + (bh - lh) / 2.0;
+                logo.points = {{lx, ly}, {lx + lw, ly}, {lx + lw, ly + lh}, {lx, ly + lh}};
+                logo.meta.insert(QStringLiteral("logo"), true);
+                add(logo);
+            }
+        }
+        TemplateField details{QStringLiteral("company"), QStringLiteral("COMPANY"), tpl.company, valH * 0.85, true};
+        Entity text = field(tbX + logoW + pad, above + cH - pad, details);
+        text.meta.insert(QStringLiteral("boxWidth"), tbW - logoW - 2.0 * pad);
+        text.meta.insert(QStringLiteral("boxHeight"), cH - 2.0 * pad);
+        add(text);
+        above += cH;
+    }
     // Anything the template adds beyond the built-in boxes is stacked up the left of the title block,
     // so a field added by hand still lands somewhere sensible rather than at the origin.
     {
-        double y = tbY + tbH + 4.0;
+        double y = above + 4.0;
         for (const TemplateField& f : useFields) {
             if (f.builtIn) continue;
             add(text(tbX + pad, y + f.textHeight + 1.0, f.label, capH));

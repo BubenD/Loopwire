@@ -6,6 +6,7 @@
 #include "io/Dxf.h"
 #include "model/Document.h"
 #include "model/DrawingDetails.h"
+#include "model/Picture.h"
 #include "system/SystemRouting.h"
 #include "system/SystemExport.h"
 
@@ -866,6 +867,7 @@ QJsonObject sheetToJson(const SysSheet& s) {
                   {QStringLiteral("scale"), s.scale}, {QStringLiteral("fields"), s.fields},
                   {QStringLiteral("layers"), s.layers}};
     if (!s.sources.isEmpty()) o[QStringLiteral("sources")] = s.sources;
+    if (!s.logo.isEmpty()) o[QStringLiteral("logo")] = QString::fromLatin1(s.logo.toBase64());
     return o;
 }
 
@@ -881,6 +883,7 @@ SysSheet sheetFromJson(const QJsonObject& s) {
     out.fields = s.value(QStringLiteral("fields")).toObject();
     out.layers = s.value(QStringLiteral("layers")).toArray();
     out.sources = s.value(QStringLiteral("sources")).toObject();
+    out.logo = QByteArray::fromBase64(s.value(QStringLiteral("logo")).toString().toLatin1());
     return out;
 }
 
@@ -917,6 +920,7 @@ const std::vector<std::pair<QString, QString>>& sysFieldSources() {
         {QStringLiteral("revision"), QStringLiteral("Latest revision")},
         {QStringLiteral("revisionDate"), QStringLiteral("Latest revision's date")},
         {QStringLiteral("drawn"), QStringLiteral("Latest revision's drawn by")},
+        {QStringLiteral("checked"), QStringLiteral("Latest revision's checked by")},
         {QStringLiteral("approved"), QStringLiteral("Latest revision's approved by")},
         {QStringLiteral("today"), QStringLiteral("Today's date")},
         {QStringLiteral("sheet"), QStringLiteral("Sheet number (1 of 3)")},
@@ -940,6 +944,7 @@ QJsonObject SystemDesign::sheetTexts(const SysSheet& s) const {
         else if (source == QLatin1String("revision")) text = latest ? latest->rev : QString();
         else if (source == QLatin1String("revisionDate")) text = latest ? latest->date : QString();
         else if (source == QLatin1String("drawn")) text = latest ? latest->drawn : QString();
+        else if (source == QLatin1String("checked")) text = latest ? latest->checked : QString();
         else if (source == QLatin1String("approved")) text = latest ? latest->approved : QString();
         else if (source == QLatin1String("today")) text = QDate::currentDate().toString(Qt::ISODate);
         else if (source == QLatin1String("sheet")) text = QStringLiteral("%1 of %2").arg(index + 1).arg(sheetCount());
@@ -994,8 +999,29 @@ QJsonArray SystemDesign::sheetContent(const SysSheet& s) const {
                 }
             }
         }
+        // THE TEMPLATE'S OWN LOGO left out where the sheet has one of its own.
+        if (!s.logo.isEmpty() && meta.value(QStringLiteral("logo")).toBool()) continue;
         out.append(meta);
     }
+    // THE SHEET'S OWN LOGO, in the logo box: as big as it goes, kept to its shape, in the middle.
+    if (!s.logo.isEmpty())
+        for (const QJsonValue v : s.content) {
+            const Entity box = Entity::fromJson(v.toObject());
+            if (!box.meta.value(QStringLiteral("logoBox")).toBool() || box.points.size() < 4) continue;
+            Entity logo = makePictureEntity(s.logo, QStringLiteral("png"), QStringLiteral("Logo"));
+            if (logo.type != EntityType::Image) break;
+            double x0 = box.points[0].x, y0 = box.points[0].y, x1 = x0, y1 = y0;
+            for (const Vec2& p : box.points) { x0 = std::min(x0, p.x); y0 = std::min(y0, p.y); x1 = std::max(x1, p.x); y1 = std::max(y1, p.y); }
+            const double pw = std::max(1.0, logo.meta.value(QStringLiteral("imagePixW")).toDouble(1.0));
+            const double ph = std::max(1.0, logo.meta.value(QStringLiteral("imagePixH")).toDouble(1.0));
+            const double room = 1.5, bw = x1 - x0 - 2 * room, bh = y1 - y0 - 2 * room, k = std::min(bw / pw, bh / ph);
+            const double lw = pw * k, lh = ph * k, lx = x0 + room + (bw - lw) / 2.0, ly = y0 + room + (bh - lh) / 2.0;
+            logo.points = {{lx, ly}, {lx + lw, ly}, {lx + lw, ly + lh}, {lx, ly + lh}};
+            logo.layer = box.layer;
+            logo.meta.insert(QStringLiteral("logo"), true);
+            out.append(logo.toJson());
+            break;
+        }
     return out;
 }
 
