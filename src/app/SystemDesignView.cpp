@@ -55,6 +55,9 @@
 #include "model/Entity.h"
 #include <QPdfWriter>
 #include <QPageSize>
+#include <QTimer>
+#include <QDate>
+#include <QSignalBlocker>
 
 #include <algorithm>
 
@@ -72,6 +75,10 @@ QIcon fieldEyeIcon() {
 }
 
 const char* const kShown[4] = {"name", "pn", "rev", "desc"};
+// WHERE A UNIT'S PICTURE MAY SIT: what the list says, and what is saved.
+const std::pair<const char*, const char*> kPicturePlaces[] = {
+    {"Center", ""}, {"Top", "top"}, {"Bottom", "bottom"}, {"Left", "left"}, {"Right", "right"},
+    {"Top left", "top-left"}, {"Top right", "top-right"}, {"Bottom left", "bottom-left"}, {"Bottom right", "bottom-right"}};
 
 QLineEdit* field(QWidget* parent, const char* name, const QString& tip) {
     auto* e = new QLineEdit(parent);
@@ -112,6 +119,19 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
         auto* sheetBox = new QGroupBox(QStringLiteral("Sheet (template)"), page);
         sheetBox->setObjectName(QStringLiteral("systemSheetBox"));
         auto* sv = new QVBoxLayout(sheetBox);
+        // WHICH SHEET: each a template round its own part of the diagram, a page of its own in the PDF.
+        auto* pickRow = new QHBoxLayout;
+        sheetPick_ = new QComboBox(sheetBox);
+        sheetPick_->setObjectName(QStringLiteral("systemSheetPick"));
+        sheetPick_->setToolTip(QStringLiteral("The sheet these settings are for"));
+        connect(sheetPick_, &QComboBox::currentIndexChanged, this, [this](int i) { if (!filling_) setCurrentSheet(i); });
+        auto* addSheet = new QPushButton(QStringLiteral("Add sheet..."), sheetBox);
+        addSheet->setObjectName(QStringLiteral("systemSheetAdd"));
+        addSheet->setToolTip(QStringLiteral("Another sheet with a template of its choice, beside the last - a page more in the PDF"));
+        connect(addSheet, &QPushButton::clicked, this, [this] { applyTemplate(QString(), true); });
+        pickRow->addWidget(sheetPick_, 1);
+        pickRow->addWidget(addSheet);
+        sv->addLayout(pickRow);
         sheetName_ = new QLabel(sheetBox);
         sheetName_->setObjectName(QStringLiteral("systemSheetName"));
         sheetName_->setWordWrap(true);
@@ -132,6 +152,42 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
         new QFormLayout(sheetFields_);
         sv->addWidget(sheetFields_);
         v->addWidget(sheetBox);
+        // THE REVISIONS: the design's issues, oldest first - in every sheet's revision table, the last one the revision a
+        // field can take.
+        auto* revBox = new QGroupBox(QStringLiteral("Revisions"), page);
+        revBox->setObjectName(QStringLiteral("systemRevisionBox"));
+        auto* rv = new QVBoxLayout(revBox);
+        revisions_ = new QTableWidget(0, 7, revBox);
+        revisions_->setObjectName(QStringLiteral("systemRevisions"));
+        revisions_->setHorizontalHeaderLabels({QStringLiteral("Rev"), QStringLiteral("Change note"), QStringLiteral("ECO"),
+                                               QStringLiteral("Drawn"), QStringLiteral("Checked"), QStringLiteral("Approved"),
+                                               QStringLiteral("Date")});
+        revisions_->verticalHeader()->setVisible(false);
+        revisions_->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+        revisions_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+        revisions_->setMinimumHeight(110);
+        connect(revisions_, &QTableWidget::cellChanged, this, [this](int row, int) {
+            if (filling_ || row < 0 || row >= static_cast<int>(design_.revisions.size())) return;
+            SysRevision r;
+            QString* f[] = {&r.rev, &r.note, &r.eco, &r.drawn, &r.checked, &r.approved, &r.date};
+            for (int c = 0; c < 7; ++c)
+                if (const QTableWidgetItem* it = revisions_->item(row, c)) *f[c] = it->text().trimmed();
+            setRevision(row, r);
+        });
+        rv->addWidget(revisions_);
+        auto* revButtons = new QHBoxLayout;
+        auto* addRev = new QPushButton(QStringLiteral("Add revision"), revBox);
+        addRev->setObjectName(QStringLiteral("systemRevisionAdd"));
+        addRev->setToolTip(QStringLiteral("A revision after the last - the next letter or number, dated today"));
+        connect(addRev, &QPushButton::clicked, this, [this] { addRevision(); });
+        auto* dropRev = new QPushButton(QStringLiteral("Remove"), revBox);
+        dropRev->setObjectName(QStringLiteral("systemRevisionRemove"));
+        connect(dropRev, &QPushButton::clicked, this, [this] { removeRevision(revisions_->currentRow()); });
+        revButtons->addWidget(addRev);
+        revButtons->addWidget(dropRev);
+        revButtons->addStretch(1);
+        rv->addLayout(revButtons);
+        v->addWidget(revBox);
         v->addStretch(1);
         panel_->addWidget(page);
     }
@@ -281,6 +337,15 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
             if (!filling_) setUnitPictureScale(canvas_->selectedUnit(), v / 100.0);
         });
         pv->addWidget(unitPictureSize_);
+        // WHERE IN THE UNIT IT SITS: the middle, a side or a corner.
+        unitPictureAlign_ = new QComboBox(pictureBox);
+        unitPictureAlign_->setObjectName(QStringLiteral("systemUnitPictureAlign"));
+        unitPictureAlign_->setToolTip(QStringLiteral("Where the picture sits in the unit"));
+        for (const auto& [label, key] : kPicturePlaces) unitPictureAlign_->addItem(QString::fromLatin1(label), QString::fromLatin1(key));
+        connect(unitPictureAlign_, &QComboBox::currentIndexChanged, this, [this] {
+            if (!filling_) setUnitPictureAlign(canvas_->selectedUnit(), unitPictureAlign_->currentData().toString());
+        });
+        pv->addWidget(unitPictureAlign_);
         form->addRow(QStringLiteral("Picture"), pictureBox);
         v->addLayout(form);
         v->addWidget(new QLabel(QStringLiteral("<b>Ports</b> - connector and contact part numbers"), page));
@@ -956,6 +1021,8 @@ void SystemDesignView::syncPanel() {
             unitPictureEye_->setEnabled(!picture.isNull());
             unitPictureSize_->setValue(static_cast<int>(std::lround(u->pictureScale * 100.0)));
             unitPictureSize_->setEnabled(!picture.isNull());
+            unitPictureAlign_->setCurrentIndex(std::max(0, unitPictureAlign_->findData(u->pictureAlign)));
+            unitPictureAlign_->setEnabled(!picture.isNull());
         }
         if (opacityDragging_ != u->id) opacityDragging_.clear();
         ports_->setRowCount(static_cast<int>(u->ports.size()));
@@ -1546,6 +1613,14 @@ void SystemDesignView::setUnitPictureScale(const QString& unit, double scale) {
     emit changed();
 }
 
+void SystemDesignView::setUnitPictureAlign(const QString& unit, const QString& align) {
+    SysUnit* u = design_.unit(unit);
+    if (!u || u->pictureAlign == align) return;
+    aboutToChange();
+    design_.unit(unit)->pictureAlign = align;
+    commit();
+}
+
 bool SystemDesignView::saveUnitPicture(const QString& unit, const QString& given) {
     const SysUnit* u = design_.unit(unit);
     if (!u || u->picture.isEmpty()) return false;
@@ -1574,9 +1649,124 @@ QRectF drawnBox(const SystemDesign& d) {
     QRectF box;
     for (const SysUnit& u : d.units) box = box.united(u.rect());
     for (const SysNote& n : d.notes) box = box.united(QRectF(n.x, n.y, n.w, n.h));
-    if (!d.sheet.empty()) box = box.united(d.sheet.rect());
+    for (int i = 0; i < d.sheetCount(); ++i) box = box.united(d.sheetAt(i)->rect());
     return box.isEmpty() ? QRectF(0, 0, 800, 560) : box;
 }
+
+// A PAPER BY ITS NAME, upright, in millimetres; none for a name it does not know.
+QSizeF paperMm(const QString& name) {
+    static const std::pair<const char*, QSizeF> papers[] = {
+        {"A4", {210, 297}}, {"A3", {297, 420}}, {"A2", {420, 594}}, {"A1", {594, 841}}, {"A0", {841, 1189}},
+        {"Letter", {215.9, 279.4}}, {"Tabloid", {279.4, 431.8}}};
+    for (const auto& [n, size] : papers)
+        if (name == QLatin1String(n)) return size;
+    return {};
+}
+
+// A PAGE OF THE PDF: the part of the diagram on it, and the paper it is on.
+struct PdfPage {
+    QRectF world;
+    QSizeF paper;
+};
+
+std::vector<PdfPage> pdfPages(const SystemDesign& d, const SysPdfOptions& o, const QRectF& window, const QSet<QString>& selected) {
+    // THE PAPER: the one named, its way round; or as the sheet - the first, where the page is not a sheet - or A3 across.
+    auto paper = [&](const SysSheet* s) {
+        QSizeF size = paperMm(o.paper);
+        if (size.isEmpty()) {
+            if (!s && d.sheetCount() > 0) s = d.sheetAt(0);
+            return s ? QSizeF(s->widthMm, s->heightMm) : QSizeF(420, 297);
+        }
+        if (o.portrait != (size.height() > size.width())) size.transpose();
+        return size;
+    };
+    std::vector<PdfPage> pages;
+    SysPdfOptions::What what = o.what;
+    QRectF chosen;
+    if (what == SysPdfOptions::Selected) {
+        for (const SysUnit& u : d.units)
+            if (selected.contains(u.id)) chosen = chosen.united(u.rect());
+        if (chosen.isEmpty()) what = SysPdfOptions::Whole;
+    }
+    if (what == SysPdfOptions::Sheets && d.sheetCount() == 0) what = SysPdfOptions::Whole;
+    switch (what) {
+    case SysPdfOptions::Sheets:
+        for (int i = 0; i < d.sheetCount(); ++i) pages.push_back({d.sheetAt(i)->rect(), paper(d.sheetAt(i))});
+        break;
+    case SysPdfOptions::Window: pages.push_back({window, paper(nullptr)}); break;
+    case SysPdfOptions::Selected: pages.push_back({chosen.adjusted(-40, -40, 40, 40), paper(nullptr)}); break;
+    case SysPdfOptions::Whole: pages.push_back({drawnBox(d).adjusted(-40, -40, 40, 40), paper(nullptr)}); break;
+    }
+    return pages;
+}
+
+// ONE PAGE DRAWN: on white, inside its margin, the part of the diagram fitted to it - in black only, where asked.
+void paintPdfPage(QPainter& p, const SystemDesign& d, const PdfPage& page, const QSizeF& pagePx, double marginPx, bool blackWhite) {
+    SystemDesign paper = d;
+    paper.background = Qt::white;
+    if (blackWhite) {
+        for (SysUnit& u : paper.units) { u.color = Qt::white; u.picture.clear(); }
+        for (SysCable& c : paper.cables) c.color = Qt::black;
+        for (SysNote& n : paper.notes) n.color = Qt::white;
+        paper.designatorColor = Qt::black;
+    }
+    const QRectF area(marginPx, marginPx, pagePx.width() - 2 * marginPx, pagePx.height() - 2 * marginPx);
+    if (area.width() < 10 || area.height() < 10) return;
+    SystemCanvas shot;
+    shot.setDesign(&paper);
+    shot.setPlain(true);
+    shot.resize(area.size().toSize());
+    shot.fitRect(page.world);
+    const bool whiteWas = EntityRenderer::whitePaper();
+    EntityRenderer::setWhitePaper(true);
+    shot.render(&p, area.topLeft().toPoint());
+    EntityRenderer::setWhitePaper(whiteWas);
+}
+}
+
+int SystemDesignView::pdfPageCount(const SysPdfOptions& o) const {
+    return static_cast<int>(pdfPages(design_, o, canvas_->visibleWorld(), canvas_->selectedUnits()).size());
+}
+
+QImage SystemDesignView::pdfPage(const SysPdfOptions& o, int page, int longSide) const {
+    const auto pages = pdfPages(design_, o, canvas_->visibleWorld(), canvas_->selectedUnits());
+    if (page < 0 || page >= static_cast<int>(pages.size())) return QImage();
+    const QSizeF mm = pages[static_cast<size_t>(page)].paper;
+    const double k = longSide / std::max(mm.width(), mm.height());
+    QImage image(QSize(std::max(1, qRound(mm.width() * k)), std::max(1, qRound(mm.height() * k))), QImage::Format_ARGB32);
+    image.fill(Qt::white);
+    QPainter p(&image);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    paintPdfPage(p, design_, pages[static_cast<size_t>(page)], image.size(), o.marginMm * k, o.blackWhite);
+    p.end();
+    return image;
+}
+
+bool SystemDesignView::writePdf(const SysPdfOptions& o, const QString& path) const {
+    const auto pages = pdfPages(design_, o, canvas_->visibleWorld(), canvas_->selectedUnits());
+    if (pages.empty()) return false;
+    QPdfWriter writer(path);
+    writer.setTitle(design_.name.isEmpty() ? QStringLiteral("System design") : design_.name);
+    writer.setCreator(QStringLiteral("Edraw"));
+    writer.setResolution(96);
+    writer.setPageMargins(QMarginsF(0, 0, 0, 0));
+    // EACH PAGE ITS OWN PAPER: set before the page is begun.
+    auto size = [&](const PdfPage& pg) {
+        writer.setPageSize(QPageSize(pg.paper, QPageSize::Millimeter, QString(), QPageSize::ExactMatch));
+    };
+    size(pages.front());
+    QPainter painter;
+    if (!painter.begin(&writer)) return false;
+    const double k = 96.0 / 25.4;
+    for (size_t i = 0; i < pages.size(); ++i) {
+        if (i > 0) {
+            size(pages[i]);
+            writer.newPage();
+        }
+        paintPdfPage(painter, design_, pages[i], pages[i].paper * k, o.marginMm * k, o.blackWhite);
+    }
+    painter.end();
+    return QFileInfo(path).size() > 0;
 }
 
 bool SystemDesignView::exportPng(const QString& given) {
@@ -1603,37 +1793,107 @@ bool SystemDesignView::exportPng(const QString& given) {
 }
 
 bool SystemDesignView::exportPdf(const QString& given) {
-    const QString path = given.isEmpty() ? QFileDialog::getSaveFileName(this, QStringLiteral("The diagram as a PDF"),
-                                                                        (design_.name.isEmpty() ? QStringLiteral("system") : design_.name) + QStringLiteral(".pdf"),
-                                                                        QStringLiteral("PDF (*.pdf)"))
-                                         : given;
+    // A FILE GIVEN: every sheet a page, as its paper - or the whole diagram, where there is no sheet.
+    if (!given.isEmpty()) return writePdf(SysPdfOptions(), given);
+    // THE PDF WINDOW: what goes out, the paper and its way round, a margin, colour - and the pages as they will be.
+    QDialog dialog(this);
+    dialog.setObjectName(QStringLiteral("systemPdfDialog"));
+    dialog.setWindowTitle(QStringLiteral("PDF"));
+    auto* h = new QHBoxLayout(&dialog);
+    auto* form = new QFormLayout;
+    auto* what = new QComboBox(&dialog);
+    what->setObjectName(QStringLiteral("systemPdfWhat"));
+    what->addItem(QStringLiteral("Every sheet - a page each"), SysPdfOptions::Sheets);
+    what->addItem(QStringLiteral("The whole diagram"), SysPdfOptions::Whole);
+    what->addItem(QStringLiteral("What the window shows"), SysPdfOptions::Window);
+    what->addItem(QStringLiteral("The units selected"), SysPdfOptions::Selected);
+    if (design_.sheetCount() == 0) what->setCurrentIndex(1);
+    form->addRow(QStringLiteral("What"), what);
+    auto* paper = new QComboBox(&dialog);
+    paper->setObjectName(QStringLiteral("systemPdfPaper"));
+    paper->addItem(design_.sheetCount() > 0 ? QStringLiteral("As the sheet") : QStringLiteral("A3 (no sheet)"), QString());
+    for (const char* p : {"A4", "A3", "A2", "A1", "A0", "Letter", "Tabloid"}) paper->addItem(QString::fromLatin1(p), QString::fromLatin1(p));
+    form->addRow(QStringLiteral("Paper"), paper);
+    auto* way = new QComboBox(&dialog);
+    way->setObjectName(QStringLiteral("systemPdfOrientation"));
+    way->addItems({QStringLiteral("Landscape"), QStringLiteral("Portrait")});
+    form->addRow(QStringLiteral("Orientation"), way);
+    auto* margin = new QDoubleSpinBox(&dialog);
+    margin->setObjectName(QStringLiteral("systemPdfMargin"));
+    margin->setRange(0.0, 50.0);
+    margin->setSuffix(QStringLiteral(" mm"));
+    form->addRow(QStringLiteral("Margin"), margin);
+    auto* bw = new QCheckBox(QStringLiteral("Black on white"), &dialog);
+    bw->setObjectName(QStringLiteral("systemPdfBlackWhite"));
+    form->addRow(QString(), bw);
+    auto* pages = new QLabel(&dialog);
+    pages->setObjectName(QStringLiteral("systemPdfPages"));
+    form->addRow(QStringLiteral("Pages"), pages);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, &dialog);
+    QPushButton* save = buttons->addButton(QStringLiteral("Export..."), QDialogButtonBox::AcceptRole);
+    save->setObjectName(QStringLiteral("systemPdfExport"));
+    form->addRow(buttons);
+    h->addLayout(form);
+    // THE PREVIEW: a page at a time, with the way to the others under it.
+    auto* side = new QVBoxLayout;
+    auto* preview = new QLabel(&dialog);
+    preview->setObjectName(QStringLiteral("systemPdfPreview"));
+    preview->setMinimumSize(460, 340);
+    preview->setAlignment(Qt::AlignCenter);
+    preview->setStyleSheet(QStringLiteral("background:#5a6070;"));
+    side->addWidget(preview, 1);
+    auto* nav = new QHBoxLayout;
+    auto* back = new QPushButton(QStringLiteral("<"), &dialog);
+    auto* next = new QPushButton(QStringLiteral(">"), &dialog);
+    auto* at = new QLabel(&dialog);
+    nav->addStretch(1);
+    nav->addWidget(back);
+    nav->addWidget(at);
+    nav->addWidget(next);
+    nav->addStretch(1);
+    side->addLayout(nav);
+    h->addLayout(side, 1);
+    int shown = 0;
+    auto options = [=] {
+        SysPdfOptions o;
+        o.what = static_cast<SysPdfOptions::What>(what->currentData().toInt());
+        o.paper = paper->currentData().toString();
+        o.portrait = way->currentIndex() == 1;
+        o.marginMm = margin->value();
+        o.blackWhite = bw->isChecked();
+        return o;
+    };
+    auto show = [&, options] {
+        const SysPdfOptions o = options();
+        const int count = pdfPageCount(o);
+        shown = std::clamp(shown, 0, std::max(0, count - 1));
+        way->setEnabled(!o.paper.isEmpty());
+        pages->setText(QString::number(count));
+        at->setText(QStringLiteral("Page %1 of %2").arg(count ? shown + 1 : 0).arg(count));
+        back->setEnabled(shown > 0);
+        next->setEnabled(shown + 1 < count);
+        const QImage page = pdfPage(o, shown, 900);
+        preview->setPixmap(QPixmap::fromImage(page.scaled(preview->size() - QSize(16, 16), Qt::KeepAspectRatio, Qt::SmoothTransformation)));
+    };
+    for (QComboBox* c : {what, paper, way}) connect(c, &QComboBox::currentIndexChanged, &dialog, [&] { show(); });
+    connect(margin, &QDoubleSpinBox::valueChanged, &dialog, [&] { show(); });
+    connect(bw, &QCheckBox::toggled, &dialog, [&] { show(); });
+    connect(back, &QPushButton::clicked, &dialog, [&] { --shown; show(); });
+    connect(next, &QPushButton::clicked, &dialog, [&] { ++shown; show(); });
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    dialog.resize(900, 520);
+    QTimer::singleShot(0, &dialog, [&] { show(); });
+    if (dialog.exec() != QDialog::Accepted) return false;
+    const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("The diagram as a PDF"),
+                                                      (design_.name.isEmpty() ? QStringLiteral("system") : design_.name) + QStringLiteral(".pdf"),
+                                                      QStringLiteral("PDF (*.pdf)"));
     if (path.isEmpty()) return false;
-    // A PAGE THE SHEET'S SIZE, where it has one; A3 across, where not. Drawn as lines and text, not as a picture.
-    QPdfWriter writer(path);
-    writer.setTitle(design_.name.isEmpty() ? QStringLiteral("System design") : design_.name);
-    writer.setCreator(QStringLiteral("Edraw"));
-    if (!design_.sheet.empty())
-        writer.setPageSize(QPageSize(QSizeF(design_.sheet.widthMm, design_.sheet.heightMm), QPageSize::Millimeter, QString(), QPageSize::ExactMatch));
-    else
-        writer.setPageSize(QPageSize(QSizeF(420.0, 297.0), QPageSize::Millimeter, QStringLiteral("A3"), QPageSize::ExactMatch));
-    writer.setPageMargins(QMarginsF(0, 0, 0, 0));
-    writer.setResolution(96);
-    // ON A CLEAN WHITE PAGE, not the dark canvas: the designators on Auto take dark ink, a white line of the sheet black.
-    SystemDesign paper = design_;
-    paper.background = Qt::white;
-    SystemCanvas shot;
-    shot.setDesign(&paper);
-    shot.setPlain(true);
-    const bool whiteWas = EntityRenderer::whitePaper();
-    EntityRenderer::setWhitePaper(true);
-    shot.resize(writer.width(), writer.height());
-    shot.fit();
-    QPainter painter;
-    if (!painter.begin(&writer)) { EntityRenderer::setWhitePaper(whiteWas); return false; }
-    shot.render(&painter);
-    painter.end();
-    EntityRenderer::setWhitePaper(whiteWas);
-    return QFileInfo(path).size() > 0;
+    if (!writePdf(options(), path)) {
+        QMessageBox::warning(this, QStringLiteral("PDF"), QStringLiteral("%1 could not be written").arg(path));
+        return false;
+    }
+    return true;
 }
 
 QList<QPair<QString, QString>> SystemDesignView::templateChoices() const {
@@ -1644,7 +1904,19 @@ QList<QPair<QString, QString>> SystemDesignView::templateChoices() const {
     return choices;
 }
 
-bool SystemDesignView::applyTemplate(const QString& given) {
+SysSheet* SystemDesignView::chosenSheet() { return design_.sheetAt(std::clamp(sheetAt_, 0, std::max(0, design_.sheetCount() - 1))); }
+const SysSheet* SystemDesignView::chosenSheet() const {
+    return design_.sheetAt(std::clamp(sheetAt_, 0, std::max(0, design_.sheetCount() - 1)));
+}
+
+void SystemDesignView::setCurrentSheet(int i) {
+    i = std::clamp(i, 0, std::max(0, design_.sheetCount() - 1));
+    if (i == sheetAt_) return;
+    sheetAt_ = i;
+    refresh();
+}
+
+bool SystemDesignView::applyTemplate(const QString& given, bool another) {
     QString path = given;
     if (path.isEmpty()) {
         // THE TEMPLATES INSTALLED, THE PLAIN SHEETS BUILT IN, or one from a file.
@@ -1680,6 +1952,32 @@ bool SystemDesignView::applyTemplate(const QString& given) {
     sheet.content = tpl.hasContent() ? tpl.content : defaultSheetContent(tpl);
     sheet.widthMm = tpl.sheet.drawnWidthMm();
     sheet.heightMm = tpl.sheet.drawnHeightMm();
+    if (design_.sheetCount() > 0 && (another || design_.sheetCount() > 1)) {
+        SysSheet* now = chosenSheet();
+        aboutToChange();
+        if (another) {
+            // A SHEET MORE: beside the last, as big to the diagram as the first; its fields taken from the one chosen.
+            const SysSheet& last = design_.sheetCount() > 1 ? design_.moreSheets.back() : design_.sheet;
+            sheet.scale = design_.sheet.scale;
+            sheet.x = last.rect().right() + 60.0;
+            sheet.y = last.y;
+            sheet.fields = now->fields;
+            sheet.sources = now->sources;
+            design_.moreSheets.push_back(sheet);
+            sheetAt_ = design_.sheetCount() - 1;
+        } else {
+            // ANOTHER TEMPLATE FOR THE SHEET CHOSEN: where it is, its fields and their sources kept.
+            sheet.x = now->x;
+            sheet.y = now->y;
+            sheet.scale = now->scale;
+            sheet.fields = now->fields;
+            sheet.sources = now->sources;
+            *now = sheet;
+        }
+        commit();
+        canvas_->fit();
+        return true;
+    }
     // ROUND WHAT IS DRAWN: in the open middle of the sheet, left of its tables - the revisions at the top right, the title
     // block at the bottom right - taking three fifths of it each way at most, in steps of a quarter.
     QRectF box;
@@ -1690,10 +1988,12 @@ bool SystemDesignView::applyTemplate(const QString& given) {
     sheet.x = box.center().x() - sheet.widthMm * sheet.scale * 0.36;
     sheet.y = box.center().y() - sheet.heightMm * sheet.scale * 0.46;
     sheet.fields = design_.sheet.fields;
+    sheet.sources = design_.sheet.sources;
     if (!sheet.fields.contains(QStringLiteral("title")))
         sheet.fields[QStringLiteral("title")] = design_.name.isEmpty() ? QStringLiteral("System design") : design_.name;
     aboutToChange();
     design_.sheet = sheet;
+    sheetAt_ = 0;
     commit();
     canvas_->fit();
     return true;
@@ -1701,7 +2001,9 @@ bool SystemDesignView::applyTemplate(const QString& given) {
 
 QStringList SystemDesignView::sheetFieldKeys() const {
     QStringList keys;
-    for (const QJsonValue v : design_.sheet.content) {
+    const SysSheet* s = chosenSheet();
+    if (!s) return keys;
+    for (const QJsonValue v : s->content) {
         const QString key = entityFieldKey(Entity::fromJson(v.toObject()));
         if (!key.isEmpty() && !keys.contains(key)) keys << key;
     }
@@ -1709,21 +2011,78 @@ QStringList SystemDesignView::sheetFieldKeys() const {
 }
 
 void SystemDesignView::setSheetField(const QString& key, const QString& value) {
-    if (design_.sheet.empty() || design_.sheet.fields.value(key).toString() == value) return;
+    SysSheet* s = chosenSheet();
+    if (!s || s->empty() || s->fields.value(key).toString() == value) return;
     aboutToChange();
-    design_.sheet.fields[key] = value;
+    chosenSheet()->fields[key] = value;
+    commit();
+}
+
+void SystemDesignView::setSheetFieldSource(const QString& key, const QString& source) {
+    SysSheet* s = chosenSheet();
+    if (!s || s->empty() || s->sources.value(key).toString() == source) return;
+    aboutToChange();
+    s = chosenSheet();
+    // WHAT IT SAID kept as its typed text, so turning the source off starts from it.
+    if (source.isEmpty()) s->fields[key] = design_.sheetTexts(*s).value(key).toString();
+    if (source.isEmpty()) s->sources.remove(key);
+    else s->sources[key] = source;
+    commit();
+}
+
+static QString nextRevision(const QString& last) {
+    // THE NEXT ONE: a number counts on, a letter goes to the next (Z to AA); none yet - A.
+    if (last.isEmpty()) return QStringLiteral("A");
+    bool number = false;
+    const int n = last.toInt(&number);
+    if (number) return QString::number(n + 1);
+    QString s = last.toUpper();
+    for (int i = s.size() - 1; i >= 0; --i) {
+        if (s[i] < QLatin1Char('A') || s[i] > QLatin1Char('Z')) return last + QStringLiteral("1");
+        if (s[i] != QLatin1Char('Z')) { s[i] = QChar(s[i].unicode() + 1); return s; }
+        s[i] = QLatin1Char('A');
+    }
+    return QStringLiteral("A") + s;
+}
+
+void SystemDesignView::addRevision() {
+    aboutToChange();
+    SysRevision r;
+    r.rev = nextRevision(design_.revisions.empty() ? QString() : design_.revisions.back().rev);
+    r.date = QDate::currentDate().toString(Qt::ISODate);
+    if (!design_.revisions.empty()) r.drawn = design_.revisions.back().drawn;
+    design_.revisions.push_back(r);
+    commit();
+}
+
+void SystemDesignView::removeRevision(int row) {
+    if (row < 0 || row >= static_cast<int>(design_.revisions.size())) return;
+    aboutToChange();
+    design_.revisions.erase(design_.revisions.begin() + row);
+    commit();
+}
+
+void SystemDesignView::setRevision(int row, const SysRevision& r) {
+    if (row < 0 || row >= static_cast<int>(design_.revisions.size())) return;
+    const SysRevision& was = design_.revisions[static_cast<size_t>(row)];
+    if (was.rev == r.rev && was.note == r.note && was.eco == r.eco && was.drawn == r.drawn && was.checked == r.checked &&
+        was.approved == r.approved && was.date == r.date)
+        return;
+    aboutToChange();
+    design_.revisions[static_cast<size_t>(row)] = r;
     commit();
 }
 
 bool SystemDesignView::askSheetFields() {
-    if (design_.sheet.empty()) return false;
+    if (!chosenSheet() || chosenSheet()->empty()) return false;
+    const SysSheet& chosen = *chosenSheet();
     QDialog dialog(this);
     dialog.setWindowTitle(QStringLiteral("Sheet fields"));
     dialog.setObjectName(QStringLiteral("systemSheetFields"));
     auto* form = new QFormLayout(&dialog);
     QHash<QString, QLineEdit*> edits;
     for (const QString& key : sheetFieldKeys()) {
-        auto* edit = new QLineEdit(design_.sheet.fields.value(key).toString(), &dialog);
+        auto* edit = new QLineEdit(chosen.fields.value(key).toString(), &dialog);
         edit->setObjectName(QStringLiteral("systemSheetField_") + key);
         form->addRow(key, edit);
         edits.insert(key, edit);
@@ -1733,11 +2092,11 @@ bool SystemDesignView::askSheetFields() {
     connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     if (dialog.exec() != QDialog::Accepted) return false;
-    QJsonObject fields = design_.sheet.fields;
+    QJsonObject fields = chosen.fields;
     for (auto it = edits.begin(); it != edits.end(); ++it) fields[it.key()] = it.value()->text();
-    if (fields == design_.sheet.fields) return false;
+    if (fields == chosen.fields) return false;
     aboutToChange();
-    design_.sheet.fields = fields;
+    chosenSheet()->fields = fields;
     commit();
     return true;
 }
@@ -1746,18 +2105,59 @@ void SystemDesignView::fillSheetPanel() {
     if (!sheetName_ || !sheetFields_) return;
     auto* form = qobject_cast<QFormLayout*>(sheetFields_->layout());
     while (form && form->rowCount() > 0) form->removeRow(0);
-    if (design_.sheet.empty()) {
+    // THE REVISIONS, a row each.
+    if (revisions_) {
+        const QSignalBlocker quiet(revisions_);
+        revisions_->setRowCount(static_cast<int>(design_.revisions.size()));
+        for (int r = 0; r < static_cast<int>(design_.revisions.size()); ++r) {
+            const SysRevision& rev = design_.revisions[static_cast<size_t>(r)];
+            const QString cells[] = {rev.rev, rev.note, rev.eco, rev.drawn, rev.checked, rev.approved, rev.date};
+            for (int c = 0; c < 7; ++c) revisions_->setItem(r, c, new QTableWidgetItem(cells[c]));
+        }
+    }
+    sheetAt_ = std::clamp(sheetAt_, 0, std::max(0, design_.sheetCount() - 1));
+    if (sheetPick_) {
+        const QSignalBlocker quiet(sheetPick_);
+        sheetPick_->clear();
+        for (int i = 0; i < design_.sheetCount(); ++i) sheetPick_->addItem(QStringLiteral("Sheet %1 - %2").arg(i + 1).arg(design_.sheetAt(i)->name));
+        sheetPick_->setCurrentIndex(sheetAt_);
+        sheetPick_->setEnabled(design_.sheetCount() > 1);
+    }
+    const SysSheet* sheet = chosenSheet();
+    if (!sheet || sheet->empty()) {
         sheetName_->setText(QStringLiteral("No sheet round the diagram. Choose a template - one of yours, or a plain A4 to A0 sheet - "
                                            "for its frame and title block; it is in the PDF and the picture too."));
         return;
     }
-    sheetName_->setText(QStringLiteral("<b>%1</b> - %2 x %3 mm").arg(design_.sheet.name).arg(design_.sheet.widthMm).arg(design_.sheet.heightMm));
-    // ITS FIELDS, each as its title block has it, written in here.
+    sheetName_->setText(QStringLiteral("<b>%1</b> - %2 x %3 mm").arg(sheet->name).arg(sheet->widthMm).arg(sheet->heightMm));
+    // ITS FIELDS, each as its title block has it: typed in here, or taken from the design - its name, the latest
+    // revision, the date... - chosen beside it.
+    const QJsonObject texts = design_.sheetTexts(*sheet);
     for (const QString& key : sheetFieldKeys()) {
-        auto* edit = new QLineEdit(design_.sheet.fields.value(key).toString(), sheetFields_);
+        auto* row = new QWidget(sheetFields_);
+        auto* rh = new QHBoxLayout(row);
+        rh->setContentsMargins(0, 0, 0, 0);
+        rh->setSpacing(3);
+        const QString source = sheet->sources.value(key).toString();
+        auto* edit = new QLineEdit(texts.value(key).toString(), row);
         edit->setObjectName(QStringLiteral("systemSheetField_") + key);
-        connect(edit, &QLineEdit::editingFinished, this, [this, edit, key] { setSheetField(key, edit->text()); });
-        form->addRow(key, edit);
+        edit->setReadOnly(!source.isEmpty());
+        edit->setEnabled(source.isEmpty());
+        connect(edit, &QLineEdit::editingFinished, this, [this, edit, key] { if (!edit->isReadOnly()) setSheetField(key, edit->text()); });
+        auto* from = new QComboBox(row);
+        from->setObjectName(QStringLiteral("systemSheetSource_") + key);
+        from->setToolTip(QStringLiteral("Where this field's text comes from - typed here, or the design's own"));
+        from->setMaximumWidth(150);
+        for (const auto& [id, label] : sysFieldSources()) from->addItem(label, id);
+        from->setCurrentIndex(std::max(0, from->findData(source)));
+        // Later, not inside its own signal: the panel is built again, this list with it.
+        connect(from, &QComboBox::currentIndexChanged, this, [this, from, key] {
+            const QString id = from->currentData().toString();
+            QTimer::singleShot(0, this, [this, key, id] { setSheetFieldSource(key, id); });
+        });
+        rh->addWidget(edit, 1);
+        rh->addWidget(from);
+        form->addRow(key, row);
     }
 }
 
@@ -1772,9 +2172,17 @@ int SystemDesignView::autoAlign() {
 }
 
 void SystemDesignView::removeSheet() {
-    if (design_.sheet.empty()) return;
+    // THE SHEET CHOSEN taken away: the first's place taken by the next, where there is one.
+    if (design_.sheetCount() == 0) return;
+    const int i = std::clamp(sheetAt_, 0, design_.sheetCount() - 1);
     aboutToChange();
-    design_.sheet = SysSheet();
+    if (i > 0) design_.moreSheets.erase(design_.moreSheets.begin() + (i - 1));
+    else if (!design_.moreSheets.empty()) {
+        design_.sheet = design_.moreSheets.front();
+        design_.moreSheets.erase(design_.moreSheets.begin());
+    } else
+        design_.sheet = SysSheet();
+    sheetAt_ = std::max(0, i - 1);
     commit();
 }
 
@@ -1861,6 +2269,15 @@ QMenu* SystemDesignView::contextMenu(const QPointF& world) {
             shown->setCheckable(true);
             shown->setChecked(u->pictureShown);
             connect(shown, &QAction::toggled, this, [this, id](bool on) { setUnitPictureShown(id, on); });
+            QMenu* place = menu->addMenu(QStringLiteral("Picture place"));
+            place->setObjectName(QStringLiteral("systemMenuPicturePlace"));
+            for (const auto& [label, key] : kPicturePlaces) {
+                QAction* a = place->addAction(QString::fromLatin1(label));
+                a->setCheckable(true);
+                a->setChecked(u->pictureAlign == QLatin1String(key));
+                const QString k = QString::fromLatin1(key);
+                connect(a, &QAction::triggered, this, [this, id, k] { setUnitPictureAlign(id, k); });
+            }
             QAction* drop = menu->addAction(QStringLiteral("Remove picture"), this, [this, id] { removeUnitPicture(id); });
             drop->setObjectName(QStringLiteral("systemMenuPictureRemove"));
         }

@@ -729,8 +729,11 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
                                       "there (again, to move it); the next part not yet put is chosen for you"));
     parts_->setMaximumHeight(140);
     sl->addWidget(parts_);
+    // DOWNWARD, TWO TO A ROW, so the side panel stays narrow.
     auto* linkRow = new QHBoxLayout;
     linkRow->setSpacing(2);
+    auto* routeRow = new QHBoxLayout;
+    routeRow->setSpacing(2);
     link_ = button(linkRow, "view3dLinkPart", QStringLiteral("Link"),
                    QStringLiteral("Put the part chosen at the node selected in the picture"), [this] {
                        if (QListWidgetItem* it = parts_->currentItem()) linkSelectedNode(it->data(Qt::UserRole).toString());
@@ -738,7 +741,7 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     unlink_ = button(linkRow, "view3dUnlinkPart", QStringLiteral("Unlink"),
                      QStringLiteral("The node selected in the picture put for no part"), [this] { linkSelectedNode(QString()); });
     // THE REAL HARNESS AS A ROUTE: its parts and cables put in where it is drawn in 3D, to move into the model.
-    button(linkRow, "view3dRouteFromHarness", QStringLiteral("Route from harness"),
+    button(routeRow, "view3dRouteFromHarness", QStringLiteral("Route from harness"),
            QStringLiteral("Put the harness in as a route: a connector for each of its parts not put yet, where the harness is "
                           "drawn in 3D, and its cables between them (through a branch where a cable goes to several) - then "
                           "move the connectors to where they go in the model, and Lengths to harness"),
@@ -747,11 +750,13 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
                emit canvas_->message(n < 0 ? QStringLiteral("No harness to route - open one in the harness wizard, or place one")
                                            : QStringLiteral("%1 cable(s) of the harness laid - move its connectors to where they go").arg(n));
            });
-    lengths_ = button(linkRow, "view3dLengthsToHarness", QStringLiteral("Lengths to harness"),
+    lengths_ = button(routeRow, "view3dLengthsToHarness", QStringLiteral("Lengths to harness"),
                       QStringLiteral("Give each cable of the harness its length along the route, between the parts it joins"),
                       [this] { applyLengths(true); });
     linkRow->addStretch(1);
+    routeRow->addStretch(1);
     sl->addLayout(linkRow);
+    sl->addLayout(routeRow);
     // THE CONNECTOR SELECTED, TURNED: which way it points - the way its bundle leaves it - and how it is turned round
     // that, a rectangular housing lying one way or another. Shown while a connector is selected.
     connBox_ = new QWidget(side_);
@@ -959,10 +964,9 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
         mg->setVerticalSpacing(2);
         moveSaid_ = new QLabel(moveBox_);
         mg->addWidget(moveSaid_, 0, 0, 1, 4);
+        // ONE AXIS TO A ROW, downward, so the side panel stays narrow.
         const char* axisNames[3] = {"view3dMoveX", "view3dMoveY", "view3dMoveZ"};
-        for (int i = 0; i < 3; ++i) {
-            mg->addWidget(new QLabel(QString(QChar(QLatin1Char("XYZ"[i]))), moveBox_), 1, i * 0 + 0 + i, Qt::AlignLeft);
-        }
+        for (int i = 0; i < 3; ++i) mg->addWidget(new QLabel(QString(QChar(QLatin1Char("XYZ"[i]))), moveBox_), 1 + i, 0);
         for (int i = 0; i < 3; ++i) {
             moveAt_[i] = new QDoubleSpinBox(moveBox_);
             moveAt_[i]->setObjectName(QLatin1String(axisNames[i]));
@@ -971,21 +975,21 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
             moveAt_[i]->setSuffix(QStringLiteral(" mm"));
             moveAt_[i]->setKeyboardTracking(false);
             moveAt_[i]->setToolTip(QStringLiteral("Where it is along %1").arg(QChar(QLatin1Char("XYZ"[i]))));
-            mg->addWidget(moveAt_[i], 2, i);
+            mg->addWidget(moveAt_[i], 1 + i, 1);
             connect(moveAt_[i], &QDoubleSpinBox::valueChanged, this, [this] {
                 if (fillingMove_) return;
                 const V3 to{moveAt_[0]->value(), moveAt_[1]->value(), moveAt_[2]->value()};
                 editSelectedNode([to](RouteNode3D& n) { n.at = to; });
             });
         }
-        mg->addWidget(new QLabel(QStringLiteral("Step"), moveBox_), 3, 0);
+        mg->addWidget(new QLabel(QStringLiteral("Step"), moveBox_), 4, 0);
         moveStep_ = new QDoubleSpinBox(moveBox_);
         moveStep_->setObjectName(QStringLiteral("view3dMoveStep"));
         moveStep_->setRange(0.1, 1000.0);
         moveStep_->setValue(5.0);
         moveStep_->setSuffix(QStringLiteral(" mm"));
         moveStep_->setToolTip(QStringLiteral("How far each arrow on the wheel moves it"));
-        mg->addWidget(moveStep_, 3, 1);
+        mg->addWidget(moveStep_, 4, 1);
         auto* colour = new QPushButton(QStringLiteral("Colour..."), moveBox_);
         colour->setObjectName(QStringLiteral("view3dNodeColor"));
         connect(colour, &QPushButton::clicked, this, [this] {
@@ -994,13 +998,17 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
             const QColor c = QColorDialog::getColor(n->color.isValid() ? n->color : QColor(205, 208, 214), this, QStringLiteral("Its colour"));
             if (c.isValid()) setSelectedNodeColor(c);
         });
-        mg->addWidget(colour, 3, 2);
-        mg->addWidget(new QLabel(QStringLiteral("Turn"), moveBox_), 4, 0);
+        mg->addWidget(colour, 5, 1, Qt::AlignLeft);
+        mg->addWidget(new QLabel(QStringLiteral("Turn"), moveBox_), 6, 0, Qt::AlignTop);
+        // THE TURNS: one axis to a row, its two ways beside each other.
         auto* turns = new QWidget(moveBox_);
-        auto* tl = new QHBoxLayout(turns);
+        auto* tl = new QVBoxLayout(turns);
         tl->setContentsMargins(0, 0, 0, 0);
         tl->setSpacing(2);
-        for (int axis = 0; axis < 3; ++axis)
+        for (int axis = 0; axis < 3; ++axis) {
+            auto* axisRow = new QHBoxLayout;
+            axisRow->setSpacing(2);
+            tl->addLayout(axisRow);
             for (int sign : {1, -1}) {
                 auto* b = new QToolButton(turns);
                 const QString name = QStringLiteral("view3dRot%1%2").arg(QChar(QLatin1Char("XYZ"[axis]))).arg(sign > 0 ? QLatin1Char('+') : QLatin1Char('-'));
@@ -1009,9 +1017,11 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
                 b->setToolTip(QStringLiteral("Turn it 15° round %1, %2").arg(QChar(QLatin1Char("XYZ"[axis]))).arg(sign > 0 ? QStringLiteral("one way") : QStringLiteral("the other")));
                 b->setAutoRaise(true);
                 connect(b, &QToolButton::clicked, this, [this, axis, sign] { rotateSelectedNode(axis, 15.0 * sign); });
-                tl->addWidget(b);
+                axisRow->addWidget(b);
             }
-        mg->addWidget(turns, 4, 1, 1, 3);
+            axisRow->addStretch(1);
+        }
+        mg->addWidget(turns, 6, 1);
     }
     moveBox_->setVisible(false);
     sl->addWidget(moveBox_);

@@ -9,6 +9,7 @@
 #include "system/SystemRouting.h"
 #include "system/SystemExport.h"
 
+#include <QDate>
 #include <QFileInfo>
 #include <QCryptographicHash>
 #include <QJsonDocument>
@@ -850,6 +851,134 @@ QString SystemDesign::cableListCsv() const {
     return lines.join(QLatin1Char('\n')) + QLatin1Char('\n');
 }
 
+namespace {
+
+QJsonObject sheetToJson(const SysSheet& s) {
+    QJsonObject o{{QStringLiteral("name"), s.name}, {QStringLiteral("content"), s.content},
+                  {QStringLiteral("w"), s.widthMm}, {QStringLiteral("h"), s.heightMm},
+                  {QStringLiteral("x"), s.x}, {QStringLiteral("y"), s.y},
+                  {QStringLiteral("scale"), s.scale}, {QStringLiteral("fields"), s.fields},
+                  {QStringLiteral("layers"), s.layers}};
+    if (!s.sources.isEmpty()) o[QStringLiteral("sources")] = s.sources;
+    return o;
+}
+
+SysSheet sheetFromJson(const QJsonObject& s) {
+    SysSheet out;
+    out.name = s.value(QStringLiteral("name")).toString();
+    out.content = s.value(QStringLiteral("content")).toArray();
+    out.widthMm = s.value(QStringLiteral("w")).toDouble(420.0);
+    out.heightMm = s.value(QStringLiteral("h")).toDouble(297.0);
+    out.x = s.value(QStringLiteral("x")).toDouble();
+    out.y = s.value(QStringLiteral("y")).toDouble();
+    out.scale = std::max(0.05, s.value(QStringLiteral("scale")).toDouble(2.0));
+    out.fields = s.value(QStringLiteral("fields")).toObject();
+    out.layers = s.value(QStringLiteral("layers")).toArray();
+    out.sources = s.value(QStringLiteral("sources")).toObject();
+    return out;
+}
+
+// A REVISION'S COLUMNS, by the headings a template's revision table may have.
+const char* const kRevisionKeys[] = {"rev", "note", "eco", "drawn", "checked", "approved", "date"};
+
+QString* revisionField(SysRevision& r, int i) {
+    QString* all[] = {&r.rev, &r.note, &r.eco, &r.drawn, &r.checked, &r.approved, &r.date};
+    return i >= 0 && i < 7 ? all[i] : nullptr;
+}
+
+// WHICH OF A REVISION'S COLUMNS A HEADING IS: REV, CHANGE NOTE (or DESCRIPTION), ECO, DRAWN (or BY), CHECKED, APPROVED,
+// DATE; -1 for none of them.
+int revisionColumn(const QString& heading) {
+    const QString h = heading.trimmed().toUpper();
+    if (h == QLatin1String("REV") || h == QLatin1String("REVISION")) return 0;
+    if (h.contains(QLatin1String("NOTE")) || h.startsWith(QLatin1String("DESC")) || h == QLatin1String("CHANGE")) return 1;
+    if (h.contains(QLatin1String("ECO")) || h.contains(QLatin1String("ECN"))) return 2;
+    if (h.startsWith(QLatin1String("DRAWN")) || h == QLatin1String("BY")) return 3;
+    if (h.startsWith(QLatin1String("CHECK"))) return 4;
+    if (h.startsWith(QLatin1String("APPR"))) return 5;
+    if (h == QLatin1String("DATE")) return 6;
+    return -1;
+}
+
+}  // namespace
+
+const std::vector<std::pair<QString, QString>>& sysFieldSources() {
+    static const std::vector<std::pair<QString, QString>> sources{
+        {QString(), QStringLiteral("Typed")},
+        {QStringLiteral("project"), QStringLiteral("Project name")},
+        {QStringLiteral("drawingNo"), QStringLiteral("Drawing P/N (sheet 1)")},
+        {QStringLiteral("title"), QStringLiteral("Title (sheet 1)")},
+        {QStringLiteral("revision"), QStringLiteral("Latest revision")},
+        {QStringLiteral("revisionDate"), QStringLiteral("Latest revision's date")},
+        {QStringLiteral("drawn"), QStringLiteral("Latest revision's drawn by")},
+        {QStringLiteral("approved"), QStringLiteral("Latest revision's approved by")},
+        {QStringLiteral("today"), QStringLiteral("Today's date")},
+        {QStringLiteral("sheet"), QStringLiteral("Sheet number (1 of 3)")},
+        {QStringLiteral("units"), QStringLiteral("Number of units")},
+        {QStringLiteral("cables"), QStringLiteral("Number of harnesses")}};
+    return sources;
+}
+
+QJsonObject SystemDesign::sheetTexts(const SysSheet& s) const {
+    QJsonObject out = s.fields;
+    const SysRevision* latest = revisions.empty() ? nullptr : &revisions.back();
+    int index = 0;
+    for (int i = 0; i < sheetCount(); ++i)
+        if (sheetAt(i) == &s) index = i;
+    for (auto it = s.sources.begin(); it != s.sources.end(); ++it) {
+        const QString source = it.value().toString();
+        QString text;
+        if (source == QLatin1String("project")) text = name;
+        else if (source == QLatin1String("drawingNo") || source == QLatin1String("title")) text = sheet.fields.value(source).toString();
+        else if (source == QLatin1String("revision")) text = latest ? latest->rev : QString();
+        else if (source == QLatin1String("revisionDate")) text = latest ? latest->date : QString();
+        else if (source == QLatin1String("drawn")) text = latest ? latest->drawn : QString();
+        else if (source == QLatin1String("approved")) text = latest ? latest->approved : QString();
+        else if (source == QLatin1String("today")) text = QDate::currentDate().toString(Qt::ISODate);
+        else if (source == QLatin1String("sheet")) text = QStringLiteral("%1 of %2").arg(index + 1).arg(sheetCount());
+        else if (source == QLatin1String("units")) text = QString::number(units.size());
+        else if (source == QLatin1String("cables")) text = QString::number(cables.size());
+        else continue;
+        out[it.key()] = text;
+    }
+    return out;
+}
+
+QJsonArray SystemDesign::sheetContent(const SysSheet& s) const {
+    const QJsonObject texts = sheetTexts(s);
+    QJsonArray out;
+    for (const QJsonValue v : s.content) {
+        // AN ENTITY'S OWN KEYS ARE ITS META, side by side with its geometry.
+        QJsonObject meta = v.toObject();
+        const QString field = meta.value(QStringLiteral("field")).toString();
+        if (!field.isEmpty() && texts.contains(field)) meta[QStringLiteral("text")] = texts.value(field).toString();
+        if (meta.value(QStringLiteral("revisionTable")).toBool() && !revisions.empty()) {
+            // THE REVISIONS IN ITS TABLE, a row each under the headings - the newest where it has fewer rows than there are.
+            const int cols = meta.value(QStringLiteral("cols")).toInt();
+            const int rows = meta.value(QStringLiteral("rows")).toInt();
+            QJsonArray cells = meta.value(QStringLiteral("cells")).toArray();
+            if (cols > 0 && rows > 1 && cells.size() >= cols * rows) {
+                const int room = rows - 1;
+                const int first = std::max(0, static_cast<int>(revisions.size()) - room);
+                for (int r = 0; r < room; ++r) {
+                    const int which = first + r;
+                    for (int c = 0; c < cols; ++c) {
+                        QString text;
+                        if (which < static_cast<int>(revisions.size())) {
+                            SysRevision rev = revisions[static_cast<size_t>(which)];
+                            if (QString* f = revisionField(rev, revisionColumn(cells.at(c).toString()))) text = *f;
+                        }
+                        cells[(r + 1) * cols + c] = text;
+                    }
+                }
+                meta[QStringLiteral("cells")] = cells;
+            }
+        }
+        out.append(meta);
+    }
+    return out;
+}
+
 QJsonObject SystemDesign::toJson() const {
     QJsonObject o;
     if (!name.isEmpty()) o[QStringLiteral("name")] = name;
@@ -858,12 +987,22 @@ QJsonObject SystemDesign::toJson() const {
     if (!ruleLevels.isEmpty()) o[QStringLiteral("ruleLevels")] = ruleLevels;
     if (background != QColor(48, 52, 58)) o[QStringLiteral("background")] = background.name();
     if (designatorColor.isValid()) o[QStringLiteral("designatorColor")] = designatorColor.name();
-    if (!sheet.empty())
-        o[QStringLiteral("sheet")] = QJsonObject{{QStringLiteral("name"), sheet.name}, {QStringLiteral("content"), sheet.content},
-                                                 {QStringLiteral("w"), sheet.widthMm}, {QStringLiteral("h"), sheet.heightMm},
-                                                 {QStringLiteral("x"), sheet.x}, {QStringLiteral("y"), sheet.y},
-                                                 {QStringLiteral("scale"), sheet.scale}, {QStringLiteral("fields"), sheet.fields},
-                                                 {QStringLiteral("layers"), sheet.layers}};
+    if (!sheet.empty()) o[QStringLiteral("sheet")] = sheetToJson(sheet);
+    if (!moreSheets.empty()) {
+        QJsonArray more;
+        for (const SysSheet& s : moreSheets) more.append(sheetToJson(s));
+        o[QStringLiteral("moreSheets")] = more;
+    }
+    if (!revisions.empty()) {
+        QJsonArray list;
+        for (SysRevision r : revisions) {
+            QJsonObject j;
+            for (int i = 0; i < 7; ++i)
+                if (const QString* f = revisionField(r, i); !f->isEmpty()) j[QLatin1String(kRevisionKeys[i])] = *f;
+            list.append(j);
+        }
+        o[QStringLiteral("revisions")] = list;
+    }
     if (!bypassed.empty()) {
         QJsonArray accepted;
         for (const SysIssue& i : bypassed)
@@ -886,6 +1025,7 @@ QJsonObject SystemDesign::toJson() const {
         if (!u.picture.isEmpty()) j[QStringLiteral("picture")] = QString::fromLatin1(u.picture.toBase64());
         if (!u.pictureShown) j[QStringLiteral("pictureHidden")] = true;
         if (u.pictureScale < 1.0) j[QStringLiteral("pictureScale")] = u.pictureScale;
+        if (!u.pictureAlign.isEmpty()) j[QStringLiteral("pictureAlign")] = u.pictureAlign;
         j[QStringLiteral("parent")] = u.parent;
         if (!u.hidden.isEmpty()) j[QStringLiteral("hide")] = QJsonArray::fromStringList(u.hidden);
         QJsonArray ps;
@@ -968,16 +1108,17 @@ SystemDesign SystemDesign::fromJson(const QJsonObject& o) {
     const QColor background(o.value(QStringLiteral("background")).toString());
     if (background.isValid()) d.background = background;
     d.designatorColor = QColor(o.value(QStringLiteral("designatorColor")).toString());
-    if (const QJsonObject s = o.value(QStringLiteral("sheet")).toObject(); !s.value(QStringLiteral("name")).toString().isEmpty()) {
-        d.sheet.name = s.value(QStringLiteral("name")).toString();
-        d.sheet.content = s.value(QStringLiteral("content")).toArray();
-        d.sheet.widthMm = s.value(QStringLiteral("w")).toDouble(420.0);
-        d.sheet.heightMm = s.value(QStringLiteral("h")).toDouble(297.0);
-        d.sheet.x = s.value(QStringLiteral("x")).toDouble();
-        d.sheet.y = s.value(QStringLiteral("y")).toDouble();
-        d.sheet.scale = std::max(0.05, s.value(QStringLiteral("scale")).toDouble(2.0));
-        d.sheet.fields = s.value(QStringLiteral("fields")).toObject();
-        d.sheet.layers = s.value(QStringLiteral("layers")).toArray();
+    if (const QJsonObject s = o.value(QStringLiteral("sheet")).toObject(); !s.value(QStringLiteral("name")).toString().isEmpty())
+        d.sheet = sheetFromJson(s);
+    // MORE SHEETS only after a first one.
+    if (!d.sheet.empty())
+        for (const QJsonValue v : o.value(QStringLiteral("moreSheets")).toArray())
+            if (SysSheet s = sheetFromJson(v.toObject()); !s.empty()) d.moreSheets.push_back(s);
+    for (const QJsonValue v : o.value(QStringLiteral("revisions")).toArray()) {
+        const QJsonObject j = v.toObject();
+        SysRevision r;
+        for (int i = 0; i < 7; ++i) *revisionField(r, i) = j.value(QLatin1String(kRevisionKeys[i])).toString();
+        d.revisions.push_back(r);
     }
     for (const QJsonValue& v : o.value(QStringLiteral("bypassed")).toArray()) {
         const QJsonObject j = v.toObject();
@@ -1020,6 +1161,7 @@ SystemDesign SystemDesign::fromJson(const QJsonObject& o) {
         u.picture = QByteArray::fromBase64(j.value(QStringLiteral("picture")).toString().toLatin1());
         u.pictureShown = !j.value(QStringLiteral("pictureHidden")).toBool(false);
         u.pictureScale = std::clamp(j.value(QStringLiteral("pictureScale")).toDouble(1.0), 0.1, 1.0);
+        u.pictureAlign = j.value(QStringLiteral("pictureAlign")).toString();
         u.parent = j.value(QStringLiteral("parent")).toString();
         // Saved before units went in units: none is in another yet - found below by where it lies.
         if (!j.contains(QStringLiteral("parent"))) u.parent = QStringLiteral("?");

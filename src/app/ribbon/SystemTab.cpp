@@ -183,6 +183,7 @@ void MainWindow::buildSystemTab() {
         sheet->setPopupMode(QToolButton::MenuButtonPopup);
         auto* sheetMenu = new QMenu(sheet);
         sheetMenu->addAction(QStringLiteral("Choose template..."), this, [this] { if (systemView_) systemView_->applyTemplate(); });
+        sheetMenu->addAction(QStringLiteral("Add sheet..."), this, [this] { if (systemView_) systemView_->applyTemplate(QString(), true); });
         sheetMenu->addAction(QStringLiteral("Sheet fields..."), this, [this] { if (systemView_) systemView_->askSheetFields(); });
         sheetMenu->addAction(QStringLiteral("Remove the sheet"), this, [this] { if (systemView_) systemView_->removeSheet(); });
         sheet->setMenu(sheetMenu);
@@ -199,14 +200,11 @@ void MainWindow::buildSystemTab() {
         auto* numbering = new QMenu(number);
         numbering->addAction(QStringLiteral("Prefix and digits..."), this, [this] { if (systemView_) systemView_->askNumbering(); });
         number->setMenu(numbering);
-        big(w, row, "systemLink", QStringLiteral("Link drawing"), QStringLiteral("link"),
-            QStringLiteral("Link a drawing file to the cable selected - its drawing number and revision are read off it"),
-            [this] { if (systemView_) systemView_->linkDrawingFromFile(); });
         big(w, row, "systemFind", QStringLiteral("Find drawings"), QStringLiteral("search"),
             QStringLiteral("Search folders for DWX, DXF and DWG drawings - by name, drawing number or title - with a preview; a cable "
                            "selected: link the one found"),
             [this] { if (systemView_) systemView_->findDrawing(); });
-        big(w, row, "systemOpen", QStringLiteral("Open drawing"), QStringLiteral("load"),
+        big(w, row, "systemOpen", QStringLiteral("Open drawing"), QStringLiteral("openfile"),
             QStringLiteral("Open the drawing linked to the cable selected"), [this] { if (systemView_) systemView_->openDrawing(); });
     });
     // THE CHECKS.
@@ -240,11 +238,11 @@ void MainWindow::buildSystemTab() {
         big(w, row, "systemSave", QStringLiteral("Save as"), QStringLiteral("export"),
             QStringLiteral("Save the system design as a file of its own (.wetsys, Edraw's own) - it is kept in the drawing too"),
             [this] { if (systemView_) systemView_->saveDesignAs(); });
-        big(w, row, "systemImport", QStringLiteral("Import"), QStringLiteral("load"),
+        big(w, row, "systemImport", QStringLiteral("Import"), QStringLiteral("import"),
             QStringLiteral("A system diagram from draw.io (.drawio) or Visio (.vsdx) - its boxes as units, the small squares on "
                            "their sides as ports, its lines as cables, its notes - in place of this one (Undo takes it back)"),
             [this] { if (systemView_) systemView_->importDesign(); });
-        big(w, row, "systemOpenDesign", QStringLiteral("Open"), QStringLiteral("load"),
+        big(w, row, "systemOpenDesign", QStringLiteral("Open"), QStringLiteral("openfile"),
             QStringLiteral("Open a system design saved as a file of its own (.wetsys) - in place of this one (Undo takes it back)"),
             [this] { if (systemView_) systemView_->openDesign(); });
     });

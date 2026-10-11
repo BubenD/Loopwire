@@ -30,6 +30,8 @@
 #include "app/RuleExplainer.h"
 #include "app/View3DPane.h"
 #include "app/SystemDesignView.h"
+#include "app/Recovery.h"
+#include "system/SystemExport.h"
 #include "harness/Datasheet.h"
 #include "app/TemplateDialog.h"
 #include "app/ScientificCalculatorDialog.h"
@@ -4677,7 +4679,12 @@ void MainWindow::buildRibbon() {
         syncUndoRedo();
     });
     // THE CORNER'S UNDO AND REDO kept in step with the system diagram and the 3D route as they change.
-    if (systemView_) connect(systemView_, &SystemDesignView::changed, this, [this] { syncUndoRedo(); });
+    if (systemView_) connect(systemView_, &SystemDesignView::changed, this, [this] { syncUndoRedo(); systemUnbacked_ = true; });
+    // RECOVERY COPIES every few minutes (two, unless the settings say otherwise).
+    recoveryTimer_ = new QTimer(this);
+    recoveryTimer_->setInterval(std::max(1, QSettings().value(QStringLiteral("recovery/minutes"), 2).toInt()) * 60 * 1000);
+    connect(recoveryTimer_, &QTimer::timeout, this, [this] { writeRecoveryNow(); });
+    recoveryTimer_->start();
     if (view3dPane_) connect(view3dPane_, &View3DPane::routeChanged, this, [this] { syncUndoRedo(); });
 
     // (Parametric and Output ribbon tabs were removed — file New/Open/Save and the
@@ -7432,6 +7439,9 @@ void MainWindow::buildMenus() {
     // there is not one.
     // About has moved to the Help menu, which is where a person looks for it - see below. The LGPL
     // notice it carries is unaffected by which menu points at it.
+    fileMenu->addSeparator();
+    fileMenu->addAction(QStringLiteral("Re&cover..."), this, [this] { showRecovery(); })
+        ->setObjectName(QStringLiteral("fileRecover"));
     fileMenu->addSeparator();
     fileMenu->addAction(QStringLiteral("E&xit"), QKeySequence::Quit, qApp, &QApplication::quit);
 
@@ -17075,6 +17085,11 @@ bool MainWindow::saveDocument(int index, bool forceDialog) {
         QMessageBox::warning(this, QStringLiteral("Save failed"), err);
         return false;
     }
+    // SAVED: its recovery copies are not wanted any more - under the name it had and the one it has now.
+    for (const QString& was : {docPaths_[index], path}) {
+        QFile::remove(recovery::drawingFile(was, index));
+        QFile::remove(recovery::systemFile(was, index));
+    }
     docPaths_[index] = path;
     docs_[index]->setDirty(false);
     updateActiveTabText();
@@ -17447,6 +17462,47 @@ void MainWindow::newDrawing() {
         }
     }
     statusBar()->showMessage(QStringLiteral("New drawing"));
+}
+
+void MainWindow::writeRecoveryNow() {
+    for (int i = 0; i < static_cast<int>(docs_.size()); ++i)
+        if (docs_[i]->dirty()) dwx::save(*docs_[i], recovery::drawingFile(docPaths_[i], i));
+    const int at = activeIndex();
+    if (systemView_ && systemUnbacked_ && !systemView_->design().empty() && at >= 0 && at < docPaths_.size()) {
+        if (saveSystemFile(systemView_->design(), recovery::systemFile(docPaths_[at], at))) systemUnbacked_ = false;
+    }
+}
+
+bool MainWindow::recoverFile(const QString& path) {
+    if (path.endsWith(QLatin1String(".sbak"), Qt::CaseInsensitive)) {
+        if (!systemView_) return false;
+        if (systemTabPage_) ribbon_->setCurrentWidget(systemTabPage_);
+        if (!systemView_->openDesign(path)) {
+            QMessageBox::warning(this, QStringLiteral("Recover"), QStringLiteral("%1 could not be read").arg(path));
+            return false;
+        }
+        statusBar()->showMessage(QStringLiteral("System design recovered from %1").arg(QFileInfo(path).fileName()), 8000);
+        return true;
+    }
+    auto doc = std::make_unique<Document>();
+    doc->entities().clear();
+    QString err;
+    if (!dwx::load(*doc, path, &err)) {
+        QMessageBox::warning(this, QStringLiteral("Recover"), err);
+        return false;
+    }
+    // NOT SAVED: it opens as a drawing with no file yet, so Save asks where to put it.
+    Document* added = addDocument(std::move(doc), QString());
+    added->setDirty(true);
+    updateActiveTabText();
+    canvas_->fitView();
+    statusBar()->showMessage(QStringLiteral("Drawing recovered from %1 - save it to keep it").arg(QFileInfo(path).fileName()), 8000);
+    return true;
+}
+
+void MainWindow::showRecovery() {
+    RecoveryDialog dialog(this);
+    if (dialog.exec() == QDialog::Accepted && !dialog.chosen().isEmpty()) recoverFile(dialog.chosen());
 }
 
 void MainWindow::openDrawing() {

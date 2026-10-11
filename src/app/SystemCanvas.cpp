@@ -16,6 +16,7 @@
 #include <QPainterPath>
 #include <QWheelEvent>
 #include <QTimer>
+#include <QSettings>
 #include <QPainterPathStroker>
 #include <QTextOption>
 
@@ -167,6 +168,19 @@ SystemCanvas::SystemCanvas(QWidget* parent) : QWidget(parent) {
     connect(locateTimer_, &QTimer::timeout, this, [this] {
         if (locateClock_.elapsed() >= 1600) { locateOn_ = false; locateTimer_->stop(); }
         update();
+    });
+    detailsPinned_ = QSettings().value(QStringLiteral("system/pinProjectDetails"), false).toBool();
+    detailsExpand_ = new QTimer(this);
+    detailsExpand_->setSingleShot(true);
+    detailsExpand_->setInterval(200);
+    connect(detailsExpand_, &QTimer::timeout, this, [this] {
+        if (!detailsPinned_ && detailsFrame_.contains(mapFromGlobal(QCursor::pos()))) { detailsHover_ = true; update(); }
+    });
+    detailsFold_ = new QTimer(this);
+    detailsFold_->setSingleShot(true);
+    detailsFold_->setInterval(3000);
+    connect(detailsFold_, &QTimer::timeout, this, [this] {
+        if (!detailsPinned_ && detailsHover_) { detailsHover_ = false; update(); }
     });
     checkTimer_ = new QTimer(this);
     checkTimer_->setInterval(30);
@@ -564,11 +578,22 @@ void SystemCanvas::fit() {
     QRectF box;
     for (const SysUnit& u : design_->units) box = box.united(QRectF(u.x, u.y, u.w, u.h));
     for (const SysNote& n : design_->notes) box = box.united(QRectF(n.x, n.y, n.w, n.h));
-    if (!design_->sheet.empty()) box = box.united(design_->sheet.rect());
+    for (int i = 0; i < design_->sheetCount(); ++i) box = box.united(design_->sheetAt(i)->rect());
     box.adjust(-60, -60, 60, 60);
     scale_ = std::clamp(std::min(width() / box.width(), height() / box.height()), 0.05, 3.0);
     offset_ = QPointF(width() / 2.0, height() / 2.0) - box.center() * scale_;
     update();
+}
+
+void SystemCanvas::fitRect(const QRectF& world) {
+    if (world.width() <= 0.0 || world.height() <= 0.0) return;
+    scale_ = std::min(width() / world.width(), height() / world.height());
+    offset_ = QPointF(width() / 2.0, height() / 2.0) - world.center() * scale_;
+    update();
+}
+
+QRectF SystemCanvas::visibleWorld() const {
+    return QRectF(toWorld(QPointF(0, 0)), toWorld(QPointF(width(), height()))).normalized();
 }
 
 void SystemCanvas::deleteSelected(bool removeContents) {
@@ -602,19 +627,17 @@ void SystemCanvas::paintEvent(QPaintEvent*) {
         }
     }
     if (!design_) return;
-    // THE SHEET, under everything: the template's frame and title block, its fields written in.
-    if (!design_->sheet.empty()) {
-        const SysSheet& sheet = design_->sheet;
-        const uint key = qHash(QJsonDocument(QJsonObject{{QStringLiteral("c"), sheet.content}, {QStringLiteral("f"), sheet.fields}}).toJson(QJsonDocument::Compact));
-        if (key != sheetKey_) {
-            sheetKey_ = key;
-            sheetEntities_.clear();
-            for (const QJsonValue v : sheet.content) {
-                Entity e = Entity::fromJson(v.toObject());
-                const QString field = entityFieldKey(e);
-                if (!field.isEmpty() && sheet.fields.contains(field)) e.meta[QStringLiteral("text")] = sheet.fields.value(field).toString();
-                sheetEntities_.push_back(e);
-            }
+    // THE SHEETS, under everything: each template's frame and title block, its fields and revisions written in.
+    sheetCache_.resize(static_cast<size_t>(design_->sheetCount()));
+    for (int si = 0; si < design_->sheetCount(); ++si) {
+        const SysSheet& sheet = *design_->sheetAt(si);
+        const QJsonArray content = design_->sheetContent(sheet);
+        auto& [sheetKey, sheetEntities] = sheetCache_[static_cast<size_t>(si)];
+        const uint key = qHash(QJsonDocument(content).toJson(QJsonDocument::Compact));
+        if (key != sheetKey || sheetEntities.empty()) {
+            sheetKey = key;
+            sheetEntities.clear();
+            for (const QJsonValue v : content) sheetEntities.push_back(Entity::fromJson(v.toObject()));
         }
         const QRectF paper(toScreen(sheet.rect().topLeft()), sheet.rect().size() * scale_);
         if (!plain_) {
@@ -631,7 +654,12 @@ void SystemCanvas::paintEvent(QPaintEvent*) {
         vt.view.scale = sheet.scale * scale_;
         vt.view.x = offset_.x() + sheet.x * scale_;
         vt.view.y = offset_.y() + (sheet.y + sheet.heightMm * sheet.scale) * scale_;
-        for (const Entity& e : sheetEntities_) EntityRenderer::draw(p, e, holder, vt);
+        for (const Entity& e : sheetEntities) EntityRenderer::draw(p, e, holder, vt);
+        // WHICH SHEET IT IS, beside its corner, where there are more than one.
+        if (design_->sheetCount() > 1 && !plain_) {
+            p.setPen(canvasInk);
+            p.drawText(paper.topLeft() + QPointF(0, -5), QStringLiteral("Sheet %1 - %2").arg(si + 1).arg(sheet.name));
+        }
     }
     QFont f = font();
     f.setPointSizeF(std::clamp(9.0 * scale_, 6.0, 16.0));
@@ -700,7 +728,14 @@ void SystemCanvas::paintEvent(QPaintEvent*) {
             const QRectF room(r.left() + 6, r.top() + mark + 7, r.width() - 12, bottom - (r.top() + mark + 7));
             if (room.width() > 4 && room.height() > 4) {
                 const QSizeF size = QSizeF(picture.size()).scaled(room.size() * std::clamp(u.pictureScale, 0.1, 1.0), Qt::KeepAspectRatio);
-                p.drawImage(QRectF(room.center() - QPointF(size.width() / 2, size.height() / 2), size), picture);
+                // WHERE IT SITS in the room: the middle unless a side or corner is chosen.
+                const QString& at = u.pictureAlign;
+                double px = room.center().x() - size.width() / 2, py = room.center().y() - size.height() / 2;
+                if (at.contains(QLatin1String("left"))) px = room.left();
+                if (at.contains(QLatin1String("right"))) px = room.right() - size.width();
+                if (at.contains(QLatin1String("top"))) py = room.top();
+                if (at.contains(QLatin1String("bottom"))) py = room.bottom() - size.height();
+                p.drawImage(QRectF(QPointF(px, py), size), picture);
             }
             nameBox = QRectF(r.left() + 6, bottom + 2, r.width() - 12, line);
             subBox = QRectF(r.left() + 6, bottom + 2 + line, r.width() - 12, line);
@@ -720,6 +755,43 @@ void SystemCanvas::paintEvent(QPaintEvent*) {
     }
     // THE CABLES, each labelled at its middle with a dot for how its drawing stands. Every line - trunks and branches - on
     // the screen first: where two harnesses cross, one jumps the other.
+    // THE UNITS' WALLS ON THE SCREEN: where a harness crossing one may change its ink.
+    std::vector<QRectF> unitBoxes;
+    for (const SysUnit& u : design_->units) unitBoxes.push_back(QRectF(toScreen(u.rect().topLeft()), toScreen(u.rect().bottomRight())));
+    auto paleUnder = [this](const QPolygonF& line, const auto& groundAt, const std::vector<QRectF>& boxes, double width) {
+        // THE PIECES OF A LINE OVER A PALE GROUND, as a band as wide as its hops: cut where it crosses a wall, each
+        // piece's ground looked up at its middle.
+        QPainterPath pale;
+        for (int i = 1; i < line.size(); ++i) {
+            const QPointF a = line[i - 1], b = line[i], d = b - a;
+            std::vector<double> cuts{0.0, 1.0};
+            for (const QRectF& r : boxes) {
+                if (std::abs(d.x()) > 1e-9)
+                    for (const double x : {r.left(), r.right()}) {
+                        const double t = (x - a.x()) / d.x(), y = a.y() + d.y() * t;
+                        if (t > 0.0 && t < 1.0 && y >= r.top() && y <= r.bottom()) cuts.push_back(t);
+                    }
+                if (std::abs(d.y()) > 1e-9)
+                    for (const double y : {r.top(), r.bottom()}) {
+                        const double t = (y - a.y()) / d.y(), x = a.x() + d.x() * t;
+                        if (t > 0.0 && t < 1.0 && x >= r.left() && x <= r.right()) cuts.push_back(t);
+                    }
+            }
+            std::sort(cuts.begin(), cuts.end());
+            for (size_t k = 1; k < cuts.size(); ++k) {
+                if (cuts[k] - cuts[k - 1] < 1e-9) continue;
+                const QPointF from = a + d * cuts[k - 1], to = a + d * cuts[k];
+                if (groundAt(toWorld((from + to) / 2.0)).lightness() < 128) continue;
+                QPainterPath piece(from);
+                piece.lineTo(to);
+                QPainterPathStroker band;
+                band.setWidth(width);
+                band.setCapStyle(Qt::FlatCap);
+                pale.addPath(band.createStroke(piece));
+            }
+        }
+        return pale.simplified();
+    };
     std::vector<QPolygonF> trunks(design_->cables.size());
     std::vector<std::vector<QPolygonF>> limbs(design_->cables.size());
     std::vector<std::pair<int, QPolygonF>> every;
@@ -751,19 +823,40 @@ void SystemCanvas::paintEvent(QPaintEvent*) {
             p.setPen(highlight);
             p.drawPolyline(line);
         }
-        // ITS INK against what it runs over: a harness inside a pale unit dark, one out on a dark canvas light.
-        const std::vector<QPointF> raw = cablePath(c);
-        const QColor ground = raw.size() >= 2 ? behind((raw[raw.size() / 2 - 1] + raw[raw.size() / 2]) / 2.0) : background;
-        const QColor ink = on ? QColor(40, 140, 230) : c.color.isValid() ? c.color : ground.lightness() < 128 ? QColor(210, 218, 229) : QColor(60, 66, 76);
-        p.setPen(QPen(ink, on ? 3.0 : 2.0, Qt::SolidLine, Qt::FlatCap, Qt::MiterJoin));
-        p.setBrush(Qt::NoBrush);
-        p.drawPath(hoppedLine(line, ci, every, hop));
-        // ITS BRANCHES: each from the trunk's middle to its port, a dot where they leave it.
-        for (const QPolygonF& limb : limbs[static_cast<size_t>(ci)]) p.drawPath(hoppedLine(limb, ci, every, hop));
+        // ITS INK against what it runs over, piece by piece: dark where it crosses a pale unit, light out on a dark
+        // canvas - a harness leaving a unit changes where it goes through the wall. Its own colour, or selected: one ink.
+        const QColor lightInk(210, 218, 229), darkInk(60, 66, 76);
+        const bool own = on || c.color.isValid();
+        const QColor ink = on ? QColor(40, 140, 230) : c.color;
+        QPainterPath paleArea;
+        if (!own) {
+            paleArea.addPath(paleUnder(line, behind, unitBoxes, 2.0 * hop + 6.0));
+            for (const QPolygonF& limb : limbs[static_cast<size_t>(ci)]) paleArea.addPath(paleUnder(limb, behind, unitBoxes, 2.0 * hop + 6.0));
+        }
+        auto stroke = [&](const QColor& colour) {
+            p.setPen(QPen(colour, on ? 3.0 : 2.0, Qt::SolidLine, Qt::FlatCap, Qt::MiterJoin));
+            p.setBrush(Qt::NoBrush);
+            p.drawPath(hoppedLine(line, ci, every, hop));
+            // ITS BRANCHES: each from the trunk's middle to its port.
+            for (const QPolygonF& limb : limbs[static_cast<size_t>(ci)]) p.drawPath(hoppedLine(limb, ci, every, hop));
+        };
+        if (own) stroke(ink);
+        else {
+            QPainterPath all;
+            all.addRect(QRectF(rect()).adjusted(-50, -50, 50, 50));
+            p.save();
+            p.setClipPath(all.subtracted(paleArea));
+            stroke(lightInk);
+            p.setClipPath(paleArea);
+            stroke(darkInk);
+            p.restore();
+        }
+        // A DOT WHERE THE BRANCHES LEAVE THE TRUNK, in the ink of the ground it is on.
         if (!limbs[static_cast<size_t>(ci)].empty()) {
+            const QPointF dot = limbs[static_cast<size_t>(ci)].front().front();
             p.setPen(Qt::NoPen);
-            p.setBrush(ink);
-            p.drawEllipse(limbs[static_cast<size_t>(ci)].front().front(), 3.5, 3.5);
+            p.setBrush(own ? ink : behind(toWorld(dot)).lightness() < 128 ? lightInk : darkInk);
+            p.drawEllipse(dot, 3.5, 3.5);
             p.setBrush(Qt::NoBrush);
         }
         const QPointF mid = (line[line.size() / 2 - 1] + line[line.size() / 2]) / 2.0;
@@ -946,6 +1039,8 @@ void SystemCanvas::paintEvent(QPaintEvent*) {
         p.drawRoundedRect(QRectF(progress.topLeft(), QSizeF(progress.width() * std::min(1.0, elapsed / (double(std::max(1, shown)) * kRuleDuration)), 5)), 2, 2);
         p.restore();
     }
+    if (!checkShown_) drawProjectDetails(p);
+    else detailsFrame_ = detailsPin_ = QRect();
     if (design_->units.empty() && design_->notes.empty()) {
         p.setPen(dark ? QColor(170, 181, 198) : QColor(120, 128, 140));
         p.drawText(rect(), Qt::AlignCenter,
@@ -954,8 +1049,123 @@ void SystemCanvas::paintEvent(QPaintEvent*) {
     }
 }
 
+void SystemCanvas::drawProjectDetails(QPainter& p) const {
+    detailsFrame_ = detailsPin_ = QRect();
+    if (!design_ || plain_ || width() < 150) return;
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing, true);
+    const QColor edge(151, 177, 200, 150), fill(20, 29, 40, 175), ink(238, 244, 250), soft(182, 199, 216);
+    QFont text = font();
+    text.setPixelSize(12);
+    // FOLDED: a small square saying what it is.
+    if (!detailsPinned_ && !detailsHover_) {
+        detailsFrame_ = QRect(width() - 84, 12, 72, 72);
+        p.setPen(QPen(edge, 1));
+        p.setBrush(fill);
+        p.drawRoundedRect(detailsFrame_, 4, 4);
+        text.setBold(true);
+        p.setFont(text);
+        p.setPen(ink);
+        p.drawText(detailsFrame_.adjusted(5, 4, -5, -4), Qt::AlignCenter | Qt::TextWordWrap, QStringLiteral("Project details"));
+        p.restore();
+        return;
+    }
+    const QJsonObject& f = design_->sheet.fields;
+    auto field = [&](const char* key) { return f.value(QLatin1String(key)).toString().trimmed(); };
+    QString title = field("title");
+    if (title.isEmpty()) title = design_->name;
+    const QString labels[] = {QStringLiteral("Project"), QStringLiteral("Drawing P/N"), QStringLiteral("Revision"),
+                              QStringLiteral("Title"), QStringLiteral("Contents")};
+    QString values[] = {design_->name, field("drawingNo"), field("revision"), title,
+                        QStringLiteral("%1 units, %2 harnesses").arg(design_->units.size()).arg(design_->cables.size())};
+    const int panelWidth = std::min(290, width() - 24), valueWidth = panelWidth - 102;
+    p.setFont(text);
+    const QFontMetrics metrics(text);
+    int heights[5], panelHeight = 38;
+    for (int i = 0; i < 5; ++i) {
+        if (values[i].isEmpty()) values[i] = QStringLiteral("—");
+        heights[i] = std::clamp(metrics.boundingRect(QRect(0, 0, valueWidth, 1000), Qt::TextWordWrap, values[i]).height(),
+                                metrics.height(), 72);
+        panelHeight += heights[i] + 7;
+    }
+    const QRect panel(width() - panelWidth - 12, 12, panelWidth, panelHeight);
+    detailsFrame_ = panel;
+    detailsPin_ = QRect(panel.right() - 29, panel.top() + 6, 22, 22);
+    p.setPen(QPen(edge, 1));
+    p.setBrush(fill);
+    p.drawRoundedRect(panel, 4, 4);
+    QFont heading = text;
+    heading.setBold(true);
+    p.setFont(heading);
+    p.setPen(ink);
+    p.drawText(QRect(panel.x() + 12, panel.y() + 8, panelWidth - 48, 19), Qt::AlignLeft | Qt::AlignVCenter,
+               QStringLiteral("Project details"));
+    p.setPen(QPen(soft, 1));
+    p.setBrush(QColor(100, 127, 151, 70));
+    p.drawRoundedRect(detailsPin_, 3, 3);
+    // THE PIN, as on the drawing's card: gold and upright while it stays open, tipped over and hollow while it folds.
+    {
+        p.save();
+        p.translate(QPointF(detailsPin_.center()) + QPointF(0.5, 0.5));
+        if (!detailsPinned_) p.rotate(45.0);
+        const QColor pin = detailsPinned_ ? QColor(255, 209, 102) : ink;
+        p.setPen(QPen(pin, 1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.setBrush(detailsPinned_ ? QBrush(pin) : QBrush(Qt::NoBrush));
+        p.drawRoundedRect(QRectF(-4.0, -8.0, 8.0, 2.6), 1.0, 1.0);
+        p.drawPolygon(QPolygonF{QPointF(-2.6, -5.4), QPointF(2.6, -5.4), QPointF(3.4, 0.0), QPointF(-3.4, 0.0)});
+        p.drawRoundedRect(QRectF(-5.5, 0.0, 11.0, 2.4), 1.0, 1.0);
+        p.setPen(QPen(pin, 1.6, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(QPointF(0.0, 2.4), QPointF(0.0, 8.0));
+        p.restore();
+    }
+    p.setFont(text);
+    int top = panel.y() + 34;
+    for (int i = 0; i < 5; ++i) {
+        p.setPen(soft);
+        p.drawText(QRect(panel.x() + 12, top, 84, heights[i]), Qt::AlignLeft | Qt::AlignTop, labels[i]);
+        p.setPen(ink);
+        const QRect valueRect(panel.x() + 96, top, valueWidth, heights[i]);
+        p.save();
+        p.setClipRect(valueRect);
+        p.drawText(valueRect, Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap, values[i]);
+        p.restore();
+        top += heights[i] + 7;
+    }
+    p.restore();
+}
+
+void SystemCanvas::detailsHoverAt(const QPointF& at) {
+    if (detailsPinned_) return;
+    if (detailsFrame_.contains(at.toPoint())) {
+        detailsFold_->stop();
+        if (!detailsHover_ && !detailsExpand_->isActive()) detailsExpand_->start();
+    } else {
+        detailsExpand_->stop();
+        if (detailsHover_ && !detailsFold_->isActive()) detailsFold_->start();
+    }
+}
+
+void SystemCanvas::leaveEvent(QEvent* e) {
+    detailsHoverAt(QPointF(-1, -1));
+    QWidget::leaveEvent(e);
+}
+
 void SystemCanvas::mousePressEvent(QMouseEvent* e) {
     setFocus();
+    // THE PROJECT DETAILS CARD: its pin keeps it open or lets it fold; a click on the folded square opens it pinned.
+    if (detailsFrame_.contains(e->position().toPoint())) {
+        if (e->button() == Qt::LeftButton && (detailsPin_.contains(e->position().toPoint()) || !projectDetailsOpen())) {
+            detailsPinned_ = !detailsPinned_;
+            detailsHover_ = !detailsPinned_;
+            detailsExpand_->stop();
+            detailsFold_->stop();
+            if (detailsHover_) detailsFold_->start();
+            QSettings().setValue(QStringLiteral("system/pinProjectDetails"), detailsPinned_);
+            update();
+        }
+        e->accept();
+        return;
+    }
     if (checkShown_ && e->button() == Qt::LeftButton &&
         QRectF(checkPanelRect().right() - 30, checkPanelRect().top(), 30, 32).contains(e->position())) {
         clearCheck(); return;
@@ -1075,7 +1285,15 @@ void SystemCanvas::mousePressEvent(QMouseEvent* e) {
             }
         }
         // SHIFT+CLICK: what is there added to the selection - units, harnesses, ports, notes - or taken out of it.
+        // SHIFT+DRAG ON A UNIT: the unit taken away from every harness on it, and moved.
         if (e->modifiers() & Qt::ShiftModifier) {
+            if (!hitUnit.isEmpty() && hitNote.isEmpty() && !portAt(pressWorld_, unit, port)) {
+                const SysUnit* u = design_->unit(hitUnit);
+                drag_ = Drag::Detach;
+                detachUnit_ = hitUnit;
+                grabOffset_ = pressWorld_ - QPointF(u->x, u->y);
+                return;
+            }
             toggleAt(pressWorld_);
             return;
         }
@@ -1168,6 +1386,12 @@ void SystemCanvas::mouseMoveEvent(QMouseEvent* e) {
         }
     };
     const QPointF w = toWorld(e->position());
+    if (drag_ == Drag::Detach && moved_ && design_->unit(detachUnit_)) {
+        announce();
+        detachUnitFromCables(detachUnit_);
+        select(detachUnit_, QString(), QString());
+        drag_ = Drag::Unit;
+    }
     switch (drag_) {
     case Drag::CtrlCopy: {
         // FAR ENOUGH TO BE A DRAG: the new one made, and dragged from here on as it would be had it been there already.
@@ -1322,6 +1546,8 @@ void SystemCanvas::mouseMoveEvent(QMouseEvent* e) {
         update();
         break;
     case Drag::None: {
+        detailsHoverAt(e->position());
+        if (detailsFrame_.contains(e->position().toPoint())) { setCursor(Qt::ArrowCursor); break; }
         QString unit, port, sized;
         const int how = tool_ == SysTool::Select ? sizeHandleAt(w, sized) : 0;
         const QString note = noteAt(w);
@@ -1372,6 +1598,11 @@ void SystemCanvas::mouseReleaseEvent(QMouseEvent* e) {
         copyKind_.clear();
         return;
     }
+    if (was == Drag::Detach) {
+        // SHIFT+CLICK, NOT DRAGGED: the selection as before.
+        toggleAt(pressWorld_);
+        return;
+    }
     if (was == Drag::Zone) {
         zoneEnd_ = toWorld(e->position());
         selectZone(QRectF(pressWorld_, zoneEnd_).normalized(), zoneCrossing()); return;
@@ -1397,6 +1628,16 @@ void SystemCanvas::mouseReleaseEvent(QMouseEvent* e) {
         }
         finishCable(e);
     }
+}
+
+void SystemCanvas::detachUnitFromCables(const QString& unit) {
+    // A HARNESS ENDING ON IT goes; a branch of one to it goes and leaves the harness.
+    QStringList gone;
+    for (SysCable& c : design_->cables) {
+        if (c.aUnit == unit || c.bUnit == unit) { gone << c.id; continue; }
+        std::erase_if(c.branches, [&](const SysBranch& b) { return b.unit == unit; });
+    }
+    for (const QString& id : gone) design_->removeCable(id);
 }
 
 void SystemCanvas::finishCable(const QMouseEvent* e) {

@@ -48,6 +48,9 @@ struct SysUnit {
     QByteArray picture;    // a picture shown in it (PNG), none: no picture
     bool pictureShown = true;    // drawn in the unit, or kept but not drawn
     double pictureScale = 1.0;   // how much of the room in the unit it takes, 0.1 to 1
+    // WHERE IN THE ROOM IT SITS: "" (the middle), "top", "bottom", "left", "right", "top-left", "top-right",
+    // "bottom-left", "bottom-right".
+    QString pictureAlign;
     // THE UNIT IT IS IN - a PCBA in its housing - kept inside it, moved with it. Empty: in none.
     QString parent;
     // WHAT IS NOT SHOWN ON THE DIAGRAM of its own: "name", "pn", "rev", "desc".
@@ -162,10 +165,22 @@ struct SysSheet {
     double x = 0.0, y = 0.0;    // its top left corner on the diagram
     double scale = 2.0;         // diagram units to the millimetre
     QJsonObject fields;         // "title", "drawingNo", "revision"... written into the template's fields
+    // WHERE A FIELD'S TEXT COMES FROM, by its key: one of sysFieldSources() - the project's name, its drawing number,
+    // the latest revision, the date... None: what is typed in `fields`.
+    QJsonObject sources;
     QJsonArray layers;          // the template's layers, its frame's colours with them
     bool empty() const { return name.isEmpty(); }
     QRectF rect() const { return QRectF(x, y, widthMm * scale, heightMm * scale); }
 };
+
+// ONE ISSUE OF THE DESIGN, as a template's revision table lists it: its columns, by the same names.
+struct SysRevision {
+    QString rev, note, eco, drawn, checked, approved, date;
+};
+
+// WHAT A SHEET'S FIELD CAN TAKE ITS TEXT FROM: the id kept in SysSheet::sources and what the list says for it. The first
+// ("") is the text typed in.
+const std::vector<std::pair<QString, QString>>& sysFieldSources();
 
 struct SystemDesign {
     QString name;
@@ -174,6 +189,18 @@ struct SystemDesign {
     QStringList disabledRules;
     QJsonObject ruleLevels;
     std::vector<SysIssue> bypassed;
+    // MORE SHEETS than the first: each a template round its own part of the diagram, a page of its own in the PDF.
+    std::vector<SysSheet> moreSheets;
+    // THE REVISIONS, oldest first: written into every sheet's revision table, the last the revision a field can take.
+    std::vector<SysRevision> revisions;
+    // A SHEET BY ITS PLACE: 0 the first (`sheet`), then `moreSheets`; how many there are (an empty first counts none).
+    int sheetCount() const { return sheet.empty() ? 0 : 1 + static_cast<int>(moreSheets.size()); }
+    const SysSheet* sheetAt(int i) const { return i == 0 ? &sheet : i > 0 && i <= static_cast<int>(moreSheets.size()) ? &moreSheets[static_cast<size_t>(i - 1)] : nullptr; }
+    SysSheet* sheetAt(int i) { return const_cast<SysSheet*>(static_cast<const SystemDesign*>(this)->sheetAt(i)); }
+    // WHAT A SHEET'S FIELDS SAY: what is typed, or what their source gives. Its content with them written in, and the
+    // revisions in its revision table - the newest where there are more than it has rows.
+    QJsonObject sheetTexts(const SysSheet& s) const;
+    QJsonArray sheetContent(const SysSheet& s) const;
     QColor background = QColor(48, 52, 58);
     // THE DESIGNATORS' COLOUR - units', ports' and cables' names. None: Auto, each one dark or light against what is
     // behind it, so a label dragged from a pale unit onto a dark canvas stays readable.
@@ -188,7 +215,7 @@ struct SystemDesign {
 
     bool empty() const { return units.empty() && cables.empty() && notes.empty() && disabledRules.isEmpty()
                                && ruleLevels.isEmpty() && bypassed.empty() && background == QColor(48, 52, 58)
-                               && !designatorColor.isValid() && sheet.empty(); }
+                               && !designatorColor.isValid() && sheet.empty() && moreSheets.empty() && revisions.empty(); }
     const SysNote* note(const QString& id) const;
     SysNote* note(const QString& id);
     // A NOTE put at a place; its id. One taken away.

@@ -3,6 +3,7 @@
 #include "app/SystemCanvas.h"
 #include "system/SystemDesign.h"
 
+#include <QImage>
 #include <QJsonObject>
 #include <QSet>
 #include <QWidget>
@@ -28,6 +29,19 @@ class QTabWidget;
 class QMenu;
 
 namespace Edraw_Desktop {
+
+// WHAT THE PDF IS MADE OF: which part of the diagram goes out - every sheet a page, the whole diagram, what the window
+// shows, or the units selected - the paper ("" as the sheet, else "A4" to "A0", "Letter", "Tabloid") and its way round,
+// a margin, and black on white or in colour.
+struct SysPdfOptions {
+    enum What { Sheets, Whole, Window, Selected };
+    What what = Sheets;
+    QString paper;
+    bool portrait = false;
+    double marginMm = 0.0;
+    bool blackWhite = false;
+};
+
 
 // THE SYSTEM DESIGN: the system diagram (SystemCanvas) in the middle; on the right what is selected - a unit's name,
 // part number, revision and ports, or a cable's name, part number, revision, length, wires and the drawing it is
@@ -110,6 +124,7 @@ public:
     // ITS PICTURE drawn in the unit or not, and how much of the room in it it takes (0.1 to 1); saved to a file.
     void setUnitPictureShown(const QString& unit, bool shown);
     void setUnitPictureScale(const QString& unit, double scale);
+    void setUnitPictureAlign(const QString& unit, const QString& align);
     bool saveUnitPicture(const QString& unit, const QString& path = QString());
     // WHAT A UNIT OR HARNESS SHOWS of itself on the diagram ("name", "pn", "rev", "desc"), as its eyes say.
     void setShown(const QString& id, const QString& what, bool shown);
@@ -121,14 +136,29 @@ public:
     bool exportVisio(const QString& path = QString());
     // THE DIAGRAM OUT AS A PICTURE (PNG) or as a PDF - its sheet with it, where it has one.
     bool exportPng(const QString& path = QString());
+    // THE PDF: with no file given, the PDF window - what goes out, the paper, its way round, margins, colour, a preview.
+    // Given a file: every sheet a page (or the whole diagram where there is none), as the sheet's paper.
     bool exportPdf(const QString& path = QString());
+    int pdfPageCount(const SysPdfOptions& o) const;
+    QImage pdfPage(const SysPdfOptions& o, int page, int longSide) const;
+    bool writePdf(const SysPdfOptions& o, const QString& path) const;
     // A TEMPLATE'S SHEET round the diagram: an Edraw drawing template (.etp) - its frame and title block - fitted round what
     // is drawn, its title filled in; chosen from those installed (or a file) where none is given. Its fields; taken away.
-    bool applyTemplate(const QString& path = QString());
+    // ANOTHER: a sheet more, beside the last - a page more in the PDF. The rest work on the sheet chosen in the panel.
+    bool applyTemplate(const QString& path = QString(), bool another = false);
     bool askSheetFields();
     void setSheetField(const QString& key, const QString& value);
+    // WHERE A FIELD OF THE SHEET CHOSEN TAKES ITS TEXT FROM: an id of sysFieldSources(), "" for what is typed.
+    void setSheetFieldSource(const QString& key, const QString& source);
     QStringList sheetFieldKeys() const;
     void removeSheet();
+    // THE SHEET THE PANEL WORKS ON: 0 the first.
+    int currentSheet() const { return sheetAt_; }
+    void setCurrentSheet(int i);
+    // THE REVISIONS: one added after the last (its letter or number the next, dated today), one taken away, one written.
+    void addRevision();
+    void removeRevision(int row);
+    void setRevision(int row, const SysRevision& r);
     // THE TEMPLATES THERE ARE TO CHOOSE FROM: those installed, by name, each with its file - and the plain sheets built in
     // ("builtin:A3").
     QList<QPair<QString, QString>> templateChoices() const;
@@ -214,9 +244,15 @@ private:
     QLabel* unitPicturePreview_ = nullptr;
     QToolButton* unitPictureEye_ = nullptr;
     QSlider* unitPictureSize_ = nullptr;
+    QComboBox* unitPictureAlign_ = nullptr;
     // THE SHEET, on the panel when nothing is selected: its template and its fields.
     QLabel* sheetName_ = nullptr;
     QWidget* sheetFields_ = nullptr;
+    QComboBox* sheetPick_ = nullptr;
+    QTableWidget* revisions_ = nullptr;
+    int sheetAt_ = 0;   // the sheet the panel works on. Not saved.
+    SysSheet* chosenSheet();
+    const SysSheet* chosenSheet() const;
     void fillSheetPanel();
     QStringList selectedIds(int what) const;   // 0 units, 1 harnesses, 2 notes
     CheckScope lastScope_ = CheckScope::All;   // what Check again runs: the check last run. Not saved.

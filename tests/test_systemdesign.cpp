@@ -4,6 +4,7 @@
 #include "app/MainWindow.h"
 #include "app/SystemCanvas.h"
 #include "app/SystemDesignView.h"
+#include "app/Recovery.h"
 #include "app/RuleExplainer.h"
 #include "app/Editor.h"
 #include "app/PdfViewer.h"
@@ -39,6 +40,9 @@
 #include <QFileInfo>
 #include <QXmlStreamReader>
 #include <QComboBox>
+#include <QDate>
+#include <QRegularExpression>
+#include <QSettings>
 #include <QKeyEvent>
 #include <QPlainTextEdit>
 #include <QTableWidget>
@@ -2379,6 +2383,293 @@ void testRoundEight(const QString& base) {
 
 } // namespace
 
+void testShiftDetachAndPicturePlace() {
+    QJsonObject stored;
+    SystemDesignView view;
+    view.setStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    view.resize(1100, 700);
+    view.show();
+    QApplication::processEvents();
+    SystemCanvas* c = view.canvas();
+    SystemDesign& d = view.design();
+    const QString a = d.addUnit(0, 0), b = d.addUnit(400, 0), e = d.addUnit(400, 300);
+    const QString pa = d.addPort(a, QStringLiteral("right"), 0.3), pa2 = d.addPort(a, QStringLiteral("right"), 0.7);
+    const QString pb = d.addPort(b, QStringLiteral("left"), 0.5), pe = d.addPort(e, QStringLiteral("left"), 0.5);
+    const QString pb2 = d.addPort(b, QStringLiteral("bottom"), 0.5);
+    d.addCable(a, pa, b, pb);
+    const QString kept = d.addCable(a, pa2, e, pe);
+    d.cable(kept)->branches.push_back(SysBranch{b, pb2, false});
+    c->fit();
+    auto shift = [&](QEvent::Type type, const QPointF& at, Qt::MouseButtons buttons, Qt::MouseButton button) {
+        QMouseEvent ev(type, at, c->mapToGlobal(at), button, buttons, Qt::ShiftModifier);
+        QApplication::sendEvent(c, &ev);
+    };
+    // ---- SHIFT+CLICK, NOT DRAGGED: the selection as before, nothing taken off ----
+    const QPointF onB = c->unitOnScreen(b);
+    shift(QEvent::MouseButtonPress, onB, Qt::LeftButton, Qt::LeftButton);
+    shift(QEvent::MouseButtonRelease, onB, Qt::NoButton, Qt::LeftButton);
+    check(d.cables.size() == 2 && d.cable(kept)->branches.size() == 1, "shift-drag: a Shift+click alone leaves the harnesses on");
+    // ---- SHIFT+DRAG: the unit off every harness, and moved ----
+    const double x0 = d.unit(b)->x;
+    shift(QEvent::MouseButtonPress, onB, Qt::LeftButton, Qt::LeftButton);
+    for (int i = 1; i <= 5; ++i) shift(QEvent::MouseMove, onB + QPointF(0, 30.0 * i), Qt::LeftButton, Qt::NoButton);
+    shift(QEvent::MouseButtonRelease, onB + QPointF(0, 150), Qt::NoButton, Qt::LeftButton);
+    QApplication::processEvents();
+    check(d.cables.size() == 1 && d.cables[0].id == kept, "shift-drag: the harness ending on the unit dragged is gone");
+    check(d.cable(kept) && d.cable(kept)->branches.empty(), "shift-drag: a branch to it is gone, the harness it was on kept");
+    check(std::abs(d.unit(b)->x - x0) < 1e-6 && d.unit(b)->y > 50, "shift-drag: the unit moved with the pointer");
+    view.undo();
+    check(d.cables.size() == 2 && d.cable(kept) && d.cable(kept)->branches.size() == 1,
+          "shift-drag: one Undo puts the harnesses back");
+
+    // ---- WHERE A UNIT'S PICTURE SITS ----
+    SysUnit* u = d.unit(a);
+    u->pictureAlign = QStringLiteral("top-right");
+    const SystemDesign back = SystemDesign::fromJson(d.toJson());
+    check(back.unit(a) && back.unit(a)->pictureAlign == QLatin1String("top-right"), "picture place: saved and read back");
+    check(!d.toJson().value(QStringLiteral("units")).toArray().at(1).toObject().contains(QStringLiteral("pictureAlign")),
+          "picture place: the middle (as it starts) not written");
+    auto* combo = view.findChild<QComboBox*>(QStringLiteral("systemUnitPictureAlign"));
+    check(combo && combo->count() == 9, "picture place: the unit panel lists the middle, four sides and four corners");
+
+    // ---- THE PROJECT DETAILS CARD: folded, opened pinned by a click, its pin lets it fold ----
+    QSettings().setValue(QStringLiteral("system/pinProjectDetails"), false);
+    SystemDesignView second;
+    second.setStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    second.resize(1100, 700);
+    second.show();
+    SystemCanvas* sc = second.canvas();
+    second.design().name = QStringLiteral("Test rig");
+    sc->grab();
+    const QRect folded = sc->projectDetailsFrame();
+    check(!folded.isEmpty() && folded.width() < 100 && !sc->projectDetailsOpen(), "project details: folded to a small square at first");
+    check(folded.right() > sc->width() - 30 && folded.top() < 30, "project details: at the top right of the diagram");
+    click(sc, QPointF(folded.center()));
+    sc->grab();
+    check(sc->projectDetailsPinned() && sc->projectDetailsFrame().width() > 200, "project details: a click on the square opens it pinned");
+    check(QSettings().value(QStringLiteral("system/pinProjectDetails")).toBool(), "project details: the pin kept in the settings");
+    const QImage shot = sc->grab().toImage();
+    if (const QString out = qEnvironmentVariable("EDRAW_SHOT_DIR"); !out.isEmpty()) shot.save(out + QStringLiteral("/project-details.png"));
+    click(sc, QPointF(sc->projectDetailsPin().center()));
+    check(!sc->projectDetailsPinned() && sc->projectDetailsOpen(), "project details: the pin taken out - still open until it folds");
+    QSettings().setValue(QStringLiteral("system/pinProjectDetails"), false);
+}
+
+void testHarnessInkByGround() {
+    // ---- A HARNESS FROM A UNIT INSIDE A PALE UNIT, OUT THROUGH ITS WALL ONTO THE DARK CANVAS ----
+    QJsonObject stored;
+    SystemDesignView view;
+    view.setStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    view.resize(1100, 700);
+    view.show();
+    QApplication::processEvents();
+    SystemCanvas* c = view.canvas();
+    SystemDesign& d = view.design();
+    const QString mother = d.addUnit(0, 0);
+    d.unit(mother)->w = 400;
+    d.unit(mother)->h = 300;
+    const QString child = d.addUnit(40, 100), out = d.addUnit(700, 100);
+    d.unit(child)->parent = mother;
+    const QString pc = d.addPort(child, QStringLiteral("right"), 0.5), po = d.addPort(out, QStringLiteral("left"), 0.5);
+    d.addCable(child, pc, out, po);
+    c->fit();
+    const QImage shot = c->grab().toImage();
+    if (const QString dir = qEnvironmentVariable("EDRAW_SHOT_DIR"); !dir.isEmpty()) shot.save(dir + QStringLiteral("/harness-ink.png"));
+    const double y = d.unit(child)->y + d.unit(child)->h / 2.0;
+    // The line's own pixels at a place: the one standing out most from its neighbours a few pixels above and below.
+    auto lineAt = [&](double worldX) {
+        const QPointF s = c->toScreen({worldX, y});
+        const int x = qRound(s.x()), sy = qRound(s.y());
+        QColor best = shot.pixelColor(x, sy);
+        int most = -1;
+        for (int dy = -3; dy <= 3; ++dy) {
+            const QColor here = shot.pixelColor(x, sy + dy), away = shot.pixelColor(x, sy + 12);
+            const int differ = std::abs(here.lightness() - away.lightness());
+            if (differ > most) { most = differ; best = here; }
+        }
+        return best;
+    };
+    const double inside = (d.unit(child)->x + d.unit(child)->w + 400.0) / 2.0, outside = (400.0 + 700.0) / 2.0;
+    check(lineAt(inside).lightness() < 128, "harness ink: dark where it runs over the pale unit it leaves through");
+    check(lineAt(outside).lightness() >= 150, "harness ink: light out on the dark canvas - the same harness");
+}
+
+void testView3DSideNarrow() {
+    // ---- THE 3D VIEW'S SIDE PANEL: its buttons and fields downward, two to a row at most, so it stays narrow ----
+    View3DPane pane;
+    pane.resize(1200, 700);
+    pane.show();
+    QApplication::processEvents();
+    auto* link = pane.findChild<QToolButton*>(QStringLiteral("view3dLinkPart"));
+    auto* route = pane.findChild<QToolButton*>(QStringLiteral("view3dRouteFromHarness"));
+    auto* x = pane.findChild<QDoubleSpinBox*>(QStringLiteral("view3dMoveX"));
+    auto* y = pane.findChild<QDoubleSpinBox*>(QStringLiteral("view3dMoveY"));
+    check(link && route && x && y, "3D side: its Link, Route and position fields are there");
+    if (!link || !route || !x || !y) return;
+    QWidget* side = link->parentWidget();
+    std::printf("  3D side panel: needs %d px across\n", side->minimumSizeHint().width());
+    check(route->mapTo(side, QPoint()).y() > link->mapTo(side, QPoint()).y(), "3D side: Route from harness under Link, not beside it");
+    check(pane.findChild<QWidget*>(QStringLiteral("view3dMoveBox"))->minimumSizeHint().width() <= 260,
+          "3D side: the position box narrow - X, Y and Z one to a row");
+    check(side->minimumSizeHint().width() <= 300, "3D side: the side panel needs no more than 300 px across");
+}
+
+void testSheetsRevisionsAndPdf(const QString& dir) {
+    QJsonObject stored;
+    SystemDesignView view;
+    view.setStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    view.resize(1100, 700);
+    view.show();
+    QApplication::processEvents();
+    SystemDesign& d = view.design();
+    d.name = QStringLiteral("Rig");
+    const QString a = d.addUnit(0, 0), b = d.addUnit(400, 0);
+    d.addCable(a, d.addPort(a, QStringLiteral("right"), 0.5), b, d.addPort(b, QStringLiteral("left"), 0.5));
+
+    // ---- SEVERAL SHEETS: the first round the diagram, another beside it ----
+    check(view.applyTemplate(QStringLiteral("builtin:A3")) && d.sheetCount() == 1, "sheets: a first sheet put round the diagram");
+    check(view.applyTemplate(QStringLiteral("builtin:A4"), true) && d.sheetCount() == 2 && view.currentSheet() == 1,
+          "sheets: another added - two, the new one chosen");
+    check(d.moreSheets[0].x > d.sheet.rect().right() && std::abs(d.moreSheets[0].widthMm - d.sheet.widthMm) > 1.0,
+          "sheets: the second beside the first, on its own template's paper");
+    auto* pick = view.findChild<QComboBox*>(QStringLiteral("systemSheetPick"));
+    check(pick && pick->count() == 2 && pick->currentIndex() == 1, "sheets: the panel lists both, the second chosen");
+
+    // ---- REVISIONS: added, the next letter, dated today ----
+    view.addRevision();
+    view.addRevision();
+    check(d.revisions.size() == 2 && d.revisions[0].rev == QLatin1String("A") && d.revisions[1].rev == QLatin1String("B") &&
+              d.revisions[1].date == QDate::currentDate().toString(Qt::ISODate),
+          "revisions: A, then B - dated today");
+    SysRevision second = d.revisions[1];
+    second.note = QStringLiteral("Harness W1 added");
+    view.setRevision(1, second);
+    auto* table = view.findChild<QTableWidget*>(QStringLiteral("systemRevisions"));
+    check(table && table->rowCount() == 2 && table->item(1, 1) && table->item(1, 1)->text() == QLatin1String("Harness W1 added"),
+          "revisions: the panel's table shows them as written");
+    // In every sheet's revision table.
+    auto revTableHas = [&](const SysSheet& s, const QString& text) {
+        for (const QJsonValue v : d.sheetContent(s)) {
+            const QJsonObject e = v.toObject();
+            if (e.value(QStringLiteral("revisionTable")).toBool())
+                for (const QJsonValue c : e.value(QStringLiteral("cells")).toArray())
+                    if (c.toString() == text) return true;
+        }
+        return false;
+    };
+    check(revTableHas(d.sheet, QStringLiteral("B")) && revTableHas(d.moreSheets[0], QStringLiteral("Harness W1 added")),
+          "revisions: written into the revision table of every sheet");
+
+    // ---- A FIELD'S SOURCE: the latest revision, written into the sheet ----
+    const QStringList keys = view.sheetFieldKeys();
+    check(!keys.isEmpty(), "sources: the sheet chosen has fields");
+    if (keys.isEmpty()) return;
+    const QString key = keys.contains(QStringLiteral("revision")) ? QStringLiteral("revision") : keys.first();
+    view.setSheetFieldSource(key, QStringLiteral("revision"));
+    check(d.moreSheets[0].sources.value(key).toString() == QLatin1String("revision") &&
+              d.sheetTexts(d.moreSheets[0]).value(key).toString() == QLatin1String("B"),
+          "sources: a field set to the latest revision says B");
+    auto* source = view.findChild<QComboBox*>(QStringLiteral("systemSheetSource_") + key);
+    auto* edit = view.findChild<QLineEdit*>(QStringLiteral("systemSheetField_") + key);
+    check(source && edit && source->currentData().toString() == QLatin1String("revision") && !edit->isEnabled() &&
+              edit->text() == QLatin1String("B"),
+          "sources: its list shows the source, its text the revision - not to be typed in");
+    view.setSheetFieldSource(key, QStringLiteral("sheet"));
+    check(d.sheetTexts(d.moreSheets[0]).value(key).toString() == QLatin1String("2 of 2"), "sources: the sheet number - 2 of 2");
+    view.setSheetFieldSource(key, QString());
+    check(!d.moreSheets[0].sources.contains(key) && d.moreSheets[0].fields.value(key).toString() == QLatin1String("2 of 2"),
+          "sources: back to typed - starting from what it said");
+
+    // ---- SAVED AND READ BACK ----
+    view.setSheetFieldSource(key, QStringLiteral("project"));
+    const SystemDesign back = SystemDesign::fromJson(d.toJson());
+    check(back.sheetCount() == 2 && back.revisions.size() == 2 && back.revisions[1].note == QLatin1String("Harness W1 added") &&
+              back.moreSheets[0].sources.value(key).toString() == QLatin1String("project"),
+          "saved: the sheets, the revisions and the sources read back");
+    check(!SystemDesign().toJson().contains(QStringLiteral("moreSheets")) && !SystemDesign().toJson().contains(QStringLiteral("revisions")),
+          "saved: none written where there are none");
+
+    // ---- THE PDF: a page a sheet, each on its own paper; the whole diagram one page ----
+    SysPdfOptions sheets;
+    check(view.pdfPageCount(sheets) == 2, "pdf: every sheet - two pages");
+    const QString pdf = dir + QStringLiteral("/sheets.pdf");
+    check(view.writePdf(sheets, pdf), "pdf: written");
+    QFile f(pdf);
+    f.open(QIODevice::ReadOnly);
+    const QByteArray bytes = f.readAll();
+    int pageCount = 0;
+    const QRegularExpression pageObject(QStringLiteral(R"(/Type\s*/Page[^s])"));
+    for (auto it = pageObject.globalMatch(QString::fromLatin1(bytes)); it.hasNext(); it.next()) ++pageCount;
+    check(pageCount == 2, "pdf: the file has two pages");
+    SysPdfOptions whole;
+    whole.what = SysPdfOptions::Whole;
+    whole.paper = QStringLiteral("A4");
+    whole.portrait = true;
+    check(view.pdfPageCount(whole) == 1, "pdf: the whole diagram - one page");
+    const QImage upright = view.pdfPage(whole, 0, 600);
+    check(upright.height() == 600 && upright.width() < upright.height() && std::abs(upright.width() - 600 * 210 / 297) <= 2,
+          "pdf: A4 portrait - the page upright, A4's shape");
+    whole.portrait = false;
+    const QImage across = view.pdfPage(whole, 0, 600);
+    check(across.width() == 600 && across.height() < across.width(), "pdf: A4 landscape - the page across");
+    const QImage first = view.pdfPage(sheets, 0, 900);
+    if (const QString shots = qEnvironmentVariable("EDRAW_SHOT_DIR"); !shots.isEmpty()) {
+        first.save(shots + QStringLiteral("/pdf-sheet1.png"));
+        view.pdfPage(sheets, 1, 900).save(shots + QStringLiteral("/pdf-sheet2.png"));
+    }
+    check(!first.isNull() && std::abs(double(first.width()) / first.height() - d.sheet.widthMm / d.sheet.heightMm) < 0.01,
+          "pdf: as the sheet - the first page the first sheet's shape");
+    check(view.exportPdf(dir + QStringLiteral("/plain.pdf")), "pdf: a file given - written with no window");
+
+    // ---- A SHEET TAKEN AWAY: the first's place taken by the next ----
+    view.setCurrentSheet(0);
+    const QString secondName = d.moreSheets[0].name;
+    view.removeSheet();
+    check(d.sheetCount() == 1 && d.sheet.name == secondName, "sheets: the first taken away - the second is the first now");
+}
+
+void testRecoveryCopies() {
+    QTemporaryDir folder;
+    qputenv("EDRAW_RECOVERY_DIR", folder.path().toUtf8());
+    {
+        MainWindow w;
+        w.show();
+        QApplication::processEvents();
+        // ---- A DRAWING WITH CHANGES NOT SAVED: a .dbak ----
+        Document* doc = w.editDoc();
+        doc->drawingDetails()[QStringLiteral("title")] = QStringLiteral("Recover me");
+        doc->setDirty(true);
+        // ---- THE SYSTEM DESIGN CHANGED: a .sbak ----
+        auto* sys = w.findChild<SystemDesignView*>(QStringLiteral("systemDesign"));
+        check(sys != nullptr, "recovery: the system design view is there");
+        if (!sys) return;
+        sys->setTool(SysTool::Unit);
+        click(sys->canvas(), sys->canvas()->toScreen({100, 100}));
+        QApplication::processEvents();
+        w.writeRecoveryNow();
+        const auto copies = recovery::list();
+        QString dbak, sbak;
+        for (const recovery::Entry& e : copies) (e.system ? sbak : dbak) = e.path;
+        check(copies.size() == 2 && dbak.endsWith(QLatin1String(".dbak")) && sbak.endsWith(QLatin1String(".sbak")),
+              "recovery: one .dbak for the drawing changed, one .sbak for the system design");
+        // ---- RECOVERED: the drawing in a tab of its own, not saved; the system design in place of the one open ----
+        check(w.recoverFile(dbak) && w.editDoc() != doc &&
+                  w.editDoc()->drawingDetails().value(QStringLiteral("title")).toString() == QLatin1String("Recover me") &&
+                  w.editDoc()->dirty(),
+              "recovery: a .dbak opens as a new drawing, its contents back, not yet saved");
+        sys->design() = SystemDesign();
+        check(w.recoverFile(sbak) && sys->design().units.size() == 1, "recovery: a .sbak puts the system design back");
+        // ---- NOTHING CHANGED: nothing written again ----
+        w.writeRecoveryNow();
+        for (const recovery::Entry& e : recovery::list()) QFile::remove(e.path);
+        w.editDoc()->setDirty(false);
+        doc->setDirty(false);
+        w.writeRecoveryNow();
+        check(recovery::list().empty(), "recovery: nothing changed since - no copy written");
+    }
+    qunsetenv("EDRAW_RECOVERY_DIR");
+}
+
 int run_systemdesign_tests() {
     std::printf("system design\n");
     QTemporaryDir dir;
@@ -2411,6 +2702,14 @@ int run_systemdesign_tests() {
     testRoundSeven(dir.path());
     testSystemTabPanels();
     testRoundEight(dir.path());
+    testShiftDetachAndPicturePlace();
+    testRecoveryCopies();
+    testHarnessInkByGround();
+    testView3DSideNarrow();
+    {
+        QTemporaryDir pdfDir;
+        testSheetsRevisionsAndPdf(pdfDir.path());
+    }
     std::printf("  system design: %s\n", g_fail == 0 ? "OK" : "FAILED");
     return g_fail;
 }

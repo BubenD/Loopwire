@@ -397,6 +397,28 @@ void draw(QPainter& p, const QString& k, const QColor& ink, const QColor& acc) {
         p.drawPolyline(QPolygonF{QPointF(13, 18), QPointF(18, 24), QPointF(29, 9)});
         return;
     }
+    if (k == QLatin1String("import")) {
+        // A sheet and an arrow into it.
+        p.setPen(QPen(ink, 1.4));
+        p.setBrush(QColor(240, 242, 246));
+        p.drawRect(QRectF(12, 5, 16, 22));
+        p.setPen(QPen(ink, 1.0));
+        for (double y : {10.0, 14.0, 18.0, 22.0}) p.drawLine(QPointF(15, y), QPointF(25, y));
+        p.setPen(QPen(QColor(40, 170, 110), 2.4, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(QPointF(3, 16), QPointF(16, 16));
+        p.drawLine(QPointF(12, 12), QPointF(16, 16));
+        p.drawLine(QPointF(12, 20), QPointF(16, 16));
+        return;
+    }
+    if (k == QLatin1String("openfile")) {
+        // An open folder.
+        p.setPen(QPen(ink, 1.4));
+        p.setBrush(QColor(236, 200, 110));
+        p.drawPolygon(QPolygonF{{3, 25}, {3, 8}, {11, 8}, {13, 11}, {25, 11}, {25, 25}});
+        p.setBrush(QColor(248, 222, 150));
+        p.drawPolygon(QPolygonF{{3, 25}, {8, 15}, {30, 15}, {25, 25}});
+        return;
+    }
     if (k == QLatin1String("export")) {
         // A sheet and an arrow out of it.
         p.setPen(QPen(ink, 1.4));

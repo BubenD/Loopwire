@@ -168,6 +168,8 @@ add_library(edraw_core STATIC
     src/app/ribbon/SystemTab.cpp
     src/app/SystemCanvas.cpp
     src/app/SystemDesignView.cpp
+    src/app/Recovery.h
+    src/app/Recovery.cpp
     src/app/DrawingFinderDialog.cpp
     src/app/PdfViewer.h
     src/app/PdfViewer.cpp

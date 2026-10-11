@@ -151,6 +151,12 @@ public:
     // The bill's own window, opened. Public beside addPartToBom because the two together are the thing worth
     // checking: a line added in one place has to appear in the other.
     void openBomWindowForTest();
+    // RECOVERY COPIES (app/Recovery.h): every drawing with changes not saved written to a .dbak, and the system
+    // design changed since the last copy to a .sbak - on a timer, and now for a test. A copy opened again: a drawing
+    // in a tab of its own, not saved; the system design in place of the one open.
+    void writeRecoveryNow();
+    bool recoverFile(const QString& path);
+    void showRecovery();
     // The side bill redrawn, for a test that the columns the configuration asks for are the columns
     // both views of the bill show.
     void refreshBomPanelForTest() { refreshBomPanel(); }
@@ -1094,6 +1100,8 @@ private:
     QStackedWidget* centralStack_ = nullptr;
     QWidget* preview3dHost_ = nullptr;
     QWidget* systemTabPage_ = nullptr;
+    QTimer* recoveryTimer_ = nullptr;
+    bool systemUnbacked_ = false;   // the system design changed since its last recovery copy. Not saved.
     class SystemDesignView* systemView_ = nullptr;
     QWidget* preview3dStandIn_ = nullptr;
     bool preview3dOn_ = false;
