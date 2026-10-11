@@ -144,6 +144,11 @@ private:
     // given up.
     void finishCable(const QMouseEvent* e);
     void detachUnitFromCables(const QString& unit);
+    // A HARNESS'S LOOSE END near a point: its cable and which end (0 a, 1 b, 2 on its branches); plugged in where let go.
+    bool looseEndAt(const QPointF& w, QString& cable, int& which) const;
+    void plugLooseEnd(const QPointF& w);
+    QString looseCable_;   // the loose end being dragged. Not saved.
+    int looseWhich_ = -1;
     // After a unit, port, cable or note is put: back to Select, unless Shift is held to put another.
     void placed(const QMouseEvent* e);
     // Whether a unit lies inside another (a PCBA in its housing).
@@ -160,7 +165,7 @@ private:
     double scale_ = 1.0;
     QPointF offset_{40.0, 40.0};
     // A drag under way: a unit, a note or a port moved, a unit sized, a cable drawn from a port, the view moved.
-    enum class Drag { None, Unit, Note, Port, Size, NoteSize, PortLabel, Zone, Group, CableMove, Cable, Pan, CtrlCopy, Detach };
+    enum class Drag { None, Unit, Note, Port, Size, NoteSize, PortLabel, Zone, Group, CableMove, Cable, Pan, CtrlCopy, Detach, LooseEnd };
     // CTRL HELD ON SOMETHING: what it was ("unit", "port", "note", "cable") and which - a new one made once the pointer moves.
     QString copyKind_, copyUnit_, copyPort_, copyNote_;
     Drag drag_ = Drag::None;

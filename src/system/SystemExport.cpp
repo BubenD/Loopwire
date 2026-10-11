@@ -230,9 +230,11 @@ std::vector<QPointF> sysBranchPath(const SystemDesign& d, const SysCable& c, con
     const std::vector<QPointF> trunk = sysCablePath(d, c, end);
     const SysUnit* u = d.unit(b.unit);
     const SysPort* p = u ? u->port(b.port) : nullptr;
-    if (trunk.size() < 2 || !p) return {};
-    const QPointF dir = sysPortOut(*p) * (b.inside ? -1.0 : 1.0);
-    const QPointF at = sysPortPoint(*u, *p) + dir * end, lead = at + dir * kLead;
+    // A LOOSE END: no port - it ends where it lies, straight off the trunk's nearest point and round one corner.
+    const bool loose = b.unit.isEmpty();
+    if (trunk.size() < 2 || (!p && !loose)) return {};
+    QPointF dir = p ? sysPortOut(*p) * (b.inside ? -1.0 : 1.0) : QPointF(1, 0);
+    const QPointF at = p ? sysPortPoint(*u, *p) + dir * end : b.at, lead = p ? at + dir * kLead : b.at;
     // THE SPLIT: the point of the trunk nearest the branch's lead - its port leads at either end left out - so the branch
     // is short and leaves the trunk clear of its label.
     QPointF split = (trunk[trunk.size() / 2 - 1] + trunk[trunk.size() / 2]) / 2.0;
@@ -245,6 +247,10 @@ std::vector<QPointF> sysBranchPath(const SystemDesign& d, const SysCable& c, con
         const QPointF q = a + e * t;
         const double gap = std::abs(q.x() - lead.x()) + std::abs(q.y() - lead.y());
         if (gap < nearest) { nearest = gap; split = q; }
+    }
+    if (loose) {
+        const QPointF off = at - split;
+        dir = std::abs(off.x()) >= std::abs(off.y()) ? QPointF(off.x() >= 0 ? 1 : -1, 0) : QPointF(0, off.y() >= 0 ? 1 : -1);
     }
     // OUT OF THE PORT along its way, then across to the split: one corner (none where it lies straight ahead).
     const QPointF corner = std::abs(dir.x()) > 0.5 ? QPointF(lead.x(), split.y()) : QPointF(split.x(), lead.y());
@@ -260,10 +266,19 @@ std::vector<QPointF> sysCableBasePath(const SystemDesign& d, const SysCable& c, 
     const SysUnit* ub = d.unit(c.bUnit);
     const SysPort* pa = ua ? ua->port(c.aPort) : nullptr;
     const SysPort* pb = ub ? ub->port(c.bPort) : nullptr;
-    if (!pa || !pb) return {};
-    // SQUARE: straight out of each port - out of its outside, or in from its inside - then across and along to meet.
-    const QPointF da = sysPortOut(*pa) * (c.aInside ? -1.0 : 1.0), db = sysPortOut(*pb) * (c.bInside ? -1.0 : 1.0);
-    const QPointF a = sysPortPoint(*ua, *pa) + da * end, b = sysPortPoint(*ub, *pb) + db * end;
+    // A LOOSE END (no unit) ends where it lies; any other end not on its port and the cable is not drawn.
+    const bool looseA = c.aUnit.isEmpty(), looseB = c.bUnit.isEmpty();
+    if ((!pa && !looseA) || (!pb && !looseB)) return {};
+    // SQUARE: straight out of each port - out of its outside, or in from its inside - then across and along to meet. A
+    // loose end leaves towards the other end, the way it is further.
+    const QPointF a = pa ? sysPortPoint(*ua, *pa) + sysPortOut(*pa) * (c.aInside ? -1.0 : 1.0) * end : c.aAt;
+    const QPointF b = pb ? sysPortPoint(*ub, *pb) + sysPortOut(*pb) * (c.bInside ? -1.0 : 1.0) * end : c.bAt;
+    auto toward = [](const QPointF& from, const QPointF& to) {
+        const QPointF off = to - from;
+        return std::abs(off.x()) >= std::abs(off.y()) ? QPointF(off.x() >= 0 ? 1 : -1, 0) : QPointF(0, off.y() >= 0 ? 1 : -1);
+    };
+    const QPointF da = pa ? sysPortOut(*pa) * (c.aInside ? -1.0 : 1.0) : toward(a, b);
+    const QPointF db = pb ? sysPortOut(*pb) * (c.bInside ? -1.0 : 1.0) : toward(b, a);
     const QPointF a1 = a + da * kLead, b1 = b + db * kLead;
     std::vector<QPointF> path{a, a1};
     if(!c.waypoints.empty()){
@@ -357,19 +372,28 @@ QString systemDrawioXml(const SystemDesign& d) {
         if (path.size() < 2) continue;
         x += QStringLiteral("<mxCell id=\"%1\" value=\"%2\" style=\"edgeStyle=none;rounded=0;endArrow=none;startArrow=none;html=0;jumpStyle=arc;jumpSize=10;"
                             "strokeWidth=2;strokeColor=%3;labelBackgroundColor=#FFFFFF;fontSize=10;\" edge=\"1\" parent=\"1\" "
-                            "source=\"%4.%5\" target=\"%6.%7\"><mxGeometry relative=\"1\" as=\"geometry\"><Array as=\"points\">")
-                 .arg(esc(c.id), esc(cableLabel(c)), colour(c.color, QColor(60, 66, 76)), esc(c.aUnit), esc(c.aPort), esc(c.bUnit),
-                      esc(c.bPort));
+                            "%4%5><mxGeometry relative=\"1\" as=\"geometry\">")
+                 .arg(esc(c.id), esc(cableLabel(c)), colour(c.color, QColor(60, 66, 76)),
+                      // A LOOSE END on no port: no source (or target) - the line ends at a point of its own.
+                      c.aUnit.isEmpty() ? QString() : QStringLiteral("source=\"%1.%2\" ").arg(esc(c.aUnit), esc(c.aPort)),
+                      c.bUnit.isEmpty() ? QString() : QStringLiteral("target=\"%1.%2\"").arg(esc(c.bUnit), esc(c.bPort)));
+        if (c.aUnit.isEmpty()) x += QStringLiteral("<mxPoint x=\"%1\" y=\"%2\" as=\"sourcePoint\"/>").arg(num(path.front().x()), num(path.front().y()));
+        if (c.bUnit.isEmpty()) x += QStringLiteral("<mxPoint x=\"%1\" y=\"%2\" as=\"targetPoint\"/>").arg(num(path.back().x()), num(path.back().y()));
+        x += QStringLiteral("<Array as=\"points\">");
         for (size_t i = 0; i < path.size(); ++i) x += QStringLiteral("<mxPoint x=\"%1\" y=\"%2\"/>").arg(num(path[i].x()), num(path[i].y()));
         x += QStringLiteral("</Array></mxGeometry></mxCell>\n");
         for (size_t k = 0; k < c.branches.size(); ++k) {
             const std::vector<QPointF> limb = sysBranchPath(d, c, c.branches[k]);
             if (limb.size() < 2) continue;
             x += QStringLiteral("<mxCell id=\"%1-b%2\" style=\"edgeStyle=none;rounded=0;endArrow=none;startArrow=none;jumpStyle=arc;jumpSize=10;"
-                                "strokeWidth=2;strokeColor=%3;\" edge=\"1\" parent=\"1\" target=\"%4.%5\"><mxGeometry relative=\"1\" as=\"geometry\">"
-                                "<mxPoint x=\"%6\" y=\"%7\" as=\"sourcePoint\"/><Array as=\"points\">")
-                     .arg(esc(c.id)).arg(k + 1).arg(colour(c.color, QColor(60, 66, 76)), esc(c.branches[k].unit), esc(c.branches[k].port),
-                          num(limb.front().x()), num(limb.front().y()));
+                                "strokeWidth=2;strokeColor=%3;\" edge=\"1\" parent=\"1\" %4><mxGeometry relative=\"1\" as=\"geometry\">"
+                                "<mxPoint x=\"%5\" y=\"%6\" as=\"sourcePoint\"/>%7<Array as=\"points\">")
+                     .arg(esc(c.id)).arg(k + 1).arg(colour(c.color, QColor(60, 66, 76)),
+                          c.branches[k].unit.isEmpty() ? QString()
+                                                       : QStringLiteral("target=\"%1.%2\"").arg(esc(c.branches[k].unit), esc(c.branches[k].port)),
+                          num(limb.front().x()), num(limb.front().y()),
+                          c.branches[k].unit.isEmpty() ? QStringLiteral("<mxPoint x=\"%1\" y=\"%2\" as=\"targetPoint\"/>").arg(num(limb.back().x()), num(limb.back().y()))
+                                                       : QString());
             for (size_t i = 1; i < limb.size(); ++i) x += QStringLiteral("<mxPoint x=\"%1\" y=\"%2\"/>").arg(num(limb[i].x()), num(limb[i].y()));
             x += QStringLiteral("</Array></mxGeometry></mxCell>\n");
         }

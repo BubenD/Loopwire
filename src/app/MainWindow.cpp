@@ -17087,8 +17087,8 @@ bool MainWindow::saveDocument(int index, bool forceDialog) {
     }
     // SAVED: its recovery copies are not wanted any more - under the name it had and the one it has now.
     for (const QString& was : {docPaths_[index], path}) {
-        QFile::remove(recovery::drawingFile(was, index));
-        QFile::remove(recovery::systemFile(was, index));
+        const QString copy = recovery::drawingFile(was);
+        if (!copy.isEmpty() && QFile::remove(copy)) recovery::forget(copy);
     }
     docPaths_[index] = path;
     docs_[index]->setDirty(false);
@@ -17465,11 +17465,17 @@ void MainWindow::newDrawing() {
 }
 
 void MainWindow::writeRecoveryNow() {
-    for (int i = 0; i < static_cast<int>(docs_.size()); ++i)
-        if (docs_[i]->dirty()) dwx::save(*docs_[i], recovery::drawingFile(docPaths_[i], i));
-    const int at = activeIndex();
-    if (systemView_ && systemUnbacked_ && !systemView_->design().empty() && at >= 0 && at < docPaths_.size()) {
-        if (saveSystemFile(systemView_->design(), recovery::systemFile(docPaths_[at], at))) systemUnbacked_ = false;
+    // ONLY WHAT HAS A FILE: a drawing never saved, or a system design never saved as a file of its own, has no copy.
+    for (int i = 0; i < static_cast<int>(docs_.size()); ++i) {
+        const QString copy = recovery::drawingFile(docPaths_[i]);
+        if (docs_[i]->dirty() && !copy.isEmpty() && dwx::save(*docs_[i], copy)) recovery::remember(copy);
+    }
+    if (systemView_ && systemUnbacked_ && !systemView_->design().empty()) {
+        const QString copy = recovery::systemFile(systemView_->designPath());
+        if (!copy.isEmpty() && saveSystemFile(systemView_->design(), copy)) {
+            recovery::remember(copy);
+            systemUnbacked_ = false;
+        }
     }
 }
 

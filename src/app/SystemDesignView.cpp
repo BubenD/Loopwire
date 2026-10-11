@@ -2,6 +2,7 @@
 
 #include "app/DrawingFinderDialog.h"
 #include "app/UiBits.h"
+#include "app/Recovery.h"
 #include "system/SystemImport.h"
 #include "app/RuleExplainer.h"
 #include "system/SystemExport.h"
@@ -172,7 +173,8 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
             QString* f[] = {&r.rev, &r.note, &r.eco, &r.drawn, &r.checked, &r.approved, &r.date};
             for (int c = 0; c < 7; ++c)
                 if (const QTableWidgetItem* it = revisions_->item(row, c)) *f[c] = it->text().trimmed();
-            setRevision(row, r);
+            // Later, not inside the table's own signal: the table is filled again, the cell typed in with it.
+            QTimer::singleShot(0, this, [this, row, r] { setRevision(row, r); });
         });
         rv->addWidget(revisions_);
         auto* revButtons = new QHBoxLayout;
@@ -186,6 +188,30 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
         revButtons->addWidget(addRev);
         revButtons->addWidget(dropRev);
         revButtons->addStretch(1);
+        // WHERE THE TEXT SITS IN THE TABLE'S CELLS on the sheet: for the column of the cell chosen, or every column where
+        // none is.
+        revButtons->addWidget(new QLabel(QStringLiteral("Text in cell"), revBox));
+        revisionAlign_ = new QComboBox(revBox);
+        revisionAlign_->setObjectName(QStringLiteral("systemRevisionAlign"));
+        revisionAlign_->setToolTip(QStringLiteral("Where the text sits in the revision table's cells on the sheet - for the column of "
+                                                  "the cell chosen above, or every column where no cell is chosen"));
+        revisionAlign_->addItem(QStringLiteral("As the template"), QString());
+        for (const auto& [code, label] : {std::pair{"TL", "Top left (TL)"}, {"TC", "Top centre (TC)"}, {"TR", "Top right (TR)"},
+                                          {"ML", "Centre left (CL)"}, {"MC", "Centre (CC)"}, {"MR", "Centre right (CR)"},
+                                          {"BL", "Bottom left (BL)"}, {"BC", "Bottom centre (BC)"}, {"BR", "Bottom right (BR)"}})
+            revisionAlign_->addItem(QString::fromLatin1(label), QString::fromLatin1(code));
+        connect(revisionAlign_, &QComboBox::currentIndexChanged, this, [this] {
+            if (filling_) return;
+            const int column = revisions_->selectedItems().isEmpty() ? -1 : revisions_->currentColumn();
+            const QString code = revisionAlign_->currentData().toString();
+            QTimer::singleShot(0, this, [this, column, code] { setRevisionAlign(column, code); });
+        });
+        connect(revisions_, &QTableWidget::currentCellChanged, this, [this](int, int column) {
+            const QSignalBlocker quiet(revisionAlign_);
+            const QString code = column >= 0 && column < design_.revisionAlign.size() ? design_.revisionAlign[column] : QString();
+            revisionAlign_->setCurrentIndex(std::max(0, revisionAlign_->findData(code)));
+        });
+        revButtons->addWidget(revisionAlign_);
         rv->addLayout(revButtons);
         v->addWidget(revBox);
         v->addStretch(1);
@@ -730,6 +756,7 @@ void SystemDesignView::setStore(std::function<QJsonObject()> load, std::function
 
 void SystemDesignView::reload() {
     design_ = SystemDesign::fromJson(load_ ? load_() : QJsonObject());
+    designPath_.clear();
     history_.clear();
     future_.clear();
     issues_.clear();
@@ -1909,6 +1936,39 @@ const SysSheet* SystemDesignView::chosenSheet() const {
     return design_.sheetAt(std::clamp(sheetAt_, 0, std::max(0, design_.sheetCount() - 1)));
 }
 
+QString SystemDesignView::sheetFieldName(const QString& key) {
+    // WHAT A TITLE BLOCK'S FIELD IS CALLED HERE: its key said plainly; one of the template's own, as it is.
+    static const std::pair<const char*, const char*> names[] = {
+        {"title", "Title"}, {"drawingNo", "Drawing P/N"}, {"revision", "Revision"}, {"sheet", "Sheet number"},
+        {"scale", "Drawing scale"}, {"date", "Date"}, {"drawn", "Drawn by"}, {"checked", "Checked by"}, {"approved", "Approved by"}};
+    for (const auto& [k, name] : names)
+        if (key == QLatin1String(k)) return QString::fromLatin1(name);
+    return key;
+}
+
+QString SystemDesignView::sheetFieldTip(const QString& key) {
+    if (key == QLatin1String("scale"))
+        return QStringLiteral("The drawing scale written in the title block's SCALE box: how big things are on the paper to how big "
+                              "they really are - 1:1, 1:2, 2:1. A system diagram is not drawn to any scale, so it is usually "
+                              "NTS (not to scale).");
+    if (key == QLatin1String("sheet")) return QStringLiteral("Which sheet this is of how many - 1 of 3 - in the title block's SHEET box");
+    if (key == QLatin1String("drawingNo")) return QStringLiteral("The drawing's part number, in the title block's DRAWING No. box");
+    return QString();
+}
+
+void SystemDesignView::setRevisionAlign(int column, const QString& code) {
+    // ONE COLUMN, or every column for -1.
+    QStringList align = design_.revisionAlign;
+    while (align.size() < 7) align << QString();
+    for (int c = 0; c < 7; ++c)
+        if (column < 0 || c == column) align[c] = code;
+    if (std::all_of(align.begin(), align.end(), [](const QString& s) { return s.isEmpty(); })) align.clear();
+    if (align == design_.revisionAlign) return;
+    aboutToChange();
+    design_.revisionAlign = align;
+    commit();
+}
+
 void SystemDesignView::setCurrentSheet(int i) {
     i = std::clamp(i, 0, std::max(0, design_.sheetCount() - 1));
     if (i == sheetAt_) return;
@@ -2084,7 +2144,8 @@ bool SystemDesignView::askSheetFields() {
     for (const QString& key : sheetFieldKeys()) {
         auto* edit = new QLineEdit(chosen.fields.value(key).toString(), &dialog);
         edit->setObjectName(QStringLiteral("systemSheetField_") + key);
-        form->addRow(key, edit);
+        edit->setToolTip(sheetFieldTip(key));
+        form->addRow(sheetFieldName(key), edit);
         edits.insert(key, edit);
     }
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
@@ -2104,7 +2165,20 @@ bool SystemDesignView::askSheetFields() {
 void SystemDesignView::fillSheetPanel() {
     if (!sheetName_ || !sheetFields_) return;
     auto* form = qobject_cast<QFormLayout*>(sheetFields_->layout());
-    while (form && form->rowCount() > 0) form->removeRow(0);
+    // THE ROWS THERE WERE taken out and let go later, not deleted now: this is built again from inside a field's own
+    // signal - Enter, or the focus leaving it - and that field must still be there when its signal returns.
+    while (form && form->rowCount() > 0) {
+        const QFormLayout::TakeRowResult row = form->takeRow(0);
+        for (QLayoutItem* item : {row.labelItem, row.fieldItem}) {
+            if (!item) continue;
+            if (QWidget* w = item->widget()) {
+                w->hide();
+                w->setParent(nullptr);
+                w->deleteLater();
+            }
+            delete item;
+        }
+    }
     // THE REVISIONS, a row each.
     if (revisions_) {
         const QSignalBlocker quiet(revisions_);
@@ -2157,7 +2231,11 @@ void SystemDesignView::fillSheetPanel() {
         });
         rh->addWidget(edit, 1);
         rh->addWidget(from);
-        form->addRow(key, row);
+        const QString tip = sheetFieldTip(key);
+        if (!tip.isEmpty()) edit->setToolTip(tip);
+        auto* name = new QLabel(sheetFieldName(key), sheetFields_);
+        name->setToolTip(tip);
+        form->addRow(name, row);
     }
 }
 
@@ -2316,6 +2394,10 @@ bool SystemDesignView::saveDesignAs(const QString& given) {
         if (given.isEmpty()) QMessageBox::warning(this, QStringLiteral("System design"), error);
         return false;
     }
+    // ITS FILE NOW: its recovery copy is written beside it from here on - the one there was, saved over, goes.
+    designPath_ = path;
+    const QString copy = recovery::systemFile(path);
+    if (QFile::remove(copy)) recovery::forget(copy);
     return true;
 }
 
@@ -2331,6 +2413,11 @@ bool SystemDesignView::openDesign(const QString& given) {
     }
     aboutToChange();
     design_ = read;
+    // A FILE OPENED is its file; a recovery copy belongs to the .wetsys beside it.
+    if (!path.endsWith(QLatin1String(".sbak"), Qt::CaseInsensitive)) designPath_ = path;
+    else if (const QString own = QFileInfo(path).path() + QLatin1Char('/') + QFileInfo(path).completeBaseName() + QStringLiteral(".wetsys");
+             QFileInfo::exists(own))
+        designPath_ = own;
     canvas_->setDesign(&design_);
     commit();
     canvas_->fit();

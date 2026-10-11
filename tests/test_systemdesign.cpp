@@ -2415,12 +2415,40 @@ void testShiftDetachAndPicturePlace() {
     for (int i = 1; i <= 5; ++i) shift(QEvent::MouseMove, onB + QPointF(0, 30.0 * i), Qt::LeftButton, Qt::NoButton);
     shift(QEvent::MouseButtonRelease, onB + QPointF(0, 150), Qt::NoButton, Qt::LeftButton);
     QApplication::processEvents();
-    check(d.cables.size() == 1 && d.cables[0].id == kept, "shift-drag: the harness ending on the unit dragged is gone");
-    check(d.cable(kept) && d.cable(kept)->branches.empty(), "shift-drag: a branch to it is gone, the harness it was on kept");
+    check(d.cables.size() == 2, "shift-drag: every harness stays on the diagram");
+    const SysCable* off = nullptr;
+    for (const SysCable& c : d.cables)
+        if (c.id != kept) off = &c;
+    check(off && off->bUnit.isEmpty() && off->aUnit == a, "shift-drag: the harness to it - its end there loose, the other still plugged in");
+    check(d.cable(kept) && d.cable(kept)->branches.size() == 1 && d.cable(kept)->branches[0].unit.isEmpty(),
+          "shift-drag: a branch to it kept - its end loose");
     check(std::abs(d.unit(b)->x - x0) < 1e-6 && d.unit(b)->y > 50, "shift-drag: the unit moved with the pointer");
+    check(off && sysCablePath(d, *off).size() >= 2 && !sysBranchPath(d, *d.cable(kept), d.cable(kept)->branches[0]).empty(),
+          "shift-drag: the loose harness and branch still drawn");
+    check(d.cablesAt(b, pb).empty(), "shift-drag: nothing left on the unit's port");
+    if (const QString shots = qEnvironmentVariable("EDRAW_SHOT_DIR"); !shots.isEmpty()) c->grab().save(shots + QStringLiteral("/loose-ends.png"));
+    // Saved and read back with its loose ends.
+    const SystemDesign again = SystemDesign::fromJson(d.toJson());
+    check(again.cables.size() == 2 && again.cable(off->id) && again.cable(off->id)->bUnit.isEmpty() &&
+              again.cable(kept)->branches.size() == 1,
+          "shift-drag: the loose ends saved and read back");
+    bool flagged = false;
+    for (const SysIssue& i : d.check()) flagged = flagged || (i.cable == off->id && i.what.contains(QLatin1String("loose")));
+    check(flagged, "shift-drag: the check says the harness has a loose end");
+    // ---- A LOOSE END DRAGGED ONTO A PORT: plugged in again ----
+    const QString looseId = off->id;
+    const QPointF from = c->toScreen(off->bAt), to = c->portOnScreen(b, pb);
+    mouse(c, QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
+    for (int i = 1; i <= 5; ++i) mouse(c, QEvent::MouseMove, from + (to - from) * (i / 5.0), Qt::LeftButton, Qt::NoButton);
+    mouse(c, QEvent::MouseButtonRelease, to, Qt::NoButton, Qt::LeftButton);
+    QApplication::processEvents();
+    check(d.cable(looseId) && d.cable(looseId)->bUnit == b && d.cable(looseId)->bPort == pb,
+          "loose end: dragged onto the port - plugged in again");
     view.undo();
-    check(d.cables.size() == 2 && d.cable(kept) && d.cable(kept)->branches.size() == 1,
-          "shift-drag: one Undo puts the harnesses back");
+    QApplication::processEvents();
+    view.undo();
+    check(d.cables.size() == 2 && d.cable(kept) && d.cable(kept)->branches.size() == 1 && d.cable(kept)->branches[0].unit == b,
+          "shift-drag: one Undo plugs the harnesses back in");
 
     // ---- WHERE A UNIT'S PICTURE SITS ----
     SysUnit* u = d.unit(a);
@@ -2628,21 +2656,118 @@ void testSheetsRevisionsAndPdf(const QString& dir) {
     check(d.sheetCount() == 1 && d.sheet.name == secondName, "sheets: the first taken away - the second is the first now");
 }
 
+void testSheetPanelTyping() {
+    // ---- TYPED INTO THE SHEET'S FIELDS AND THE REVISIONS, as a person does: the panel built again under the edit ----
+    QJsonObject stored;
+    SystemDesignView view;
+    view.setStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    view.resize(1100, 700);
+    view.show();
+    QApplication::processEvents();
+    SystemDesign& d = view.design();
+    d.addUnit(0, 0);
+    view.applyTemplate(QStringLiteral("builtin:A3"));
+    view.addRevision();
+    QApplication::processEvents();
+    auto* title = view.findChild<QLineEdit*>(QStringLiteral("systemSheetField_title"));
+    check(title != nullptr, "typing: the sheet's title field is there");
+    if (!title) return;
+    title->setFocus();
+    title->setText(QStringLiteral("Typed title"));
+    QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QApplication::sendEvent(title, &enter);
+    QApplication::processEvents();
+    check(d.sheet.fields.value(QStringLiteral("title")).toString() == QLatin1String("Typed title"),
+          "typing: Enter in a sheet field - written, the window still there");
+    // Typed, then the focus taken elsewhere.
+    title = view.findChild<QLineEdit*>(QStringLiteral("systemSheetField_drawingNo"));
+    if (title) {
+        title->setFocus();
+        title->setText(QStringLiteral("SYS-100"));
+        view.canvas()->setFocus();
+        QApplication::processEvents();
+        check(d.sheet.fields.value(QStringLiteral("drawingNo")).toString() == QLatin1String("SYS-100"),
+              "typing: a field left for another - written");
+    }
+    auto* table = view.findChild<QTableWidget*>(QStringLiteral("systemRevisions"));
+    check(table && table->rowCount() == 1, "typing: one revision in the table");
+    if (!table) return;
+    table->item(0, 1)->setText(QStringLiteral("First issue"));
+    QApplication::processEvents();
+    check(d.revisions[0].note == QLatin1String("First issue"), "typing: a revision's cell typed in - written");
+    view.undo();
+    QApplication::processEvents();
+    check(d.revisions[0].note.isEmpty(), "typing: and Undo takes it back");
+
+    // ---- WHERE THE TEXT SITS IN THE REVISION TABLE'S CELLS ----
+    view.setRevisionAlign(1, QStringLiteral("TR"));
+    view.setRevisionAlign(0, QStringLiteral("MC"));
+    check(d.revisionAlign.size() == 7 && d.revisionAlign[1] == QLatin1String("TR"), "align: the change note column top right");
+    QString noteAlign, headAlign;
+    for (const QJsonValue v : d.sheetContent(d.sheet)) {
+        const QJsonObject e = v.toObject();
+        if (!e.value(QStringLiteral("revisionTable")).toBool()) continue;
+        const int cols = e.value(QStringLiteral("cols")).toInt();
+        const QJsonArray cells = e.value(QStringLiteral("cells")).toArray(), align = e.value(QStringLiteral("cellAlign")).toArray();
+        for (int c = 0; c < cols; ++c)
+            if (cells.at(c).toString() == QLatin1String("CHANGE NOTE")) {
+                noteAlign = align.at(cols + c).toString();
+                headAlign = align.at(c).toString();
+            }
+    }
+    check(noteAlign == QLatin1String("TR") && headAlign == QLatin1String("MC"),
+          "align: on the sheet, its cells under the heading top right - the heading as it was");
+    check(SystemDesign::fromJson(d.toJson()).revisionAlign == d.revisionAlign, "align: saved and read back");
+    auto* align = view.findChild<QComboBox*>(QStringLiteral("systemRevisionAlign"));
+    check(align && align->count() == 10, "align: the list - as the template, and the nine places");
+
+    // ---- THE FIELDS' NAMES, said plainly ----
+    check(SystemDesignView::sheetFieldName(QStringLiteral("scale")) == QLatin1String("Drawing scale") &&
+              SystemDesignView::sheetFieldTip(QStringLiteral("scale")).contains(QLatin1String("NTS")),
+          "names: scale is the Drawing scale, and its tip says what it is");
+    QLabel* named = nullptr;
+    for (QLabel* l : view.findChildren<QLabel*>())
+        if (l->text() == QLatin1String("Drawing scale")) named = l;
+    std::printf("  sheet fields: %s\n", qPrintable(view.sheetFieldKeys().join(QStringLiteral(", "))));
+    check(named != nullptr, "names: the panel calls it Drawing scale");
+    if (view.sheetFieldKeys().contains(QStringLiteral("scale"))) {
+        view.setSheetFieldSource(QStringLiteral("scale"), QStringLiteral("nts"));
+        check(d.sheetTexts(d.sheet).value(QStringLiteral("scale")).toString() == QLatin1String("NTS"), "names: and NTS can fill it");
+    }
+}
+
 void testRecoveryCopies() {
     QTemporaryDir folder;
-    qputenv("EDRAW_RECOVERY_DIR", folder.path().toUtf8());
+    QSettings().remove(QStringLiteral("recovery/files"));
     {
         MainWindow w;
         w.show();
         QApplication::processEvents();
-        // ---- A DRAWING WITH CHANGES NOT SAVED: a .dbak ----
-        Document* doc = w.editDoc();
-        doc->drawingDetails()[QStringLiteral("title")] = QStringLiteral("Recover me");
-        doc->setDirty(true);
-        // ---- THE SYSTEM DESIGN CHANGED: a .sbak ----
         auto* sys = w.findChild<SystemDesignView*>(QStringLiteral("systemDesign"));
         check(sys != nullptr, "recovery: the system design view is there");
         if (!sys) return;
+        // ---- NEVER SAVED TO A FILE: no copy, however changed ----
+        w.editDoc()->setDirty(true);
+        sys->setTool(SysTool::Unit);
+        click(sys->canvas(), sys->canvas()->toScreen({300, 300}));
+        QApplication::processEvents();
+        w.writeRecoveryNow();
+        check(recovery::list().empty() && QDir(folder.path()).entryList(QDir::Files).isEmpty(),
+              "recovery: a drawing and a system design never saved to a file - no copy");
+        w.editDoc()->setDirty(false);
+        // ---- A DRAWING SAVED TO A FILE, changed: its .dbak beside it ----
+        const QString drawing = folder.path() + QStringLiteral("/harness.dwx");
+        {
+            Document saved;
+            dwx::save(saved, drawing);
+        }
+        w.openPath(drawing);
+        Document* doc = w.editDoc();
+        doc->drawingDetails()[QStringLiteral("title")] = QStringLiteral("Recover me");
+        doc->setDirty(true);
+        // ---- A SYSTEM DESIGN SAVED AS A FILE OF ITS OWN, changed: its .sbak beside it ----
+        const QString design = folder.path() + QStringLiteral("/rig.wetsys");
+        check(sys->saveDesignAs(design) && sys->designPath() == design, "recovery: the system design saved as a file of its own");
         sys->setTool(SysTool::Unit);
         click(sys->canvas(), sys->canvas()->toScreen({100, 100}));
         QApplication::processEvents();
@@ -2650,15 +2775,20 @@ void testRecoveryCopies() {
         const auto copies = recovery::list();
         QString dbak, sbak;
         for (const recovery::Entry& e : copies) (e.system ? sbak : dbak) = e.path;
-        check(copies.size() == 2 && dbak.endsWith(QLatin1String(".dbak")) && sbak.endsWith(QLatin1String(".sbak")),
-              "recovery: one .dbak for the drawing changed, one .sbak for the system design");
+        check(copies.size() == 2 && QFileInfo(dbak) == QFileInfo(folder.path() + QStringLiteral("/harness.dbak")) &&
+                  QFileInfo(sbak) == QFileInfo(folder.path() + QStringLiteral("/rig.sbak")),
+              "recovery: harness.dbak and rig.sbak, each beside its own file");
+        const size_t units = sys->design().units.size();
         // ---- RECOVERED: the drawing in a tab of its own, not saved; the system design in place of the one open ----
         check(w.recoverFile(dbak) && w.editDoc() != doc &&
                   w.editDoc()->drawingDetails().value(QStringLiteral("title")).toString() == QLatin1String("Recover me") &&
                   w.editDoc()->dirty(),
               "recovery: a .dbak opens as a new drawing, its contents back, not yet saved");
         sys->design() = SystemDesign();
-        check(w.recoverFile(sbak) && sys->design().units.size() == 1, "recovery: a .sbak puts the system design back");
+        check(w.recoverFile(sbak) && sys->design().units.size() == units && sys->designPath() == design,
+              "recovery: a .sbak puts the system design back - its file the .wetsys beside it");
+        // ---- SAVED: the copy beside it goes ----
+        check(sys->saveDesignAs(design) && !QFileInfo::exists(sbak), "recovery: the design saved - its .sbak gone");
         // ---- NOTHING CHANGED: nothing written again ----
         w.writeRecoveryNow();
         for (const recovery::Entry& e : recovery::list()) QFile::remove(e.path);
@@ -2667,7 +2797,7 @@ void testRecoveryCopies() {
         w.writeRecoveryNow();
         check(recovery::list().empty(), "recovery: nothing changed since - no copy written");
     }
-    qunsetenv("EDRAW_RECOVERY_DIR");
+    QSettings().remove(QStringLiteral("recovery/files"));
 }
 
 int run_systemdesign_tests() {
@@ -2706,6 +2836,7 @@ int run_systemdesign_tests() {
     testRecoveryCopies();
     testHarnessInkByGround();
     testView3DSideNarrow();
+    testSheetPanelTyping();
     {
         QTemporaryDir pdfDir;
         testSheetsRevisionsAndPdf(pdfDir.path());

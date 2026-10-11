@@ -107,6 +107,8 @@ public:
     // FOR VISIO. Asked where, when no path is given.
     bool saveDesignAs(const QString& path = QString());
     bool openDesign(const QString& path = QString());
+    // THE FILE IT WAS LAST SAVED TO OR OPENED FROM AS A DESIGN OF ITS OWN (.wetsys); empty: none. Not saved.
+    QString designPath() const { return designPath_; }
     // A DIAGRAM FROM DRAW.IO OR VISIO, in place of this one (one step to undo); asked which, when not given.
     bool importDesign(const QString& path = QString());
     // COPY, CUT AND PASTE what is selected - units with what is inside them, the harnesses among them, notes - by the
@@ -159,6 +161,12 @@ public:
     void addRevision();
     void removeRevision(int row);
     void setRevision(int row, const SysRevision& r);
+    // WHERE THE TEXT SITS in the revision table's cells on the sheets: "TL" to "BR", "" as the template - for one column of
+    // the seven (rev, change note, ECO, drawn, checked, approved, date), or every one for -1.
+    void setRevisionAlign(int column, const QString& code);
+    // A TITLE BLOCK FIELD'S NAME, said plainly ("scale": "Drawing scale"), and what it is for.
+    static QString sheetFieldName(const QString& key);
+    static QString sheetFieldTip(const QString& key);
     // THE TEMPLATES THERE ARE TO CHOOSE FROM: those installed, by name, each with its file - and the plain sheets built in
     // ("builtin:A3").
     QList<QPair<QString, QString>> templateChoices() const;
@@ -250,7 +258,9 @@ private:
     QWidget* sheetFields_ = nullptr;
     QComboBox* sheetPick_ = nullptr;
     QTableWidget* revisions_ = nullptr;
+    QComboBox* revisionAlign_ = nullptr;
     int sheetAt_ = 0;   // the sheet the panel works on. Not saved.
+    QString designPath_;
     SysSheet* chosenSheet();
     const SysSheet* chosenSheet() const;
     void fillSheetPanel();

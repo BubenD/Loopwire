@@ -68,6 +68,7 @@ struct SysUnit {
 struct SysBranch {
     QString unit, port;
     bool inside = false;   // on the port's inside, as a cable's end may be
+    QPointF at;            // A LOOSE END - no unit - where it ends on the diagram
 };
 
 struct SysCable {
@@ -77,6 +78,8 @@ struct SysCable {
     QString rev;
     QString description;
     QString aUnit, aPort, bUnit, bPort;
+    // A LOOSE END - its unit empty, taken off its port (Shift+drag of the unit) - where it ends on the diagram.
+    QPointF aAt, bAt;
     // AN END ON A PORT'S INSIDE: from within the unit - another port of the same unit, or a unit inside it.
     bool aInside = false, bInside = false;
     // THE HARNESS SPREAD TO MORE PORTS: each further end a branch off the trunk from a to b.
@@ -193,6 +196,9 @@ struct SystemDesign {
     std::vector<SysSheet> moreSheets;
     // THE REVISIONS, oldest first: written into every sheet's revision table, the last the revision a field can take.
     std::vector<SysRevision> revisions;
+    // WHERE THE TEXT SITS in the revision table's cells, a column each in SysRevision's order: "TL" to "BR"; "" (or none):
+    // as the template has it.
+    QStringList revisionAlign;
     // A SHEET BY ITS PLACE: 0 the first (`sheet`), then `moreSheets`; how many there are (an empty first counts none).
     int sheetCount() const { return sheet.empty() ? 0 : 1 + static_cast<int>(moreSheets.size()); }
     const SysSheet* sheetAt(int i) const { return i == 0 ? &sheet : i > 0 && i <= static_cast<int>(moreSheets.size()) ? &moreSheets[static_cast<size_t>(i - 1)] : nullptr; }
@@ -215,7 +221,8 @@ struct SystemDesign {
 
     bool empty() const { return units.empty() && cables.empty() && notes.empty() && disabledRules.isEmpty()
                                && ruleLevels.isEmpty() && bypassed.empty() && background == QColor(48, 52, 58)
-                               && !designatorColor.isValid() && sheet.empty() && moreSheets.empty() && revisions.empty(); }
+                               && !designatorColor.isValid() && sheet.empty() && moreSheets.empty() && revisions.empty()
+                               && revisionAlign.isEmpty(); }
     const SysNote* note(const QString& id) const;
     SysNote* note(const QString& id);
     // A NOTE put at a place; its id. One taken away.

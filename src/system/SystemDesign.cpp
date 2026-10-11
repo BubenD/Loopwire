@@ -653,6 +653,7 @@ std::vector<SysIssue> SystemDesign::check() const {
         return u ? u->name : id;
     };
     auto portName = [this](const QString& u, const QString& p) {
+        if (u.isEmpty()) return QStringLiteral("a loose end");
         const SysUnit* unitP = unit(u);
         const SysPort* port = unitP ? unitP->port(p) : nullptr;
         return QStringLiteral("%1.%2").arg(unitP ? unitP->name : u, port ? port->name : p);
@@ -672,6 +673,11 @@ std::vector<SysIssue> SystemDesign::check() const {
     QHash<QString, const SysCable*> byPn;
     for (const SysCable& c : cables) {
         const QString ends = QStringLiteral("%1 (%2 - %3)").arg(c.name, portName(c.aUnit, c.aPort), portName(c.bUnit, c.bPort));
+        // A LOOSE END: the harness taken off a unit, not plugged in again.
+        int loose = (c.aUnit.isEmpty() ? 1 : 0) + (c.bUnit.isEmpty() ? 1 : 0);
+        for (const SysBranch& b : c.branches) loose += b.unit.isEmpty() ? 1 : 0;
+        if (loose > 0)
+            out.push_back({1, QStringLiteral("%1 has %2 loose end(s) - not plugged in").arg(c.name).arg(loose), QString(), c.id});
         if (c.pn.trimmed().isEmpty()) {
             out.push_back({2, QStringLiteral("%1 has no part number").arg(ends), QString(), c.id});
         } else if (const SysCable* other = byPn.value(c.pn, nullptr)) {
@@ -915,7 +921,8 @@ const std::vector<std::pair<QString, QString>>& sysFieldSources() {
         {QStringLiteral("today"), QStringLiteral("Today's date")},
         {QStringLiteral("sheet"), QStringLiteral("Sheet number (1 of 3)")},
         {QStringLiteral("units"), QStringLiteral("Number of units")},
-        {QStringLiteral("cables"), QStringLiteral("Number of harnesses")}};
+        {QStringLiteral("cables"), QStringLiteral("Number of harnesses")},
+        {QStringLiteral("nts"), QStringLiteral("NTS (not to scale)")}};
     return sources;
 }
 
@@ -938,6 +945,7 @@ QJsonObject SystemDesign::sheetTexts(const SysSheet& s) const {
         else if (source == QLatin1String("sheet")) text = QStringLiteral("%1 of %2").arg(index + 1).arg(sheetCount());
         else if (source == QLatin1String("units")) text = QString::number(units.size());
         else if (source == QLatin1String("cables")) text = QString::number(cables.size());
+        else if (source == QLatin1String("nts")) text = QStringLiteral("NTS");
         else continue;
         out[it.key()] = text;
     }
@@ -952,7 +960,7 @@ QJsonArray SystemDesign::sheetContent(const SysSheet& s) const {
         QJsonObject meta = v.toObject();
         const QString field = meta.value(QStringLiteral("field")).toString();
         if (!field.isEmpty() && texts.contains(field)) meta[QStringLiteral("text")] = texts.value(field).toString();
-        if (meta.value(QStringLiteral("revisionTable")).toBool() && !revisions.empty()) {
+        if (meta.value(QStringLiteral("revisionTable")).toBool() && (!revisions.empty() || !revisionAlign.isEmpty())) {
             // THE REVISIONS IN ITS TABLE, a row each under the headings - the newest where it has fewer rows than there are.
             const int cols = meta.value(QStringLiteral("cols")).toInt();
             const int rows = meta.value(QStringLiteral("rows")).toInt();
@@ -960,7 +968,7 @@ QJsonArray SystemDesign::sheetContent(const SysSheet& s) const {
             if (cols > 0 && rows > 1 && cells.size() >= cols * rows) {
                 const int room = rows - 1;
                 const int first = std::max(0, static_cast<int>(revisions.size()) - room);
-                for (int r = 0; r < room; ++r) {
+                for (int r = 0; r < room && !revisions.empty(); ++r) {
                     const int which = first + r;
                     for (int c = 0; c < cols; ++c) {
                         QString text;
@@ -972,6 +980,18 @@ QJsonArray SystemDesign::sheetContent(const SysSheet& s) const {
                     }
                 }
                 meta[QStringLiteral("cells")] = cells;
+                // WHERE THE TEXT SITS in the rows under the headings: as chosen for its column, else as the template has it.
+                if (!revisionAlign.isEmpty()) {
+                    QJsonArray align = meta.value(QStringLiteral("cellAlign")).toArray();
+                    while (align.size() < cols * rows) align.append(QString());
+                    for (int c = 0; c < cols; ++c) {
+                        const int column = revisionColumn(cells.at(c).toString());
+                        const QString code = column >= 0 && column < revisionAlign.size() ? revisionAlign[column] : QString();
+                        if (code.isEmpty()) continue;
+                        for (int r = 1; r < rows; ++r) align[r * cols + c] = code;
+                    }
+                    meta[QStringLiteral("cellAlign")] = align;
+                }
             }
         }
         out.append(meta);
@@ -1002,6 +1022,9 @@ QJsonObject SystemDesign::toJson() const {
             list.append(j);
         }
         o[QStringLiteral("revisions")] = list;
+    }
+    if (!revisionAlign.isEmpty()) {
+        o[QStringLiteral("revisionAlign")] = QJsonArray::fromStringList(revisionAlign);
     }
     if (!bypassed.empty()) {
         QJsonArray accepted;
@@ -1049,6 +1072,8 @@ QJsonObject SystemDesign::toJson() const {
     for (const SysCable& c : cables) {
         QJsonObject j{{QStringLiteral("id"), c.id},       {QStringLiteral("name"), c.name},   {QStringLiteral("aUnit"), c.aUnit},
                       {QStringLiteral("aPort"), c.aPort}, {QStringLiteral("bUnit"), c.bUnit}, {QStringLiteral("bPort"), c.bPort}};
+        if (c.aUnit.isEmpty()) j[QStringLiteral("aAt")] = QJsonArray{c.aAt.x(), c.aAt.y()};
+        if (c.bUnit.isEmpty()) j[QStringLiteral("bAt")] = QJsonArray{c.bAt.x(), c.bAt.y()};
         if (!c.pn.isEmpty()) j[QStringLiteral("pn")] = c.pn;
         if (!c.rev.isEmpty()) j[QStringLiteral("rev")] = c.rev;
         if (!c.description.isEmpty()) j[QStringLiteral("description")] = c.description;
@@ -1061,6 +1086,7 @@ QJsonObject SystemDesign::toJson() const {
             for (const SysBranch& b : c.branches) {
                 QJsonObject end{{QStringLiteral("unit"), b.unit}, {QStringLiteral("port"), b.port}};
                 if (b.inside) end[QStringLiteral("in")] = true;
+                if (b.unit.isEmpty()) end[QStringLiteral("at")] = QJsonArray{b.at.x(), b.at.y()};
                 branches.append(end);
             }
             j[QStringLiteral("branches")] = branches;
@@ -1120,6 +1146,7 @@ SystemDesign SystemDesign::fromJson(const QJsonObject& o) {
         for (int i = 0; i < 7; ++i) *revisionField(r, i) = j.value(QLatin1String(kRevisionKeys[i])).toString();
         d.revisions.push_back(r);
     }
+    for (const QJsonValue v : o.value(QStringLiteral("revisionAlign")).toArray()) d.revisionAlign << v.toString();
     for (const QJsonValue& v : o.value(QStringLiteral("bypassed")).toArray()) {
         const QJsonObject j = v.toObject();
         SysIssue i;
@@ -1226,7 +1253,9 @@ SystemDesign SystemDesign::fromJson(const QJsonObject& o) {
             b.unit = end.value(QStringLiteral("unit")).toString();
             b.port = end.value(QStringLiteral("port")).toString();
             b.inside = end.value(QStringLiteral("in")).toBool(false);
-            if (!b.unit.isEmpty() && !b.port.isEmpty()) c.branches.push_back(b);
+            const QJsonArray at = end.value(QStringLiteral("at")).toArray();
+            if (at.size() == 2) b.at = QPointF(at[0].toDouble(), at[1].toDouble());
+            if ((!b.unit.isEmpty() && !b.port.isEmpty()) || (b.unit.isEmpty() && at.size() == 2)) c.branches.push_back(b);
         }
         if (j.contains(QStringLiteral("color"))) c.color = QColor(j.value(QStringLiteral("color")).toString());
         for(const QJsonValue& value:j.value(QStringLiteral("waypoints")).toArray()){const QJsonArray point=value.toArray();if(point.size()==2)c.waypoints.push_back({point[0].toDouble(),point[1].toDouble()});}
@@ -1234,10 +1263,15 @@ SystemDesign SystemDesign::fromJson(const QJsonObject& o) {
         c.drawingNo = j.value(QStringLiteral("drawingNo")).toString();
         c.drawingRev = j.value(QStringLiteral("drawingRev")).toString();
         c.drawingTitle=j.value(QStringLiteral("drawingTitle")).toString();c.expectedTitle=j.value(QStringLiteral("expectedTitle")).toString();
-        // A cable to a unit or port that is not there is dropped, not kept dangling.
+        // A cable to a unit or port that is not there is dropped, not kept dangling - but a loose end is kept where it lies.
+        const QJsonArray aAt = j.value(QStringLiteral("aAt")).toArray(), bAt = j.value(QStringLiteral("bAt")).toArray();
+        if (aAt.size() == 2) c.aAt = QPointF(aAt[0].toDouble(), aAt[1].toDouble());
+        if (bAt.size() == 2) c.bAt = QPointF(bAt[0].toDouble(), bAt[1].toDouble());
         const SysUnit* a = d.unit(c.aUnit);
         const SysUnit* b = d.unit(c.bUnit);
-        if (!c.id.isEmpty() && a && b && a->port(c.aPort) && b->port(c.bPort)) d.cables.push_back(c);
+        const bool aOk = c.aUnit.isEmpty() ? aAt.size() == 2 : a && a->port(c.aPort);
+        const bool bOk = c.bUnit.isEmpty() ? bAt.size() == 2 : b && b->port(c.bPort);
+        if (!c.id.isEmpty() && aOk && bOk) d.cables.push_back(c);
     }
     return d;
 }

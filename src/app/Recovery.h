@@ -8,17 +8,18 @@
 
 class QTableWidget;
 
-// RECOVERY COPIES: what was open, written every few minutes while it has changes not saved, so a crash or a power cut
-// loses minutes, not the day. A drawing goes to a .dbak (a DWX), the system design to a .sbak (a .wetsys). They live in
-// one folder of their own, never beside the user's files; a drawing's copy goes once that drawing is saved.
+// RECOVERY COPIES: a drawing or a system design saved to a file, written again every few minutes while it has changes
+// not saved, so a crash or a power cut loses minutes, not the day. Beside its file, by the same name: a drawing's as .dbak
+// (a DWX), a system design's as .sbak (a .wetsys). Nothing never saved to a file has one. A copy goes once its file is
+// saved; the copies written are remembered, so the Recover window finds them wherever they are.
 namespace recovery {
 
-// The folder: EDRAW_RECOVERY_DIR where it is set (the tests), else Edraw's own folder under the user's application data.
-QString folder();
-// THE FILE FOR ONE THING: named after its file (or "Untitled" and its tab), with a few letters of its full path so two
-// drawings of the same name in different folders do not take each other's copy.
-QString drawingFile(const QString& documentPath, int tab);
-QString systemFile(const QString& documentPath, int tab);
+// THE COPY FOR A FILE: beside it, the same name with .dbak (a drawing) or .sbak (a system design); none for no file.
+QString drawingFile(const QString& documentPath);
+QString systemFile(const QString& designPath);
+// A copy written: remembered for the Recover window. One taken away: forgotten.
+void remember(const QString& copy);
+void forget(const QString& copy);
 
 struct Entry {
     QString path;
@@ -26,12 +27,13 @@ struct Entry {
     QDateTime when;
     qint64 size = 0;
 };
-// Every copy there, the newest first. Copies older than two weeks are taken away as they are listed.
+// Every copy remembered that is still there, the newest first.
 std::vector<Entry> list();
 
 }  // namespace recovery
 
-// THE RECOVERY WINDOW (the E menu's Recover...): every copy, newest first - one chosen and Recovered, or Deleted.
+// THE RECOVERY WINDOW (the E menu's Recover...): every copy, newest first - one chosen and Recovered, Deleted, or one
+// found by Browse.
 class RecoveryDialog : public QDialog {
 public:
     explicit RecoveryDialog(QWidget* parent = nullptr);

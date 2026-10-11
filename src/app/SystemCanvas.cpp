@@ -851,6 +851,18 @@ void SystemCanvas::paintEvent(QPaintEvent*) {
             stroke(darkInk);
             p.restore();
         }
+        // A LOOSE END: an orange ring where it ends - drag it onto a port to plug it in again.
+        {
+            std::vector<QPointF> loose;
+            if (c.aUnit.isEmpty()) loose.push_back(c.aAt);
+            if (c.bUnit.isEmpty()) loose.push_back(c.bAt);
+            for (const SysBranch& b : c.branches)
+                if (b.unit.isEmpty()) loose.push_back(b.at);
+            p.setPen(QPen(QColor(235, 150, 40), 2.0));
+            p.setBrush(background);
+            for (const QPointF& at : loose) p.drawEllipse(toScreen(at), 4.5, 4.5);
+            p.setBrush(Qt::NoBrush);
+        }
         // A DOT WHERE THE BRANCHES LEAVE THE TRUNK, in the ink of the ground it is on.
         if (!limbs[static_cast<size_t>(ci)].empty()) {
             const QPointF dot = limbs[static_cast<size_t>(ci)].front().front();
@@ -1284,8 +1296,14 @@ void SystemCanvas::mousePressEvent(QMouseEvent* e) {
                 return;
             }
         }
+        // A LOOSE END: dragged - onto a port, or a unit (a port put there), to plug it in again.
+        if (!(e->modifiers() & (Qt::ShiftModifier | Qt::ControlModifier)) && looseEndAt(pressWorld_, looseCable_, looseWhich_)) {
+            select(QString(), QString(), looseCable_);
+            drag_ = Drag::LooseEnd;
+            return;
+        }
         // SHIFT+CLICK: what is there added to the selection - units, harnesses, ports, notes - or taken out of it.
-        // SHIFT+DRAG ON A UNIT: the unit taken away from every harness on it, and moved.
+        // SHIFT+DRAG ON A UNIT: the unit taken off every harness on it - their ends left loose where they were - and moved.
         if (e->modifiers() & Qt::ShiftModifier) {
             if (!hitUnit.isEmpty() && hitNote.isEmpty() && !portAt(pressWorld_, unit, port)) {
                 const SysUnit* u = design_->unit(hitUnit);
@@ -1393,6 +1411,15 @@ void SystemCanvas::mouseMoveEvent(QMouseEvent* e) {
         drag_ = Drag::Unit;
     }
     switch (drag_) {
+    case Drag::LooseEnd:
+        if (SysCable* c = design_->cable(looseCable_); c && moved_) {
+            announce();
+            if (looseWhich_ == 0) c->aAt = w;
+            else if (looseWhich_ == 1) c->bAt = w;
+            else if (looseWhich_ - 2 < static_cast<int>(c->branches.size())) c->branches[static_cast<size_t>(looseWhich_ - 2)].at = w;
+            update();
+        }
+        break;
     case Drag::CtrlCopy: {
         // FAR ENOUGH TO BE A DRAG: the new one made, and dragged from here on as it would be had it been there already.
         if ((toScreen(w) - toScreen(pressWorld_)).manhattanLength() < 5.0 || copyKind_ == QLatin1String("cable")) break;
@@ -1598,6 +1625,13 @@ void SystemCanvas::mouseReleaseEvent(QMouseEvent* e) {
         copyKind_.clear();
         return;
     }
+    if (was == Drag::LooseEnd) {
+        if (moveAnnounced_) {
+            plugLooseEnd(toWorld(e->position()));
+            emit changed();
+        }
+        return;
+    }
     if (was == Drag::Detach) {
         // SHIFT+CLICK, NOT DRAGGED: the selection as before.
         toggleAt(pressWorld_);
@@ -1631,13 +1665,61 @@ void SystemCanvas::mouseReleaseEvent(QMouseEvent* e) {
 }
 
 void SystemCanvas::detachUnitFromCables(const QString& unit) {
-    // A HARNESS ENDING ON IT goes; a branch of one to it goes and leaves the harness.
-    QStringList gone;
+    // EVERY HARNESS END ON IT LEFT LOOSE where it was, a little out from its port: the harness stays on the diagram, to be
+    // plugged in again by dragging the end onto a port.
+    const SysUnit* u = design_->unit(unit);
+    if (!u) return;
+    auto looseAt = [&](const QString& port, bool inside) {
+        const SysPort* pt = u->port(port);
+        return pt ? portPoint(*u, *pt) + portOut(*pt) * (inside ? -30.0 : 30.0) : QPointF(u->x, u->y);
+    };
     for (SysCable& c : design_->cables) {
-        if (c.aUnit == unit || c.bUnit == unit) { gone << c.id; continue; }
-        std::erase_if(c.branches, [&](const SysBranch& b) { return b.unit == unit; });
+        if (c.aUnit == unit) { c.aAt = looseAt(c.aPort, c.aInside); c.aUnit.clear(); c.aPort.clear(); c.aInside = false; }
+        if (c.bUnit == unit) { c.bAt = looseAt(c.bPort, c.bInside); c.bUnit.clear(); c.bPort.clear(); c.bInside = false; }
+        for (SysBranch& b : c.branches)
+            if (b.unit == unit) { b.at = looseAt(b.port, b.inside); b.unit.clear(); b.port.clear(); b.inside = false; }
+        c.waypoints.clear();
     }
-    for (const QString& id : gone) design_->removeCable(id);
+}
+
+bool SystemCanvas::looseEndAt(const QPointF& w, QString& cable, int& which) const {
+    const double reach = std::max(6.0, 8.0 / scale_);
+    double best = reach;
+    for (const SysCable& c : design_->cables) {
+        auto consider = [&](const QPointF& at, int end) {
+            const double d = std::hypot(at.x() - w.x(), at.y() - w.y());
+            if (d < best) { best = d; cable = c.id; which = end; }
+        };
+        if (c.aUnit.isEmpty()) consider(c.aAt, 0);
+        if (c.bUnit.isEmpty()) consider(c.bAt, 1);
+        for (size_t k = 0; k < c.branches.size(); ++k)
+            if (c.branches[k].unit.isEmpty()) consider(c.branches[k].at, 2 + static_cast<int>(k));
+    }
+    return best < reach;
+}
+
+void SystemCanvas::plugLooseEnd(const QPointF& w) {
+    SysCable* c = design_->cable(looseCable_);
+    if (!c) return;
+    QString unit, port;
+    if (!portAt(w, unit, port)) {
+        unit = unitAt(w);
+        if (unit.isEmpty()) return;
+        QString side;
+        double at = 0.5;
+        nearestSide(*design_->unit(unit), w, side, at);
+        port = design_->addPort(unit, side, at);
+        c = design_->cable(looseCable_);
+    }
+    if (looseWhich_ == 0) { c->aUnit = unit; c->aPort = port; }
+    else if (looseWhich_ == 1) { c->bUnit = unit; c->bPort = port; }
+    else if (looseWhich_ - 2 < static_cast<int>(c->branches.size())) {
+        SysBranch& b = c->branches[static_cast<size_t>(looseWhich_ - 2)];
+        b.unit = unit;
+        b.port = port;
+        b.inside = unit == c->aUnit || unit == c->bUnit || design_->isWithin(c->aUnit, unit) || design_->isWithin(c->bUnit, unit);
+    }
+    arrangeSystemPorts(*design_, {unit});
 }
 
 void SystemCanvas::finishCable(const QMouseEvent* e) {
