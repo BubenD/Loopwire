@@ -28,6 +28,7 @@ struct SysPort {
     QString insidePn;    // legacy data, retained for older drawings
     int pins = 0;        // legacy contact count, retained for older drawings
     QString contactPn;
+    QString description;   // what the port is for ("CAN bus", "24 V in")
     double labelDx = 0.0, labelDy = 0.0;   // designator offset from its default place above the connection
 };
 
@@ -126,6 +127,7 @@ struct SysNote {
     double x = 0.0, y = 0.0, w = 180.0, h = 70.0;
     QColor color;
     QString unit, port, cable;   // optional leader to one unit, port or cable
+    bool showLink = true;        // the leader drawn; hidden, the note stays linked all the same
 };
 
 // HOW THE LINK OF A CABLE TO ITS DRAWING STANDS: none linked, the file not there, its revision not the one the cable
@@ -145,6 +147,9 @@ struct SystemDesign {
     QJsonObject ruleLevels;
     std::vector<SysIssue> bypassed;
     QColor background = QColor(48, 52, 58);
+    // THE DESIGNATORS' COLOUR - units', ports' and cables' names. None: Auto, each one dark or light against what is
+    // behind it, so a label dragged from a pale unit onto a dark canvas stays readable.
+    QColor designatorColor;
     int ruleSeverity(const QString& rule, int defaultLevel = 2) const {
         return disabledRules.contains(rule) ? 0 : ruleLevels.value(rule).toInt(defaultLevel);
     }
@@ -154,7 +159,8 @@ struct SystemDesign {
     std::vector<SysNote> notes;
 
     bool empty() const { return units.empty() && cables.empty() && notes.empty() && disabledRules.isEmpty()
-                               && ruleLevels.isEmpty() && bypassed.empty() && background == QColor(48, 52, 58); }
+                               && ruleLevels.isEmpty() && bypassed.empty() && background == QColor(48, 52, 58)
+                               && !designatorColor.isValid(); }
     const SysNote* note(const QString& id) const;
     SysNote* note(const QString& id);
     // A NOTE put at a place; its id. One taken away.

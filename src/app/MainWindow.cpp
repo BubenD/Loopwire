@@ -13701,6 +13701,7 @@ void MainWindow::showValidationRules() {
     auto* explanation=new QLabel(QStringLiteral("Click a traffic light to cycle error, warning and not checked. Hover over a rule for its animated fault and fix."),dlg);
     explanation->setWordWrap(true); lay->addWidget(explanation);
     RuleExplainer::addSeverityLegend(lay,dlg);
+    RuleExplainer::addHelpToggle(lay,dlg);
 
     // HOVERED, each rule shows the fault and the fix, animated, with what it means.
     static const QHash<QString, QString> meaning = {

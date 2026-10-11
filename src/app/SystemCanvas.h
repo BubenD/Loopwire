@@ -51,7 +51,10 @@ public:
     const QSet<QString>& selectedCables() const { return zoneCables_; }
     const QSet<QString>& selectedNotes() const { return zoneNotes_; }
     int selectionCount() const;
-    void animateCheck(const std::vector<SysIssue>& issues);
+    // The check played over the diagram: the rules it ran (none: all of them), under a title of its own.
+    void animateCheck(const std::vector<SysIssue>& issues, const QStringList& rules = {}, const QString& title = {});
+    // The rules the last check reviewed, by id - what its card lists.
+    QStringList checkedRules() const;
     void clearCheck();
     bool locateIssue(const SysIssue& issue);
     QPointF portLabelOnScreen(const QString& unit, const QString& port) const;
@@ -148,6 +151,9 @@ private:
     bool zoneCrossing() const;
     QTimer* checkTimer_ = nullptr;
     std::vector<SysIssue> checkIssues_;
+    std::vector<int> checkRules_;   // the rules the card reviews, by place in the list of all
+    QString checkTitle_;
+    int checkRuleCount() const { return static_cast<int>(checkRules_.size()); }
     int checkStep_ = -1;
     double checkPhase_ = 0.0;
     QElapsedTimer checkClock_;

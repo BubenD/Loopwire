@@ -317,7 +317,7 @@ QString systemDrawioXml(const SystemDesign& d) {
                n.x, n.y, n.w, n.h);
     for (const SysNote& n : d.notes) {
         QPointF target;
-        if (!sysNoteTarget(d, n, target)) continue;
+        if (!n.showLink || !sysNoteTarget(d, n, target)) continue;
         const QString targetId = !n.cable.isEmpty() ? n.cable : !n.port.isEmpty() ? n.unit + QLatin1Char('.') + n.port : n.unit;
         x += QStringLiteral("<mxCell id=\"%1-leader\" style=\"dashed=1;endArrow=none;strokeColor=#7D828C;\" edge=\"1\" parent=\"1\" source=\"%1\" target=\"%2\"><mxGeometry relative=\"1\" as=\"geometry\"/></mxCell>\n").arg(esc(n.id), esc(targetId));
     }
@@ -416,7 +416,7 @@ bool exportSystemVsdx(const SystemDesign& d, const QString& path, QString* error
     }
     for (const SysNote& n : d.notes) {
         QPointF target;
-        if (sysNoteTarget(d, n, target)) {
+        if (n.showLink && sysNoteTarget(d, n, target)) {
             const QPointF edge(std::clamp(target.x(), n.x, n.x + n.w), std::clamp(target.y(), n.y, n.y + n.h));
             const double left = std::min(edge.x(), target.x()), top = std::min(edge.y(), target.y());
             const double W = std::max(0.01, std::abs(edge.x() - target.x()) / perInch);

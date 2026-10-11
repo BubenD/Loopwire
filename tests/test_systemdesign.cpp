@@ -43,6 +43,9 @@
 #include <QPlainTextEdit>
 #include <QTableWidget>
 #include <QToolButton>
+#include <QVBoxLayout>
+#include <QSplitter>
+#include <QCheckBox>
 
 #include <QApplication>
 #include <QDir>
@@ -614,7 +617,7 @@ void testUnitsPortsNotes() {
         ports->setItem(0, 3, new QTableWidgetItem(QStringLiteral("HDR-8")));
     }
     check(ports && d.unit(housing)->port(through)->connector == QLatin1String("M12-8F") &&
-              d.unit(housing)->port(through)->contactPn == QLatin1String("HDR-8") && ports->columnCount() == 4,
+              d.unit(housing)->port(through)->contactPn == QLatin1String("HDR-8") && ports->columnCount() == 5,
           "ports: one connector P/N and a contact P/N");
 
     // ---- A NOTE ----
@@ -1591,6 +1594,172 @@ void testImportScopesCtrl(const QString& base) {
           "eyes: drawn as the mechanical wizard's");
 }
 
+// THE CHECK CARD OF EACH CHECK, THE ANIMATION HELP SWITCH, PORT DESCRIPTIONS, THE NOTE'S LINK EYE AND SPLIT, DESIGNATOR COLOUR.
+void testCheckCardsHelpNotesDesignators() {
+    QJsonObject stored;
+    SystemDesignView view;
+    view.setStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    view.resize(1100, 700);
+    view.show();
+    QApplication::processEvents();
+    SystemDesign& d = view.design();
+    const QString a = d.addUnit(0, 0, QStringLiteral("U1")), b = d.addUnit(400, 0, QStringLiteral("U2"));
+    const QString pa = d.addPort(a, QStringLiteral("right"), .5, QStringLiteral("J1")), pb = d.addPort(b, QStringLiteral("left"), .5, QStringLiteral("J2"));
+    d.addCable(a, pa, b, pb);
+    stored = view.design().toJson();
+    view.reload();
+
+    // ---- EACH CHECK'S CARD LISTS WHAT IT CHECKED, AND NOTHING ELSE ----
+    view.checkRevisions();
+    const QStringList revisionCard = view.canvas()->checkedRules();
+    view.checkSchematics();
+    const QStringList connectionCard = view.canvas()->checkedRules();
+    view.checkDesign();
+    const QStringList designCard = view.canvas()->checkedRules();
+    std::printf("  check cards: revisions [%s], connections [%s], design %d rule(s)\n", qPrintable(revisionCard.join(QStringLiteral(", "))),
+                qPrintable(connectionCard.join(QStringLiteral(", "))), static_cast<int>(designCard.size()));
+    check(revisionCard == QStringList{QStringLiteral("DRAWING-LINK"), QStringLiteral("DRAWING-FIELDS")},
+          "check card: Check revisions reviews the revision rules only");
+    check(connectionCard == QStringList{QStringLiteral("PORT-CONNECTION"), QStringLiteral("SCHEMATIC-NAME")},
+          "check card: Connections reviews the connection rules only");
+    check(designCard.size() == 8, "check card: Check design reviews every rule");
+
+    // ---- ANIMATION HELP: OFF, HOVERING SHOWS NOTHING; ON, IT SHOWS - OUTSIDE THE WINDOW WHERE ASKED ----
+    {
+        QDialog window;
+        window.resize(400, 300);
+        window.move(100, 100);
+        auto* lay = new QVBoxLayout(&window);
+        QCheckBox* toggle = RuleExplainer::addHelpToggle(lay, &window);
+        auto* hovered = new QLabel(QStringLiteral("Port connections"), &window);
+        lay->addWidget(hovered);
+        RuleExplainer::attachOutside(hovered, &window, QStringLiteral("PORT-CONNECTION"), QStringLiteral("Port connections"), QStringLiteral("One cable a side."));
+        window.show();
+        QApplication::processEvents();
+        toggle->setChecked(false);
+        QEvent enter(QEvent::Enter);
+        QApplication::sendEvent(hovered, &enter);
+        const bool hiddenWhenOff = !RuleExplainer::instance()->isVisible();
+        toggle->setChecked(true);
+        QApplication::sendEvent(hovered, &enter);
+        QApplication::processEvents();
+        const bool shownWhenOn = RuleExplainer::instance()->isVisible();
+        const int x = RuleExplainer::instance()->geometry().left();
+        const QRect frame = window.frameGeometry();
+        const bool outside = x >= frame.right() || RuleExplainer::instance()->geometry().right() <= frame.left();
+        QEvent leave(QEvent::Leave);
+        QApplication::sendEvent(hovered, &leave);
+        check(toggle->objectName() == QLatin1String("drcShowAnimationHelp") && hiddenWhenOff && shownWhenOn,
+              "animation help: its tick box - off, hovering a rule shows nothing; on, the animation");
+        check(outside, "animation help: shown outside the rules window, not over it");
+        check(RuleExplainer::helpShown(), "animation help: the choice remembered");
+    }
+    // In each rules window: the schematic's, the harness DRC's and the system's.
+    {
+        MainWindow window;
+        window.show();
+        QApplication::processEvents();
+        auto* editor = window.findChild<Editor*>();
+        MechanicalValidationDialog mechanical(editor);
+        mechanical.show();
+        QApplication::processEvents();
+        bool harness = false, system = false;
+        for (QPushButton* b : mechanical.findChildren<QPushButton*>())
+            if (b->text().contains(QLatin1String("Rules"), Qt::CaseInsensitive)) { b->click(); break; }
+        QApplication::processEvents();
+        for (QWidget* w : QApplication::topLevelWidgets())
+            if (w->objectName() == QLatin1String("harnessDrcRulesDialog")) harness = w->findChild<QCheckBox*>(QStringLiteral("drcShowAnimationHelp")) != nullptr;
+        QTimer::singleShot(0, [&] {
+            if (QWidget* modal = QApplication::activeModalWidget()) {
+                system = modal->findChild<QCheckBox*>(QStringLiteral("drcShowAnimationHelp")) != nullptr;
+                modal->close();
+            }
+        });
+        view.askRules();
+        std::printf("  animation help tick box: harness DRC rules %d, system rules %d\n", harness ? 1 : 0, system ? 1 : 0);
+        check(harness && system, "animation help: in the harness DRC and system rules windows");
+    }
+
+    // ---- A PORT'S DESCRIPTION: typed in the ports table, kept in the file ----
+    view.canvas()->select(a, QString(), QString());
+    QApplication::processEvents();
+    auto* ports = view.findChild<QTableWidget*>(QStringLiteral("systemPorts"));
+    if (ports && ports->rowCount() > 0) ports->setItem(0, 4, new QTableWidgetItem(QStringLiteral("CAN bus")));
+    const SystemDesign back = SystemDesign::fromJson(view.design().toJson());
+    check(ports && ports->columnCount() == 5 && view.design().unit(a)->ports[0].description == QLatin1String("CAN bus") &&
+              back.unit(a)->ports[0].description == QLatin1String("CAN bus"),
+          "port: a description of its own, typed in the table and saved");
+
+    // ---- THE NOTE: AN EYE FOR ITS LINK LINE, A LINE TO DRAG BETWEEN ITS TEXT AND ITS PROPERTIES ----
+    const QString n = view.design().addNote(0, 200, QStringLiteral("Keep clear"));
+    view.design().note(n)->unit = a;
+    stored = view.design().toJson();
+    view.reload();
+    view.canvas()->select(QString(), QString(), QString());
+    view.canvas()->selectNote(n);
+    QApplication::processEvents();
+    auto* eye = view.findChild<QToolButton*>(QStringLiteral("systemNoteLinkEye"));
+    if (eye && eye->isEnabled()) eye->click();
+    const bool hidden = view.design().note(n) && !view.design().note(n)->showLink && view.design().note(n)->unit == a;
+    const SystemDesign saved = SystemDesign::fromJson(view.design().toJson());
+    view.undo();
+    check(eye && hidden && saved.note(n) && !saved.note(n)->showLink && view.design().note(n)->showLink,
+          "note: its link line's eye - hidden with the link kept, saved, one step to undo");
+    auto* split = view.findChild<QSplitter*>(QStringLiteral("systemNoteSplit"));
+    bool resized = false;
+    if (split && split->count() == 2) {
+        const QList<int> before = split->sizes();
+        // The line dragged up: the properties given more room, the text less (it cannot go under the form's own height).
+        split->setSizes({before[0] - 60, before[1] + 60});
+        QApplication::processEvents();
+        resized = split->sizes()[1] > before[1] && split->sizes()[0] < before[0];
+    }
+    check(split && split->count() == 2 && split->widget(0) == view.findChild<QPlainTextEdit*>(QStringLiteral("systemNoteText")) && resized,
+          "note: the text above, its properties below, the line between them dragged");
+
+    // ---- DESIGNATORS: AUTO, OR ONE COLOUR SET FOR ALL ----
+    check(!view.design().designatorColor.isValid(), "designators: Auto to start with");
+    view.setDesignatorColour(QColor(200, 30, 30));
+    const SystemDesign coloured = SystemDesign::fromJson(view.design().toJson());
+    check(coloured.designatorColor == QColor(200, 30, 30), "designators: a colour of their own, saved with the design");
+    view.setDesignatorColour(QColor());
+    check(!view.design().designatorColor.isValid() && !view.design().toJson().contains(QStringLiteral("designatorColor")),
+          "designators: back to Auto - nothing written");
+    // AUTO AGAINST WHAT IS BEHIND: a port's name dragged off a pale unit onto the dark canvas turns light.
+    {
+        view.canvas()->select(QString(), QString(), QString());
+        view.canvas()->fit();
+        QApplication::processEvents();
+        SysPort* port = view.design().unit(a)->port(pa);
+        auto inkAt = [&]() {
+            const QImage shot = view.canvas()->grab().toImage();
+            const QPointF at = view.canvas()->portLabelOnScreen(a, pa);
+            const QRect box(static_cast<int>(at.x()) - 12, static_cast<int>(at.y()) - 6, 24, 12);
+            int lightest = 0, darkest = 255;   // the text's own ink, against the ground
+            const int dpr = static_cast<int>(shot.devicePixelRatio());
+            for (int y = box.top(); y <= box.bottom(); ++y)
+                for (int x = box.left(); x <= box.right(); ++x) {
+                    const QColor c = shot.pixelColor(x * dpr, y * dpr);
+                    lightest = std::max(lightest, c.lightness());
+                    darkest = std::min(darkest, c.lightness());
+                }
+            return std::make_pair(lightest, darkest);
+        };
+        port->labelDx = -60;   // well inside the pale unit
+        view.canvas()->update();
+        const auto onUnit = inkAt();
+        port->labelDx = 80;    // out on the dark canvas
+        view.canvas()->update();
+        const auto onCanvas = inkAt();
+        std::printf("  designator ink: on the unit lightness %d..%d, on the canvas %d..%d\n", onUnit.second, onUnit.first,
+                    onCanvas.second, onCanvas.first);
+        // The unit's fill is near white and the canvas near black: dark ink shows as something well under the fill, light
+        // ink as something well over the canvas.
+        check(onUnit.second < 150 && onCanvas.first > 150, "designators: Auto - dark on a pale unit, light on the dark canvas");
+        port->labelDx = 0;
+    }
+}
+
 } // namespace
 
 int run_systemdesign_tests() {
@@ -1619,6 +1788,7 @@ int run_systemdesign_tests() {
     testPdfViewerAndProgress(dir.path());
     testSystemModuleLinksAndRoutes();
     testImportScopesCtrl(dir.path());
+    testCheckCardsHelpNotesDesignators();
     std::printf("  system design: %s\n", g_fail == 0 ? "OK" : "FAILED");
     return g_fail;
 }

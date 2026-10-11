@@ -722,6 +722,7 @@ QJsonObject SystemDesign::toJson() const {
     if (!disabledRules.isEmpty()) o[QStringLiteral("disabledRules")] = QJsonArray::fromStringList(disabledRules);
     if (!ruleLevels.isEmpty()) o[QStringLiteral("ruleLevels")] = ruleLevels;
     if (background != QColor(48, 52, 58)) o[QStringLiteral("background")] = background.name();
+    if (designatorColor.isValid()) o[QStringLiteral("designatorColor")] = designatorColor.name();
     if (!bypassed.empty()) {
         QJsonArray accepted;
         for (const SysIssue& i : bypassed)
@@ -751,6 +752,7 @@ QJsonObject SystemDesign::toJson() const {
             if (!p.insidePn.isEmpty()) q[QStringLiteral("insidePn")] = p.insidePn;
             if (p.pins > 0) q[QStringLiteral("pins")] = p.pins;
             if (!p.contactPn.isEmpty()) q[QStringLiteral("contactPn")] = p.contactPn;
+            if (!p.description.isEmpty()) q[QStringLiteral("description")] = p.description;
             if (p.labelDx != 0.0) q[QStringLiteral("labelDx")] = p.labelDx;
             if (p.labelDy != 0.0) q[QStringLiteral("labelDy")] = p.labelDy;
             ps.append(q);
@@ -792,6 +794,7 @@ QJsonObject SystemDesign::toJson() const {
             if (!n.unit.isEmpty()) j[QStringLiteral("unit")] = n.unit;
             if (!n.port.isEmpty()) j[QStringLiteral("port")] = n.port;
             if (!n.cable.isEmpty()) j[QStringLiteral("cable")] = n.cable;
+            if (!n.showLink) j[QStringLiteral("hideLink")] = true;
             ns.append(j);
         }
         o[QStringLiteral("notes")] = ns;
@@ -811,6 +814,7 @@ SystemDesign SystemDesign::fromJson(const QJsonObject& o) {
     for (auto it = levels.begin(); it != levels.end(); ++it) if (it.value().isDouble()) d.ruleLevels[it.key()] = std::clamp(it.value().toInt(2), 0, 2);
     const QColor background(o.value(QStringLiteral("background")).toString());
     if (background.isValid()) d.background = background;
+    d.designatorColor = QColor(o.value(QStringLiteral("designatorColor")).toString());
     for (const QJsonValue& v : o.value(QStringLiteral("bypassed")).toArray()) {
         const QJsonObject j = v.toObject();
         SysIssue i;
@@ -836,6 +840,7 @@ SystemDesign SystemDesign::fromJson(const QJsonObject& o) {
         n.unit = j.value(QStringLiteral("unit")).toString(j.value(QStringLiteral("linkUnit")).toString());
         n.port = j.value(QStringLiteral("port")).toString(j.value(QStringLiteral("linkPort")).toString());
         n.cable = j.value(QStringLiteral("cable")).toString(j.value(QStringLiteral("linkCable")).toString());
+        n.showLink = !j.value(QStringLiteral("hideLink")).toBool(false);
         if (!n.id.isEmpty()) d.notes.push_back(n);
     }
     for (const QJsonValue& v : o.value(QStringLiteral("units")).toArray()) {
@@ -869,6 +874,7 @@ SystemDesign SystemDesign::fromJson(const QJsonObject& o) {
             p.pins = q.value(QStringLiteral("pins")).toInt(0);
             if (p.connector.isEmpty()) p.connector = p.insidePn;
             p.contactPn = q.value(QStringLiteral("contactPn")).toString();
+            p.description = q.value(QStringLiteral("description")).toString();
             p.labelDx = q.value(QStringLiteral("labelDx")).toDouble(q.value(QStringLiteral("ldx")).toDouble());
             p.labelDy = q.value(QStringLiteral("labelDy")).toDouble(q.value(QStringLiteral("ldy")).toDouble());
             if (!p.id.isEmpty()) u.ports.push_back(p);

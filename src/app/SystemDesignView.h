@@ -81,6 +81,9 @@ public:
     void showBypass();
     void setCanvasColour(const QColor& colour);
     void askCanvasColour();
+    // THE DESIGNATORS' COLOUR: one for all, or none for Auto (each against what is behind it).
+    void setDesignatorColour(const QColor& colour);
+    void askDesignatorColour();
     // THE CABLE LIST to a CSV file (asked where, when none is given).
     bool exportCableList(const QString& path = QString());
     // THE DESIGN AS A FILE OF ITS OWN (.edsys), and read back from one (one step to undo); THE DIAGRAM FOR DRAW.IO and
@@ -157,6 +160,7 @@ private:
     QDoubleSpinBox* noteHeight_ = nullptr;
     QToolButton* noteColour_ = nullptr;
     QComboBox* noteLink_ = nullptr;
+    QToolButton* noteLinkEye_ = nullptr;
     std::vector<SysConnection> connectionRows_;
     // Under the picture.
     QTabWidget* tabs_ = nullptr;

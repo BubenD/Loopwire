@@ -1,6 +1,8 @@
 #include "app/RuleExplainer.h"
 
 #include <QApplication>
+#include <QCheckBox>
+#include <QSettings>
 #include <QEvent>
 #include <QFontMetricsF>
 #include <QHash>
@@ -34,6 +36,7 @@ const QColor kDim(143, 176, 214);
 // What each hovered widget explains.
 struct Said {
     QString rule, title, text;
+    QPointer<QWidget> outside;   // the window it is shown outside of, if any
 };
 QHash<QObject*, Said>& saidOf() {
     static QHash<QObject*, Said> said;
@@ -577,16 +580,43 @@ RuleExplainer::RuleExplainer() : QWidget(nullptr, Qt::ToolTip | Qt::FramelessWin
 }
 
 void RuleExplainer::attach(QWidget* w, const QString& rule, const QString& title, const QString& text) {
+    attachOutside(w, nullptr, rule, title, text);
+}
+
+void RuleExplainer::attachOutside(QWidget* w, QWidget* window, const QString& rule, const QString& title, const QString& text) {
     if (!w) return;
-    saidOf().insert(w, {rule, title, text});
+    saidOf().insert(w, {rule, title, text, window});
     w->installEventFilter(instance());
     QObject::connect(w, &QObject::destroyed, instance(), [w] { saidOf().remove(w); });
 }
 
+bool RuleExplainer::helpShown() {
+    return QSettings().value(QStringLiteral("drc/showAnimationHelp"), true).toBool();
+}
+
+void RuleExplainer::setHelpShown(bool shown) {
+    QSettings().setValue(QStringLiteral("drc/showAnimationHelp"), shown);
+    if (!shown && instance()->isVisible()) {
+        instance()->hide();
+        instance()->timer_->stop();
+    }
+}
+
+QCheckBox* RuleExplainer::addHelpToggle(QVBoxLayout* layout, QWidget* parent) {
+    auto* box = new QCheckBox(QStringLiteral("Show animation help"), parent);
+    box->setObjectName(QStringLiteral("drcShowAnimationHelp"));
+    box->setToolTip(QStringLiteral("Hovering a rule shows an animated picture of the fault it catches and its fix"));
+    box->setChecked(helpShown());
+    QObject::connect(box, &QCheckBox::toggled, box, [](bool on) { setHelpShown(on); });
+    layout->addWidget(box);
+    return box;
+}
+
 bool RuleExplainer::eventFilter(QObject* o, QEvent* e) {
     if (e->type() == QEvent::Enter && saidOf().contains(o)) {
+        if (!helpShown()) return false;
         const Said& s = saidOf().value(o);
-        showFor(qobject_cast<QWidget*>(o), s.rule, s.title, s.text);
+        showFor(qobject_cast<QWidget*>(o), s.rule, s.title, s.text, s.outside);
     } else if ((e->type() == QEvent::Leave || e->type() == QEvent::Hide) && saidOf().contains(o)) {
         hide();
         timer_->stop();
@@ -594,7 +624,7 @@ bool RuleExplainer::eventFilter(QObject* o, QEvent* e) {
     return false;
 }
 
-void RuleExplainer::showFor(QWidget* anchor, const QString& rule, const QString& title, const QString& text) {
+void RuleExplainer::showFor(QWidget* anchor, const QString& rule, const QString& title, const QString& text, QWidget* outside) {
     rule_ = rule;
     title_ = title;
     text_ = text;
@@ -604,7 +634,17 @@ void RuleExplainer::showFor(QWidget* anchor, const QString& rule, const QString&
     f.setPixelSize(12);
     const QRectF words = QFontMetricsF(f).boundingRect(QRectF(0, 0, kWidth - 20, 400), Qt::TextWordWrap, text_);
     setFixedHeight(kSceneH + 34 + static_cast<int>(std::ceil(words.height())) + 10);
-    if (anchor) {
+    if (anchor && outside) {
+        // OUTSIDE THE WINDOW: past its right edge, level with what is hovered - its left where the screen ends.
+        const QRect frame = outside->window()->frameGeometry();
+        QPoint at(frame.right() + 10, anchor->mapToGlobal(QPoint(0, 0)).y());
+        if (const QScreen* sc = outside->screen()) {
+            const QRect area = sc->availableGeometry();
+            if (at.x() + width() > area.right()) at.setX(frame.left() - width() - 10);
+            at.setY(std::clamp(at.y(), area.top(), std::max(area.top(), area.bottom() - height())));
+        }
+        move(at);
+    } else if (anchor) {
         // Beside what is hovered, kept on its screen.
         QPoint at = anchor->mapToGlobal(QPoint(anchor->width() + 12, 0));
         if (const QScreen* sc = anchor->screen()) {

@@ -1040,12 +1040,21 @@ int CanvasWidget::drawDrawingDetails(QPainter& painter) const {
     QFont heading=textFont;heading.setBold(true);painter.setFont(heading);painter.setPen(QColor("#eef4fa"));
     painter.drawText(QRect(panel.x()+12,panel.y()+8,panelWidth-24,19),Qt::AlignLeft|Qt::AlignVCenter,QStringLiteral("Drawing details"));
     painter.setPen(QPen(QColor("#b6c7d8"),1));painter.setBrush(QColor(100,127,151,70));painter.drawRoundedRect(drawingDetailsMinimize_,3,3);
-    painter.setPen(QPen(QColor("#eef4fa"),2));
-    if(drawingDetailsPinned_){
-        const QPoint c=drawingDetailsMinimize_.center();
-        painter.drawLine(c+QPoint(-4,-5),c+QPoint(4,3));painter.drawLine(c+QPoint(4,3),c+QPoint(-4,3));
-        painter.drawLine(c+QPoint(0,3),c+QPoint(0,7));
-    }else painter.drawLine(drawingDetailsMinimize_.center()+QPoint(-5,2),drawingDetailsMinimize_.center()+QPoint(5,2));
+    // THE PIN: a pushpin standing in the card, gold, while it stays open; tipped over and hollow while it folds away
+    // by itself when the pointer leaves.
+    {
+        painter.save();painter.translate(QPointF(drawingDetailsMinimize_.center())+QPointF(0.5,0.5));
+        if(!drawingDetailsPinned_)painter.rotate(45.0);
+        const QColor ink=drawingDetailsPinned_?QColor("#ffd166"):QColor("#eef4fa");
+        painter.setPen(QPen(ink,1.4,Qt::SolidLine,Qt::RoundCap,Qt::RoundJoin));
+        painter.setBrush(drawingDetailsPinned_?QBrush(ink):QBrush(Qt::NoBrush));
+        painter.drawRoundedRect(QRectF(-4.0,-8.0,8.0,2.6),1.0,1.0);
+        QPolygonF body;body<<QPointF(-2.6,-5.4)<<QPointF(2.6,-5.4)<<QPointF(3.4,0.0)<<QPointF(-3.4,0.0);
+        painter.drawPolygon(body);
+        painter.drawRoundedRect(QRectF(-5.5,0.0,11.0,2.4),1.0,1.0);
+        painter.setPen(QPen(ink,1.6,Qt::SolidLine,Qt::RoundCap));painter.drawLine(QPointF(0.0,2.4),QPointF(0.0,8.0));
+        painter.restore();
+    }
     painter.setFont(textFont);int top=panel.y()+34;
     for(int i=0;i<3;++i){
         painter.setPen(QColor("#b6c7d8"));painter.drawText(QRect(panel.x()+12,top,78,heights[i]),Qt::AlignLeft|Qt::AlignTop,labels[i]);

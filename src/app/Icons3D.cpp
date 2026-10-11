@@ -661,6 +661,19 @@ void draw(QPainter& p, const QString& k, const QColor& ink, const QColor& acc) {
         }
         return;
     }
+    if (k == QLatin1String("designator")) {
+        // A LETTER OVER A COLOUR BAR: the colour of the names written on the diagram.
+        QFont f = p.font();
+        f.setBold(true);
+        f.setPixelSize(20);
+        p.setFont(f);
+        p.setPen(ink);
+        p.drawText(QRectF(4, 1, 24, 22), Qt::AlignCenter, QStringLiteral("A"));
+        p.setPen(Qt::NoPen);
+        p.setBrush(acc);
+        p.drawRoundedRect(QRectF(5, 24, 22, 5), 1.5, 1.5);
+        return;
+    }
     if (k == QLatin1String("renumber")) {
         QFont f = p.font();
         f.setBold(true);

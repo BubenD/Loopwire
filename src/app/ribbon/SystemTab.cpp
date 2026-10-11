@@ -153,6 +153,27 @@ void MainWindow::buildSystemTab() {
         menu->addAction(QStringLiteral("Dark grey"),this,[this]{if(systemView_)systemView_->setCanvasColour(QColor(48,52,58));});
         menu->addAction(QStringLiteral("Light"),this,[this]{if(systemView_)systemView_->setCanvasColour(QColor(250,251,252));});
         menu->addAction(QStringLiteral("Custom colour..."),this,[this]{if(systemView_)systemView_->askCanvasColour();}); colour->setMenu(menu);
+        // THE DESIGNATORS' COLOUR: Auto (ticked) - each dark or light against what it is on - or one chosen for all.
+        auto* names = big(w, row, "systemDesignatorColour", QStringLiteral("Designators"), QStringLiteral("designator"),
+                          QStringLiteral("The colour of unit, port and cable designators - Auto keeps each readable against what "
+                                         "is behind it; the arrow: Auto or a colour of your own"),
+                          [this] { if (systemView_) systemView_->askDesignatorColour(); });
+        names->setPopupMode(QToolButton::MenuButtonPopup);
+        auto* namesMenu = new QMenu(names);
+        auto* autoInk = namesMenu->addAction(QStringLiteral("Auto colour"));
+        autoInk->setObjectName(QStringLiteral("systemDesignatorAuto"));
+        autoInk->setCheckable(true);
+        connect(autoInk, &QAction::triggered, this, [this, autoInk](bool on) {
+            if (!systemView_) return;
+            if (on) systemView_->setDesignatorColour(QColor());
+            else systemView_->askDesignatorColour();
+            autoInk->setChecked(!systemView_->design().designatorColor.isValid());
+        });
+        namesMenu->addAction(QStringLiteral("Choose colour..."), this, [this] { if (systemView_) systemView_->askDesignatorColour(); });
+        connect(namesMenu, &QMenu::aboutToShow, this, [this, autoInk] {
+            autoInk->setChecked(!systemView_ || !systemView_->design().designatorColor.isValid());
+        });
+        names->setMenu(namesMenu);
     });
     // THE CABLES: their part numbers, and the drawings that define them.
     group(QStringLiteral("Cables"), [&](QWidget* w, QHBoxLayout* row) {
@@ -180,7 +201,7 @@ void MainWindow::buildSystemTab() {
     group(QStringLiteral("Check"), [&](QWidget* w, QHBoxLayout* row) {
         big(w, row, "systemCheckRevisions", QStringLiteral("Check revisions"), QStringLiteral("check"),
             QStringLiteral("Read every linked drawing again and say where its revision (or drawing number) is not the one the cable "
-                           "calls for - and check the whole design"),
+                           "calls for, and check its drawing fields - nothing else"),
             [this] {
                 if (!systemView_) return;
                 const int errors = systemView_->checkRevisions();

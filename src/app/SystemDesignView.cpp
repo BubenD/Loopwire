@@ -184,12 +184,12 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
         form->addRow(QStringLiteral("Look"), look);
         v->addLayout(form);
         v->addWidget(new QLabel(QStringLiteral("<b>Ports</b> - connector and contact part numbers"), page));
-        ports_ = new QTableWidget(0, 4, page);
+        ports_ = new QTableWidget(0, 5, page);
         ports_->setObjectName(QStringLiteral("systemPorts"));
         ports_->setHorizontalHeaderLabels({QStringLiteral("Designator"), QStringLiteral("Side"), QStringLiteral("Connector P/N"),
-                                           QStringLiteral("Contact P/N")});
-        ports_->setToolTip(QStringLiteral("One connector P/N for the port, and the part number of its contacts. Drag the designator on "
-                                          "the diagram to move its label independently."));
+                                           QStringLiteral("Contact P/N"), QStringLiteral("Description")});
+        ports_->setToolTip(QStringLiteral("One connector P/N for the port, the part number of its contacts and what the port is for. "
+                                          "Drag the designator on the diagram to move its label independently."));
         ports_->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
         ports_->horizontalHeader()->setStretchLastSection(true);
         ports_->verticalHeader()->setVisible(false);
@@ -223,6 +223,7 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
             if (col == 0) p.name = text;
             else if (col == 2) p.connector = text;
             else if (col == 3) p.contactPn = text;
+            else if (col == 4) p.description = text;
             commit();
         });
         connect(add, &QPushButton::clicked, this, [this] {
@@ -356,8 +357,22 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
         noteText_ = new QPlainTextEdit(page);
         noteText_->setObjectName(QStringLiteral("systemNoteText"));
         noteText_->setLineWrapMode(QPlainTextEdit::WidgetWidth);
-        v->addWidget(noteText_, 1);
-        auto* noteForm = new QFormLayout;
+        // THE TEXT ABOVE, ITS PROPERTIES BELOW, and a white line between them to drag: more room for either.
+        auto* noteSplit = new QSplitter(Qt::Vertical, page);
+        noteSplit->setObjectName(QStringLiteral("systemNoteSplit"));
+        noteSplit->setChildrenCollapsible(false);
+        noteSplit->setHandleWidth(5);
+        noteSplit->setStyleSheet(QStringLiteral("QSplitter#systemNoteSplit::handle{background:#ffffff;margin:1px 0px;}"
+                                                "QSplitter#systemNoteSplit::handle:hover{background:#9fd0ff;}"));
+        noteSplit->addWidget(noteText_);
+        auto* noteProperties = new QWidget(noteSplit);
+        noteProperties->setObjectName(QStringLiteral("systemNoteProperties"));
+        noteSplit->addWidget(noteProperties);
+        noteSplit->setStretchFactor(0, 1);
+        noteSplit->setStretchFactor(1, 0);
+        v->addWidget(noteSplit, 1);
+        auto* noteForm = new QFormLayout(noteProperties);
+        noteForm->setContentsMargins(0, 6, 0, 0);
         noteWidth_ = new QDoubleSpinBox(page);
         noteHeight_ = new QDoubleSpinBox(page);
         noteWidth_->setObjectName(QStringLiteral("systemNoteWidth"));
@@ -383,8 +398,25 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
         noteLink_ = new QComboBox(page);
         noteLink_->setObjectName(QStringLiteral("systemNoteLink"));
         noteLink_->setToolTip(QStringLiteral("Attach a leader to a unit, cable or port; it follows that item when it moves."));
-        noteForm->addRow(QStringLiteral("Link to"), noteLink_);
-        v->addLayout(noteForm);
+        // THE LINK LINE'S EYE, as the fields' own: the leader shown on the diagram, or hidden with the link kept.
+        auto* linkRow = new QWidget(noteProperties);
+        auto* linkLayout = new QHBoxLayout(linkRow); linkLayout->setContentsMargins(0, 0, 0, 0); linkLayout->setSpacing(2);
+        linkLayout->addWidget(noteLink_, 1);
+        noteLinkEye_ = new QToolButton(linkRow);
+        noteLinkEye_->setObjectName(QStringLiteral("systemNoteLinkEye"));
+        noteLinkEye_->setCheckable(true);
+        noteLinkEye_->setChecked(true);
+        noteLinkEye_->setAutoRaise(true);
+        noteLinkEye_->setIcon(fieldEyeIcon());
+        noteLinkEye_->setIconSize(QSize(18, 18));
+        noteLinkEye_->setToolTip(QStringLiteral("The link line shown on the diagram - click to hide it (the note stays linked)"));
+        linkLayout->addWidget(noteLinkEye_);
+        noteForm->addRow(QStringLiteral("Link to"), linkRow);
+        connect(noteLinkEye_, &QToolButton::toggled, this, [this](bool on) {
+            SysNote* n = design_.note(canvas_->selectedNote());
+            if (filling_ || !n || n->showLink == on) return;
+            noteTyping_.clear(); aboutToChange(); n->showLink = on; commit();
+        });
         auto applyNoteSize = [this] {
             SysNote* n = design_.note(canvas_->selectedNote());
             if (filling_ || !n || (n->w == noteWidth_->value() && n->h == noteHeight_->value())) return;
@@ -751,6 +783,8 @@ void SystemDesignView::syncPanel() {
         for (const SysCable& target : design_.cables) addTarget(QStringLiteral("Cable: %1").arg(target.name), {{}, {}, target.id});
         if (selected < 0) { addTarget(QStringLiteral("Missing linked item"), current); selected = noteLink_->count() - 1; }
         noteLink_->setCurrentIndex(selected);
+        noteLinkEye_->setChecked(n->showLink);
+        noteLinkEye_->setEnabled(!n->unit.isEmpty() || !n->cable.isEmpty());
     } else if (c) {
         panel_->setCurrentIndex(2);
         cableName_->setText(c->name);
@@ -808,6 +842,7 @@ void SystemDesignView::syncPanel() {
             ports_->setCellWidget(i, 1, side);
             ports_->setItem(i, 2, new QTableWidgetItem(p.connector));
             ports_->setItem(i, 3, new QTableWidgetItem(p.contactPn));
+            ports_->setItem(i, 4, new QTableWidgetItem(p.description));
         }
     } else {
         panel_->setCurrentIndex(0);
@@ -1004,7 +1039,9 @@ int SystemDesignView::checkDesign(CheckScope scope) {
     fillBypass();
     std::stable_sort(issues_.begin(), issues_.end(), [](const SysIssue& a, const SysIssue& b) { return a.level > b.level; });
     fillConnections();
-    canvas_->animateCheck(issues_);
+    canvas_->animateCheck(issues_, scope == CheckScope::All ? QStringList{} : scope == CheckScope::Revisions ? revisions : connections,
+                          scope == CheckScope::All ? QString{} : scope == CheckScope::Revisions ? QStringLiteral("Revision check")
+                                                                                                 : QStringLiteral("Connection check"));
     fillIssues();
     fillCables();
     syncPanel();
@@ -1039,6 +1076,7 @@ void SystemDesignView::askRules() {
     legendLayout->setContentsMargins(10, 6, 10, 6);
     RuleExplainer::addSeverityLegend(legendLayout, legendBox);
     layout->addWidget(legendBox);
+    RuleExplainer::addHelpToggle(layout, &dialog);
     auto* rule = new QFrame(&dialog);
     rule->setFrameShape(QFrame::HLine);
     rule->setFrameShadow(QFrame::Sunken);
@@ -1072,8 +1110,10 @@ void SystemDesignView::askRules() {
         });
         auto* title = new QLabel(QStringLiteral("<b>%1</b>").arg(QString::fromLatin1(rule.second)), row);
         title->setObjectName(QStringLiteral("systemDrcRuleName_") + QString::fromLatin1(rule.first));
-        RuleExplainer::attach(title, QString::fromLatin1(rule.first), QString::fromLatin1(rule.second), QString::fromLatin1(rule.description));
-        RuleExplainer::attach(box, QString::fromLatin1(rule.first), QString::fromLatin1(rule.second), QString::fromLatin1(rule.description));
+        // THE ANIMATION OUTSIDE THE WINDOW, at its right: the rules stay in sight while it plays.
+        for (QWidget* hovered : {static_cast<QWidget*>(row), static_cast<QWidget*>(title), static_cast<QWidget*>(box)})
+            RuleExplainer::attachOutside(hovered, &dialog, QString::fromLatin1(rule.first), QString::fromLatin1(rule.second),
+                                         QString::fromLatin1(rule.description));
         auto* words = new QWidget(row);
         auto* wordsLayout = new QVBoxLayout(words);
         wordsLayout->setContentsMargins(0, 0, 0, 0);
@@ -1156,6 +1196,19 @@ void SystemDesignView::fillBypass() {
 void SystemDesignView::setCanvasColour(const QColor& colour) {
     if(!colour.isValid() || colour==design_.background) return;
     aboutToChange(); design_.background=colour; design_.background.setAlpha(255); commit();
+}
+
+void SystemDesignView::setDesignatorColour(const QColor& colour) {
+    QColor set = colour;
+    if (set.isValid()) set.setAlpha(255);
+    if (set == design_.designatorColor || (!set.isValid() && !design_.designatorColor.isValid())) return;
+    aboutToChange(); design_.designatorColor = set; commit();
+}
+
+void SystemDesignView::askDesignatorColour() {
+    const QColor start = design_.designatorColor.isValid() ? design_.designatorColor : QColor(25, 30, 36);
+    const QColor colour = QColorDialog::getColor(start, this, QStringLiteral("Designator colour"));
+    if (colour.isValid()) setDesignatorColour(colour);
 }
 
 void SystemDesignView::askCanvasColour() {

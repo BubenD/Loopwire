@@ -3,6 +3,7 @@
 #include <QString>
 #include <QWidget>
 
+class QCheckBox;
 class QTimer;
 class QToolButton;
 class QVBoxLayout;
@@ -17,13 +18,21 @@ class RuleExplainer : public QWidget {
 public:
     // Put on a widget in a rules list: hovering it shows the explainer for that rule beside it.
     static void attach(QWidget* w, const QString& rule, const QString& title, const QString& text);
+    // Shown outside a window: hovering w puts the explainer beyond that window's right edge (or its left, where the
+    // screen ends) instead of beside w, so it covers nothing in the window.
+    static void attachOutside(QWidget* w, QWidget* window, const QString& rule, const QString& title, const QString& text);
+    // WHETHER HOVERING SHOWS IT AT ALL: one choice for every rules window, remembered between sessions.
+    static bool helpShown();
+    static void setHelpShown(bool shown);
+    // The tick box that says so, for a rules window.
+    static QCheckBox* addHelpToggle(QVBoxLayout* layout, QWidget* parent);
     // The one explainer there is (made on first use), and whether a rule has a picture of its own.
     static RuleExplainer* instance();
     static bool hasScene(const QString& rule);
     static void paintSeverity(QToolButton* button, int level);
     static void addSeverityLegend(QVBoxLayout* layout, QWidget* parent);
 
-    void showFor(QWidget* anchor, const QString& rule, const QString& title, const QString& text);
+    void showFor(QWidget* anchor, const QString& rule, const QString& title, const QString& text, QWidget* outside = nullptr);
     QString rule() const { return rule_; }
     // Where the animation is, 0..1 round the loop (the first half the fault, the second the fix) - for the tests.
     void setPhase(double t);

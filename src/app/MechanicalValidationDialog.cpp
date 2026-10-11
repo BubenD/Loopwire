@@ -297,6 +297,7 @@ void MechanicalValidationDialog::showRules() {
         }
         legend->addStretch(1);
         lay->addLayout(legend);
+        RuleExplainer::addHelpToggle(lay, dlg);
     }
     for (const QString group : {QStringLiteral("Logical"), QStringLiteral("Compatibility")}) {
         auto* box = new QGroupBox(group == QLatin1String("Logical") ? QStringLiteral("Logical DRC")

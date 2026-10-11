@@ -103,8 +103,9 @@ SystemCanvas::SystemCanvas(QWidget* parent) : QWidget(parent) {
         const int elapsed = static_cast<int>(checkClock_.elapsed());
         checkPhase_ = elapsed / 150.0;
         const int items = design_ ? static_cast<int>(design_->units.size() + design_->cables.size()) : 0;
-        checkStep_ = items > 0 ? std::min(items - 1, elapsed * items / (kCheckRuleCount * kRuleDuration)) : -1;
-        if (!design_ || elapsed >= kCheckRuleCount * kRuleDuration) { checkTimer_->stop(); checkStep_ = -1; }
+        const int rules = std::max(1, checkRuleCount());
+        checkStep_ = items > 0 ? std::min(items - 1, elapsed * items / (rules * kRuleDuration)) : -1;
+        if (!design_ || elapsed >= rules * kRuleDuration) { checkTimer_->stop(); checkStep_ = -1; }
         update();
     });
     setToolTip(QStringLiteral("Unit (U): click to put a unit. Port (P): click a unit's side. Cable (H): drag from a port or a unit "
@@ -212,7 +213,12 @@ bool SystemCanvas::locateIssue(const SysIssue& issue) {
     return true;
 }
 
-void SystemCanvas::animateCheck(const std::vector<SysIssue>& issues) {
+void SystemCanvas::animateCheck(const std::vector<SysIssue>& issues, const QStringList& rules, const QString& title) {
+    // ONLY WHAT WAS CHECKED on the card: Check revisions reviews the revision rules and no others.
+    checkRules_.clear();
+    for (int rule = 0; rule < kCheckRuleCount; ++rule)
+        if (rules.isEmpty() || rules.contains(QLatin1String(kCheckRules[rule]))) checkRules_.push_back(rule);
+    checkTitle_ = title;
     checkIssues_ = issues; checkStep_ = 0; checkPhase_ = 0.0;
     checkShown_ = true; checkClock_.start();
     checkTimer_->start(); update();
@@ -220,14 +226,21 @@ void SystemCanvas::animateCheck(const std::vector<SysIssue>& issues) {
 
 QRectF SystemCanvas::checkPanelRect() const {
     const double panelWidth = std::min(340.0, width() - 24.0);
-    return QRectF(width() - panelWidth - 12.0, 12.0, panelWidth, 70.0+kCheckRuleCount*27.0);
+    return QRectF(width() - panelWidth - 12.0, 12.0, panelWidth, 70.0+checkRuleCount()*27.0);
+}
+
+QStringList SystemCanvas::checkedRules() const {
+    QStringList ids;
+    for (int rule : checkRules_) ids << QString::fromLatin1(kCheckRules[rule]);
+    return ids;
 }
 
 bool SystemCanvas::issueOn(const QString& unit, const QString& cable) const {
     return std::any_of(checkIssues_.begin(), checkIssues_.end(), [&](const SysIssue& issue) {
         if (checkTimer_->isActive()) {
-            const int rule = std::min(kCheckRuleCount-1, static_cast<int>(checkClock_.elapsed()) / kRuleDuration);
-            if (issue.rule != QLatin1String(kCheckRules[rule])) return false;
+            if (checkRules_.empty()) return false;
+            const int at = std::min(checkRuleCount() - 1, static_cast<int>(checkClock_.elapsed()) / kRuleDuration);
+            if (issue.rule != QLatin1String(kCheckRules[checkRules_[static_cast<size_t>(at)]])) return false;
         }
         return issue.level > 0 && ((!unit.isEmpty() && issue.unit == unit) || (!cable.isEmpty() && issue.cable == cable));
     });
@@ -478,6 +491,30 @@ void SystemCanvas::paintEvent(QPaintEvent*) {
     std::vector<const SysUnit*> order;
     for (const SysUnit& u : design_->units) order.push_back(&u);
     std::stable_sort(order.begin(), order.end(), [this](const SysUnit* a, const SysUnit* b) { return design_->depth(a->id) < design_->depth(b->id); });
+    // WHAT A DESIGNATOR IS WRITTEN ON: the unit uppermost under it - its fill as solid as it is set over what is behind
+    // that - or the canvas.
+    auto unitFill = [](const SysUnit& u) {
+        return u.color.isValid() ? u.color : u.kind == QLatin1String("pcba") ? QColor(226, 242, 230)
+                                     : u.kind == QLatin1String("module") ? QColor(110, 160, 210) : QColor(232, 238, 246);
+    };
+    auto behind = [&](const QPointF& world) {
+        QColor seen = background;
+        for (const SysUnit* u : order)
+            if (u->rect().contains(world)) {
+                const double a = std::clamp(u->opacity, 0.0, 1.0);
+                const QColor fill = unitFill(*u);
+                seen = QColor::fromRgbF(static_cast<float>(fill.redF() * a + seen.redF() * (1 - a)),
+                                        static_cast<float>(fill.greenF() * a + seen.greenF() * (1 - a)),
+                                        static_cast<float>(fill.blueF() * a + seen.blueF() * (1 - a)));
+            }
+        return seen;
+    };
+    // ITS INK: the colour set for designators, or on Auto dark on a pale ground and light on a dark one.
+    const QColor setInk = design_->designatorColor;
+    auto inkOn = [&](const QColor& ground) {
+        if (setInk.isValid()) return setInk;
+        return ground.lightness() < 128 ? QColor(235, 239, 245) : QColor(25, 30, 36);
+    };
     for (const SysUnit* up : order) {
         const SysUnit& u = *up;
         const QRectF r(toScreen(QPointF(u.x, u.y)), QSizeF(u.w * scale_, u.h * scale_));
@@ -503,13 +540,13 @@ void SystemCanvas::paintEvent(QPaintEvent*) {
         QFont bold = f;
         bold.setBold(true);
         p.setFont(bold);
-        p.setPen(darkUnit ? QColor(235, 239, 245) : QColor(25, 30, 36));
+        p.setPen(setInk.isValid() ? setInk : darkUnit ? QColor(235, 239, 245) : QColor(25, 30, 36));
         if (u.shows(QStringLiteral("name"))) p.drawText(r.adjusted(6, 4, -6, -r.height() / 2), Qt::AlignHCenter | Qt::AlignBottom, u.name);
         p.setFont(f);
         QStringList sub;
         if (!u.pn.isEmpty() && u.shows(QStringLiteral("pn"))) sub << u.pn;
         if (!u.rev.isEmpty() && u.shows(QStringLiteral("rev"))) sub << QStringLiteral("rev ") + u.rev;
-        p.setPen(darkUnit ? QColor(195, 205, 220) : QColor(80, 88, 100));
+        p.setPen(setInk.isValid() ? setInk : darkUnit ? QColor(195, 205, 220) : QColor(80, 88, 100));
         if (!sub.isEmpty()) p.drawText(r.adjusted(6, r.height() / 2 + 2, -6, -4), Qt::AlignHCenter | Qt::AlignTop, sub.join(QStringLiteral("  ")));
     }
     // THE CABLES, each labelled at its middle with a dot for how its drawing stands.
@@ -544,7 +581,7 @@ void SystemCanvas::paintEvent(QPaintEvent*) {
         p.setPen(QPen(QColor(180, 186, 196), 1.0));
         p.setBrush(QColor(255, 255, 255, 235));
         p.drawRoundedRect(box, 3, 3);
-        p.setPen(QColor(30, 34, 40));
+        p.setPen(inkOn(QColor(255, 255, 255)));
         p.drawText(box.adjusted(4, 0, -12, 0), Qt::AlignVCenter | Qt::AlignLeft, label);
         p.setPen(Qt::NoPen);
         p.setBrush(stateColour(SystemDesign::linkState(c)));
@@ -595,14 +632,14 @@ void SystemCanvas::paintEvent(QPaintEvent*) {
             const QRectF worldBox = sysPortLabelRect(u, pt);
             const QRectF nameBox(toScreen(worldBox.topLeft()), worldBox.size() * scale_);
             if (pon) { p.setPen(QPen(QColor(40, 140, 230), 1, Qt::DashLine)); p.setBrush(Qt::NoBrush); p.drawRect(nameBox); }
-            p.setPen(canvasInk);
+            p.setPen(inkOn(behind(worldBox.center())));
             p.drawText(nameBox, Qt::AlignCenter, pt.name);
         }
     // THE NOTES, over everything: a pale yellow box with its text.
     for (const SysNote& n : design_->notes) {
         const QRectF r(toScreen(QPointF(n.x, n.y)), QSizeF(n.w * scale_, n.h * scale_));
         QPointF target;
-        if (sysNoteTarget(*design_, n, target)) {
+        if (n.showLink && sysNoteTarget(*design_, n, target)) {
             const QPointF end = toScreen(target);
             const QPointF edge(std::clamp(end.x(), r.left(), r.right()), std::clamp(end.y(), r.top(), r.bottom()));
             p.setPen(QPen(dark ? QColor(190, 201, 215) : QColor(125, 130, 140), 1.2, Qt::DashLine));
@@ -667,24 +704,27 @@ void SystemCanvas::paintEvent(QPaintEvent*) {
         p.drawRoundedRect(card, 7, 7);
         const bool running = checkTimer_->isActive();
         const int elapsed = static_cast<int>(checkClock_.elapsed());
-        const int activeRule = running ? std::min(kCheckRuleCount-1, elapsed / kRuleDuration) : kCheckRuleCount;
+        const int shown = checkRuleCount();
+        const int activeRule = running ? std::min(shown - 1, elapsed / kRuleDuration) : shown;
         p.setPen(QColor(30, 75, 110));
         reviewFont.setBold(true); p.setFont(reviewFont);
         p.drawText(card.adjusted(12, 6, -32, -card.height() + 30), Qt::AlignVCenter | Qt::AlignLeft,
-                   running ? QStringLiteral("Reviewing design rules") : QStringLiteral("Design rule check complete"));
+                   checkTitle_.isEmpty() ? (running ? QStringLiteral("Reviewing design rules") : QStringLiteral("Design rule check complete"))
+                                         : (running ? QStringLiteral("Reviewing %1").arg(checkTitle_.toLower()) : QStringLiteral("%1 complete").arg(checkTitle_)));
         p.drawText(QRectF(card.right() - 28, card.top() + 5, 22, 24), Qt::AlignCenter, QStringLiteral("x"));
         reviewFont.setBold(false); p.setFont(reviewFont);
-        for (int rule = 0; rule < kCheckRuleCount; ++rule) {
+        for (int row = 0; row < shown; ++row) {
+            const int rule = checkRules_[static_cast<size_t>(row)];
             const QString id = QString::fromLatin1(kCheckRules[rule]);
             const bool disabled = design_->ruleSeverity(id)==0;
-            const bool current = running && rule == activeRule && !disabled;
+            const bool current = running && row == activeRule && !disabled;
             int findings = 0, errors = 0, bypasses = 0;
             for (const SysIssue& accepted : design_->bypassed) if (accepted.rule==id) ++bypasses;
             for (const SysIssue& issue : checkIssues_) if (issue.rule == id) { ++findings; if (issue.level == 2) ++errors; }
-            const QColor colour = disabled || rule > activeRule ? QColor(145, 150, 160)
+            const QColor colour = disabled || row > activeRule ? QColor(145, 150, 160)
                                 : current ? QColor(35, 145, 225)
                                 : errors ? QColor(205, 60, 50) : findings || bypasses ? QColor(185, 120, 25) : QColor(40, 150, 80);
-            const double y = card.top() + 40 + rule * 27;
+            const double y = card.top() + 40 + row * 27;
             if (current) { p.setPen(Qt::NoPen); p.setBrush(QColor(226, 240, 253)); p.drawRoundedRect(QRectF(card.left() + 6, y - 2, card.width() - 12, 25), 3, 3); }
             p.setPen(Qt::NoPen); p.setBrush(colour);
             const double radius = current ? 4.5 + std::sin(checkPhase_) : 4.0;
@@ -692,7 +732,7 @@ void SystemCanvas::paintEvent(QPaintEvent*) {
             p.setPen(QColor(45, 55, 65));
             p.drawText(QRectF(card.left() + 29, y, card.width() - 145, 22), Qt::AlignLeft | Qt::AlignVCenter, QString::fromLatin1(kCheckTitles[rule]));
             const QString status = disabled ? QStringLiteral("Not checked") : current ? QStringLiteral("Reviewing...")
-                                 : rule > activeRule ? QStringLiteral("Pending")
+                                 : row > activeRule ? QStringLiteral("Pending")
                                  : findings ? QStringLiteral("%1 finding(s)").arg(findings) : bypasses ? QStringLiteral("%1 bypassed").arg(bypasses) : QStringLiteral("Passed");
             p.setPen(colour); p.drawText(QRectF(card.right() - 110, y, 98, 22), Qt::AlignRight | Qt::AlignVCenter, status);
         }
@@ -700,7 +740,7 @@ void SystemCanvas::paintEvent(QPaintEvent*) {
         const QRectF progress(card.left() + 12, card.bottom() - 16, card.width() - 24, 5);
         p.drawRoundedRect(progress, 2, 2);
         p.setBrush(QColor(35, 145, 225));
-        p.drawRoundedRect(QRectF(progress.topLeft(), QSizeF(progress.width() * std::min(1.0, elapsed / (double(kCheckRuleCount) * kRuleDuration)), 5)), 2, 2);
+        p.drawRoundedRect(QRectF(progress.topLeft(), QSizeF(progress.width() * std::min(1.0, elapsed / (double(std::max(1, shown)) * kRuleDuration)), 5)), 2, 2);
         p.restore();
     }
     if (design_->units.empty() && design_->notes.empty()) {
