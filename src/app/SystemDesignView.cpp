@@ -1,6 +1,8 @@
 #include "app/SystemDesignView.h"
 
 #include "app/DrawingFinderDialog.h"
+#include "app/UiBits.h"
+#include "system/SystemImport.h"
 #include "app/RuleExplainer.h"
 #include "system/SystemExport.h"
 
@@ -33,6 +35,8 @@
 #include <QTextStream>
 #include <QVBoxLayout>
 #include <QColorDialog>
+#include <QFrame>
+#include <QGroupBox>
 #include <QPainter>
 #include <QPalette>
 #include <QPainterPath>
@@ -45,30 +49,12 @@ namespace Edraw_Desktop {
 
 namespace {
 
-// AN EYE: open - shown on the diagram; shut, a stroke across it - not.
-QIcon eyeIcon() {
+// AN EYE, AS THE MECHANICAL WIZARD'S: open - shown on the diagram; struck through - not. The same drawing and colours,
+// one for each state of the button.
+QIcon fieldEyeIcon() {
     QIcon icon;
-    for (const bool open : {true, false}) {
-        QPixmap pm(36, 36);
-        pm.fill(Qt::transparent);
-        QPainter p(&pm);
-        p.setRenderHint(QPainter::Antialiasing, true);
-        const QColor ink = open ? QColor(40, 140, 230) : QColor(140, 146, 156);
-        p.setPen(QPen(ink, 2.6));
-        QPainterPath lid;
-        lid.moveTo(4, 18);
-        lid.quadTo(18, 4, 32, 18);
-        lid.quadTo(18, 32, 4, 18);
-        p.drawPath(lid);
-        if (open) {
-            p.setBrush(ink);
-            p.drawEllipse(QPointF(18, 18), 5, 5);
-        } else {
-            p.drawLine(QPointF(7, 29), QPointF(29, 7));
-        }
-        p.end();
-        icon.addPixmap(pm, QIcon::Normal, open ? QIcon::On : QIcon::Off);
-    }
+    icon.addPixmap(eyeIcon(true).pixmap(20, 20), QIcon::Normal, QIcon::On);
+    icon.addPixmap(eyeIcon(false).pixmap(20, 20), QIcon::Normal, QIcon::Off);
     return icon;
 }
 
@@ -140,7 +126,7 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
             eye->setCheckable(true);
             eye->setChecked(true);
             eye->setAutoRaise(true);
-            eye->setIcon(eyeIcon());
+            eye->setIcon(fieldEyeIcon());
             eye->setIconSize(QSize(18, 18));
             eye->setToolTip(QStringLiteral("Shown on the diagram - click to hide it there (it is kept all the same)"));
             h->addWidget(eye);
@@ -287,7 +273,7 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
             eye->setObjectName(edit->objectName() + QStringLiteral("Eye"));
             eye->setCheckable(true);
             eye->setAutoRaise(true);
-            eye->setIcon(eyeIcon());
+            eye->setIcon(fieldEyeIcon());
             eye->setIconSize(QSize(18, 18));
             eye->setToolTip(QStringLiteral("Shown on the cable's label - click to hide it there, or show it"));
             h->addWidget(eye);
@@ -984,20 +970,27 @@ int SystemDesignView::checkRevisions() {
     aboutToChange();
     design_.refreshDrawings();
     commit();
-    return checkDesign();
+    return checkDesign(CheckScope::Revisions);
 }
 
-int SystemDesignView::checkDesign() {
+int SystemDesignView::checkDesign(CheckScope scope) {
+    // EACH CHECK ITS OWN PART: the revisions the linked drawings and their fields, the connections the ports and the line
+    // names through them - the rest left out; everything, for Check design.
+    const QStringList revisions{QStringLiteral("DRAWING-LINK"), QStringLiteral("DRAWING-FIELDS")};
+    const QStringList connections{QStringLiteral("PORT-CONNECTION"), QStringLiteral("SCHEMATIC-NAME")};
+    auto inScope = [&](const QString& rule) {
+        return scope == CheckScope::All || (scope == CheckScope::Revisions ? revisions.contains(rule) : connections.contains(rule));
+    };
     issues_ = design_.check();
-    issues_.erase(std::remove_if(issues_.begin(), issues_.end(), [this](const SysIssue& i) { return design_.ruleSeverity(i.rule)==0; }), issues_.end());
+    issues_.erase(std::remove_if(issues_.begin(), issues_.end(), [&](const SysIssue& i) { return design_.ruleSeverity(i.rule)==0 || !inScope(i.rule); }), issues_.end());
     connectionRows_.clear();
-    if(design_.ruleSeverity(QStringLiteral("DRAWING-FIELDS"))>0)for(const SysCable& cable:design_.cables){
+    if(inScope(QStringLiteral("DRAWING-FIELDS"))&&design_.ruleSeverity(QStringLiteral("DRAWING-FIELDS"))>0)for(const SysCable& cable:design_.cables){
         if(cable.drawing.isEmpty())continue;const DrawingInfo info=readDrawingInfo(cable.drawing);
         for(const QString& message:info.fieldIssues)issues_.push_back({2,QStringLiteral("%1: %2").arg(cable.name,message),{},cable.id,QStringLiteral("DRAWING-FIELDS"),{}});
         if(info.found&&!cable.expectedTitle.isEmpty()&&info.title!=cable.expectedTitle)
             issues_.push_back({2,QStringLiteral("%1: drawing title '%2', expected '%3'").arg(cable.name,info.title,cable.expectedTitle),{},cable.id,QStringLiteral("DRAWING-FIELDS"),{}});
     }
-    if (design_.ruleSeverity(QStringLiteral("SCHEMATIC-NAME"))>0) {
+    if (inScope(QStringLiteral("SCHEMATIC-NAME")) && design_.ruleSeverity(QStringLiteral("SCHEMATIC-NAME"))>0) {
         connectionRows_ = design_.checkConnections();
         for (const SysConnection& r : connectionRows_) if (r.level > 0)
             issues_.push_back({r.level, r.line.isEmpty() ? r.status : r.line + QStringLiteral(": ") + r.status, {}, r.cable, QStringLiteral("SCHEMATIC-NAME"), {}});
@@ -1027,15 +1020,35 @@ int SystemDesignView::checkDesign() {
 }
 
 int SystemDesignView::checkSchematics() {
-    const int errors = checkDesign(); tabs_->setCurrentIndex(2); return errors;
+    const int errors = checkDesign(CheckScope::Connections); tabs_->setCurrentIndex(2); return errors;
 }
 
 void SystemDesignView::askRules() {
     QDialog dialog(this); dialog.setWindowTitle(QStringLiteral("System design rules"));
+    dialog.setMinimumWidth(620);
     auto* layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(18, 16, 18, 14);
+    layout->setSpacing(10);
     dialog.setObjectName(QStringLiteral("systemDrcRulesDialog"));
     auto* explanation = new QLabel(QStringLiteral("Click a traffic light to cycle error, warning and not checked. Hover over a rule for its animated fault and fix. Changes apply immediately."), &dialog);
     explanation->setWordWrap(true); layout->addWidget(explanation);
+    // THE LEGEND IN A BOX OF ITS OWN, a line under it, then the rules - each with what it checks written under its name.
+    auto* legendBox = new QGroupBox(QStringLiteral("Legend"), &dialog);
+    legendBox->setObjectName(QStringLiteral("systemDrcLegend"));
+    auto* legendLayout = new QVBoxLayout(legendBox);
+    legendLayout->setContentsMargins(10, 6, 10, 6);
+    RuleExplainer::addSeverityLegend(legendLayout, legendBox);
+    layout->addWidget(legendBox);
+    auto* rule = new QFrame(&dialog);
+    rule->setFrameShape(QFrame::HLine);
+    rule->setFrameShadow(QFrame::Sunken);
+    layout->addWidget(rule);
+    auto* rulesBox = new QGroupBox(QStringLiteral("Rules"), &dialog);
+    rulesBox->setObjectName(QStringLiteral("systemDrcRulesBox"));
+    auto* rulesLayout = new QVBoxLayout(rulesBox);
+    rulesLayout->setContentsMargins(10, 8, 10, 8);
+    rulesLayout->setSpacing(8);
+    layout->addWidget(rulesBox);
     struct Rule { const char* first; const char* second; const char* description; };
     const Rule rules[] = {
         {"DESIGNATOR", "Unique designators", "Give every unit and cable a unique name, and every port a unique name on its unit. Empty and duplicated designators make connections ambiguous."},
@@ -1047,23 +1060,32 @@ void SystemDesignView::askRules() {
         {"NOTE-LINK", "Note links", "A note leader must point to an existing unit, port or cable. Relink the note when its referenced item has been removed."},
         {"SCHEMATIC-NAME", "Schematic line names", "Named electrical paths must join the expected ports. Every segment and shared unit/port/contact must retain the same line name across linked schematics."}
     };
-    RuleExplainer::addSeverityLegend(layout, &dialog);
     for (const auto& rule : rules) {
-        auto* row = new QWidget(&dialog); auto* rowLayout = new QHBoxLayout(row); rowLayout->setContentsMargins(0, 2, 0, 2);
-        auto* box = new QToolButton(row); box->setFixedSize(14, 14); box->setCursor(Qt::PointingHandCursor);
+        auto* row = new QWidget(rulesBox); auto* rowLayout = new QHBoxLayout(row); rowLayout->setContentsMargins(0, 4, 0, 4);
+        rowLayout->setSpacing(10);
+        auto* box = new QToolButton(row); box->setFixedSize(18, 18); box->setCursor(Qt::PointingHandCursor);
         const QString id = QString::fromLatin1(rule.first);
         RuleExplainer::paintSeverity(box, design_.ruleSeverity(id, id==QLatin1String("NOTE-LINK") ? 1 : 2));
         connect(box, &QToolButton::clicked, this, [this, box, id] {
             const int level=box->property("severity").toInt(); const int next=level>=2 ? 1 : level==1 ? 0 : 2;
             setRuleSeverity(id,next); RuleExplainer::paintSeverity(box,next);
         });
-        auto* title = new QLabel(QString::fromLatin1(rule.second), row);
+        auto* title = new QLabel(QStringLiteral("<b>%1</b>").arg(QString::fromLatin1(rule.second)), row);
         title->setObjectName(QStringLiteral("systemDrcRuleName_") + QString::fromLatin1(rule.first));
         RuleExplainer::attach(title, QString::fromLatin1(rule.first), QString::fromLatin1(rule.second), QString::fromLatin1(rule.description));
         RuleExplainer::attach(box, QString::fromLatin1(rule.first), QString::fromLatin1(rule.second), QString::fromLatin1(rule.description));
-        rowLayout->addWidget(box); rowLayout->addWidget(title, 1);
+        auto* words = new QWidget(row);
+        auto* wordsLayout = new QVBoxLayout(words);
+        wordsLayout->setContentsMargins(0, 0, 0, 0);
+        wordsLayout->setSpacing(2);
+        wordsLayout->addWidget(title);
+        auto* what = new QLabel(QString::fromLatin1(rule.description), words);
+        what->setWordWrap(true);
+        what->setStyleSheet(QStringLiteral("color:#8a93a0;"));
+        wordsLayout->addWidget(what);
+        rowLayout->addWidget(box, 0, Qt::AlignTop); rowLayout->addWidget(words, 1);
         box->setObjectName(QStringLiteral("systemDrcRule_") + QString::fromLatin1(rule.first));
-        layout->addWidget(row);
+        rulesLayout->addWidget(row);
     }
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
     layout->addWidget(buttons); connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
@@ -1178,6 +1200,24 @@ bool SystemDesignView::openDesign(const QString& given) {
     QString error;
     if (!loadSystemFile(path, read, &error)) {
         if (given.isEmpty()) QMessageBox::warning(this, QStringLiteral("System design"), error);
+        return false;
+    }
+    aboutToChange();
+    design_ = read;
+    canvas_->setDesign(&design_);
+    commit();
+    canvas_->fit();
+    return true;
+}
+
+bool SystemDesignView::importDesign(const QString& given) {
+    const QString path = askPath(this, given, false, QStringLiteral("Import a diagram"), QString(),
+                                 QStringLiteral("Diagrams (*.drawio *.dio *.xml *.vsdx);;draw.io (*.drawio *.dio *.xml);;Visio (*.vsdx)"));
+    if (path.isEmpty()) return false;
+    SystemDesign read;
+    QString error;
+    if (!importSystemDiagram(path, read, &error)) {
+        if (given.isEmpty()) QMessageBox::warning(this, QStringLiteral("Import"), error);
         return false;
     }
     aboutToChange();

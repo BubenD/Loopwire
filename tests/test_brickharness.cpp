@@ -9779,6 +9779,35 @@ void testRoundSixtySeven() {
               qPrintable(QStringLiteral("ribbon: %1 on the 3D Preview tab").arg(QLatin1String(name))));
 }
 
+// ROUND SIXTY-EIGHT: A LACING CORD'S TURNS LIE AT 67 DEGREES TO THE CABLE.
+void testRoundSixtyEight() {
+    Document doc(QStringLiteral("lacing"));
+    for (double y : {0.0, 2.0, 4.0}) {
+        Entity w;
+        w.type = EntityType::Line;
+        w.a = {-50, y};
+        w.b = {50, y};
+        doc.entities().push_back(w);
+    }
+    Editor ed;
+    ed.setDocument(&doc);
+    const std::vector<Entity> tie = ed.lacingTieFromBand({0, -6}, {0, 10});
+    std::vector<double> angles;
+    for (const Entity& e : tie) {
+        if (e.type != EntityType::Polyline || e.points.size() != 2 || e.meta.value(QStringLiteral("closed")).toBool()) continue;
+        const Vec2 d = e.points[1] - e.points[0];
+        if (d.length() < 1e-6) continue;
+        // To the wires (along x): the acute angle between them.
+        double deg = std::abs(std::atan2(d.y, d.x)) * 180.0 / M_PI;
+        if (deg > 90.0) deg = 180.0 - deg;
+        angles.push_back(deg);
+    }
+    std::sort(angles.begin(), angles.end());
+    const double typical = angles.empty() ? 0.0 : angles[angles.size() / 2];
+    std::printf("  lacing: %d turn line(s), at %.1f degrees to the wires\n", static_cast<int>(angles.size()), typical);
+    check(angles.size() >= 3 && std::abs(typical - 67.0) < 1.5, "lacing: the cord's turns at 67 degrees to the cable");
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -9870,6 +9899,7 @@ int run_brickharness_tests() {
     ROUND(testRoundSixtyFive);
     ROUND(testRoundSixtySix);
     ROUND(testRoundSixtySeven);
+    ROUND(testRoundSixtyEight);
 #undef ROUND
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;

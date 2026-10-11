@@ -202,6 +202,11 @@ bool SystemCanvas::locateIssue(const SysIssue& issue) {
     const double fitScale = std::min(std::max(1, width()-100) / std::max(1.0, bounds.width()+100),
                                     std::max(1, height()-100) / std::max(1.0, bounds.height()+100));
     scale_ = std::clamp(std::min(fitScale, std::max(scale_, 1.5)), 0.15, 3.0);
+    // A CABLE'S MIDDLE TAKEN AGAIN AT THE NEW SCALE: its path is laid out partly on the screen, so it moves with the zoom.
+    if (const SysCable* c = issue.note.isEmpty() ? design_->cable(issue.cable) : nullptr) {
+        const auto path = cablePath(*c);
+        if (!path.empty()) point = path.size() > 1 ? (path[path.size()/2-1] + path[path.size()/2])/2.0 : path.front();
+    }
     offset_ = QPointF(width()/2.0, height()/2.0) - point * scale_;
     locatePoint_ = point; locateOn_ = true; locateClock_.start(); locateTimer_->start(); update();
     return true;
@@ -414,7 +419,8 @@ QPointF SystemCanvas::cableOnScreen(const QString& cable) const {
     const SysCable* c = design_ ? design_->cable(cable) : nullptr;
     if (!c) return {};
     const std::vector<QPointF> p = cablePath(*c);
-    return p.size() >= 4 ? toScreen((p[p.size() / 2 - 1] + p[p.size() / 2]) / 2.0) : QPointF();
+    if (p.empty()) return {};
+    return toScreen(p.size() > 1 ? (p[p.size() / 2 - 1] + p[p.size() / 2]) / 2.0 : p.front());
 }
 
 void SystemCanvas::fit() {
@@ -799,6 +805,27 @@ void SystemCanvas::mousePressEvent(QMouseEvent* e) {
         return;
     case SysTool::Select: {
         const QString hitUnit = unitAt(pressWorld_), hitNote = noteAt(pressWorld_);
+        // CTRL+CLICK: a new one of what was clicked, to put - a port, a note, a unit (of the same kind), a cable.
+        if (e->modifiers() & Qt::ControlModifier) {
+            QString cu, cp;
+            if (portAt(pressWorld_, cu, cp)) {
+                setTool(SysTool::Port);
+                return;
+            }
+            if (!hitNote.isEmpty()) {
+                setTool(SysTool::Note);
+                return;
+            }
+            if (!hitUnit.isEmpty()) {
+                setNewUnitKind(design_->unit(hitUnit)->kind);
+                setTool(SysTool::Unit);
+                return;
+            }
+            if (!cableAt(pressWorld_).isEmpty()) {
+                setTool(SysTool::Cable);
+                return;
+            }
+        }
         if (selectionCount() > 1 && (zoneUnits_.contains(hitUnit) || zoneNotes_.contains(hitNote))) {
             drag_ = Drag::Group; groupDelta_ = {}; return;
         }

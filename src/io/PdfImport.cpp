@@ -1080,11 +1080,18 @@ std::vector<TextPage> readTextPages(const QByteArray& bytes, QString* error) {
         }
         result.push_back(std::move(text));
     }
-    if(result.empty()){
-        const QString fallback=PdfText::extract(bytes,error);
-        if(!fallback.isEmpty()){if(error)error->clear();TextPage page;page.text=fallback;result.push_back(page);}
-    }
+    // NO WORDS OUT OF THE PAGES - a font the page reader does not map, say: the plain text reader tried, its text the
+    // first page's.
     bool words=false;for(const TextPage& page:result)words=words||!page.text.trimmed().isEmpty();
+    if(!words){
+        const QString fallback=PdfText::extract(bytes,error);
+        if(!fallback.trimmed().isEmpty()){
+            if(error)error->clear();
+            if(result.empty())result.push_back(TextPage{});
+            result.front().text=fallback;
+            words=true;
+        }
+    }
     if(!words&&error)*error=QStringLiteral("No searchable text layer; scanned PDFs need OCR first");
     return result;
 }

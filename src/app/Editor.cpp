@@ -17467,9 +17467,10 @@ std::vector<Entity> Editor::lacingTieFromBand(const Vec2& a, const Vec2& b) cons
     line({point(-bandHalf, -half + cord), point(-cord, -half), point(cord, -half),
           point(bandHalf, -half + cord), point(bandHalf, half - cord), point(cord, half),
           point(-cord, half), point(-bandHalf, half - cord)}, true);
-    // STRAIGHT CORD WRAPS AT 45 DEGREES, clipped to the band above its wipeout.
-    const double detailAngle = M_PI / 4.0;
-    const double slope = std::tan(detailAngle);
+    // STRAIGHT CORD WRAPS AT 67 DEGREES TO THE CABLE, clipped to the band above its wipeout - steep across it, as a
+    // lacing cord's turns lie.
+    const double detailAngle = 67.0 * M_PI / 180.0;
+    const double slope = 1.0 / std::tan(detailAngle);
     const double rise = 2.0 * bandHalf / slope;
     const double low = -half + cord, high = half - cord;
     for (double base = low - rise; base < high; base += cord * 2.2) {

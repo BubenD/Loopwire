@@ -99,6 +99,14 @@ int main(int argc, char** argv) {
     // window. Offscreen, so this runs the same on a machine with no display as on one with a screen -
     // set here rather than left to whoever starts the tests.
     qputenv("QT_QPA_PLATFORM", "offscreen");
+#ifdef _WIN32
+    // THE SYSTEM'S FONTS FOR THE OFFSCREEN PLATFORM. It looks for fonts beside Qt, where there are none, and then
+    // draws every letter as an empty box - a PDF written in a test then has no text in it to search.
+    if (qEnvironmentVariableIsEmpty("QT_QPA_FONTDIR")) {
+        const QByteArray windows = qgetenv("SystemRoot");
+        qputenv("QT_QPA_FONTDIR", (windows.isEmpty() ? QByteArray("C:\\Windows") : windows) + "\\Fonts");
+    }
+#endif
     // A NAME, SO SETTINGS HAVE SOMEWHERE TO LIVE. Without an organisation and an application name QSettings
     // has no file at all - it answers AccessError and every write is dropped - so anything the program
     // REMEMBERS between sessions was untestable, and a test of it passed or failed for reasons that had

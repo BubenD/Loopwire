@@ -177,6 +177,7 @@ add_library(edraw_core STATIC
     src/system/SystemRouting.h
     src/system/SystemRouting.cpp
     src/system/SystemExport.cpp
+    src/system/SystemImport.cpp
     src/system/PnMatch.cpp
     src/system/FileText.cpp
     src/app/View3DHelpDialog.h
@@ -202,6 +203,7 @@ add_library(edraw_core STATIC
     src/harness/RouteLink.h
     src/system/SystemDesign.h
     src/system/SystemExport.h
+    src/system/SystemImport.h
     src/system/PnMatch.h
     src/system/FileText.h
     src/app/SystemCanvas.h

@@ -722,23 +722,36 @@ QPixmap makeGripPixmap() {
     return pm;
 }
 
-// Push-pin icon: upright/filled when pinned, tilted/outline when auto-hide.
+// A THUMBTACK, as a panel's pin is shown everywhere: stuck in upright - its head filled - while the panel is pinned
+// open; lying on its side, hollow, while the panel folds away on its own. Drawn at twice the size and shown smaller,
+// so it is crisp.
 QIcon makePinIcon(bool pinned) {
-    QPixmap pm(18, 18);
+    QPixmap pm(40, 40);
     pm.fill(Qt::transparent);
     QPainter p(&pm);
     p.setRenderHint(QPainter::Antialiasing, true);
-    p.translate(9, 9);
-    if (!pinned) p.rotate(45); // tilted = "released"
-    QPen pen(QColor("#cfd8e6"));
-    pen.setWidthF(1.4);
+    p.translate(20, 20);
+    if (!pinned) p.rotate(90);   // on its side: not holding the panel
+    const QColor ink(pinned ? QColor("#ffd166") : QColor("#cfd8e6"));
+    QPen pen(pinned ? QColor("#f0c050") : QColor("#cfd8e6"));
+    pen.setWidthF(2.4);
+    pen.setJoinStyle(Qt::RoundJoin);
     p.setPen(pen);
-    p.setBrush(pinned ? QColor("#ffd166") : QColor(0, 0, 0, 0));
-    // Pin head (rounded top) + needle pointing down.
-    p.drawRoundedRect(QRectF(-4, -7, 8, 7), 2, 2);
-    p.drawLine(QPointF(0, 0), QPointF(0, 7));
+    p.setBrush(pinned ? ink : QColor(0, 0, 0, 0));
+    // The round head, its waist and the wide collar it is pressed in by, and the needle.
+    p.drawRoundedRect(QRectF(-6, -16, 12, 5), 2, 2);
+    QPolygonF waist;
+    waist << QPointF(-4, -11) << QPointF(4, -11) << QPointF(5, -2) << QPointF(-5, -2);
+    p.drawPolygon(waist);
+    p.drawRoundedRect(QRectF(-10, -3, 20, 4), 2, 2);
+    QPen needle(pen);
+    needle.setWidthF(2.2);
+    needle.setCapStyle(Qt::RoundCap);
+    p.setPen(needle);
+    p.drawLine(QPointF(0, 1), QPointF(0, 16));
     p.end();
-    return QIcon(pm);
+    QIcon icon(pm);
+    return icon;
 }
 
 // ---- AutoCAD-style preview icons for the PROPERTIES combos ----
@@ -1926,6 +1939,7 @@ public:
         pin->setAutoRaise(true);
         pin->setFocusPolicy(Qt::NoFocus);
         pin->setIcon(makePinIcon(true));
+        pin->setIconSize(QSize(18, 18));
         pin->setToolTip(QStringLiteral(
             "Pinned — click to fold this whole side away (this side only; the other side "
             "keeps its own pin)"));

@@ -67,8 +67,11 @@ public:
     void findDrawing();           // found with Find drawings
     void openDrawing();           // the selected cable's drawing, opened (openRequested)
     // EVERY LINKED DRAWING READ AGAIN, and the design checked - what is found listed. How many errors.
+    // THE CHECKS, each of its own part: the linked drawings' revisions only (read again first); the units' connections
+    // only - their ports and the line names through them; everything.
+    enum class CheckScope { All, Revisions, Connections };
     int checkRevisions();
-    int checkDesign();
+    int checkDesign(CheckScope scope = CheckScope::All);
     int checkSchematics();
     void askRules();
     bool locateIssue(int row);
@@ -84,6 +87,8 @@ public:
     // FOR VISIO. Asked where, when no path is given.
     bool saveDesignAs(const QString& path = QString());
     bool openDesign(const QString& path = QString());
+    // A DIAGRAM FROM DRAW.IO OR VISIO, in place of this one (one step to undo); asked which, when not given.
+    bool importDesign(const QString& path = QString());
     bool exportDrawio(const QString& path = QString());
     bool exportVisio(const QString& path = QString());
     // What the check found last.

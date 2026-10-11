@@ -208,6 +208,10 @@ void MainWindow::buildSystemTab() {
         big(w, row, "systemSave", QStringLiteral("Save as"), QStringLiteral("export"),
             QStringLiteral("Save the system design as a file of its own (.wetsys, Edraw's own) - it is kept in the drawing too"),
             [this] { if (systemView_) systemView_->saveDesignAs(); });
+        big(w, row, "systemImport", QStringLiteral("Import"), QStringLiteral("load"),
+            QStringLiteral("A system diagram from draw.io (.drawio) or Visio (.vsdx) - its boxes as units, the small squares on "
+                           "their sides as ports, its lines as cables, its notes - in place of this one (Undo takes it back)"),
+            [this] { if (systemView_) systemView_->importDesign(); });
         big(w, row, "systemOpenDesign", QStringLiteral("Open"), QStringLiteral("load"),
             QStringLiteral("Open a system design saved as a file of its own (.wetsys) - in place of this one (Undo takes it back)"),
             [this] { if (systemView_) systemView_->openDesign(); });

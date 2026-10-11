@@ -30,6 +30,9 @@
 #include "model/Document.h"
 #include "system/PnMatch.h"
 #include "system/SystemDesign.h"
+#include <QUrl>
+#include "app/UiBits.h"
+#include "system/SystemImport.h"
 #include "system/SystemExport.h"
 
 #include <QAction>
@@ -232,7 +235,10 @@ void testView(const QString& dir) {
     check(d.cables[0].drawingRev == QLatin1String("B") && d.cables[0].rev == QLatin1String("B") &&
               SystemDesign::linkState(d.cables[0]) == SysLinkState::Match,
           "view: linked - its drawing's number and revision read, the revision taken where it had none");
-    check(view.checkRevisions() == 0, "view: the revisions checked - none differs");
+    // The drawing has no DRC-passed stamps (DRAWING-FIELDS asks for them): its revision is what is checked here.
+    view.checkRevisions();
+    check(std::none_of(view.issues().begin(), view.issues().end(), [](const SysIssue& i) { return i.rule == QLatin1String("DRAWING-LINK"); }),
+          "view: the revisions checked - none differs");
     view.undo();
     check(d.cables[0].drawing == path, "undo: the check is one step - the link still there");
     view.undo();
@@ -1394,6 +1400,197 @@ void testParentDeleteChoices() {
     view.undo();check(view.design().toJson()==original.toJson(),"parent delete: recursive deletion also restores in one Undo");
 }
 
+// IMPORTED FROM DRAW.IO AND VISIO, CHECKS OF THEIR OWN PART, CTRL+CLICK TO TAKE THE TOOL, THE WIZARD'S EYES.
+void testImportScopesCtrl(const QString& base) {
+    const QString dir = QDir(base).filePath(QStringLiteral("import"));
+    QDir().mkpath(dir);
+    SystemDesign d;
+    const QString box = d.addUnit(0, 0), board = d.addUnit(40, 30), other = d.addUnit(400, 0);
+    d.unit(box)->w = 260;
+    d.unit(box)->h = 200;
+    d.unit(board)->kind = QStringLiteral("pcba");
+    d.unit(board)->parent = box;
+    d.unit(box)->pn = QStringLiteral("ENC-1");
+    d.unit(box)->rev = QStringLiteral("B");
+    const QString p1 = d.addPort(box, QStringLiteral("right"), 0.5, QStringLiteral("J1"));
+    const QString p2 = d.addPort(other, QStringLiteral("left"), 0.5, QStringLiteral("J2"));
+    d.unit(box)->port(p1)->connector = QStringLiteral("M12-8");
+    const QString w = d.addCable(box, p1, other, p2);
+    d.cable(w)->pn = QStringLiteral("CBL-007");
+    d.addNote(0, 260, QStringLiteral("Keep clear"));
+    auto same = [&](const SystemDesign& got, const char* how) {
+        int pcba = 0, inside = 0;
+        for (const SysUnit& u : got.units) {
+            pcba += u.kind == QLatin1String("pcba") ? 1 : 0;
+            inside += u.parent.isEmpty() ? 0 : 1;
+        }
+        const SysUnit* enc = nullptr;
+        for (const SysUnit& u : got.units)
+            if (u.name == d.unit(box)->name) enc = &u;
+        size_t ports = 0;
+        for (const SysUnit& u : got.units) ports += u.ports.size();
+        std::printf("  import %s: %d unit(s) (%d PCBA, %d inside another), %d port(s), %d cable(s), %d note(s)\n", how,
+                    static_cast<int>(got.units.size()), pcba, inside, static_cast<int>(ports), static_cast<int>(got.cables.size()),
+                    static_cast<int>(got.notes.size()));
+        return got.units.size() == 3 && pcba == 1 && inside == 1 && ports == 2 && got.cables.size() == 1 && got.notes.size() == 1 && enc &&
+               enc->pn == QLatin1String("ENC-1") && enc->rev == QLatin1String("B") && got.cables[0].pn == QLatin1String("CBL-007");
+    };
+    // ---- DRAW.IO: plain, and compressed as draw.io keeps a page ----
+    const QString drawio = QDir(dir).filePath(QStringLiteral("rig.drawio"));
+    exportSystemDrawio(d, drawio);
+    SystemDesign got;
+    check(importSystemDiagram(drawio, got) && same(got, "draw.io"),
+          "import: draw.io - units (one a PCBA in its housing), ports, the cable with its P/N, the note");
+    {
+        const QString xml = systemDrawioXml(d);
+        const int a = xml.indexOf(QLatin1String("<mxGraphModel")), b = xml.indexOf(QLatin1String("</mxGraphModel>")) + 15;
+        const QByteArray model = QUrl::toPercentEncoding(xml.mid(a, b - a));
+        const QByteArray zlib = qCompress(model, 9);
+        const QByteArray raw = zlib.mid(6, zlib.size() - 10);   // Qt's length, zlib's header and checksum off: raw DEFLATE
+        const QByteArray packed = QByteArrayLiteral("<mxfile><diagram id=\"a\" name=\"Page-1\">") + raw.toBase64() + QByteArrayLiteral("</diagram></mxfile>");
+        SystemDesign zipped;
+        check(importSystemDrawioXml(packed, zipped) && same(zipped, "draw.io compressed"), "import: a compressed draw.io page");
+    }
+    // A diagram drawn in draw.io itself: two boxes, a line between them (no ports) - a port put on each.
+    {
+        const QByteArray own = R"(<mxfile><diagram name="P"><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/>
+<mxCell id="a" value="PSU&lt;br&gt;PS-24 rev C" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1"><mxGeometry x="40" y="40" width="120" height="60" as="geometry"/></mxCell>
+<mxCell id="b" value="Controller" style="rounded=0;" vertex="1" parent="1"><mxGeometry x="300" y="40" width="120" height="80" as="geometry"/></mxCell>
+<mxCell id="e" value="W5 CBL-100" style="edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="a" target="b"><mxGeometry relative="1" as="geometry"/></mxCell>
+</root></mxGraphModel></diagram></mxfile>)";
+        SystemDesign mine;
+        const bool ok = importSystemDrawioXml(own, mine);
+        const SysUnit* psu = ok && !mine.units.empty() ? &mine.units[0] : nullptr;
+        for (const SysUnit& u : mine.units)
+            std::printf("  own draw.io: unit %s pn %s rev %s, %d port(s)%s\n", qPrintable(u.name), qPrintable(u.pn), qPrintable(u.rev),
+                        static_cast<int>(u.ports.size()), u.ports.empty() ? "" : qPrintable(QStringLiteral(" on ") + u.ports[0].side));
+        for (const SysCable& c : mine.cables) std::printf("  own draw.io: cable %s pn %s\n", qPrintable(c.name), qPrintable(c.pn));
+        check(ok && mine.units.size() == 2 && psu && psu->name == QLatin1String("PSU") && psu->pn == QLatin1String("PS-24") &&
+                  psu->rev == QLatin1String("C") && mine.cables.size() == 1 && mine.cables[0].name == QLatin1String("W5") &&
+                  mine.cables[0].pn == QLatin1String("CBL-100") && mine.units[0].ports.size() == 1 && mine.units[1].ports.size() == 1 &&
+                  mine.units[0].ports[0].side == QLatin1String("right") && mine.units[1].ports[0].side == QLatin1String("left"),
+              "import: a draw.io diagram of its own - boxes as units, the line a cable, a port put where it meets each box");
+    }
+    // ---- VISIO: as Edraw writes it, and a drawing with a connector glued to two shapes ----
+    const QString vsdx = QDir(dir).filePath(QStringLiteral("rig.vsdx"));
+    exportSystemVsdx(d, vsdx);
+    SystemDesign fromVisio;
+    check(importSystemDiagram(vsdx, fromVisio) && same(fromVisio, "Visio"), "import: Visio - the same units, ports, cable and note");
+    {
+        // A page with two boxes and a 1-D connector glued to them, stored in a package as Visio writes one.
+        const QByteArray page = R"(<?xml version="1.0"?><PageContents xmlns="http://schemas.microsoft.com/office/visio/2012/main"><Shapes>
+<Shape ID="1" Type="Shape"><Cell N="PinX" V="2"/><Cell N="PinY" V="6"/><Cell N="Width" V="1.5"/><Cell N="Height" V="1"/><Text>Sensor</Text></Shape>
+<Shape ID="2" Type="Shape"><Cell N="PinX" V="6"/><Cell N="PinY" V="6"/><Cell N="Width" V="1.5"/><Cell N="Height" V="1"/><Text>ECU</Text></Shape>
+<Shape ID="3" Type="Shape"><Cell N="BeginX" V="2.75"/><Cell N="BeginY" V="6"/><Cell N="EndX" V="5.25"/><Cell N="EndY" V="6"/><Text>W9</Text></Shape>
+</Shapes><Connects><Connect FromSheet="3" FromCell="BeginX" ToSheet="1"/><Connect FromSheet="3" FromCell="EndX" ToSheet="2"/></Connects></PageContents>)";
+        // The package: the page stored in a zip of its own.
+        auto zipOne = [](const QString& name, const QByteArray& data) {
+            QByteArray out, central;
+            auto put16 = [](QByteArray& b, int v) { b.append(char(v & 0xFF)); b.append(char((v >> 8) & 0xFF)); };
+            auto put32 = [&](QByteArray& b, quint32 v) { put16(b, int(v & 0xFFFF)); put16(b, int(v >> 16)); };
+            quint32 crc = 0xFFFFFFFFu;
+            for (const char ch : data) {
+                crc ^= static_cast<quint8>(ch);
+                for (int k = 0; k < 8; ++k) crc = crc & 1 ? 0xEDB88320u ^ (crc >> 1) : crc >> 1;
+            }
+            crc ^= 0xFFFFFFFFu;
+            const QByteArray n = name.toUtf8();
+            put32(out, 0x04034b50); put16(out, 20); put16(out, 0); put16(out, 0); put16(out, 0); put16(out, 0);
+            put32(out, crc); put32(out, quint32(data.size())); put32(out, quint32(data.size())); put16(out, int(n.size())); put16(out, 0);
+            out += n; out += data;
+            put32(central, 0x02014b50); put16(central, 20); put16(central, 20); put16(central, 0); put16(central, 0); put16(central, 0);
+            put16(central, 0); put32(central, crc); put32(central, quint32(data.size())); put32(central, quint32(data.size()));
+            put16(central, int(n.size())); put16(central, 0); put16(central, 0); put16(central, 0); put16(central, 0); put32(central, 0);
+            put32(central, 0); central += n;
+            const quint32 at = quint32(out.size());
+            out += central;
+            put32(out, 0x06054b50); put16(out, 0); put16(out, 0); put16(out, 1); put16(out, 1); put32(out, quint32(central.size()));
+            put32(out, at); put16(out, 0);
+            return out;
+        };
+        const QString path = QDir(dir).filePath(QStringLiteral("glued.vsdx"));
+        QFile f(path);
+        f.open(QIODevice::WriteOnly);
+        f.write(zipOne(QStringLiteral("visio/pages/page1.xml"), page));
+        f.close();
+        SystemDesign glued;
+        check(importSystemDiagram(path, glued) && glued.units.size() == 2 && glued.cables.size() == 1 &&
+                  glued.cables[0].name == QLatin1String("W9") && glued.units[0].name == QLatin1String("Sensor") &&
+                  glued.units[0].ports.size() == 1 && glued.units[0].ports[0].side == QLatin1String("right"),
+              "import: a Visio connector glued to two shapes - a cable between them, a port put on each");
+    }
+    SystemDesign none;
+    check(!importSystemDiagram(QDir(dir).filePath(QStringLiteral("rig.txt")), none), "import: not a diagram - said so");
+
+    // ---- FROM THE TAB: in place of the design, one step to undo ----
+    QJsonObject stored;
+    SystemDesignView view;
+    view.setStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    view.resize(1100, 700);
+    view.show();
+    QApplication::processEvents();
+    check(view.importDesign(drawio) && view.design().units.size() == 3, "import: from the tab");
+    view.undo();
+    check(view.design().units.empty(), "import: Undo takes it back");
+    view.redo();
+
+    // ---- CHECKS OF THEIR OWN PART ----
+    auto rules = [&](const char* label) {
+        QStringList seen;
+        for (const SysIssue& i : view.issues())
+            if (!seen.contains(i.rule)) seen << i.rule;
+        std::printf("  %s: %s\n", label, qPrintable(seen.join(QStringLiteral(", "))));
+        return seen;
+    };
+    view.checkDesign();
+    const QStringList all = rules("check design");
+    view.checkRevisions();
+    const QStringList revs = rules("check revisions");
+    view.checkSchematics();
+    const QStringList conns = rules("connections");
+    bool revOnly = true, connOnly = true;
+    for (const QString& r : revs) revOnly = revOnly && (r == QLatin1String("DRAWING-LINK") || r == QLatin1String("DRAWING-FIELDS"));
+    for (const QString& r : conns) connOnly = connOnly && (r == QLatin1String("PORT-CONNECTION") || r == QLatin1String("SCHEMATIC-NAME"));
+    check(all.size() > revs.size() && all.size() > conns.size() && revOnly && connOnly,
+          "checks: Check revisions only the revisions, Connections only the connections, Check design all of it");
+
+    // ---- CTRL+CLICK: THE TOOL OF WHAT WAS CLICKED ----
+    SystemCanvas* c = view.canvas();
+    c->fit();
+    QApplication::processEvents();
+    auto ctrlClick = [&](const QPointF& at) {
+        QMouseEvent down(QEvent::MouseButtonPress, at, c->mapToGlobal(at), Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier);
+        QMouseEvent up(QEvent::MouseButtonRelease, at, c->mapToGlobal(at), Qt::LeftButton, Qt::NoButton, Qt::ControlModifier);
+        QApplication::sendEvent(c, &down);
+        QApplication::sendEvent(c, &up);
+        QApplication::processEvents();
+    };
+    const SystemDesign& vd = view.design();
+    QString pcbaId;
+    for (const SysUnit& u : vd.units)
+        if (u.kind == QLatin1String("pcba")) pcbaId = u.id;
+    view.setTool(SysTool::Select);
+    ctrlClick(c->unitOnScreen(pcbaId));
+    const bool unitTool = c->tool() == SysTool::Unit && c->newUnitKind() == QLatin1String("pcba");
+    view.setTool(SysTool::Select);
+    ctrlClick(c->cableOnScreen(vd.cables[0].id));
+    const bool cableTool = c->tool() == SysTool::Cable;
+    view.setTool(SysTool::Select);
+    const SysUnit* withPort = nullptr;
+    for (const SysUnit& u : vd.units)
+        if (!u.ports.empty()) withPort = &u;
+    ctrlClick(c->portOnScreen(withPort->id, withPort->ports[0].id));
+    const bool portTool = c->tool() == SysTool::Port;
+    check(unitTool && cableTool && portTool, "ctrl+click: a unit - a unit of its kind to put; a cable - Cable; a port - Port");
+    view.setTool(SysTool::Select);
+
+    // ---- THE EYES, AS THE MECHANICAL WIZARD'S ----
+    c->select(vd.units[0].id, QString(), QString());
+    auto* eye = view.findChild<QToolButton*>(QStringLiteral("systemUnitNameEye"));
+    check(eye && !eye->icon().isNull() && eye->icon().pixmap(20, 20, QIcon::Normal, QIcon::On).toImage() == eyeIcon(true).pixmap(20, 20).toImage(),
+          "eyes: drawn as the mechanical wizard's");
+}
+
 } // namespace
 
 int run_systemdesign_tests() {
@@ -1421,6 +1618,7 @@ int run_systemdesign_tests() {
     testDrawingDetailsFields(dir.path());
     testPdfViewerAndProgress(dir.path());
     testSystemModuleLinksAndRoutes();
+    testImportScopesCtrl(dir.path());
     std::printf("  system design: %s\n", g_fail == 0 ? "OK" : "FAILED");
     return g_fail;
 }

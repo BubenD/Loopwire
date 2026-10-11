@@ -1765,7 +1765,7 @@ int run_drawingspace_tests() {
                 if (l->text() == QStringLiteral("Finish Hshrink length")) finishBoot = l;
             QCheckBox* bothSides = nullptr;
             for (QCheckBox* c : win.findChildren<QCheckBox*>())
-                if (c->text() == QStringLiteral("Cable both sides")) bothSides = c;
+                if (c->text() == QStringLiteral("Same body ends")) bothSides = c;
             check(finishBoot != nullptr && bothSides != nullptr,
                   "transition: the finish end has a boot length of its own to stand down");
             if (finishBoot && bothSides) {
