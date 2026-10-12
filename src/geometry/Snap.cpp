@@ -55,28 +55,22 @@ void entitySegments(const Entity& e, std::vector<std::pair<Vec2, Vec2>>& out) {
         out.emplace_back(e.a, e.b);
         break;
     case EntityType::TwistedPair: {
-        // THE LINES THE HARNESS IS DRAWN AS, where they are straight.
+        // EVERY LINE THE HARNESS IS DRAWN AS: each wire's two edges, curve and all, the cut ends, the
+        // body and its boots, a laid-up bundle's outline, the heatshrink on a wire's end. A dimension
+        // is taken to the edge of a wire wherever it is, and to where two wires cross - not only to
+        // the straight stretches, which were all a laid-up bundle or a fan's bend ever offered.
         //
-        // It used to be the ROUTE: the line down the middle of the bundle, which is never drawn. So
-        // the cursor caught something between the wires and on none of them, and the wires - the
-        // only part of a harness anybody measures from or lands anything on - could not be snapped
-        // to at all. That was done because the weave is hundreds of little facets and offering all
-        // of them swamped the snap system: every one becomes a midpoint, a perpendicular foot and a
-        // candidate for every crossing test, and a sheet with a few pairs on it took a quarter of a
-        // second per mouse movement.
+        // Never the ROUTE, the line down the middle of the bundle, which is not drawn: the cursor
+        // caught something between the wires and on none of them.
         //
-        // The answer is neither: it is the STRAIGHT STRETCHES of the drawn lines - the bundle, the
-        // slants of the fan, the flush ends - which is what a harness is nearly all of, and is a
-        // handful of segments rather than hundreds. A laid-up bundle has none to speak of and keeps
-        // its route, which is what it always had.
-        const std::vector<std::pair<Vec2, Vec2>> straights = twistedPairStraights(e);
-        if (!straights.empty()) {
-            for (const auto& seg : straights) out.emplace_back(seg.first, seg.second);
-            // AND THE LINES ACROSS THE ENDS, which are drawn and are lines: the cut end of a wire is
-            // a place a drawing measures to as much as the run of it is, and it was the one part of
-            // a harness the cursor went straight through.
-            for (const auto& cap : twistedPairEndCaps(e))
-                if (cap.size() == 2) out.emplace_back(cap.front(), cap.back());
+        // A curve is many little facets, and each facet's MIDDLE is no place on the drawing at all -
+        // so midpoints are taken from the straight stretches alone (see twistedPairMidSegments). What
+        // the facets cost a mouse movement is kept down by the reach box (snapReachBox) and by the
+        // crossing test, which only ever looks at the segments under the cursor.
+        if (const RunSnap* snap = twistedPairSnap(e)) {
+            out.insert(out.end(), snap->lines.begin(), snap->lines.end());
+            for (const std::vector<Vec2>& ring : twistedPairEndSleeves(e))
+                for (size_t i = 1; i < ring.size(); ++i) out.emplace_back(ring[i - 1], ring[i]);
             break;
         }
         const std::vector<Vec2>& along =
@@ -189,12 +183,13 @@ void entityEndpoints(const Entity& e, std::vector<Vec2>& out) {
         out.push_back(e.b);
         break;
     case EntityType::TwistedPair:
-        // The four wire ends - where the pair is joined to anything - and not the centre of the
-        // run, which is between the two wires and on neither of them.
-        for (const auto& strand : twistedPairStrands(e)) {
-            if (strand.empty()) continue;
-            out.push_back(strand.front());
-            out.push_back(strand.back());
+        // Every place a drawn line of it ends or turns a corner: the wire ends, a fan's knees, the
+        // step where the insulation stops, the corners of a body and its boots. Not the centre of the
+        // run, which is between the wires and on none of them.
+        if (const RunSnap* snap = twistedPairSnap(e)) {
+            out.insert(out.end(), snap->points.begin(), snap->points.end());
+            for (const std::vector<Vec2>& ring : twistedPairEndSleeves(e))
+                for (size_t i = 0; i + 1 < ring.size(); ++i) out.push_back(ring[i]);
         }
         break;
     case EntityType::DoubleLine: {
@@ -433,7 +428,23 @@ namespace {
 // measuring of text. Entity::bounds() would answer the same question, but it is the wrong tool here -
 // asking it of every object costs more than the work this is meant to save, because for some kinds it
 // builds the shape to measure it. A cull has to be cheaper than what it culls.
+// WHERE A RUN'S MIDPOINTS ARE TAKEN FROM: its straight stretches and its cut ends. Every other kind takes
+// them from its segments.
+void twistedPairMidSegments(const Entity& e, std::vector<std::pair<Vec2, Vec2>>& out) {
+    for (const auto& seg : twistedPairStraights(e)) out.push_back(seg);
+    for (const auto& cap : twistedPairEndCaps(e))
+        if (cap.size() == 2) out.emplace_back(cap.front(), cap.back());
+}
+
 bool snapReachBox(const Entity& e, Vec2& lo, Vec2& hi) {
+    // A RUN REACHES AS FAR AS WHAT IT DRAWS - its fans spread well past its route.
+    if (e.type == EntityType::TwistedPair) {
+        const RunSnap* snap = twistedPairSnap(e);
+        if (!snap) return false;
+        lo = snap->lo;
+        hi = snap->hi;
+        return true;
+    }
     if (e.meta.value(QStringLiteral("double")).toBool()) return false;   // a double run, whatever its type
     auto fromPoints = [&] {
         if (e.points.empty()) return false;
@@ -572,9 +583,12 @@ SnapResult resolveSnap(const Document& doc, const Vec2& raw,
             }
             std::vector<std::pair<Vec2, Vec2>> segs;
             entitySegments(e, segs);
-            if (s.snapMidpoint)
-                for (const auto& seg : segs)
+            if (s.snapMidpoint) {
+                std::vector<std::pair<Vec2, Vec2>> mids;
+                if (e.type == EntityType::TwistedPair) twistedPairMidSegments(e, mids);
+                for (const auto& seg : e.type == EntityType::TwistedPair ? mids : segs)
                     consider(lerp(seg.first, seg.second, 0.5), SnapKind::Midpoint);
+            }
             // Perpendicular: foot of the perpendicular from the anchor onto a segment.
             if (s.snapPerpendicular && anchor)
                 for (const auto& seg : segs) {

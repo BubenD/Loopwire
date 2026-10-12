@@ -1,4 +1,5 @@
 #include "app/Chrome.h"
+#include "app/CommandDemo.h"
 #include "app/Editor.h"
 #include "geometry/Geometry.h"
 #include "io/Dxf.h"
@@ -14439,6 +14440,44 @@ int run_editor_tests() {
             check(std::abs(distance(ax.a, ax.b) - 50.0) < 1e-9,
                   "axis sweep typed: and the radius is left alone");
         }
+    }
+
+    // ---- A COMMAND'S DEMONSTRATION DOES WHAT IT SAYS ------------------------------------------------------
+    // Each one is worked through on the real canvas and editor; afterwards its drawing must have changed - a
+    // demonstration that leaves nothing behind shows a command doing nothing.
+    {
+        auto signature = [](const Document& d) {
+            QString s;
+            for (const Entity& e : d.entities()) {
+                s += QStringLiteral("%1|%2,%3|%4,%5|%6,%7,%8|").arg(int(e.type)).arg(e.a.x).arg(e.a.y)
+                         .arg(e.b.x).arg(e.b.y).arg(e.center.x).arg(e.center.y).arg(e.radius);
+                for (const Vec2& p : e.points) s += QStringLiteral("%1,%2;").arg(p.x).arg(p.y);
+                s += QLatin1Char('\n');
+            }
+            return s;
+        };
+        CommandDemo demo;
+        demo.resize(640, 360);
+        demo.show();
+        const QStringList names = commandDemoNames();
+        check(names.size() >= 25, "demo: the common commands each have a demonstration");
+        int shown = 0;
+        for (const QString& name : names) {
+            check(demo.play(name), "demo: a listed command plays");
+            const QString before = signature(*demo.document());
+            demo.runToEnd();
+            const QString after = signature(*demo.document());
+            const int count = static_cast<int>(demo.document()->entities().size());
+            std::printf("  demo %-13s %d -> %d object(s)%s\n", qPrintable(name), demo.startCount(), count,
+                        before == after ? "  UNCHANGED" : "");
+            check(before != after, qPrintable(QStringLiteral("demo: %1 changes its drawing").arg(name)));
+            if (before != after) ++shown;
+        }
+        CommandDemoScript byAlias;
+        check(commandDemoFor(QStringLiteral("L"), byAlias) && byAlias.command == QLatin1String("line"),
+              "demo: asked for by an alias, the command's own demonstration");
+        check(!demo.play(QStringLiteral("purge")), "demo: a command with none says so");
+        std::printf("  demo: %d of %d demonstrations change the drawing\n", shown, int(names.size()));
     }
 
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);

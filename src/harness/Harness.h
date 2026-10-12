@@ -195,6 +195,17 @@ std::vector<std::vector<Vec2>> twistedPairEndSleeves(const Entity& pair);
 // ends - and this is that, which is what a drawing measures from and snaps to and puts a joint on
 // the middle of. Empty for a laid-up bundle: a weave has no straight in it to speak of.
 std::vector<std::pair<Vec2, Vec2>> twistedPairStraights(const Entity& pair);
+// THE RUN AS IT IS DRAWN, FOR THE CURSOR: every line a twisted pair or a bundle puts on the sheet - each
+// wire's two edges, the cut ends, the body and its boots, a laid-up bundle's outline - and every place one
+// of them ends or turns a corner. A dimension, a line, a move - anything that snaps - can then land on any
+// physical point of the harness and not only on its straight stretches. Kept with the run's measurement,
+// so a mouse movement does not work it out again. Null when there is nothing drawn.
+struct RunSnap {
+    std::vector<std::pair<Vec2, Vec2>> lines;   // every drawn line, facet by facet
+    std::vector<Vec2> points;                   // where a drawn line ends, or turns a corner
+    Vec2 lo, hi;                                // how far all of it reaches
+};
+const RunSnap* twistedPairSnap(const Entity& pair);
 
 // THE CONVERGED STRETCH DRAWN AS A BODY, when the run is told to be one: a cable under heatshrink
 // rather than the two or three lines the bundle is otherwise drawn as. The FANS ARE UNTOUCHED - the

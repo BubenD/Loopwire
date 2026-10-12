@@ -226,6 +226,8 @@ add_library(loopwire_core STATIC
     src/app/ThermalModelDialog.cpp
     src/app/BomDialog.h
     src/app/BomDialog.cpp
+    src/app/CommandDemo.h
+    src/app/CommandDemo.cpp
     src/app/VoltageDropDialog.h
     src/app/CableBuilderDialog.h
     src/app/CableBuilderDialog.cpp

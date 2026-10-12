@@ -115,6 +115,9 @@ public:
     bool gridVisible() const { return gridVisible_; }
     bool drawingDetailsVisible() const { return drawingDetailsVisible_; }
     void setDrawingDetailsVisible(bool visible);
+    // A PLAIN CANVAS: no axes through the origin and no drawing details panel, for a canvas that only shows
+    // something (a command's demonstration). Not saved: the user's own choice of the panel is left as it is.
+    void setPlainCanvas(bool plain);
 
     // ---- Display options (Options dialog) ----
     int crosshairSize() const { return crosshairPct_; }   // 1..100 (% of viewport)
@@ -340,6 +343,7 @@ private:
     Editor* editor_ = nullptr;
     double gridSize_ = 10.0;
     bool gridVisible_ = true;
+    bool originMarkerVisible_ = true;
     bool drawingDetailsVisible_ = true;
     bool drawingDetailsMinimized_ = false;
     bool drawingDetailsPinned_ = false;

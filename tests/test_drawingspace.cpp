@@ -8,6 +8,7 @@
 #include "app/Chrome.h"
 #include "app/Editor.h"
 #include "io/Dwx.h"
+#include "app/CommandDemo.h"
 #include "app/MainWindow.h"
 #include "app/ScientificCalculatorDialog.h"
 #include "model/Document.h"
@@ -2006,6 +2007,15 @@ int run_drawingspace_tests() {
         // meant to remove the feature.
         check(mw.hasCommandNamed(QStringLiteral("bylayer")),
               "menus: and BYLAYER is still there to be typed");
+        // THE RIBBON'S OTHER TOOLS CAN BE TYPED, and every command with a demonstration is one that exists.
+        for (const char* name : {"twistedpair", "twistedroute", "twistedbundle", "bundlerun", "harnessrun", "fanout",
+                                 "autoroute", "heatshrink", "lengthbreak", "lacing", "pin", "axisangle", "mtext",
+                                 "hatch", "wipeout", "centermark", "centerline", "detailview", "volumearrow"})
+            check(mw.hasCommandNamed(QString::fromLatin1(name)),
+                  qPrintable(QStringLiteral("commands: %1 can be typed").arg(QLatin1String(name))));
+        for (const QString& shown : commandDemoNames())
+            check(mw.hasCommandNamed(shown),
+                  qPrintable(QStringLiteral("commands: the demonstration of %1 is of a real command").arg(shown)));
         // The rest of Edit is untouched.
         check(editItems.contains(QStringLiteral("Undo")) &&
                   editItems.contains(QStringLiteral("Select all")),

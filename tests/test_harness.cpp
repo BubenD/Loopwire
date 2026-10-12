@@ -7562,6 +7562,116 @@ int run_harness_tests() {
               "units: and a count says so - no length in it at all");
     }
 
+    // ---- A TWISTED PAIR OR BUNDLE SNAPS ON EVERY LINE IT DRAWS ----------------------------------------
+    // A dimension, or anything else that snaps, can land on a wire's edge where it curves, on the place two
+    // wires cross, and on the corners of the lines - not only on the straight stretches.
+    {
+        Document d;
+        Entity bundle;
+        bundle.type = EntityType::TwistedPair;
+        bundle.id = QStringLiteral("snap-bundle");
+        bundle.points = {{0.0, 0.0}, {120.0, 0.0}};
+        bundle.a = bundle.points.front();
+        bundle.b = bundle.points.back();
+        bundle.meta.insert(QStringLiteral("twistWires"), 4);
+        d.entities().push_back(bundle);
+        const RunSnap* snap = twistedPairSnap(d.entities().front());
+        check(snap && snap->lines.size() > 100, "run snap: a laid-up bundle offers every facet of its wires");
+        auto onDrawn = [&](const Vec2& p) {
+            double best = 1e9;
+            for (const auto& seg : snap->lines)
+                best = std::min(best, closestPointOnSegment(p, seg.first, seg.second).distance);
+            return best;
+        };
+        if (snap) {
+            // NEAREST ON A CURVE: a facet in the middle of the run, the cursor a little off it.
+            const auto& seg = snap->lines[snap->lines.size() / 3];
+            const Vec2 mid = lerp(seg.first, seg.second, 0.5);
+            SnapSettings nearest;
+            nearest.objectSnap = true;
+            nearest.snapEndpoint = false;
+            nearest.snapMidpoint = false;
+            nearest.snapIntersection = false;
+            nearest.snapNearest = true;
+            const SnapResult r = resolveSnap(d, mid + Vec2{0.05, 0.05}, std::nullopt, 0.5, nearest, {});
+            std::printf("  run snap: nearest by (%.2f,%.2f) -> (%.3f,%.3f), %.4f off a drawn line\n", mid.x, mid.y,
+                        r.point.x, r.point.y, onDrawn(r.point));
+            check(r.snapped && r.kind == SnapKind::Nearest && onDrawn(r.point) < 1e-6,
+                  "run snap: nearest lands on a wire's edge where it curves");
+
+            // WHERE TWO WIRES CROSS, in the middle of the run.
+            Vec2 crossing;
+            bool found = false;
+            for (size_t i = 0; i < snap->lines.size() && !found; ++i) {
+                if (std::abs(snap->lines[i].first.x - 60.0) > 10.0) continue;
+                for (size_t j = i + 2; j < snap->lines.size() && !found; ++j)
+                    if (auto x = segmentSegmentIntersection(snap->lines[i].first, snap->lines[i].second,
+                                                            snap->lines[j].first, snap->lines[j].second)) {
+                        crossing = *x;
+                        found = true;
+                    }
+            }
+            check(found, "run snap: the bundle's wires cross on the drawing");
+            SnapSettings cross;
+            cross.objectSnap = true;
+            cross.snapEndpoint = false;
+            cross.snapMidpoint = false;
+            cross.snapIntersection = true;
+            cross.snapNearest = false;
+            const SnapResult x = resolveSnap(d, crossing + Vec2{0.03, -0.03}, std::nullopt, 0.3, cross, {});
+            std::printf("  run snap: crossing at (%.3f,%.3f) -> (%.3f,%.3f) kind %d\n", crossing.x, crossing.y,
+                        x.point.x, x.point.y, int(x.kind));
+            check(found && x.snapped && x.kind == SnapKind::Intersection && distance(x.point, crossing) < 0.05,
+                  "run snap: a crossing of two wires is caught");
+
+            // NO MIDPOINT IN THE MIDDLE OF A CURVE: a facet's middle is no place on the drawing.
+            SnapSettings mids;
+            mids.objectSnap = true;
+            mids.snapEndpoint = false;
+            mids.snapMidpoint = true;
+            mids.snapIntersection = false;
+            mids.snapNearest = false;
+            const SnapResult m = resolveSnap(d, mid, std::nullopt, 0.2, mids, {});
+            check(!(m.snapped && m.kind == SnapKind::Midpoint), "run snap: no midpoint on a facet of a curve");
+        }
+
+        // A FAN'S CORNERS. A straight pair that fans at its ends turns a corner where each wire leaves the
+        // bundle, and that corner is caught as an end of a line is.
+        Document f;
+        Entity pair = bundle;
+        pair.id = QStringLiteral("snap-fan");
+        pair.meta.insert(QStringLiteral("twistWires"), 4);
+        pair.meta.insert(QStringLiteral("twistStraight"), true);
+        f.entities().push_back(pair);
+        const RunSnap* fan = twistedPairSnap(f.entities().front());
+        const auto strands = twistedPairStrands(f.entities().front());
+        size_t ends = 0;
+        for (const auto& s : strands) ends += s.empty() ? 0 : 2;
+        std::printf("  run snap: a fanned pair offers %d point(s), %d of them wire ends\n",
+                    fan ? int(fan->points.size()) : 0, int(ends));
+        check(fan && fan->points.size() > ends, "run snap: a fanned pair offers its corners as well as its ends");
+        if (fan) {
+            Vec2 corner;
+            bool inside = false;
+            for (const Vec2& p : fan->points)
+                if (p.x > 1.0 && p.x < 119.0) {
+                    corner = p;
+                    inside = true;
+                    break;
+                }
+            check(inside, "run snap: a corner away from the ends");
+            SnapSettings endSnap;
+            endSnap.objectSnap = true;
+            endSnap.snapEndpoint = true;
+            endSnap.snapMidpoint = false;
+            endSnap.snapIntersection = false;
+            endSnap.snapNearest = false;
+            const SnapResult c = resolveSnap(f, corner + Vec2{0.05, 0.05}, std::nullopt, 0.3, endSnap, {});
+            check(inside && c.snapped && c.kind == SnapKind::Endpoint && distance(c.point, corner) < 1e-6,
+                  "run snap: the corner is caught");
+        }
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

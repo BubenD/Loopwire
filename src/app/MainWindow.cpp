@@ -4,6 +4,7 @@
 #include <QItemSelectionModel>
 #include <QScopeGuard>
 
+#include "app/CommandDemo.h"
 #include "app/Chrome.h"
 #include <QSplitter>
 #include "app/DrawingPreview.h"
@@ -11876,6 +11877,29 @@ void MainWindow::buildCommands() {
          "Schematic harness builder: define the harness and generate it",
          [this] { showHarnessBuilder(); }},
         {{"bom"}, "Harness", "Bill of materials", [this] { showBomDialog(); }},
+        // THE RIBBON'S OTHER TOOLS, typed: each starts the same tool its button does.
+        {{"twistedpair", "tp", "pair"}, "Harness", "Twisted pair between two points", tool(ToolId::TwistedPair)},
+        {{"twistedroute", "twr"}, "Harness", "Twisted pair routed through knees", tool(ToolId::TwistedRoute)},
+        {{"twistedbundle", "tbundle", "twb"}, "Harness", "Twisted bundle between two points",
+         tool(ToolId::TwistedHarness)},
+        {{"bundlerun", "twbr"}, "Harness", "Twisted bundle routed through knees", tool(ToolId::TwistedHarnessRoute)},
+        {{"harnessrun", "hr"}, "Harness", "Harness run: wires laid side by side", tool(ToolId::WiresRun)},
+        {{"fanout", "fo"}, "Harness", "Fan wires out of a connector", tool(ToolId::Fanout)},
+        {{"autoroute", "aro"}, "Harness", "Route a run automatically", tool(ToolId::AutoRoute)},
+        {{"heatshrink", "hs"}, "Harness", "Heatshrink over a run", tool(ToolId::HeatshrinkRoute)},
+        {{"lengthbreak", "lb", "break"}, "Harness", "Length break across runs", tool(ToolId::LengthBreak)},
+        {{"lacing", "tie", "lacingtie"}, "Harness", "Tie or lacing cord on a bundle", tool(ToolId::LacingTie)},
+        {{"pin", "cpin", "connectionpin"}, "Harness", "Connection pin", tool(ToolId::ConnectionPin)},
+        {{"axisangle", "aa"}, "Harness", "Axis angle between two runs", tool(ToolId::AxisAngle)},
+        {{"mtext", "mt"}, "Draw", "Multiline text", tool(ToolId::MText)},
+        {{"hatch", "h"}, "Draw", "Hatch: click inside a closed shape", tool(ToolId::Hatch)},
+        {{"wipeout", "wo"}, "Draw", "Wipeout: a mask over what is behind it", tool(ToolId::Wipeout)},
+        {{"centermark", "cm", "centremark"}, "Annotation", "Centre mark on a circle or arc",
+         tool(ToolId::CenterMark)},
+        {{"centerline", "cl", "centreline"}, "Annotation", "Centre line between two lines", tool(ToolId::CenterLine)},
+        {{"detailview", "dv", "detail"}, "Annotation", "Detail view: a circled part drawn larger",
+         tool(ToolId::DetailView)},
+        {{"volumearrow", "va"}, "Annotation", "Volume arrow", tool(ToolId::VolumeArrow)},
         {{"block", "blocks", "b"}, "Draw", "Blocks: create, insert and edit",
          [this] { showBlockDialog(); }},
         {{"makeblock", "mkblock"}, "Draw", "Make a block out of what is selected",
@@ -12132,7 +12156,7 @@ bool MainWindow::hasCommandNamed(const QString& name) const {
 void MainWindow::showHelp() {
     QDialog dlg(this);
     dlg.setWindowTitle(QStringLiteral("Commands and keys"));
-    dlg.resize(680, 680);
+    dlg.resize(1180, 700);
     auto* lay = new QVBoxLayout(&dlg);
 
     // TWO LISTS, because they are two different things and mixing them helps nobody: what you can
@@ -12178,7 +12202,12 @@ void MainWindow::showHelp() {
 
     // ---- What you can type ----
     auto* typed = makeTable(QStringLiteral("Command (aliases)"), QStringLiteral("Description"), 200);
-    const QStringList order = {"Draw", "Modify", "Harness", "Edit", "View", "File", "Help"};
+    typed->setObjectName(QStringLiteral("helpCommands"));
+    // EVERY CATEGORY THE COMMANDS HAVE, the usual ones first. The list was a fixed one and Annotation and
+    // Insert were not on it, so the balloon, the leader, the table, a picture and PDF import were never shown.
+    QStringList order = {"Draw", "Annotation", "Modify", "Harness", "Insert", "Edit", "View", "File", "Help"};
+    for (const auto& c : commands_)
+        if (!order.contains(c.category)) order << c.category;
     for (const QString& cat : order) {
         bool first = true;
         for (const auto& c : commands_) {
@@ -12190,10 +12219,52 @@ void MainWindow::showHelp() {
                 for (int i = 1; i < c.names.size(); ++i) al << c.names[i].toUpper();
                 name += QStringLiteral("  (%1)").arg(al.join(", "));
             }
-            addTo(typed, name, c.desc, false);
+            CommandDemoScript script;
+            const bool shown = commandDemoFor(c.names.first(), script);
+            // A command that can be shown says so, and which one it is goes with the row.
+            addTo(typed, shown ? QStringLiteral("▶ ") + name : name, c.desc, false);
+            typed->item(typed->rowCount() - 1, 0)->setData(Qt::UserRole, shown ? script.command : QString());
         }
     }
-    tabs->addTab(typed, QStringLiteral("Commands"));
+    typed->setSelectionMode(QAbstractItemView::SingleSelection);
+    typed->setSelectionBehavior(QAbstractItemView::SelectRows);
+
+    // HOW A COMMAND IS WORKED, SHOWN: pick one marked with the arrow and it is done in front of you, on a
+    // drawing of its own - the pointer, the clicks, the keys and a line saying what each is for.
+    auto* commandsPage = new QSplitter(Qt::Horizontal, &dlg);
+    commandsPage->addWidget(typed);
+    auto* demoSide = new QWidget(commandsPage);
+    auto* demoLay = new QVBoxLayout(demoSide);
+    demoLay->setContentsMargins(6, 0, 0, 0);
+    auto* demoTitle = new QLabel(QStringLiteral("Pick a command marked ▶ to see how it is worked."), demoSide);
+    demoTitle->setObjectName(QStringLiteral("helpDemoTitle"));
+    demoTitle->setWordWrap(true);
+    auto* demo = new CommandDemo(demoSide);
+    demo->setMinimumSize(420, 260);
+    auto* replay = new QPushButton(QStringLiteral("Replay"), demoSide);
+    replay->setObjectName(QStringLiteral("helpDemoReplay"));
+    replay->setEnabled(false);
+    demoLay->addWidget(demoTitle);
+    demoLay->addWidget(demo, 1);
+    demoLay->addWidget(replay, 0, Qt::AlignRight);
+    commandsPage->addWidget(demoSide);
+    commandsPage->setStretchFactor(0, 1);
+    commandsPage->setStretchFactor(1, 1);
+    connect(replay, &QPushButton::clicked, demo, &CommandDemo::replay);
+    connect(typed, &QTableWidget::currentCellChanged, &dlg, [typed, demo, demoTitle, replay](int row, int, int, int) {
+        const QTableWidgetItem* item = row >= 0 ? typed->item(row, 0) : nullptr;
+        const QString command = item ? item->data(Qt::UserRole).toString() : QString();
+        CommandDemoScript script;
+        if (!command.isEmpty() && commandDemoFor(command, script) && demo->play(command)) {
+            demoTitle->setText(script.title);
+            replay->setEnabled(true);
+        } else {
+            demo->play(QString());
+            demoTitle->setText(QStringLiteral("No demonstration for this one yet. Pick a command marked ▶."));
+            replay->setEnabled(false);
+        }
+    });
+    tabs->addTab(commandsPage, QStringLiteral("Commands"));
 
     // ---- What you can press ----
     auto* keys = makeTable(QStringLiteral("Keys"), QStringLiteral("What it does"), 190);

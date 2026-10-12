@@ -1265,6 +1265,9 @@ struct TwistCached {
     // to their full width in the middle. That is the fault in the drawing: a cable that is a cable to
     // everything except the eye.
     std::vector<std::vector<std::pair<size_t, size_t>>> spans;
+    // What the cursor can catch on it, worked out the first time it is asked (see twistedPairSnap).
+    mutable bool snapBuilt = false;
+    mutable RunSnap snap;
 };
 
 QString twistKey(const Entity& e) {
@@ -1801,6 +1804,74 @@ std::vector<std::pair<Vec2, Vec2>> twistedPairStraights(const Entity& pair) {
         keep(from, line.size() - 1);
     }
     return out;
+}
+
+const RunSnap* twistedPairSnap(const Entity& pair) {
+    if (pair.type != EntityType::TwistedPair) return nullptr;
+    const TwistCached* c = twistCached(pair);
+    if (!c) return nullptr;
+    if (c->snapBuilt) return c->snap.lines.empty() ? nullptr : &c->snap;
+    c->snapBuilt = true;
+    RunSnap& s = c->snap;
+    const TwistFrames& f = c->frames;
+    std::vector<std::vector<Vec2>> drawn = c->strands;
+    for (const std::vector<Vec2>& cap : c->caps) drawn.push_back(cap);
+    for (const std::vector<Vec2>& outline : c->body) drawn.push_back(outline);
+    // A LAID-UP BUNDLE'S OUTLINE, the line along the outside of its outer strands - drawn, so caught.
+    // Worked out as twistedPairWeave draws it.
+    if (!f.straight && f.wires >= 3 && !f.cableBody) {
+        std::vector<Vec2> high, low;
+        for (size_t i = 0; i < f.u.size() && i < f.pos.size() && i < f.n.size(); ++i) {
+            if (f.u[i] < f.lead - 1e-9 || f.u[i] > f.len - f.leadB + 1e-9) continue;
+            double hi = -1e18, lo = 1e18;
+            for (int wire = 0; wire < f.wires; ++wire) {
+                const double offset = dot(twistCentre(f, wire, i) - f.pos[i], f.n[i]);
+                hi = std::max(hi, offset + f.thick);
+                lo = std::min(lo, offset - f.thick);
+            }
+            high.push_back(f.pos[i] + f.n[i] * hi);
+            low.push_back(f.pos[i] + f.n[i] * lo);
+        }
+        drawn.push_back(std::move(high));
+        drawn.push_back(std::move(low));
+    }
+    // A CORNER is where a drawn line turns by more than a facet of a curve ever does: a fan's knee, the
+    // step where the insulation stops, the corner of a boot. A curve's own facets are not corners - a
+    // weave would otherwise offer a point every few hundredths of a millimetre.
+    constexpr double kCornerCos = 0.94;   // about 20 degrees
+    bool first = true;
+    auto reach = [&](const Vec2& p) {
+        if (first) {
+            s.lo = s.hi = p;
+            first = false;
+        }
+        s.lo.x = std::min(s.lo.x, p.x);
+        s.lo.y = std::min(s.lo.y, p.y);
+        s.hi.x = std::max(s.hi.x, p.x);
+        s.hi.y = std::max(s.hi.y, p.y);
+    };
+    for (const std::vector<Vec2>& line : drawn) {
+        if (line.size() < 2) continue;
+        s.points.push_back(line.front());
+        s.points.push_back(line.back());
+        Vec2 lastDir{0.0, 0.0};
+        for (size_t i = 1; i < line.size(); ++i) {
+            reach(line[i - 1]);
+            reach(line[i]);
+            const Vec2 d = line[i] - line[i - 1];
+            const double len = d.length();
+            if (len < 1e-9) continue;
+            s.lines.emplace_back(line[i - 1], line[i]);
+            const Vec2 dir = d / len;
+            if (lastDir.lengthSq() > 0.0 && dot(lastDir, dir) < kCornerCos) s.points.push_back(line[i - 1]);
+            lastDir = dir;
+        }
+    }
+    // Far enough round it to take in the heatshrink a wire's end may have on it (twistedPairEndSleeves).
+    const double margin = f.thick + 1.0;
+    s.lo = s.lo - Vec2{margin, margin};
+    s.hi = s.hi + Vec2{margin, margin};
+    return s.lines.empty() ? nullptr : &s;
 }
 
 QString twistedPairSpread(const Entity& pair) {

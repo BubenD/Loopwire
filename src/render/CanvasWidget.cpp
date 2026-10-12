@@ -476,6 +476,7 @@ void CanvasWidget::drawGrid(QPainter& p, const ViewTransform& vt) const {
 }
 
 void CanvasWidget::drawOriginMarker(QPainter& p, const ViewTransform& vt) const {
+    if (!originMarkerVisible_) return;
     const QPointF o = vt.toScreen({0, 0});
     // Full-canvas axes through the origin (red X, green Y), Loopwire-style.
     QPen xPen(QColor("#c0413a"));
@@ -990,6 +991,18 @@ void CanvasWidget::setDrawingDetailsVisible(bool visible) {
     if(!visible){drawingDetailsFrame_={};drawingDetailsMinimize_={};setCursor(inlineEditing_?Qt::ArrowCursor:Qt::BlankCursor);}
     QSettings().setValue(QStringLiteral("canvas/showDrawingDetails"),visible);
     update();
+}
+
+void CanvasWidget::setPlainCanvas(bool plain) {
+    originMarkerVisible_ = !plain;
+    if (plain) {
+        drawingDetailsVisible_ = false;
+        drawingDetailsExpandTimer_->stop();
+        drawingDetailsFoldTimer_->stop();
+        drawingDetailsFrame_ = {};
+        drawingDetailsMinimize_ = {};
+    }
+    invalidateScene();
 }
 
 void CanvasWidget::updateDrawingDetailsHover() {
