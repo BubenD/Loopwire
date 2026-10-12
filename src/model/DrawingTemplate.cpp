@@ -580,7 +580,9 @@ QJsonArray defaultSheetContent(const DrawingTemplate& tpl) {
     for (int i = 1; i < 4; ++i)
         add(line(tbX, tbY + i * band, tbX + sigW, tbY + i * band));
     add(line(tbX + sigW, tbY, tbX + sigW, tbY + tbH));           // signatures | numbering
-    add(line(tbX + sigW, tbY + tbH / 2.0, w - inset, tbY + tbH / 2.0));
+    // THE NUMBERING COLUMN: the drawing number over a row of very small boxes - only as tall as a caption and a value.
+    const double smallH = std::min(tbH / 2.0, tpl.titleBlock.captionHeight + tpl.titleBlock.valueHeight + 4.0);
+    add(line(tbX + sigW, tbY + smallH, w - inset, tbY + smallH));
     // Within a signature band: what it is, who, and when.
     const double nameX = tbX + sigW * 0.34;
     const double dateX = tbX + sigW * 0.72;
@@ -630,10 +632,10 @@ QJsonArray defaultSheetContent(const DrawingTemplate& tpl) {
         add(text(tbX + sigW + pad, titleTop, f->label, capH));
         add(field(tbX + sigW + pad + 2.0, titleTop - capH - 1.5, *f));
     }
-    // THE NUMBERING COLUMN'S LOWER HALF: three small boxes of their own - REV, SCALE (the template's drawing scale, to
+    // THE NUMBERING COLUMN'S FOOT: three very small boxes of their own - REV, SCALE (the template's drawing scale, to
     // start with) and SHEET (n of m) - each its caption over its value.
     {
-        const double numX = tbX + sigW, numW = w - inset - numX, cellW = numW / 3.0, cellTop = tbY + tbH / 2.0;
+        const double numX = tbX + sigW, numW = w - inset - numX, cellW = numW / 3.0, cellTop = tbY + smallH;
         add(line(numX + cellW, tbY, numX + cellW, cellTop));
         add(line(numX + 2.0 * cellW, tbY, numX + 2.0 * cellW, cellTop));
         TemplateField rev{QStringLiteral("revision"), QStringLiteral("REV"), QString(), valH, true};
@@ -648,10 +650,10 @@ QJsonArray defaultSheetContent(const DrawingTemplate& tpl) {
         for (int i = 0; i < 3; ++i) {
             if (!cells[i]) continue;
             const double x = numX + i * cellW;
-            add(text(x + pad, cellTop - pad, cells[i]->label, capH));
+            add(text(x + 1.5, cellTop - 1.2, cells[i]->label, capH * 0.85));
             TemplateField value = *cells[i];
-            value.textHeight = valH;
-            add(field(x + pad + 1.0, cellTop - pad - capH - 2.0, value));
+            value.textHeight = valH * 0.9;
+            add(field(x + 2.5, cellTop - 1.2 - capH - 1.0, value));
         }
     }
     // THE COMPANY BAND over the title block: the logo's box on the left - the template's logo in it, where it has one -

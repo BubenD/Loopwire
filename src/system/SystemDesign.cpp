@@ -931,7 +931,14 @@ const std::vector<std::pair<QString, QString>>& sysFieldSources() {
 }
 
 QJsonObject SystemDesign::sheetTexts(const SysSheet& s) const {
-    QJsonObject out = s.fields;
+    // WHAT THE TEMPLATE WRITES IN A BOX (its drawing scale, its company), where nothing is typed over it.
+    QJsonObject out;
+    for (const QJsonValue v : s.content) {
+        const QJsonObject e = v.toObject();
+        if (const QString key = e.value(QStringLiteral("field")).toString(); !key.isEmpty() && !e.value(QStringLiteral("text")).toString().isEmpty())
+            out[key] = e.value(QStringLiteral("text")).toString();
+    }
+    for (auto it = s.fields.begin(); it != s.fields.end(); ++it) out[it.key()] = it.value();
     const SysRevision* latest = revisions.empty() ? nullptr : &revisions.back();
     int index = 0;
     for (int i = 0; i < sheetCount(); ++i)
@@ -965,6 +972,35 @@ QJsonArray SystemDesign::sheetContent(const SysSheet& s) const {
         QJsonObject meta = v.toObject();
         const QString field = meta.value(QStringLiteral("field")).toString();
         if (!field.isEmpty() && texts.contains(field)) meta[QStringLiteral("text")] = texts.value(field).toString();
+        if (meta.value(QStringLiteral("revisionTable")).toBool() && revisionRows > 0 &&
+            meta.value(QStringLiteral("rows")).toInt() != revisionRows + 1) {
+            // AS MANY ROWS AS ASKED FOR: its top kept where the template put it, each row as tall as the template's, the
+            // headings and the column widths as they were.
+            Entity table = Entity::fromJson(meta);
+            const int cols = table.meta.value(QStringLiteral("cols")).toInt();
+            const int was = std::max(1, table.meta.value(QStringLiteral("rows")).toInt());
+            if (cols > 0 && table.points.size() >= 4) {
+                double y0 = table.points[0].y, y1 = y0;
+                for (const Vec2& p : table.points) { y0 = std::min(y0, p.y); y1 = std::max(y1, p.y); }
+                const double rowH = (y1 - y0) / was, bottom = y1 - rowH * (revisionRows + 1);
+                for (Vec2& p : table.points) p.y = std::abs(p.y - y0) < 1e-9 ? bottom : p.y;
+                const int now = revisionRows + 1;
+                const QJsonArray oldCells = table.meta.value(QStringLiteral("cells")).toArray();
+                const QJsonArray oldAlign = table.meta.value(QStringLiteral("cellAlign")).toArray();
+                QJsonArray cells, align, rowFrac;
+                for (int i = 0; i < now * cols; ++i) {
+                    cells.append(i < cols ? oldCells.at(i).toString() : QString());
+                    align.append(i < oldAlign.size() ? oldAlign.at(i).toString() : oldAlign.isEmpty() ? QStringLiteral("MC")
+                                                                                                       : oldAlign.at(oldAlign.size() - 1).toString());
+                }
+                for (int r = 0; r < now; ++r) rowFrac.append(1.0 / now);
+                table.meta.insert(QStringLiteral("rows"), now);
+                table.meta.insert(QStringLiteral("cells"), cells);
+                table.meta.insert(QStringLiteral("cellAlign"), align);
+                table.meta.insert(QStringLiteral("rowFrac"), rowFrac);
+                meta = table.toJson();
+            }
+        }
         if (meta.value(QStringLiteral("revisionTable")).toBool() && (!revisions.empty() || !revisionAlign.isEmpty())) {
             // THE REVISIONS IN ITS TABLE, a row each under the headings - the newest where it has fewer rows than there are.
             const int cols = meta.value(QStringLiteral("cols")).toInt();
@@ -1049,6 +1085,7 @@ QJsonObject SystemDesign::toJson() const {
         }
         o[QStringLiteral("revisions")] = list;
     }
+    if (revisionRows > 0) o[QStringLiteral("revisionRows")] = revisionRows;
     if (!revisionAlign.isEmpty()) {
         o[QStringLiteral("revisionAlign")] = QJsonArray::fromStringList(revisionAlign);
     }
@@ -1173,6 +1210,7 @@ SystemDesign SystemDesign::fromJson(const QJsonObject& o) {
         d.revisions.push_back(r);
     }
     for (const QJsonValue v : o.value(QStringLiteral("revisionAlign")).toArray()) d.revisionAlign << v.toString();
+    d.revisionRows = std::clamp(o.value(QStringLiteral("revisionRows")).toInt(0), 0, 30);
     for (const QJsonValue& v : o.value(QStringLiteral("bypassed")).toArray()) {
         const QJsonObject j = v.toObject();
         SysIssue i;

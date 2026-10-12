@@ -167,6 +167,8 @@ public:
     // WHERE THE TEXT SITS in the revision table's cells on the sheets: "TL" to "BR", "" as the template - for one column of
     // the seven (rev, change note, ECO, drawn, checked, approved, date), or every one for -1.
     void setRevisionAlign(int column, const QString& code);
+    // HOW MANY ROWS THE REVISION TABLE SHOWS on every sheet: 0 - as many as its template has.
+    void setRevisionRows(int rows);
     // A TITLE BLOCK FIELD'S NAME, said plainly ("scale": "Drawing scale"), and what it is for.
     static QString sheetFieldName(const QString& key);
     // A NEW SHEET'S BOXES the design fills where nothing is typed: SHEET n of m, REV, who drew, checked, approved and when.
@@ -270,6 +272,8 @@ private:
     QComboBox* sheetPick_ = nullptr;
     QTableWidget* revisions_ = nullptr;
     QComboBox* revisionAlign_ = nullptr;
+    QSpinBox* revisionRows_ = nullptr;
+    QToolButton* revisionRowsAuto_ = nullptr;
     QDialog* checksWindow_ = nullptr;   // the tabs' own window, while they are in it. Not saved.
     QToolButton* checksPop_ = nullptr;
     QSplitter* outer_ = nullptr;

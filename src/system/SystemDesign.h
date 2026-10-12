@@ -201,6 +201,8 @@ struct SystemDesign {
     // WHERE THE TEXT SITS in the revision table's cells, a column each in SysRevision's order: "TL" to "BR"; "" (or none):
     // as the template has it.
     QStringList revisionAlign;
+    // HOW MANY ROWS the revision table shows on every sheet, under its headings: 0 - as many as its template has.
+    int revisionRows = 0;
     // A SHEET BY ITS PLACE: 0 the first (`sheet`), then `moreSheets`; how many there are (an empty first counts none).
     int sheetCount() const { return sheet.empty() ? 0 : 1 + static_cast<int>(moreSheets.size()); }
     const SysSheet* sheetAt(int i) const { return i == 0 ? &sheet : i > 0 && i <= static_cast<int>(moreSheets.size()) ? &moreSheets[static_cast<size_t>(i - 1)] : nullptr; }
@@ -224,7 +226,7 @@ struct SystemDesign {
     bool empty() const { return units.empty() && cables.empty() && notes.empty() && disabledRules.isEmpty()
                                && ruleLevels.isEmpty() && bypassed.empty() && background == QColor(48, 52, 58)
                                && !designatorColor.isValid() && sheet.empty() && moreSheets.empty() && revisions.empty()
-                               && revisionAlign.isEmpty(); }
+                               && revisionAlign.isEmpty() && revisionRows == 0; }
     const SysNote* note(const QString& id) const;
     SysNote* note(const QString& id);
     // A NOTE put at a place; its id. One taken away.

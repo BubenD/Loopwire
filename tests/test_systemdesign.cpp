@@ -2599,11 +2599,10 @@ void testSheetsRevisionsAndPdf(const QString& dir) {
     check(d.moreSheets[0].sources.value(key).toString() == QLatin1String("revision") &&
               d.sheetTexts(d.moreSheets[0]).value(key).toString() == QLatin1String("B"),
           "sources: a field set to the latest revision says B");
-    auto* source = view.findChild<QComboBox*>(QStringLiteral("systemSheetSource_") + key);
     auto* edit = view.findChild<QLineEdit*>(QStringLiteral("systemSheetField_") + key);
-    check(source && edit && source->currentData().toString() == QLatin1String("revision") && !edit->isEnabled() &&
-              edit->text() == QLatin1String("B"),
-          "sources: its list shows the source, its text the revision - not to be typed in");
+    check(!view.findChild<QComboBox*>(QStringLiteral("systemSheetSource_") + key) && edit && edit->isEnabled() &&
+              edit->text() == QLatin1String("B") && edit->toolTip().contains(QLatin1String("Latest revision")),
+          "sources: no list beside the field - its text the revision, its tip where it comes from, and it can be typed over");
     view.setSheetFieldSource(key, QStringLiteral("sheet"));
     check(d.sheetTexts(d.moreSheets[0]).value(key).toString() == QLatin1String("2 of 2"), "sources: the sheet number - 2 of 2");
     view.setSheetFieldSource(key, QString());
@@ -2841,6 +2840,44 @@ void testTitleBlockAndSheetExtras(const QString& dir) {
     check(view.pdfPageCount(reversed) == 2 && view.pdfPage(reversed, 0, 300) == view.pdfPage(all, 1, 300) &&
               view.pdfPage(reversed, 1, 300) == view.pdfPage(all, 0, 300),
           "pdf: the sheets in the order asked for - the second first");
+
+    // ---- A FIELD THE DESIGN FILLS, TYPED OVER: one's own from then on ----
+    view.setCurrentSheet(0);
+    QApplication::processEvents();
+    if (const QString shots = qEnvironmentVariable("EDRAW_SHOT_DIR"); !shots.isEmpty()) view.grab().save(shots + QStringLiteral("/sheet-panel.png"));
+    if (auto* rev = view.findChild<QLineEdit*>(QStringLiteral("systemSheetField_revision"))) {
+        check(rev->minimumHeight() >= rev->sizeHint().height() - 1, "fields: as tall as their text needs");
+        rev->setText(QStringLiteral("X1"));
+        emit rev->editingFinished();
+        QApplication::processEvents();
+        check(!d.sheet.sources.contains(QStringLiteral("revision")) &&
+                  d.sheetTexts(d.sheet).value(QStringLiteral("revision")).toString() == QLatin1String("X1"),
+              "fields: the revision typed over - X1, the design's no longer");
+    } else {
+        check(false, "fields: the revision field is there");
+    }
+    auto* company = view.findChild<QPlainTextEdit*>(QStringLiteral("systemSheetField_company"));
+    check(company && company->minimumHeight() >= 80 && company->toPlainText() == QLatin1String("Acme\nStreet 1"),
+          "fields: the company's details in a large box of many lines");
+
+    // ---- HOW MANY ROWS THE REVISION TABLE SHOWS ----
+    auto revRows = [&](const SysSheet& s) {
+        for (const QJsonValue v : d.sheetContent(s))
+            if (v.toObject().value(QStringLiteral("revisionTable")).toBool()) {
+                const Entity t = Entity::fromJson(v.toObject());
+                double y0 = 1e9, y1 = -1e9;
+                for (const Vec2& p : t.points) { y0 = std::min(y0, p.y); y1 = std::max(y1, p.y); }
+                return std::pair{t.meta.value(QStringLiteral("rows")).toInt() - 1, y1 - y0};
+            }
+        return std::pair{-1, 0.0};
+    };
+    const auto [rowsWere, heightWas] = revRows(d.sheet);
+    view.setRevisionRows(7);
+    const auto [rowsNow, heightNow] = revRows(d.sheet);
+    check(rowsWere == 4 && rowsNow == 7 && std::abs(heightNow / 8.0 - heightWas / 5.0) < 1e-6,
+          "revision rows: seven shown - each row as tall as the template's");
+    view.setRevisionRows(0);
+    check(revRows(d.sheet).first == 4, "revision rows: A - as many as the template has");
 
     // ---- THE CHECK IN A WINDOW OF ITS OWN, and back ----
     auto* tabs = view.findChild<QTabWidget*>(QStringLiteral("systemTabs"));

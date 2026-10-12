@@ -29,6 +29,7 @@
 #include <QPushButton>
 #include <QSpinBox>
 #include <QSplitter>
+#include <QScrollArea>
 #include <QStackedWidget>
 #include <QTabWidget>
 #include <QTableWidget>
@@ -76,6 +77,19 @@ QIcon fieldEyeIcon() {
 }
 
 const char* const kShown[4] = {"name", "pn", "rev", "desc"};
+
+// A WIDGET LEFT: something done when the focus goes from it - for a box with no editingFinished of its own.
+class FocusOutWatcher : public QObject {
+public:
+    FocusOutWatcher(QObject* parent, std::function<void()> fn) : QObject(parent), fn_(std::move(fn)) {}
+    bool eventFilter(QObject*, QEvent* e) override {
+        if (e->type() == QEvent::FocusOut && fn_) fn_();
+        return false;
+    }
+
+private:
+    std::function<void()> fn_;
+};
 // WHERE A UNIT'S PICTURE MAY SIT: what the list says, and what is saved.
 const std::pair<const char*, const char*> kPicturePlaces[] = {
     {"Center", ""}, {"Top", "top"}, {"Bottom", "bottom"}, {"Left", "left"}, {"Right", "right"},
@@ -223,10 +237,43 @@ SystemDesignView::SystemDesignView(QWidget* parent) : QWidget(parent) {
             revisionAlign_->setCurrentIndex(std::max(0, revisionAlign_->findData(code)));
         });
         revButtons->addWidget(revisionAlign_);
+        // HOW MANY ROWS THE TABLE SHOWS on the sheets: A - as many as the template has; off - the number set.
+        auto* rowsLine = new QHBoxLayout;
+        rowsLine->addWidget(new QLabel(QStringLiteral("Rows shown"), revBox));
+        revisionRows_ = new QSpinBox(revBox);
+        revisionRows_->setObjectName(QStringLiteral("systemRevisionRows"));
+        revisionRows_->setRange(1, 30);
+        revisionRows_->setToolTip(QStringLiteral("How many rows the revision table shows on the sheets - the newest revisions where "
+                                                 "there are more"));
+        connect(revisionRows_, &QSpinBox::valueChanged, this, [this](int n) {
+            if (filling_ || revisionRowsAuto_->isChecked()) return;
+            QTimer::singleShot(0, this, [this, n] { setRevisionRows(n); });
+        });
+        revisionRowsAuto_ = new QToolButton(revBox);
+        revisionRowsAuto_->setObjectName(QStringLiteral("systemRevisionRowsAuto"));
+        revisionRowsAuto_->setText(QStringLiteral("A"));
+        revisionRowsAuto_->setCheckable(true);
+        revisionRowsAuto_->setToolTip(QStringLiteral("As many rows as the template has"));
+        connect(revisionRowsAuto_, &QToolButton::toggled, this, [this](bool on) {
+            if (filling_) return;
+            // Turned off: starting from the rows the template has.
+            const int n = on ? 0 : revisionRows_->value();
+            QTimer::singleShot(0, this, [this, n] { setRevisionRows(n); });
+        });
+        rowsLine->addWidget(revisionRows_);
+        rowsLine->addWidget(revisionRowsAuto_);
+        rowsLine->addStretch(1);
+        rv->addLayout(rowsLine);
         rv->addLayout(revButtons);
         v->addWidget(revBox);
         v->addStretch(1);
-        panel_->addWidget(page);
+        // IN A SCROLL AREA: a tall title block's fields scroll, rather than being squeezed until their text is cut.
+        auto* scroll = new QScrollArea(panel_);
+        scroll->setObjectName(QStringLiteral("systemDesignPage"));
+        scroll->setWidgetResizable(true);
+        scroll->setFrameShape(QFrame::NoFrame);
+        scroll->setWidget(page);
+        panel_->addWidget(scroll);
     }
     // A UNIT.
     {
@@ -2231,9 +2278,19 @@ QStringList SystemDesignView::sheetFieldKeys() const {
 
 void SystemDesignView::setSheetField(const QString& key, const QString& value) {
     SysSheet* s = chosenSheet();
-    if (!s || s->empty() || s->fields.value(key).toString() == value) return;
+    if (!s || s->empty() || (s->fields.value(key).toString() == value && !s->sources.contains(key))) return;
     aboutToChange();
+    // TYPED OVER: one's own text from now on, not the design's.
+    chosenSheet()->sources.remove(key);
     chosenSheet()->fields[key] = value;
+    commit();
+}
+
+void SystemDesignView::setRevisionRows(int rows) {
+    rows = std::max(0, rows);
+    if (design_.revisionRows == rows) return;
+    aboutToChange();
+    design_.revisionRows = rows;
     commit();
 }
 
@@ -2348,6 +2405,18 @@ void SystemDesignView::fillSheetPanel() {
             for (int c = 0; c < 7; ++c) revisions_->setItem(r, c, new QTableWidgetItem(cells[c]));
         }
     }
+    // THE ROWS SHOWN: the number set, or - on A - as many as the chosen sheet's template has.
+    if (revisionRows_) {
+        int templateRows = 4;
+        if (const SysSheet* s = chosenSheet())
+            for (const QJsonValue v : s->content)
+                if (v.toObject().value(QStringLiteral("revisionTable")).toBool())
+                    templateRows = std::max(1, v.toObject().value(QStringLiteral("rows")).toInt() - 1);
+        const QSignalBlocker quiet(revisionRows_), quietAuto(revisionRowsAuto_);
+        revisionRowsAuto_->setChecked(design_.revisionRows == 0);
+        revisionRows_->setValue(design_.revisionRows > 0 ? design_.revisionRows : templateRows);
+        revisionRows_->setEnabled(design_.revisionRows > 0);
+    }
     sheetAt_ = std::clamp(sheetAt_, 0, std::max(0, design_.sheetCount() - 1));
     if (sheetPick_) {
         const QSignalBlocker quiet(sheetPick_);
@@ -2360,6 +2429,7 @@ void SystemDesignView::fillSheetPanel() {
     if (!sheet || sheet->empty()) {
         sheetName_->setText(QStringLiteral("No sheet round the diagram. Choose a template - one of yours, or a plain A4 to A0 sheet - "
                                            "for its frame and title block; it is in the PDF and the picture too."));
+        sheetFields_->setMinimumHeight(0);
         return;
     }
     sheetName_->setText(QStringLiteral("<b>%1</b> - %2 x %3 mm").arg(sheet->name).arg(sheet->widthMm).arg(sheet->heightMm));
@@ -2367,52 +2437,54 @@ void SystemDesignView::fillSheetPanel() {
     // revision, the date... - chosen beside it.
     const QJsonObject texts = design_.sheetTexts(*sheet);
     for (const QString& key : sheetFieldKeys()) {
-        auto* row = new QWidget(sheetFields_);
-        auto* rh = new QHBoxLayout(row);
-        rh->setContentsMargins(0, 0, 0, 0);
-        rh->setSpacing(3);
         const QString source = sheet->sources.value(key).toString();
-        auto* edit = new QLineEdit(texts.value(key).toString(), row);
-        edit->setObjectName(QStringLiteral("systemSheetField_") + key);
-        edit->setReadOnly(!source.isEmpty());
-        edit->setEnabled(source.isEmpty());
-        connect(edit, &QLineEdit::editingFinished, this, [this, edit, key] { if (!edit->isReadOnly()) setSheetField(key, edit->text()); });
-        auto* from = new QComboBox(row);
-        from->setObjectName(QStringLiteral("systemSheetSource_") + key);
-        from->setToolTip(QStringLiteral("Where this field's text comes from - typed here, or the design's own"));
-        from->setMaximumWidth(150);
-        for (const auto& [id, label] : sysFieldSources()) from->addItem(label, id);
-        from->setCurrentIndex(std::max(0, from->findData(source)));
-        // Later, not inside its own signal: the panel is built again, this list with it.
-        connect(from, &QComboBox::currentIndexChanged, this, [this, from, key] {
-            const QString id = from->currentData().toString();
-            QTimer::singleShot(0, this, [this, key, id] { setSheetFieldSource(key, id); });
-        });
-        rh->addWidget(edit, 1);
-        rh->addWidget(from);
-        // THE COMPANY'S DETAILS: lines of free text - written in a window of their own.
+        QString tip = sheetFieldTip(key);
+        // FILLED BY THE DESIGN where nothing is typed: shown, and typed over to write one's own.
+        if (!source.isEmpty())
+            for (const auto& [id, label] : sysFieldSources())
+                if (id == source)
+                    tip = (tip.isEmpty() ? QString() : tip + QStringLiteral("\n\n")) +
+                          QStringLiteral("Filled by the design: %1. Type here to write your own.").arg(label);
+        QWidget* box = nullptr;
         if (key == QLatin1String("company")) {
-            auto* more = new QToolButton(row);
-            more->setObjectName(QStringLiteral("systemSheetCompanyEdit"));
-            more->setText(QStringLiteral("..."));
-            more->setToolTip(QStringLiteral("The company's details, as many lines as they take"));
-            connect(more, &QToolButton::clicked, this, [this, key] {
+            // THE COMPANY'S DETAILS: a large box, as many lines as they take - written when it is left.
+            auto* edit = new QPlainTextEdit(texts.value(key).toString(), sheetFields_);
+            edit->setObjectName(QStringLiteral("systemSheetField_") + key);
+            edit->setPlaceholderText(QStringLiteral("Company name, address, phone, web..."));
+            edit->setMinimumHeight(90);
+            edit->setTabChangesFocus(true);
+            auto* left = new FocusOutWatcher(edit, [this, edit, key] {
                 const SysSheet* s = chosenSheet();
-                if (!s) return;
-                bool ok = false;
-                const QString text = QInputDialog::getMultiLineText(this, QStringLiteral("Company details"),
-                                                                    QStringLiteral("Name, address, phone, web..."),
-                                                                    design_.sheetTexts(*s).value(key).toString(), &ok);
-                if (ok) QTimer::singleShot(0, this, [this, key, text] { setSheetField(key, text); });
+                const QString text = edit->toPlainText();
+                if (s && text != design_.sheetTexts(*s).value(key).toString())
+                    QTimer::singleShot(0, this, [this, key, text] { setSheetField(key, text); });
             });
-            rh->addWidget(more);
+            edit->installEventFilter(left);
+            box = edit;
+        } else {
+            auto* edit = new QLineEdit(texts.value(key).toString(), sheetFields_);
+            edit->setObjectName(QStringLiteral("systemSheetField_") + key);
+            edit->setMinimumHeight(edit->sizeHint().height());
+            if (!source.isEmpty()) edit->setStyleSheet(QStringLiteral("QLineEdit{color:#9fb4c8;font-style:italic;}"));
+            connect(edit, &QLineEdit::editingFinished, this, [this, edit, key] {
+                const SysSheet* s = chosenSheet();
+                if (s && edit->text() != design_.sheetTexts(*s).value(key).toString()) setSheetField(key, edit->text());
+            });
+            box = edit;
         }
-        const QString tip = sheetFieldTip(key);
-        if (!tip.isEmpty()) edit->setToolTip(tip);
+        box->setToolTip(tip);
         auto* name = new QLabel(sheetFieldName(key), sheetFields_);
         name->setToolTip(tip);
-        form->addRow(name, row);
+        form->addRow(name, box);
+        // Shown now, not when the layout gets round to it: a hidden row counts for nothing in how tall the box must be.
+        name->show();
+        box->show();
     }
+    // AS TALL AS ITS ROWS NEED, said again now they are new: left to the layout, it kept the old rows' height and
+    // squeezed the new ones until their text was cut.
+    form->invalidate();
+    sheetFields_->setMinimumHeight(form->sizeHint().height());
+    sheetFields_->updateGeometry();
 }
 
 int SystemDesignView::autoAlign() {
