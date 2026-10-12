@@ -103,6 +103,107 @@ public:
 // THE GROUPS OF CONTROLS SIDE BY SIDE, on as few lines as the width allows: the next group on the same line while it
 // fits, on the next line where it does not - so the strip is one or two lines deep in a wide pane, more only where it
 // is narrow. Each group kept whole, never squeezed.
+// A ROW OF CONTROLS THAT FOLDS ONTO MORE LINES - while folding is on: the 3D view's options in the panel at the right -
+// where it is narrower than it is long, and lies on one line, as a plain row does, where there is room. A label is kept
+// with what it names; the rows nested in it fold with it. Folding off (the options with the 3D view), a plain row.
+class WrapRowLayout : public QHBoxLayout {
+public:
+    explicit WrapRowLayout(QWidget* parent) : QHBoxLayout(parent) {}
+    void setFolding(bool on) {
+        if (fold_ == on) return;
+        fold_ = on;
+        invalidate();
+    }
+    bool hasHeightForWidth() const override { return fold_ || QHBoxLayout::hasHeightForWidth(); }
+    int heightForWidth(int width) const override {
+        if (!fold_) return QHBoxLayout::heightForWidth(width);
+        if (width >= QHBoxLayout::sizeHint().width()) return QHBoxLayout::sizeHint().height();
+        return fold(QRect(0, 0, width, 0), false);
+    }
+    // AS NARROW AS ITS WIDEST GROUP: everything else can go onto another line.
+    QSize minimumSize() const override {
+        if (!fold_) return QHBoxLayout::minimumSize();
+        int wide = 0, tall = 0;
+        for (const Group& g : groups()) {
+            wide = std::max(wide, g.width);
+            tall = std::max(tall, g.height);
+        }
+        const QMargins m = contentsMargins();
+        return QSize(wide + m.left() + m.right(), tall + m.top() + m.bottom());
+    }
+    void setGeometry(const QRect& rect) override {
+        if (!fold_ || rect.width() >= QHBoxLayout::sizeHint().width()) {
+            QHBoxLayout::setGeometry(rect);
+            return;
+        }
+        QLayout::setGeometry(rect);
+        fold(rect, true);
+    }
+
+private:
+    bool fold_ = false;
+    struct Group {
+        QList<QLayoutItem*> items;
+        int width = 0, height = 0;
+    };
+    // EVERYTHING SHOWN IN IT, in order - the rows nested in it opened out, its stretches left out.
+    static void flatten(const QLayout* layout, QList<QLayoutItem*>& out) {
+        for (int i = 0; i < layout->count(); ++i) {
+            QLayoutItem* it = layout->itemAt(i);
+            if (!it || it->spacerItem()) continue;
+            if (const QLayout* inner = it->layout()) {
+                flatten(inner, out);
+                continue;
+            }
+            if (!it->isEmpty()) out.append(it);
+        }
+    }
+    QList<Group> groups() const {
+        QList<QLayoutItem*> pieces;
+        flatten(this, pieces);
+        const int gap = std::max(0, spacing());
+        QList<Group> out;
+        for (int i = 0; i < pieces.size(); ++i) {
+            Group g;
+            auto add = [&](QLayoutItem* it) {
+                const QSize h = it->sizeHint();
+                g.width += (g.items.isEmpty() ? 0 : gap) + h.width();
+                g.height = std::max(g.height, h.height());
+                g.items.append(it);
+            };
+            add(pieces[i]);
+            // A LABEL KEPT WITH WHAT IT NAMES: "Wires" with its box, "at" with its height.
+            if (qobject_cast<QLabel*>(pieces[i]->widget()) && i + 1 < pieces.size()) add(pieces[++i]);
+            out.append(g);
+        }
+        return out;
+    }
+    int fold(const QRect& rect, bool apply) const {
+        const QMargins m = contentsMargins();
+        const int left = rect.x() + m.left(), right = rect.x() + rect.width() - m.right();
+        const int gap = std::max(0, spacing()), groupGap = gap + 6, lineGap = 3;
+        int x = left, y = rect.y() + m.top(), line = 0;
+        for (const Group& g : groups()) {
+            if (x > left && x + g.width > right) {
+                x = left;
+                y += line + lineGap;
+                line = 0;
+            }
+            if (apply) {
+                int at = x;
+                for (QLayoutItem* it : g.items) {
+                    const QSize h = it->sizeHint();
+                    it->setGeometry(QRect(QPoint(at, y + (g.height - h.height()) / 2), h));
+                    at += h.width() + gap;
+                }
+            }
+            x += g.width + groupGap;
+            line = std::max(line, g.height);
+        }
+        return y + line - rect.y() + m.bottom();
+    }
+};
+
 class FlowLayout : public QLayout {
 public:
     FlowLayout(QWidget* parent, int hGap, int vGap) : QLayout(parent), hGap_(hGap), vGap_(vGap) { setContentsMargins(0, 0, 0, 0); }
@@ -121,11 +222,11 @@ public:
         place(rect, true);
     }
     QSize sizeHint() const override { return minimumSize(); }
-    // As wide as its widest group; as tall as one line.
+    // As wide as its widest group - a row that folds as wide as the widest thing it cannot fold; as tall as one line.
     QSize minimumSize() const override {
         QSize s;
         for (QLayoutItem* it : items_)
-            if (!it->isEmpty()) s = s.expandedTo(it->sizeHint());
+            if (!it->isEmpty()) s = s.expandedTo(it->hasHeightForWidth() ? it->minimumSize() : it->sizeHint());
         return s;
     }
 
@@ -134,7 +235,9 @@ private:
         int x = rect.x(), y = rect.y(), line = 0;
         for (QLayoutItem* it : items_) {
             if (it->isEmpty()) continue;
-            const QSize h = it->sizeHint();
+            QSize h = it->sizeHint();
+            // LONGER THAN THE LINE, AND IT CAN FOLD: the whole line for it, as deep as it folds to.
+            if (h.width() > rect.width() && it->hasHeightForWidth()) h = QSize(rect.width(), it->heightForWidth(rect.width()));
             if (x > rect.x() && x + h.width() > rect.right() + 1) {
                 x = rect.x();
                 y += line + vGap_;
@@ -175,7 +278,8 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     lay->setContentsMargins(4, 4, 4, 4);
     lay->setSpacing(4);
     topRow_ = new QWidget(this);
-    auto* bar = new QHBoxLayout(topRow_);
+    auto* bar = new WrapRowLayout(topRow_);
+    foldingRows_.push_back(bar);
     bar->setContentsMargins(0, 0, 0, 0);
     bar->setSpacing(3);
     source_ = new QComboBox(this);
@@ -290,7 +394,8 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
 
     // THE ENVIRONMENT'S ROW: the model the harness is routed in, how it shows, and a section through it.
     envRow_ = new QWidget(this);
-    auto* env = new QHBoxLayout(envRow_);
+    auto* env = new WrapRowLayout(envRow_);
+    foldingRows_.push_back(env);
     env->setContentsMargins(0, 0, 0, 0);
     env->setSpacing(3);
     env->addWidget(new QLabel(QStringLiteral("Environment:"), envRow_));
@@ -353,12 +458,14 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     // THE ROUTE'S ROW: what a click does, and the bundles' diameter, bend radius and lead out of a connector.
     // TWO GROUPS, each kept whole in the strip: placing and laying; changing and measuring.
     routeRow_ = new QWidget(this);
-    auto* rr = new QHBoxLayout(routeRow_);
+    auto* rr = new WrapRowLayout(routeRow_);
+    foldingRows_.push_back(rr);
     rr->setContentsMargins(0, 0, 0, 0);
     rr->setSpacing(3);
     editRow_ = new QWidget(this);
     editRow_->setObjectName(QStringLiteral("view3dEditRow"));
-    auto* rr2 = new QHBoxLayout(editRow_);
+    auto* rr2 = new WrapRowLayout(editRow_);
+    foldingRows_.push_back(rr2);
     rr2->setContentsMargins(0, 0, 0, 0);
     rr2->setSpacing(3);
     rr->addWidget(new QLabel(QStringLiteral("Route:"), routeRow_));
@@ -418,7 +525,8 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     });
     // THE BUNDLES' SIZES, on a row of their own - the tools before it want the room for their names.
     bundleRow_ = new QWidget(this);
-    auto* br = new QHBoxLayout(bundleRow_);
+    auto* br = new WrapRowLayout(bundleRow_);
+    foldingRows_.push_back(br);
     br->setContentsMargins(0, 0, 0, 0);
     br->setSpacing(3);
     br->addWidget(new QLabel(QStringLiteral("Bundle:"), bundleRow_));
@@ -596,7 +704,8 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     // gap, at the height it really runs.
     // WHERE A ROUTE LANDS, and the view's angles beside it.
     planeRow_ = new QWidget(this);
-    auto* pv = new QHBoxLayout(planeRow_);
+    auto* pv = new WrapRowLayout(planeRow_);
+    foldingRows_.push_back(pv);
     pv->setContentsMargins(0, 0, 0, 0);
     pv->setSpacing(1);
     auto* pr = new QHBoxLayout;
@@ -1648,6 +1757,8 @@ void View3DPane::setOptionsHost(QWidget* host) {
         split_->addWidget(side_);
     }
     optionsHost_ = host;
+    // IN THE PANEL, DOWN IT: each row folded to the panel's width. With the 3D view, a line each, as ever.
+    for (QBoxLayout* row : foldingRows_) static_cast<WrapRowLayout*>(row)->setFolding(host != nullptr);
     applyLayout();
 }
 

@@ -8313,7 +8313,8 @@ void MainWindow::placeView3DOptions(bool outside) {
             auto* scroll = new QScrollArea(view3dOptionsDock_);
             scroll->setWidgetResizable(true);
             scroll->setFrameShape(QFrame::NoFrame);
-            scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+            // DOWN, NEVER ACROSS: the rows fold to the panel's width, one under another.
+            scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
             auto* host = new QWidget(scroll);
             host->setObjectName(QStringLiteral("view3dOptionsHost"));
             auto* column = new QVBoxLayout(host);
@@ -8335,9 +8336,8 @@ void MainWindow::placeView3DOptions(bool outside) {
         auto* scroll = qobject_cast<QScrollArea*>(view3dOptionsDock_->widget());
         view3dPane_->setOptionsHost(scroll ? scroll->widget() : nullptr);
         view3dOptionsDock_->show();
-        // AS WIDE AS ITS WIDEST ROW, within reason - scrolled across beyond that.
-        const int widest = scroll && scroll->widget() ? scroll->widget()->sizeHint().width() + 24 : 420;
-        resizeDocks({view3dOptionsDock_}, {std::clamp(widest, 360, std::max(360, width() / 3))}, Qt::Horizontal);
+        // A PANEL'S WIDTH: the options fold down it to fit.
+        resizeDocks({view3dOptionsDock_}, {std::clamp(width() / 4, 340, 440)}, Qt::Horizontal);
     } else {
         if (!view3dPane_->optionsOutside()) return;
         view3dPane_->setOptionsHost(nullptr);

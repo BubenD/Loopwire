@@ -43,6 +43,7 @@ class QToolButton;
 class QWidget;
 
 class QSplitter;
+class QBoxLayout;
 
 namespace Edraw_Desktop {
 
@@ -360,6 +361,7 @@ private:
     QWidget* side_ = nullptr;
     QSplitter* split_ = nullptr;   // the picture, and the side panels either side of it
     QWidget* optionsHost_ = nullptr;
+    std::vector<QBoxLayout*> foldingRows_;   // the option rows, folded down the panel while the options are in it
     // The harness the route is for.
     std::function<RouteHarness()> harness_;
     std::function<void(const QString&, const BrickDesign&)> applyHarness_;

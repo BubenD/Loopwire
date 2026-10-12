@@ -49,6 +49,8 @@
 #include <QPlainTextEdit>
 #include <QTableWidget>
 #include <QToolButton>
+#include <QScrollBar>
+#include <QScrollArea>
 #include "render/EntityRenderer.h"
 #include "app/View3DPane.h"
 #include "model/DrawingTemplate.h"
@@ -1979,6 +1981,24 @@ void testViewSplitAndTiles() {
         if (other != options && other->isVisible() && !other->isFloating() && window.dockWidgetArea(other) == Qt::RightDockWidgetArea) ++rightOthers;
     const bool optionsRight = options && options->isVisible() && window.dockWidgetArea(options) == Qt::RightDockWidgetArea &&
                               options->findChild<QWidget*>(QStringLiteral("view3dRows")) != nullptr && rightOthers == 0;
+    // DOWN THE PANEL, NOT ACROSS: every option inside the panel's width, nothing to scroll across to.
+    {
+        for (int k = 0; k < 4; ++k) QApplication::processEvents();
+        QWidget* host = options ? options->findChild<QWidget*>(QStringLiteral("view3dOptionsHost")) : nullptr;
+        auto* rows = options ? options->findChild<QScrollArea*>(QStringLiteral("view3dRows")) : nullptr;
+        int outside = 0, shown = 0;
+        if (host && rows)
+            for (QWidget* w : rows->widget()->findChildren<QWidget*>()) {
+                if (!w->isVisible() || qobject_cast<QScrollBar*>(w) || w->parentWidget() == nullptr) continue;
+                const QRect at(w->mapTo(host, QPoint(0, 0)), w->size());
+                ++shown;
+                if (at.right() > host->width() + 1) ++outside;
+            }
+        std::printf("  3D options panel: %d px wide, %d control(s) shown, %d past its edge, scroll across %d\n", host ? host->width() : -1, shown, outside,
+                    rows && rows->horizontalScrollBar()->isVisible() ? 1 : 0);
+        check(host && rows && shown > 10 && outside == 0 && !rows->horizontalScrollBar()->isVisible(),
+              "view: side by side, the 3D options ordered down the right-hand panel - none past its edge, nothing to scroll across");
+    }
     splitBelow->click();
     QApplication::processEvents();
     const bool optionsBack = options && !options->isVisible() && options->findChild<QWidget*>(QStringLiteral("view3dRows")) == nullptr &&
