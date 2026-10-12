@@ -6,6 +6,7 @@
     <file>defaults/edrawlib.plb</file>
     <file>edraw.ico</file>
     <file>caret-down.svg</file>
+    <file>check.svg</file>
     <file>caret-up.svg</file>
   </qresource>
   <!--

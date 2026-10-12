@@ -67,7 +67,12 @@ public:
     bool showingPinMap() const;
     void showPinMap(bool on);
 
-    // THE STEPS, one on screen at a time: 0 Connectors (with their placement), 1 Shields, 2 Wires, 3 Layout. Which is
+    // CTRL+HOVER ON THE PIN MAP: the pin under the pointer, and every pin wired to it on the other connectors, lit. The pins
+    // lit now, each "connector id:pin". Not saved.
+    QStringList litPins() const { return litPins_; }
+    void lightPins(const QString& connId, int pin);   // an empty id: none lit
+
+    // THE STEPS, one on screen at a time: 0 Connectors (with their placement), 1 Wires, 2 Shields, 3 Layout. Which is
     // open; open another; how many a step's checks find wrong.
     int currentStep() const;
     void setStep(int step);
@@ -196,6 +201,7 @@ private:
     QPushButton* pinMapBtn_ = nullptr;
     QLabel* viewCaption_ = nullptr;
     void applyStepLayout(int step);
+    QStringList litPins_;
     void calmSpinBoxes();
     std::vector<HarnessIssue> liveIssues_;   // the checks, run again at every change. Not saved.
     QWidget* buildShieldsSection();

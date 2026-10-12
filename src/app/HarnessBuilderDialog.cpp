@@ -70,6 +70,11 @@ bool& sharedLibraryLoaded() {
     return loaded;
 }
 
+// THE PARTS A HARNESS ENDS IN: a connector, and as much a ferrule, a crimp terminal, a terminal block, a loose contact.
+std::vector<PartKind> builderEndKinds() {
+    return {PartKind::Connector, PartKind::Ferrule, PartKind::Crimp, PartKind::Terminal, PartKind::ContactPin};
+}
+
 const PartsLibrary& sharedLibrary() {
     // Every connected library, merged: a harness may be built from parts kept in more than one.
     if (!sharedLibraryLoaded()) {
@@ -719,12 +724,12 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
         {"Connectors", "Add the connectors at each end - from the library, or typed in - with their P/N, pins and contacts; "
                        "then drag them into the order they go down each side.",
          connectorsPage},
-        {"Shields", "For each connector end: an overall shield over the wires arriving there, and where its drain goes - "
-                    "the connector body or a pin - direct, or through a hook-up wire.",
-         buildShieldsSection()},
         {"Wires", "Add the connections between pins: hook-up wires, cables from the library, coax - with gauge, colour and "
                   "part number.",
          buildWiresSection()},
+        {"Shields", "For each connector end: an overall shield over the wires arriving there, and where the shield connects - "
+                    "the connector body or one of its pins, direct or through a hook-up wire - or not connected (an X).",
+         buildShieldsSection()},
         {"Layout", "How the drawing looks - spacing, text and symbols - then Generate draws it on the sheet.", buildLayoutSection()},
     };
     for (int i = 0; i < 4; ++i) {
@@ -890,23 +895,26 @@ QWidget* HarnessBuilderDialog::buildConnectorsSection() {
     auto* addRight = makeAddButton(this, QStringLiteral("Right"));
     auto* addFromLibrary = makeAddButton(this, QStringLiteral("From library"));
     addFromLibrary->setObjectName(QStringLiteral("harnessBuilderConnectorFromLibrary"));
-    addFromLibrary->setToolTip(QStringLiteral("A connector from the parts library - its P/N, pins and contacts with it"));
+    addFromLibrary->setToolTip(QStringLiteral("An end part from the parts library - a connector, a ferrule, a crimp terminal, a "
+                                              "terminal block - its P/N, pins and contacts with it"));
     connect(addFromLibrary, &QPushButton::clicked, this, [this] {
         // WHICH CONNECTOR, out of those the connected libraries hold.
         const PartsLibrary& lib = sharedLibrary();
         QStringList titles, ids;
-        for (const LibraryPart* p : lib.ofKind(PartKind::Connector)) {
-            const int pins = p->value(QStringLiteral("pins")).toInt();
-            titles << QStringLiteral("%1  -  %2 pin(s)").arg(p->title()).arg(pins > 0 ? pins : p->wayCount());
-            ids << p->id;
-        }
+        for (PartKind kind : builderEndKinds())
+            for (const LibraryPart* p : lib.ofKind(kind)) {
+                const int pins = p->value(QStringLiteral("pins")).toInt();
+                titles << QStringLiteral("%1  -  %2  -  %3 pin(s)").arg(partKindName(kind), p->title()).arg(pins > 0 ? pins : p->wayCount());
+                ids << p->id;
+            }
         if (ids.isEmpty()) {
-            summaryLabel_->setText(QStringLiteral("No connectors in the library yet - add one there, then it can be placed here."));
+            summaryLabel_->setText(QStringLiteral("No end parts in the library yet - connectors, ferrules, terminals - add one there, "
+                                                  "then it can be placed here."));
             return;
         }
         bool ok = false;
-        const QString picked = QInputDialog::getItem(this, QStringLiteral("A connector from the library"), QStringLiteral("Which connector?"),
-                                                     titles, 0, false, &ok);
+        const QString picked = QInputDialog::getItem(this, QStringLiteral("An end part from the library"),
+                                                     QStringLiteral("Which part - a connector, a ferrule, a terminal...?"), titles, 0, false, &ok);
         const int at = ok ? titles.indexOf(picked) : -1;
         if (at < 0) return;
         if (const LibraryPart* part = lib.byId(ids.at(at))) addConnectorFromLibrary(*part, lib.byId(part->contactId()));
@@ -1191,7 +1199,7 @@ void HarnessBuilderDialog::reloadConnectors() {
         delLay->addWidget(del);
         connTable_->setCellWidget(row, 12, delW);
         {
-            auto* lib = libraryPartBox(connTable_, {PartKind::Connector}, c.libPart);
+            auto* lib = libraryPartBox(connTable_, builderEndKinds(), c.libPart);
             centerCombo(lib);
             connect(lib, &QComboBox::currentIndexChanged, this, [this, id, lib](int i) {
                 if (syncing_ || i < 0) return;
@@ -1563,6 +1571,8 @@ void HarnessBuilderDialog::reloadShields() {
                                                                       left ? QStringLiteral("left") : QStringLiteral("right")),
                                    shieldCards_);
         card->setObjectName(QStringLiteral("harnessBuilderShieldCard_") + id);
+        // WHAT IS NOT ASKED NOW, GREYED - plainly, in a dark window as in a light one.
+        // (Greyed by the application's own sheet - see MainWindow::applyTheme - in a dark window as in a light one.)
         card->setStyleSheet(QStringLiteral("QGroupBox{font-weight:bold;border:1px solid #6b7a8a;border-radius:4px;margin-top:10px;padding-top:6px;}"
                                            "QGroupBox::title{subcontrol-origin:margin;left:8px;padding:0 4px;}"));
         auto* g = new QGridLayout(card);
@@ -1573,7 +1583,11 @@ void HarnessBuilderDialog::reloadShields() {
         // THE SHIELD ITSELF: a tick with its words beside it, big enough to see at a glance.
         auto* shield = new QCheckBox(QStringLiteral("Overall shield over the wires arriving here"), card);
         shield->setObjectName(QStringLiteral("harnessBuilderShield_") + id);
-        shield->setStyleSheet(QStringLiteral("QCheckBox{font-weight:normal;}QCheckBox::indicator{width:18px;height:18px;}"));
+        // A BOX THAT SHOWS EITHER WAY: a clear outline when not ticked, blue with a white tick when it is.
+        shield->setStyleSheet(QStringLiteral("QCheckBox{font-weight:normal;spacing:8px;}"
+                                             "QCheckBox::indicator{width:16px;height:16px;border:2px solid #8fa0b3;border-radius:3px;background:transparent;}"
+                                             "QCheckBox::indicator:hover{border-color:#3d8bfd;}"
+                                             "QCheckBox::indicator:checked{background:#3d8bfd;border-color:#3d8bfd;image:url(:/check.svg);}"));
         shield->setChecked(shielded);
         shield->setToolTip(QStringLiteral("Screen everything arriving at this connector, drawn just inboard of its pins"));
         connect(shield, &QCheckBox::toggled, this, [changed, id, left](bool on) {
@@ -1581,21 +1595,23 @@ void HarnessBuilderDialog::reloadShields() {
         });
         g->addWidget(shield, 0, 0, 1, 3);
         // WHERE ITS DRAIN GOES: nowhere, the body, or a pin of any connector.
+        // WHERE THE SHIELD CONNECTS: nowhere (an X on its leg), this connector's body, or one of this connector's pins.
         auto* to = new QComboBox(card);
         to->setObjectName(QStringLiteral("harnessBuilderDrainTo_") + id);
-        to->addItem(QStringLiteral("Not terminated"), QString());
+        to->addItem(QStringLiteral("Not connected"), QString());
         to->addItem(QStringLiteral("Connector body"), QStringLiteral("body"));
-        for (const HarnessConnector& other : def_.connectors)
-            for (int pin = 1; pin <= std::max(1, other.pinCount); ++pin)
-                to->addItem(QStringLiteral("%1  pin %2").arg(other.designator.isEmpty() ? other.id : other.designator,
-                                                            harnessPinLabel(other, pin)),
-                            QStringLiteral("pin:%1:%2").arg(other.id).arg(pin));
+        for (int pin = 1; pin <= std::max(1, c.pinCount); ++pin)
+            to->addItem(QStringLiteral("%1  pin %2").arg(c.designator.isEmpty() ? c.id : c.designator, harnessPinLabel(c, pin)),
+                        QStringLiteral("pin:%1:%2").arg(c.id).arg(pin));
+        // One kept from before on another connector's pin: still shown, as it is.
+        if (!c.drainTo.isEmpty() && to->findData(c.drainTo) < 0) to->addItem(c.drainTo, c.drainTo);
         to->setCurrentIndex(std::max(0, to->findData(c.drainTo)));
         connect(to, &QComboBox::currentIndexChanged, this, [changed, id, to](int i) {
             const QString pick = to->itemData(i).toString();
             changed(id, [pick](HarnessConnector& cc) { cc.drainTo = pick; });
         });
-        g->addWidget(new QLabel(QStringLiteral("Drain goes to"), card), 1, 0);
+        auto* toLabel = new QLabel(QStringLiteral("Shield connect"), card);
+        g->addWidget(toLabel, 1, 0);
         g->addWidget(to, 1, 1, 1, 2);
         // HOW: the screen's own drain, or a hook-up wire spliced on.
         auto* via = new QComboBox(card);
@@ -1607,7 +1623,8 @@ void HarnessBuilderDialog::reloadShields() {
             const QString pick = via->itemData(i).toString();
             changed(id, [pick](HarnessConnector& cc) { cc.drainVia = pick; });
         });
-        g->addWidget(new QLabel(QStringLiteral("Connected"), card), 2, 0);
+        auto* viaLabel = new QLabel(QStringLiteral("Connected"), card);
+        g->addWidget(viaLabel, 2, 0);
         g->addWidget(via, 2, 1, 1, 2);
         // THE HOOK-UP WIRE: one from the library, or the gauge and colour of one.
         auto* wire = libraryPartBox(card, {PartKind::Wire}, c.drainLibPart);
@@ -1643,16 +1660,22 @@ void HarnessBuilderDialog::reloadShields() {
             const QString pick = colour->itemData(i).toString();
             changed(id, [pick](HarnessConnector& cc) { cc.drainColor = pick; });
         });
-        g->addWidget(new QLabel(QStringLiteral("Hook-up wire"), card), 3, 0);
+        auto* wireLabel = new QLabel(QStringLiteral("Hook-up wire"), card);
+        g->addWidget(wireLabel, 3, 0);
         g->addWidget(wire, 3, 1, 1, 2);
-        g->addWidget(new QLabel(QStringLiteral("Gauge / colour"), card), 4, 0);
+        auto* gaugeLabel = new QLabel(QStringLiteral("Gauge / colour"), card);
+        g->addWidget(gaugeLabel, 4, 0);
         g->addWidget(gauge, 4, 1);
         g->addWidget(colour, 4, 2);
         // WHAT IS ASKED ONLY WHEN IT MEANS SOMETHING: the drain with a shield, the wire with a wire.
+        // Where it connects with a shield; how, once it connects somewhere; the hook-up wire only through one.
         const bool viaWire = c.drainVia == QLatin1String("wire");
-        for (QWidget* w : {static_cast<QWidget*>(to), static_cast<QWidget*>(via)}) w->setEnabled(shielded);
-        for (QWidget* w : {static_cast<QWidget*>(wire), static_cast<QWidget*>(gauge), static_cast<QWidget*>(colour)})
-            w->setEnabled(shielded && viaWire && !c.drainTo.isEmpty());
+        const bool connects = shielded && !c.drainTo.isEmpty();
+        for (QWidget* w : {static_cast<QWidget*>(to), static_cast<QWidget*>(toLabel)}) w->setEnabled(shielded);
+        for (QWidget* w : {static_cast<QWidget*>(via), static_cast<QWidget*>(viaLabel)}) w->setEnabled(connects);
+        for (QWidget* w : {static_cast<QWidget*>(wire), static_cast<QWidget*>(wireLabel), static_cast<QWidget*>(gauge),
+                           static_cast<QWidget*>(colour), static_cast<QWidget*>(gaugeLabel)})
+            w->setEnabled(connects && viaWire);
         gauge->setEnabled(gauge->isEnabled() && c.drainLibPart.isEmpty());
         cardsLay->addWidget(card);
     }
@@ -1688,10 +1711,10 @@ QIcon stepMark(int issues) {
 int HarnessBuilderDialog::stepOfIssue(const HarnessIssue& issue) {
     const QString kind = issue.key.section(QLatin1Char(':'), 0, 0);
     if (kind == QLatin1String("duppin") || kind == QLatin1String("dupdes") || kind == QLatin1String("duporder")) return 0;
-    if (kind == QLatin1String("shieldnowire") || kind == QLatin1String("bondnoshield")) return 1;
+    if (kind == QLatin1String("shieldnowire") || kind == QLatin1String("bondnoshield")) return 2;
     // A wire's ends, a pin carrying two, a coax's halves, a twist of one, a group split by another wire (put right from
     // the pin map's optimisers, beside the wires): the Wires step.
-    return 2;
+    return 1;
 }
 
 int HarnessBuilderDialog::currentStep() const { return pages_ ? pages_->currentIndex() : 0; }
@@ -1710,7 +1733,7 @@ void HarnessBuilderDialog::showPinMap(bool on) {
 void HarnessBuilderDialog::applyStepLayout(int step) {
     if (!mainSplit_) return;
     // THE WIRES WANT THE WIDTH: on their step the table runs the full width, the drawing (or the pin map) under it.
-    const bool wires = step == 2;
+    const bool wires = step == 1;
     const Qt::Orientation want = wires ? Qt::Vertical : Qt::Horizontal;
     if (mainSplit_->orientation() == want) return;
     mainSplit_->setOrientation(want);
@@ -1859,6 +1882,11 @@ void HarnessBuilderDialog::reloadPinMap() {
         v->addWidget(cap);
 
         auto* list = new QListWidget(col);
+        list->setObjectName(QStringLiteral("harnessBuilderPins_") + c.id);
+        // CTRL+HOVER: the pin and every pin wired to it, lit (see eventFilter).
+        list->setMouseTracking(true);
+        list->viewport()->setMouseTracking(true);
+        list->viewport()->installEventFilter(this);
         // Dragging a pin chip changes the PIN ORDER — which pin sits at which row — without
         // touching the wiring, so the pinout can be arranged to suit the routing.
         list->setDragDropMode(QAbstractItemView::InternalMove);
@@ -2280,7 +2308,56 @@ QWidget* HarnessBuilderDialog::buildWiresSection() {
 // landed in. The table's own handler cannot be relied on here: every cell of a row holds a widget,
 // which the table treats as a persistent editor, and a press on one is spent giving that editor
 // the focus rather than selecting anything.
+void HarnessBuilderDialog::lightPins(const QString& connId, int pin) {
+    // EVERY PIN WIRED TO IT, near or far: along each wire from a pin to the next, until none is new.
+    QStringList lit;
+    if (!connId.isEmpty() && pin > 0) {
+        lit << QStringLiteral("%1:%2").arg(connId).arg(pin);
+        for (int k = 0; k < lit.size(); ++k) {
+            const QString here = lit[k];
+            for (const HarnessWire& w : def_.wires) {
+                const QString from = QStringLiteral("%1:%2").arg(w.fromConn).arg(w.fromPin);
+                const QString to = QStringLiteral("%1:%2").arg(w.toConn).arg(w.toPin);
+                if (harnessIsShieldEndpoint(w.fromConn) || harnessIsShieldEndpoint(w.toConn)) continue;
+                if (from == here && !lit.contains(to) && harnessConnById(def_, w.toConn)) lit << to;
+                if (to == here && !lit.contains(from) && harnessConnById(def_, w.fromConn)) lit << from;
+            }
+        }
+    }
+    if (lit == litPins_) return;
+    litPins_ = lit;
+    for (QListWidget* list : findChildren<QListWidget*>()) {
+        const QString conn = list->property("connId").toString();
+        if (conn.isEmpty()) continue;
+        for (int r = 0; r < list->count(); ++r) {
+            QListWidgetItem* item = list->item(r);
+            const bool on = lit.contains(QStringLiteral("%1:%2").arg(conn).arg(item->data(Qt::UserRole).toInt()));
+            item->setBackground(on ? QBrush(QColor("#ffd166")) : QBrush());
+            QFont f = item->font();
+            f.setBold(on);
+            item->setFont(f);
+        }
+    }
+}
+
 bool HarnessBuilderDialog::eventFilter(QObject* watched, QEvent* ev) {
+    // CTRL+HOVER ON A PIN OF THE PIN MAP: it, and every pin wired to it, lit - until Ctrl is let go or the pointer leaves.
+    if (ev->type() == QEvent::MouseMove || ev->type() == QEvent::Leave) {
+        if (auto* list = qobject_cast<QListWidget*>(watched ? watched->parent() : nullptr);
+            list && !list->property("connId").toString().isEmpty()) {
+            QString conn;
+            int pin = 0;
+            if (ev->type() == QEvent::MouseMove) {
+                auto* me = static_cast<QMouseEvent*>(ev);
+                if ((me->modifiers() & Qt::ControlModifier) && me->buttons() == Qt::NoButton)
+                    if (QListWidgetItem* item = list->itemAt(me->position().toPoint())) {
+                        conn = list->property("connId").toString();
+                        pin = item->data(Qt::UserRole).toInt();
+                    }
+            }
+            lightPins(conn, pin);
+        }
+    }
     if (wireTable_ && watched == wireTable_->viewport() && !pendingUnify_.isEmpty() &&
         ev->type() == QEvent::MouseButtonPress) {
         auto* me = static_cast<QMouseEvent*>(ev);

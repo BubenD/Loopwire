@@ -7633,7 +7633,8 @@ void MainWindow::applyTheme(bool dark) {
              {"SEL", "#294e74"},   {"SELTX", "#ffffff"},  {"INPUT", "#45484f"},
              {"INBORD", "#585c64"},{"BTN", "#484c53"},    {"HOVER", "#525760"},
              {"SCROLL", "#2d2f34"},{"HANDLE", "#5a5f68"}, {"TABBAR", "#2f3237"},
-             {"STBG", "#2d2f34"},  {"STTX", "#aab0b8"}};
+             {"STBG", "#2d2f34"},  {"STTX", "#aab0b8"},
+             {"OFFBG", "#35383e"}, {"OFFTX", "#7c838d"}};
     } else {
         t = {{"WIN", Chrome::back().name()}, {"TEXT", Chrome::backInk().name()},
              {"PANEL", Chrome::back().name()},
@@ -7642,7 +7643,8 @@ void MainWindow::applyTheme(bool dark) {
              {"SEL", "#cfe3ff"},   {"SELTX", "#000000"},  {"INPUT", "#ffffff"},
              {"INBORD", "#aeaeb6"},{"BTN", "#e2e2e6"},    {"HOVER", "#d4d4da"},
              {"SCROLL", "#dedee2"},{"HANDLE", "#b4b4ba"}, {"TABBAR", "#dcdce0"},
-             {"STBG", "#dcdce0"},  {"STTX", "#33373f"}};
+             {"STBG", "#dcdce0"},  {"STTX", "#33373f"},
+             {"OFFBG", "#ececee"}, {"OFFTX", "#9ba1a9"}};
     }
     QString app = QStringLiteral(
         "QMainWindow,QWidget{background-color:{WIN};color:{TEXT};font-size:12px;}"
@@ -7674,6 +7676,11 @@ void MainWindow::applyTheme(bool dark) {
         "border-right:1px solid {LINE};border-bottom:1px solid {LINE};}"
         "QComboBox,QLineEdit,QSpinBox,QDoubleSpinBox{background-color:{INPUT};color:{TEXT};"
         "border:1px solid {INBORD};border-radius:3px;padding:2px 4px;}"
+        // WHAT CANNOT BE USED NOW LOOKS IT: greyed, and its words muted. Without this an input switched off looked exactly
+        // like one switched on, so nothing said why typing in it did nothing.
+        "QComboBox:disabled,QLineEdit:disabled,QSpinBox:disabled,QDoubleSpinBox:disabled{background-color:{OFFBG};"
+        "color:{OFFTX};border:1px solid {OFFBG};}"
+        "QLabel:disabled,QCheckBox:disabled,QRadioButton:disabled{color:{OFFTX};}"
         "QAbstractSpinBox::up-button{subcontrol-origin:border;subcontrol-position:top right;"
         "width:18px;border-left:1px solid {INBORD};}"
         "QAbstractSpinBox::down-button{subcontrol-origin:border;subcontrol-position:bottom right;"

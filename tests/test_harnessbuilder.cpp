@@ -10,6 +10,8 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QPushButton>
+#include <QListWidgetItem>
+#include <QMouseEvent>
 #include "harness/PartsLibrary.h"
 #include <QLabel>
 #include <QSplitter>
@@ -184,9 +186,9 @@ void testPhaseOne() {
         for (int i = 0; i < steps->count(); ++i) titles << steps->item(i)->data(Qt::UserRole).toString();
     std::printf("  builder steps: %s; open at %d\n", qPrintable(titles.join(QStringLiteral(" > "))), dialog.currentStep());
     check(steps && pages && pages->count() == 4 &&
-              titles == QStringList({QStringLiteral("Connectors"), QStringLiteral("Shields"), QStringLiteral("Wires"), QStringLiteral("Layout")}) &&
+              titles == QStringList({QStringLiteral("Connectors"), QStringLiteral("Wires"), QStringLiteral("Shields"), QStringLiteral("Layout")}) &&
               dialog.currentStep() == 0,
-          "builder steps: four steps in order - Connectors (with placement), Shields, Wires, Layout - opened at the first");
+          "builder steps: four steps in order - Connectors (with placement), Wires, Shields, Layout - opened at the first");
     // ---- BACK AND NEXT, AND A STEP CLICKED ----
     auto* next = dialog.findChild<QPushButton*>(QStringLiteral("harnessBuilderNext"));
     auto* back = dialog.findChild<QPushButton*>(QStringLiteral("harnessBuilderBack"));
@@ -216,7 +218,7 @@ void testPhaseOne() {
     // ---- THE SHIELDS STEP: an overall shield ticked there is the harness's ----
     const QString left = dialog.definition().connectors.front().id;
     auto* shield = dialog.findChild<QCheckBox*>(QStringLiteral("harnessBuilderShield_") + left);
-    dialog.setStep(1);
+    dialog.setStep(2);   // Shields
     QApplication::processEvents();
     if (shield) shield->setChecked(true);
     for (int k = 0; k < 3; ++k) QApplication::processEvents();
@@ -302,7 +304,7 @@ void testStepsRefined() {
     // ---- THE DRAWING OR THE PIN MAP, AT ANY STEP; THE PIN MAP IN PLACEMENT ORDER ----
     auto* showMap = dialog.findChild<QPushButton*>(QStringLiteral("harnessBuilderShowPinMap"));
     auto* showDrawing = dialog.findChild<QPushButton*>(QStringLiteral("harnessBuilderShowDrawing"));
-    dialog.setStep(2);
+    dialog.setStep(1);   // Wires
     if (showMap) showMap->click();
     QApplication::processEvents();
     const bool mapShown = dialog.showingPinMap();
@@ -338,7 +340,7 @@ void testStepsRefined() {
     QApplication::processEvents();
     check(under && split->orientation() == Qt::Horizontal, "wires step: the table the full width, the drawing under it; beside it on the other steps");
     // ---- DRAINS: to the body or a pin, direct or through a hook-up wire ----
-    dialog.setStep(2);
+    dialog.setStep(1);   // Wires
     QPushButton* addWire = nullptr;
     for (QPushButton* b : dialog.findChildren<QPushButton*>())
         if (b->text() == QLatin1String("Add wire")) addWire = b;
@@ -348,7 +350,7 @@ void testStepsRefined() {
     }
     const HarnessConnector first = dialog.definition().connectors.front();
     const QString id = first.id;
-    dialog.setStep(1);
+    dialog.setStep(2);   // Shields
     QApplication::processEvents();
     auto settle = [] { for (int k = 0; k < 4; ++k) QApplication::processEvents(); };
     auto* shield = dialog.findChild<QCheckBox*>(QStringLiteral("harnessBuilderShield_") + id);
@@ -376,9 +378,7 @@ void testStepsRefined() {
         if (e.meta.contains(QStringLiteral("shieldBond"))) bondColour = e.meta.value(QStringLiteral("wireColor")).toString();
     check(bondColour == QLatin1String("GN"), "shields: through a hook-up wire - drawn in that wire's colour");
     // To a pin: the drain a wire of its own; direct, no splice where it leaves the screen; through a hook-up wire, a splice.
-    const HarnessConnector* other = nullptr;
-    for (const HarnessConnector& c : dialog.definition().connectors)
-        if (c.id != id) other = &c;
+    const HarnessConnector* other = harnessConnById(dialog.definition(), id);   // a shield connects to its own connector's pins
     const QString pinChoice = other ? QStringLiteral("pin:%1:%2").arg(other->id).arg(other->pinCount) : QString();
     pick("harnessBuilderDrainTo_", pinChoice);
     std::printf("  shields: drain asked to %s, set to %s\n", qPrintable(pinChoice), qPrintable(harnessConnById(dialog.definition(), id)->drainTo));
@@ -400,7 +400,7 @@ void testStepsRefined() {
     for (const HarnessWire& w : dialog.definition().wires) gone = gone && !harnessIsDrainRow(w);
     check(gone, "shields: not terminated - the drain's wire taken away");
     // ---- CELLS THAT READ: text set against every coloured connector cell ----
-    dialog.setStep(2);
+    dialog.setStep(1);   // Wires
     settle();
     int tinted = 0, readable = 0;
     for (QComboBox* box : dialog.findChildren<QComboBox*>())
@@ -411,6 +411,98 @@ void testStepsRefined() {
     std::printf("  wire cells: %d tinted, %d with a text colour of their own\n", tinted, readable);
     check(tinted > 0 && readable == tinted, "wires: each coloured connector cell has text set to read on it");
 }
+
+// SHIELDS AFTER WIRES; SHIELD CONNECT - this connector only; NOT CONNECTED an X; THE HOOK-UP WIRE GREYED WHEN DIRECT;
+// CTRL+HOVER ON THE PIN MAP.
+void testShieldConnectAndPinLight() {
+    Document doc(QStringLiteral("builder shield connect"));
+    Editor editor;
+    editor.setDocument(&doc);
+    HarnessBuilderDialog dialog(&editor);
+    dialog.resize(1400, 860);
+    dialog.show();
+    QApplication::processEvents();
+    auto settle = [] { for (int k = 0; k < 4; ++k) QApplication::processEvents(); };
+    dialog.setStep(1);   // Wires
+    QPushButton* addWire = nullptr;
+    for (QPushButton* b : dialog.findChildren<QPushButton*>())
+        if (b->text() == QLatin1String("Add wire")) addWire = b;
+    for (int i = 0; i < 2 && addWire; ++i) {
+        addWire->click();
+        settle();
+    }
+    const HarnessConnector first = dialog.definition().connectors.front();
+    const QString id = first.id;
+    dialog.setStep(2);   // Shields
+    settle();
+    auto visible = [&](const QString& name) -> QWidget* {
+        for (QWidget* w : dialog.findChildren<QWidget*>(name)) if (w->isVisible()) return w;
+        return nullptr;
+    };
+    if (auto* shield = qobject_cast<QCheckBox*>(visible(QStringLiteral("harnessBuilderShield_") + id))) shield->setChecked(true);
+    settle();
+    // ---- SHIELD CONNECT: this connector's body and pins, and nothing of another's ----
+    auto* to = qobject_cast<QComboBox*>(visible(QStringLiteral("harnessBuilderDrainTo_") + id));
+    bool ownOnly = to != nullptr;
+    QStringList offered;
+    for (int i = 0; to && i < to->count(); ++i) {
+        const QString data = to->itemData(i).toString();
+        offered << to->itemText(i);
+        ownOnly = ownOnly && (data.isEmpty() || data == QLatin1String("body") || data.startsWith(QStringLiteral("pin:%1:").arg(id)));
+    }
+    bool named = false;
+    QWidget* card = visible(QStringLiteral("harnessBuilderShieldCard_") + id);
+    for (QLabel* l : card ? card->findChildren<QLabel*>() : QList<QLabel*>()) named = named || l->text() == QLatin1String("Shield connect");
+    std::printf("  shield connect: %d choice(s) - %s ... \n", to ? to->count() : -1, qPrintable(offered.mid(0, 3).join(QStringLiteral(", "))));
+    check(to && named && ownOnly && to->count() == 2 + first.pinCount && to->itemText(0) == QLatin1String("Not connected"),
+          "shields: Shield connect - not connected, the connector body, or one of this connector's own pins");
+    // ---- NOT CONNECTED: an X on the shield's leg ----
+    bool crossed = false;
+    for (const Entity& e : buildHarness(dialog.definition()).entities)
+        if (e.type == EntityType::Screen && !e.meta.value(QStringLiteral("overallShield")).toString().isEmpty())
+            crossed = crossed || !e.meta.contains(QStringLiteral("notConnected")) || e.meta.value(QStringLiteral("notConnected")).toBool();
+    check(crossed, "shields: not connected - the shield's leg ends in an X");
+    // ---- DIRECT: the hook-up wire, its gauge and colour greyed; THROUGH A WIRE: open ----
+    if (to) to->setCurrentIndex(to->findData(QStringLiteral("body")));
+    settle();
+    auto* wire = visible(QStringLiteral("harnessBuilderDrainWire_") + id);
+    auto* colour = visible(QStringLiteral("harnessBuilderDrainColour_") + id);
+    const bool greyedDirect = wire && colour && !wire->isEnabled() && !colour->isEnabled();
+    if (auto* via = qobject_cast<QComboBox*>(visible(QStringLiteral("harnessBuilderDrainVia_") + id))) via->setCurrentIndex(1);
+    settle();
+    wire = visible(QStringLiteral("harnessBuilderDrainWire_") + id);
+    colour = visible(QStringLiteral("harnessBuilderDrainColour_") + id);
+    check(greyedDirect && wire && colour && wire->isEnabled() && colour->isEnabled(),
+          "shields: direct - the hook-up wire, gauge and colour greyed; through a hook-up wire - open to choose");
+    // ---- CTRL+HOVER ON THE PIN MAP: the pin and every pin wired to it lit ----
+    dialog.showPinMap(true);
+    settle();
+    const HarnessWire w = dialog.definition().wires.front();
+    auto* list = qobject_cast<QListWidget*>(visible(QStringLiteral("harnessBuilderPins_") + w.fromConn));
+    QListWidgetItem* item = nullptr;
+    for (int r = 0; list && r < list->count(); ++r)
+        if (list->item(r)->data(Qt::UserRole).toInt() == w.fromPin) item = list->item(r);
+    if (list && item) {
+        const QPointF at = list->visualItemRect(item).center();
+        QMouseEvent hover(QEvent::MouseMove, at, list->viewport()->mapToGlobal(at), Qt::NoButton, Qt::NoButton, Qt::ControlModifier);
+        QApplication::sendEvent(list->viewport(), &hover);
+    }
+    const QStringList lit = dialog.litPins();
+    const QString far = QStringLiteral("%1:%2").arg(w.toConn).arg(w.toPin);
+    auto* farList = qobject_cast<QListWidget*>(visible(QStringLiteral("harnessBuilderPins_") + w.toConn));
+    bool farShown = false;
+    for (int r = 0; farList && r < farList->count(); ++r)
+        if (farList->item(r)->data(Qt::UserRole).toInt() == w.toPin) farShown = farList->item(r)->background().color() == QColor("#ffd166");
+    if (list && item) {
+        const QPointF at = list->visualItemRect(item).center();
+        QMouseEvent plain(QEvent::MouseMove, at, list->viewport()->mapToGlobal(at), Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(list->viewport(), &plain);
+    }
+    std::printf("  pin map: Ctrl over %s:%d - lit %s\n", qPrintable(w.fromConn), w.fromPin, qPrintable(lit.join(QStringLiteral(", "))));
+    check(item && lit.contains(QStringLiteral("%1:%2").arg(w.fromConn).arg(w.fromPin)) && lit.contains(far) && farShown,
+          "pin map: Ctrl held over a pin - it, and the pin wired to it on the other connector, lit");
+    check(dialog.litPins().isEmpty(), "pin map: Ctrl let go - nothing lit");
+}
 } // namespace
 
 int run_harnessbuilder_tests() {
@@ -419,6 +511,7 @@ int run_harnessbuilder_tests() {
     testPhaseZero();
     testPhaseOne();
     testStepsRefined();
+    testShieldConnectAndPinLight();
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }
