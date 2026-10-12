@@ -26,6 +26,7 @@ class QVBoxLayout;
 namespace Edraw_Desktop {
 
 class Editor;
+struct LibraryPart;
 // Drawn previews used inside the dialog (defined in the .cpp).
 class ConnectorPreview;
 class HarnessWiringPreview;
@@ -59,7 +60,14 @@ public:
     bool canUndo() const { return !undoStack_.isEmpty(); }
     bool canRedo() const { return !redoStack_.isEmpty(); }
 
-    // THE STEPS, one on screen at a time: 0 Connectors, 1 Placement, 2 Pin map, 3 Shields, 4 Wires, 5 Layout. Which is
+    // A CONNECTOR FROM THE LIBRARY: its P/N, pin count and part - and its contact, where the library ties one to it (or
+    // `contact` given) - put on the side with fewer connectors. Its id.
+    QString addConnectorFromLibrary(const LibraryPart& part, const LibraryPart* contact = nullptr);
+    // THE PICTURE OR THE PIN MAP under the steps' checks: either can be looked at at any step.
+    bool showingPinMap() const;
+    void showPinMap(bool on);
+
+    // THE STEPS, one on screen at a time: 0 Connectors (with their placement), 1 Shields, 2 Wires, 3 Layout. Which is
     // open; open another; how many a step's checks find wrong.
     int currentStep() const;
     void setStep(int step);
@@ -181,7 +189,14 @@ private:
     QStackedWidget* pages_ = nullptr;
     QPushButton* backBtn_ = nullptr;
     QPushButton* nextBtn_ = nullptr;
-    QTableWidget* shieldTable_ = nullptr;
+    QWidget* shieldCards_ = nullptr;          // the Shields step: a card a connector
+    QStackedWidget* viewStack_ = nullptr;     // the drawing, or the pin map
+    QSplitter* mainSplit_ = nullptr;          // the step's page, and the drawing/pin map beside it - or under it
+    QPushButton* drawingBtn_ = nullptr;
+    QPushButton* pinMapBtn_ = nullptr;
+    QLabel* viewCaption_ = nullptr;
+    void applyStepLayout(int step);
+    void calmSpinBoxes();
     std::vector<HarnessIssue> liveIssues_;   // the checks, run again at every change. Not saved.
     QWidget* buildShieldsSection();
     QWidget* buildPreviewColumn();

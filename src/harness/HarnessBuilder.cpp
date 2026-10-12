@@ -1156,6 +1156,14 @@ QJsonObject harnessDefToJson(const HarnessDef& def) {
         o["shieldRight"] = c.shieldRight;
         o["bodyBondLeft"] = c.bodyBondLeft;
         o["bodyBondRight"] = c.bodyBondRight;
+        if (!c.contactsIncluded) o["contactsIncluded"] = false;
+        if (!c.contactPn.isEmpty()) o["contactPn"] = c.contactPn;
+        if (!c.contactLibPart.isEmpty()) o["contactLibPart"] = c.contactLibPart;
+        if (!c.drainTo.isEmpty()) o["drainTo"] = c.drainTo;
+        if (c.drainVia != QLatin1String("direct")) o["drainVia"] = c.drainVia;
+        if (!c.drainLibPart.isEmpty()) o["drainLibPart"] = c.drainLibPart;
+        if (c.drainGauge != QLatin1String("0.5")) o["drainGauge"] = c.drainGauge;
+        if (c.drainColor != QLatin1String("DRAIN")) o["drainColor"] = c.drainColor;
         QJsonArray po;
         for (int p : c.pinOrder) po.append(p);
         o["pinOrder"] = po;
@@ -1239,6 +1247,16 @@ HarnessDef harnessDefFromJson(const QJsonObject& root) {
         c.shieldRight = o.value("shieldRight").toBool(false);
         c.bodyBondLeft = o.value("bodyBondLeft").toBool(false);
         c.bodyBondRight = o.value("bodyBondRight").toBool(false);
+        c.contactsIncluded = o.value("contactsIncluded").toBool(true);
+        c.contactPn = o.value("contactPn").toString();
+        c.contactLibPart = o.value("contactLibPart").toString();
+        c.drainVia = o.value("drainVia").toString(QStringLiteral("direct"));
+        c.drainLibPart = o.value("drainLibPart").toString();
+        c.drainGauge = o.value("drainGauge").toString(QStringLiteral("0.5"));
+        c.drainColor = o.value("drainColor").toString(QStringLiteral("DRAIN"));
+        // A file from before a drain had a place of its own: bonded to the body is where it went, if it was.
+        c.drainTo = o.contains("drainTo") ? o.value("drainTo").toString()
+                                          : ((c.side == HarnessSide::Left ? c.bodyBondLeft : c.bodyBondRight) ? QStringLiteral("body") : QString());
         for (const auto& p : o.value("pinOrder").toArray()) c.pinOrder.push_back(p.toInt());
         if (!c.id.isEmpty()) loaded.connectors.push_back(c);
     }
@@ -1299,6 +1317,40 @@ HarnessDef harnessDefFromJson(const QJsonObject& root) {
     return loaded;
 }
 
+bool harnessIsDrainRow(const HarnessWire& w) { return w.id.startsWith(QLatin1String("drain-")); }
+
+void harnessSyncDrains(HarnessDef& def) {
+    for (HarnessConnector& c : def.connectors) {
+        const bool left = c.side == HarnessSide::Left;
+        const bool shielded = left ? c.shieldLeft : c.shieldRight;
+        const QString to = shielded ? c.drainTo : QString();
+        // TO THE BODY: the bond the drawing makes off the connector's own corner.
+        (left ? c.bodyBondLeft : c.bodyBondRight) = to == QLatin1String("body");
+        // TO A PIN: a wire from the screen to it, made here and kept here - its gauge, colour and part the drain's.
+        const QString rowId = QStringLiteral("drain-") + c.id;
+        auto row = std::find_if(def.wires.begin(), def.wires.end(), [&rowId](const HarnessWire& w) { return w.id == rowId; });
+        if (!to.startsWith(QLatin1String("pin:"))) {
+            if (row != def.wires.end()) def.wires.erase(row);
+            continue;
+        }
+        HarnessWire w;
+        if (row != def.wires.end()) w = *row;
+        w.id = rowId;
+        w.fromConn = harnessOverallShieldKey(c.id, c.side);
+        w.fromPin = 0;
+        w.toConn = to.section(QLatin1Char(':'), 1, 1);
+        w.toPin = to.section(QLatin1Char(':'), 2, 2).toInt();
+        const bool viaWire = c.drainVia == QLatin1String("wire");
+        w.gauge = viaWire ? c.drainGauge : QStringLiteral("0.5");
+        w.color = viaWire ? c.drainColor : QStringLiteral("DRAIN");
+        w.libPart = viaWire ? c.drainLibPart : QString();
+        w.kind = QStringLiteral("wire");
+        if (w.label.isEmpty()) w.label = QStringLiteral("drain");
+        if (row != def.wires.end()) *row = w;
+        else def.wires.push_back(w);
+    }
+}
+
 HarnessBuild buildHarness(const HarnessDef& def) {
     HarnessBuild out;
     out.issues = validateHarness(def);
@@ -1314,6 +1366,11 @@ HarnessBuild buildHarness(const HarnessDef& def) {
         writeConnectorSpec(e.meta, p.spec);
         // Which library part this connector is, so the bill of materials can order it.
         if (p.conn && !p.conn->libPart.isEmpty()) e.meta.insert("libPart", p.conn->libPart);
+        // Its contacts, when they are a part of their own: ordered with it, one a pin.
+        if (p.conn && !p.conn->contactsIncluded) {
+            if (!p.conn->contactPn.isEmpty()) e.meta.insert("contactPn", p.conn->contactPn);
+            if (!p.conn->contactLibPart.isEmpty()) e.meta.insert("contactLibPart", p.conn->contactLibPart);
+        }
         out.entities.push_back(std::move(e));
     }
 
@@ -1605,12 +1662,17 @@ HarnessBuild buildHarness(const HarnessDef& def) {
         bond.points = {corner, {corner.x + inward * diag, drain.y}, drain};
         bond.meta.insert("shieldBond", key); // which screen's drain this is
         bond.meta.insert("drainWire", true);
-        bond.meta.insert("wireColor", QStringLiteral("DRAIN"));
-        bond.meta.insert("wireGauge", QStringLiteral("0.5"));
+        // DIRECT, the screen's own drain; VIA A HOOK-UP WIRE, that wire - its gauge, colour and part - spliced to the screen.
+        const bool viaWire = p.conn->drainVia == QLatin1String("wire");
+        const QString colour = viaWire ? p.conn->drainColor : QStringLiteral("DRAIN");
+        bond.meta.insert("wireColor", colour);
+        bond.meta.insert("wireGauge", viaWire ? p.conn->drainGauge : QStringLiteral("0.5"));
+        bond.meta.insert("drainVia", viaWire ? QStringLiteral("wire") : QStringLiteral("direct"));
+        if (viaWire && !p.conn->drainLibPart.isEmpty()) bond.meta.insert("libPart", p.conn->drainLibPart);
         if (L.wireColorMode == QLatin1String("bylayer"))
             bond.meta.insert("wireColorMode", QStringLiteral("bylayer"));
         else
-            bond.color = wireColorHex(QStringLiteral("DRAIN"));
+            bond.color = wireColorHex(colour);
         out.entities.push_back(std::move(bond));
     };
 
@@ -2145,6 +2207,9 @@ HarnessBuild buildHarness(const HarnessDef& def) {
         e.meta.insert("wireGauge", w.gauge);
         e.meta.insert("shieldLeg", shieldKey); // which screen's leg it lands on
         e.meta.insert("drainWire", true);
+        // A CONNECTOR'S OWN DRAIN TAKEN DIRECT to the pin: the screen's drain itself, no hook-up wire spliced on.
+        if (harnessIsDrainRow(w) && wantC && wantC->drainVia != QLatin1String("wire")) e.meta.insert("drainDirect", true);
+        if (!w.libPart.isEmpty()) e.meta.insert("libPart", w.libPart);
         if (!w.label.isEmpty()) e.meta.insert("wireLabel", w.label);
         e.meta.insert("showWireLabel", w.showLabel);
         e.meta.insert("showColorName", w.showColor);
@@ -2354,11 +2419,15 @@ HarnessBuild buildHarness(const HarnessDef& def) {
         // brought to the same leg is joining a conductor that has an end of its own, so the joint
         // is the bond - putting a splice dot on top of it says there are two joints where there is
         // one. Those legs are left out of the meeting-point sweep below.
+        // So is a drain taken DIRECT to a pin: it is the screen's own drain, joined to nothing. A hook-up wire, though, is
+        // spliced on - to the body or to a pin - and that joint is drawn.
         std::vector<Vec2> bondedLegs;
-        for (const Entity& e : out.entities)
-            if (e.type == EntityType::Wire && e.meta.contains(QStringLiteral("shieldBond")) &&
-                e.points.size() >= 2)
+        for (const Entity& e : out.entities) {
+            if (e.type != EntityType::Wire || e.points.size() < 2) continue;
+            if (e.meta.contains(QStringLiteral("shieldBond")) && e.meta.value(QStringLiteral("drainVia")).toString() != QLatin1String("wire"))
                 bondedLegs.push_back(e.points.back());
+            if (e.meta.value(QStringLiteral("drainDirect")).toBool()) bondedLegs.push_back(e.points.back());
+        }
         for (const Entity& e : out.entities) {
             if (e.type == EntityType::Wire && e.points.size() >= 2) {
                 wires.push_back(&e);

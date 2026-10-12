@@ -244,6 +244,12 @@ QString bundleTint(const QString& bundle) {
 // and which screen it runs between - telling P2 from P3 mattered more than telling left from
 // right, which the two-colour scheme could only do. Derived from the key, so it holds still as
 // connectors are added and the list is re-ordered.
+// TEXT THAT READS ON A TINT: light on a dark one, dark on a light one - whatever the window's own colours are.
+QString tintStyle(const QString& tint) {
+    const QColor c(tint);
+    return QStringLiteral("background:%1;color:%2;").arg(tint, c.lightness() < 128 ? QStringLiteral("#f0f4f8") : QStringLiteral("#151a20"));
+}
+
 QString endpointTint(const QString& key) {
     if (key.isEmpty()) return QStringLiteral("#2b3a44");
     if (harnessIsOpenEndpoint(key)) return QStringLiteral("#3d3a2a"); // open: no colour of a part
@@ -687,6 +693,9 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
     // opened by clicking it, or with Back and Next.
     auto* body = new QHBoxLayout();
     body->setSpacing(10);
+    mainSplit_ = new QSplitter(Qt::Horizontal, this);
+    mainSplit_->setObjectName(QStringLiteral("harnessBuilderSplit"));
+    mainSplit_->setChildrenCollapsible(false);
     stepList_ = new QListWidget(this);
     stepList_->setObjectName(QStringLiteral("harnessBuilderSteps"));
     stepList_->setFixedWidth(190);
@@ -697,28 +706,33 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
     pages_ = new QStackedWidget(this);
     pages_->setObjectName(QStringLiteral("harnessBuilderPages"));
     struct Step { const char* title; const char* help; QWidget* page; };
+    // THE CONNECTORS AND WHERE THEY GO, together: the table, and under it the two sides to drag them up and down.
+    auto* connectorsPage = new QWidget(this);
+    {
+        auto* cv = new QVBoxLayout(connectorsPage);
+        cv->setContentsMargins(0, 0, 0, 0);
+        cv->setSpacing(10);
+        cv->addWidget(buildConnectorsSection(), 3);
+        cv->addWidget(buildBlockMapSection(), 2);
+    }
     const Step steps[] = {
-        {"Connectors", "Add the connectors at each end of the harness: designator, side, library part or P/N, and how many pins.",
-         buildConnectorsSection()},
-        {"Placement", "Arrange the connectors: drag each one up or down its side; the drawing follows that order.",
-         buildBlockMapSection()},
-        {"Pin map", "Check what lands on each pin and drag pins to re-order them. The optimisers re-order the pins for you - "
-                    "fewest crossings, or shields and twisted pairs on neighbouring pins.",
-         buildPinMapSection()},
-        {"Shields", "Say which connector ends have an overall shield over the wires arriving there, and whether its drain is "
-                    "bonded to the connector body. A cable's own screens come with the cable.",
+        {"Connectors", "Add the connectors at each end - from the library, or typed in - with their P/N, pins and contacts; "
+                       "then drag them into the order they go down each side.",
+         connectorsPage},
+        {"Shields", "For each connector end: an overall shield over the wires arriving there, and where its drain goes - "
+                    "the connector body or a pin - direct, or through a hook-up wire.",
          buildShieldsSection()},
         {"Wires", "Add the connections between pins: hook-up wires, cables from the library, coax - with gauge, colour and "
                   "part number.",
          buildWiresSection()},
         {"Layout", "How the drawing looks - spacing, text and symbols - then Generate draws it on the sheet.", buildLayoutSection()},
     };
-    for (int i = 0; i < 6; ++i) {
+    for (int i = 0; i < 4; ++i) {
         auto* page = new QWidget(pages_);
         auto* pv = new QVBoxLayout(page);
         pv->setContentsMargins(0, 0, 0, 0);
         pv->setSpacing(6);
-        auto* title = new QLabel(QStringLiteral("Step %1 of 6 · %2").arg(i + 1).arg(QString::fromLatin1(steps[i].title)), page);
+        auto* title = new QLabel(QStringLiteral("Step %1 of 4 · %2").arg(i + 1).arg(QString::fromLatin1(steps[i].title)), page);
         // In the window's own text colour, light or dark as the chrome is.
         title->setStyleSheet(QStringLiteral("font-size:16px;font-weight:700;"));
         auto* help = new QLabel(QString::fromLatin1(steps[i].help), page);
@@ -735,12 +749,14 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
         auto* item = new QListWidgetItem(QStringLiteral("%1  %2").arg(i + 1).arg(QString::fromLatin1(steps[i].title)), stepList_);
         item->setData(Qt::UserRole, QString::fromLatin1(steps[i].title));
     }
-    body->addWidget(pages_, 3);
-    body->addWidget(buildPreviewColumn(), 2);
+    mainSplit_->addWidget(pages_);
+    mainSplit_->addWidget(buildPreviewColumn());
+    body->addWidget(mainSplit_, 1);
     connect(stepList_, &QListWidget::currentRowChanged, this, [this](int row) {
         if (row >= 0 && row < pages_->count()) pages_->setCurrentIndex(row);
         if (backBtn_) backBtn_->setEnabled(row > 0);
         if (nextBtn_) nextBtn_->setEnabled(row < pages_->count() - 1);
+        applyStepLayout(row);
         updateSteps();
     });
     root->addLayout(body, 1);
@@ -864,6 +880,7 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
     reloadAll();
     // Opened at the first step.
     setStep(0);
+    calmSpinBoxes();
 }
 
 // ---- Step 1: connectors ----------------------------------------------------
@@ -871,6 +888,29 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
 QWidget* HarnessBuilderDialog::buildConnectorsSection() {
     auto* addLeft = makeAddButton(this, QStringLiteral("Left"));
     auto* addRight = makeAddButton(this, QStringLiteral("Right"));
+    auto* addFromLibrary = makeAddButton(this, QStringLiteral("From library"));
+    addFromLibrary->setObjectName(QStringLiteral("harnessBuilderConnectorFromLibrary"));
+    addFromLibrary->setToolTip(QStringLiteral("A connector from the parts library - its P/N, pins and contacts with it"));
+    connect(addFromLibrary, &QPushButton::clicked, this, [this] {
+        // WHICH CONNECTOR, out of those the connected libraries hold.
+        const PartsLibrary& lib = sharedLibrary();
+        QStringList titles, ids;
+        for (const LibraryPart* p : lib.ofKind(PartKind::Connector)) {
+            const int pins = p->value(QStringLiteral("pins")).toInt();
+            titles << QStringLiteral("%1  -  %2 pin(s)").arg(p->title()).arg(pins > 0 ? pins : p->wayCount());
+            ids << p->id;
+        }
+        if (ids.isEmpty()) {
+            summaryLabel_->setText(QStringLiteral("No connectors in the library yet - add one there, then it can be placed here."));
+            return;
+        }
+        bool ok = false;
+        const QString picked = QInputDialog::getItem(this, QStringLiteral("A connector from the library"), QStringLiteral("Which connector?"),
+                                                     titles, 0, false, &ok);
+        const int at = ok ? titles.indexOf(picked) : -1;
+        if (at < 0) return;
+        if (const LibraryPart* part = lib.byId(ids.at(at))) addConnectorFromLibrary(*part, lib.byId(part->contactId()));
+    });
     connect(addLeft, &QPushButton::clicked, this, [this] {
         addConnector(HarnessSide::Left);
         reloadAll();
@@ -881,7 +921,7 @@ QWidget* HarnessBuilderDialog::buildConnectorsSection() {
     });
 
     connTable_ = new QTableWidget(this);
-    connTable_->setColumnCount(14);
+    connTable_->setColumnCount(16);
     connTable_->setHorizontalHeaderLabels({QStringLiteral("Side"), QStringLiteral("Des"),
                                           QStringLiteral("P/N"), QStringLiteral("Ann"),
                                           QStringLiteral("Pins"), QStringLiteral("Pitch"),
@@ -890,7 +930,8 @@ QWidget* HarnessBuilderDialog::buildConnectorsSection() {
                                           QStringLiteral("L shield→body"),
                                           QStringLiteral("R overall shield"),
                                           QStringLiteral("R shield→body"), QString(),
-                                          QStringLiteral("Library part")});
+                                          QStringLiteral("Library part"), QStringLiteral("Contacts"),
+                                          QStringLiteral("Contact P/N")});
     connTable_->verticalHeader()->setVisible(false);
     connTable_->horizontalHeader()->setStretchLastSection(true);
     connTable_->setSelectionMode(QAbstractItemView::NoSelection);
@@ -905,7 +946,10 @@ QWidget* HarnessBuilderDialog::buildConnectorsSection() {
     connTable_->setMinimumHeight(140);
     // ITS OVERALL SHIELDS on a step of their own (Shields): the four columns kept, out of sight, for what fills them.
     for (int col = 8; col <= 11; ++col) connTable_->setColumnHidden(col, true);
-    return section(QStringLiteral("Connectors"), connTable_, this, {addLeft, addRight});
+    // ITS CONTACTS BESIDE ITS P/N, where they are read with it - shown there, kept at the end for what fills them.
+    connTable_->horizontalHeader()->moveSection(14, 3);
+    connTable_->horizontalHeader()->moveSection(15, 4);
+    return section(QStringLiteral("Connectors"), connTable_, this, {addLeft, addRight, addFromLibrary});
 }
 
 void HarnessBuilderDialog::addConnector(HarnessSide side) {
@@ -1048,12 +1092,14 @@ void HarnessBuilderDialog::reloadConnectors() {
         connect(pitch, &QDoubleSpinBox::valueChanged, this, [this, id](double v) {
             if (syncing_) return;
             if (auto* cc = connById(id)) cc->pitch = v;
+            refreshPreview();
         });
         connTable_->setCellWidget(row, 5, pitch);
         auto* plen = makeNum(c.pinLength, 1.0, 500.0);
         connect(plen, &QDoubleSpinBox::valueChanged, this, [this, id](double v) {
             if (syncing_) return;
             if (auto* cc = connById(id)) cc->pinLength = v;
+            refreshPreview();
         });
         connTable_->setCellWidget(row, 6, plen);
 
@@ -1170,21 +1216,103 @@ void HarnessBuilderDialog::reloadConnectors() {
                     }
                     // The library knows the part number: take it, so the drawing and the bill of
                     // materials say the same thing.
-                    if (const LibraryPart* p = sharedLibrary().byId(cc->libPart))
+                    if (const LibraryPart* p = sharedLibrary().byId(cc->libPart)) {
                         if (!p->mfrPn.isEmpty()) cc->partNumber = p->mfrPn;
+                        // And the contact it is built with, where the library ties one to it.
+                        if (const LibraryPart* contact = sharedLibrary().byId(p->contactId()); contact && cc->contactsIncluded) {
+                            cc->contactsIncluded = false;
+                            cc->contactLibPart = contact->id;
+                            cc->contactPn = contact->mfrPn;
+                        }
+                    }
                 }
                 reloadConnectors();
                 refreshPreview();
             });
             connTable_->setCellWidget(row, 13, lib);
         }
+        // ITS CONTACTS: in the connector, or a part of their own - one tied to it in the library first, then any contact
+        // there is, or a P/N typed in the next column.
+        {
+            auto* contacts = new QComboBox(connTable_);
+            contacts->setObjectName(QStringLiteral("harnessBuilderContacts_") + id);
+            contacts->addItem(QStringLiteral("In the connector"), QString());
+            QStringList tied;
+            if (const LibraryPart* lp = sharedLibrary().byId(c.libPart)) tied = lp->contactIds();
+            for (const QString& cid : tied)
+                if (const LibraryPart* part = sharedLibrary().byId(cid)) contacts->addItem(QStringLiteral("%1 (its own)").arg(part->title()), cid);
+            for (const LibraryPart* part : sharedLibrary().ofKind(PartKind::ContactPin))
+                if (!tied.contains(part->id)) contacts->addItem(part->title(), part->id);
+            contacts->addItem(QStringLiteral("Separate - P/N typed"), QStringLiteral("~typed"));
+            // A library contact the libraries open now do not hold: still this connector's contact, said by its P/N.
+            if (!c.contactsIncluded && !c.contactLibPart.isEmpty() && contacts->findData(c.contactLibPart) < 0)
+                contacts->insertItem(1, QStringLiteral("%1 (not in the libraries open)").arg(c.contactPn.isEmpty() ? c.contactLibPart : c.contactPn),
+                                     c.contactLibPart);
+            const int at = c.contactsIncluded ? 0 : !c.contactLibPart.isEmpty() ? contacts->findData(c.contactLibPart) : contacts->count() - 1;
+            contacts->setCurrentIndex(std::max(0, at));
+            contacts->setToolTip(QStringLiteral("Are the contacts bought with the connector, or a part of their own?"));
+            centerCombo(contacts);
+            connect(contacts, &QComboBox::currentIndexChanged, this, [this, id, contacts](int i) {
+                if (syncing_ || i < 0) return;
+                HarnessConnector* cc = connById(id);
+                if (!cc) return;
+                const QString pick = contacts->itemData(i).toString();
+                cc->contactsIncluded = pick.isEmpty();
+                cc->contactLibPart = pick.startsWith(QLatin1Char('~')) || pick.isEmpty() ? QString() : pick;
+                if (const LibraryPart* part = sharedLibrary().byId(cc->contactLibPart)) cc->contactPn = part->mfrPn;
+                if (cc->contactsIncluded) cc->contactPn.clear();
+                QTimer::singleShot(0, this, [this] { reloadConnectors(); refreshPreview(); });
+            });
+            connTable_->setCellWidget(row, 14, contacts);
+            auto* contactPn = new QLineEdit(c.contactPn, connTable_);
+            contactPn->setObjectName(QStringLiteral("harnessBuilderContactPn_") + id);
+            contactPn->setPlaceholderText(c.contactsIncluded ? QStringLiteral("in the connector") : QStringLiteral("contact P/N"));
+            contactPn->setEnabled(!c.contactsIncluded);
+            centerEdit(contactPn);
+            connect(contactPn, &QLineEdit::editingFinished, this, [this, id, contactPn] {
+                if (syncing_) return;
+                HarnessConnector* cc = connById(id);
+                if (!cc || cc->contactPn == contactPn->text()) return;
+                cc->contactPn = contactPn->text();
+                // A P/N of its own: no longer the library contact, unless it is that contact's.
+                if (const LibraryPart* part = sharedLibrary().byId(cc->contactLibPart); part && part->mfrPn != cc->contactPn)
+                    cc->contactLibPart.clear();
+                refreshPreview();
+            });
+            connTable_->setCellWidget(row, 15, contactPn);
+        }
     }
     // Every column as wide as what is in it, with Side given a little extra so the drop-down
     // arrow does not crowd the word.
     fitColumns(connTable_, {{0, 1.15}});
+    // The contacts' choice no wider than a P/N needs - its list is read when it is opened.
+    connTable_->setColumnWidth(14, std::min(connTable_->columnWidth(14), 190));
+    connTable_->setColumnWidth(15, std::max(connTable_->columnWidth(15), 120));
 }
 
 // ---- Step 2: the placement block map (drag to reorder) ---------------------
+
+QString HarnessBuilderDialog::addConnectorFromLibrary(const LibraryPart& part, const LibraryPart* contact) {
+    // ON THE SIDE WITH FEWER: a harness is usually built a connector at each end.
+    int left = 0, right = 0;
+    for (const HarnessConnector& c : def_.connectors) (c.side == HarnessSide::Left ? left : right)++;
+    addConnector(left <= right ? HarnessSide::Left : HarnessSide::Right);
+    HarnessConnector& c = def_.connectors.back();
+    c.libPart = part.id;
+    c.partNumber = part.mfrPn;
+    const int pins = part.value(QStringLiteral("pins")).toInt();
+    c.pinCount = std::max(1, pins > 0 ? pins : part.wayCount());
+    if (contact) {
+        c.contactsIncluded = false;
+        c.contactLibPart = contact->id;
+        c.contactPn = contact->mfrPn;
+    }
+    const QString id = c.id;
+    reloadAll();
+    summaryLabel_->setText(QStringLiteral("%1 added - %2 pin(s)%3").arg(part.title()).arg(c.pinCount)
+                               .arg(contact ? QStringLiteral(", contacts %1").arg(contact->mfrPn) : QString()));
+    return id;
+}
 
 QWidget* HarnessBuilderDialog::buildBlockMapSection() {
     auto* host = new QWidget(this);
@@ -1309,7 +1437,15 @@ QWidget* HarnessBuilderDialog::buildPinMapSection() {
         "Re-order the pins so every twisted group lands on neighbouring pins, so each pair "
         "can actually be braided"));
     connect(twistBtn, &QPushButton::clicked, this, [this] { runOptimizeBy(/*shield=*/false); });
-    return section(QStringLiteral("Pin map"), host, this, {minBtn, shieldBtn, twistBtn});
+    auto* box = new QWidget(this);
+    auto* bv = new QVBoxLayout(box);
+    bv->setContentsMargins(0, 0, 0, 0);
+    auto* tools = new QHBoxLayout();
+    for (QPushButton* b : {minBtn, shieldBtn, twistBtn}) tools->addWidget(b);
+    tools->addStretch(1);
+    bv->addLayout(tools);
+    bv->addWidget(host, 1);
+    return box;
 }
 
 // THE COLUMN ON THE RIGHT, the same at every step: the harness as Generate will draw it, and under it what the checks find
@@ -1321,9 +1457,9 @@ QWidget* HarnessBuilderDialog::buildPreviewColumn() {
     v->setContentsMargins(0, 0, 0, 0);
     v->setSpacing(6);
     auto* head = new QHBoxLayout();
-    auto* cap = new QLabel(QStringLiteral("AS IT WILL BE DRAWN"), column);
-    cap->setStyleSheet(QStringLiteral("color:#4aa8d8;font-weight:700;letter-spacing:1px;"));
-    head->addWidget(cap);
+    viewCaption_ = new QLabel(QStringLiteral("AS IT WILL BE DRAWN"), column);
+    viewCaption_->setStyleSheet(QStringLiteral("color:#4aa8d8;font-weight:700;letter-spacing:1px;"));
+    head->addWidget(viewCaption_);
     head->addStretch(1);
     // The screens can be switched off: on a busy harness the outlines cover the wiring they
     // are drawn over, and the pinout is easier to read without them.
@@ -1344,29 +1480,50 @@ QWidget* HarnessBuilderDialog::buildPreviewColumn() {
         big->setShowShields(shieldPreviewBox_ && shieldPreviewBox_->isChecked());
         showPreviewPopup(this, QStringLiteral("Harness wiring"), big);
     });
-    v->addWidget(wiringPreview_, 3);
+    // THE DRAWING OR THE PIN MAP, one at a time in the same place - and the switch between them right under it.
+    viewStack_ = new QStackedWidget(column);
+    viewStack_->setObjectName(QStringLiteral("harnessBuilderView"));
+    viewStack_->addWidget(wiringPreview_);
+    viewStack_->addWidget(buildPinMapSection());
+    v->addWidget(viewStack_, 3);
+    auto* switchRow = new QHBoxLayout();
+    switchRow->setSpacing(4);
+    drawingBtn_ = new QPushButton(QStringLiteral("Drawing"), column);
+    drawingBtn_->setObjectName(QStringLiteral("harnessBuilderShowDrawing"));
+    drawingBtn_->setToolTip(QStringLiteral("The harness as Generate will draw it"));
+    pinMapBtn_ = new QPushButton(QStringLiteral("Pin map"), column);
+    pinMapBtn_->setObjectName(QStringLiteral("harnessBuilderShowPinMap"));
+    pinMapBtn_->setToolTip(QStringLiteral("What lands on each pin of each connector - drag pins to re-order them"));
+    for (QPushButton* b : {drawingBtn_, pinMapBtn_}) {
+        b->setCheckable(true);
+        b->setAutoExclusive(true);
+        switchRow->addWidget(b);
+    }
+    drawingBtn_->setChecked(true);
+    connect(drawingBtn_, &QPushButton::clicked, this, [this] { showPinMap(false); });
+    connect(pinMapBtn_, &QPushButton::clicked, this, [this] { showPinMap(true); });
+    switchRow->addStretch(1);
+    v->addLayout(switchRow);
     v->addWidget(buildIssuesSection(), 1);
     return column;
 }
 
 // ---- The Shields step ----------------------------------------------------------------------------------------------
 
-// A LINE A CONNECTOR: whether everything arriving at it is under an overall shield, and whether that shield's drain is
-// bonded back to the connector's body. The shield is on the connector's own end of the harness - its side.
+// A CARD A CONNECTOR: whether everything arriving at it is under an overall shield, where that shield's drain goes - the
+// connector body, or a pin of any connector - and how: direct (the screen's own drain), or through a hook-up wire, a
+// library wire or one of the gauge and colour given.
 QWidget* HarnessBuilderDialog::buildShieldsSection() {
-    shieldTable_ = new QTableWidget(this);
-    shieldTable_->setObjectName(QStringLiteral("harnessBuilderShields"));
-    shieldTable_->setColumnCount(4);
-    shieldTable_->setHorizontalHeaderLabels({QStringLiteral("Connector"), QStringLiteral("End"), QStringLiteral("Overall shield"),
-                                             QStringLiteral("Drain bonded to body")});
-    shieldTable_->verticalHeader()->setVisible(false);
-    shieldTable_->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
-    shieldTable_->setSelectionMode(QAbstractItemView::NoSelection);
-    shieldTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     auto* host = new QWidget(this);
     auto* v = new QVBoxLayout(host);
     v->setContentsMargins(0, 0, 0, 0);
-    v->addWidget(shieldTable_, 1);
+    v->setSpacing(8);
+    shieldCards_ = new QWidget(host);
+    shieldCards_->setObjectName(QStringLiteral("harnessBuilderShields"));
+    auto* cardsLay = new QVBoxLayout(shieldCards_);
+    cardsLay->setContentsMargins(0, 0, 0, 0);
+    cardsLay->setSpacing(8);
+    v->addWidget(shieldCards_);
     auto* note = new QLabel(QStringLiteral("Shields inside a cable - a screened pair, a coax - come with the cable from the library. "
                                            "A group of loose wires under a screen of its own is still marked on the Wires step "
                                            "(Internal shield)."),
@@ -1374,43 +1531,130 @@ QWidget* HarnessBuilderDialog::buildShieldsSection() {
     note->setWordWrap(true);
     note->setStyleSheet(QStringLiteral("color:#8a96a3;"));
     v->addWidget(note);
+    v->addStretch(1);
     return section(QStringLiteral("Overall shields"), host, this);
 }
 
 void HarnessBuilderDialog::reloadShields() {
-    if (!shieldTable_) return;
-    shieldTable_->setRowCount(static_cast<int>(def_.connectors.size()));
-    for (int row = 0; row < static_cast<int>(def_.connectors.size()); ++row) {
-        const HarnessConnector& c = def_.connectors[static_cast<size_t>(row)];
+    if (!shieldCards_) return;
+    auto* cardsLay = qobject_cast<QVBoxLayout*>(shieldCards_->layout());
+    while (QLayoutItem* item = cardsLay->takeAt(0)) {
+        if (QWidget* w = item->widget()) {
+            w->hide();
+            w->deleteLater();
+        }
+        delete item;
+    }
+    // A change here makes the drains what the card says, then the whole builder hears of it - the wire table offers the
+    // screen, the drawing draws the drain. Deferred: the reload rebuilds the very control being changed.
+    auto changed = [this](const QString& id, const std::function<void(HarnessConnector&)>& set) {
+        if (syncing_) return;
+        HarnessConnector* cc = connById(id);
+        if (!cc) return;
+        set(*cc);
+        harnessSyncDrains(def_);
+        QTimer::singleShot(0, this, [this] { reloadAll(); });
+    };
+    for (const HarnessConnector& c : def_.connectors) {
         const bool left = c.side == HarnessSide::Left;
-        shieldTable_->setItem(row, 0, new QTableWidgetItem(c.designator.isEmpty() ? c.id : c.designator));
-        shieldTable_->setItem(row, 1, new QTableWidgetItem(left ? QStringLiteral("Left end") : QStringLiteral("Right end")));
+        const bool shielded = left ? c.shieldLeft : c.shieldRight;
         const QString id = c.id;
-        auto tick = [&](int col, bool value, const QString& name, const QString& tip, bool shield) {
-            auto* cell = new QWidget(shieldTable_);
-            auto* lay = new QHBoxLayout(cell);
-            lay->setContentsMargins(0, 0, 0, 0);
-            lay->setAlignment(Qt::AlignCenter);
-            auto* box = new QCheckBox(cell);
-            box->setObjectName(name);
-            box->setChecked(value);
-            box->setToolTip(tip);
-            connect(box, &QCheckBox::toggled, this, [this, id, left, shield](bool on) {
-                if (syncing_) return;
-                HarnessConnector* cc = connById(id);
-                if (!cc) return;
-                bool& flag = shield ? (left ? cc->shieldLeft : cc->shieldRight) : (left ? cc->bodyBondLeft : cc->bodyBondRight);
-                flag = on;
-                // A shield ticked is a screen the wires can drain to - the wire table hears of it at once.
-                QTimer::singleShot(0, this, [this] { reloadAll(); });
+        auto* card = new QGroupBox(QStringLiteral("%1  -  %2 end").arg(c.designator.isEmpty() ? c.id : c.designator,
+                                                                      left ? QStringLiteral("left") : QStringLiteral("right")),
+                                   shieldCards_);
+        card->setObjectName(QStringLiteral("harnessBuilderShieldCard_") + id);
+        card->setStyleSheet(QStringLiteral("QGroupBox{font-weight:bold;border:1px solid #6b7a8a;border-radius:4px;margin-top:10px;padding-top:6px;}"
+                                           "QGroupBox::title{subcontrol-origin:margin;left:8px;padding:0 4px;}"));
+        auto* g = new QGridLayout(card);
+        g->setContentsMargins(10, 8, 10, 8);
+        g->setHorizontalSpacing(10);
+        g->setVerticalSpacing(6);
+        g->setColumnStretch(1, 1);
+        // THE SHIELD ITSELF: a tick with its words beside it, big enough to see at a glance.
+        auto* shield = new QCheckBox(QStringLiteral("Overall shield over the wires arriving here"), card);
+        shield->setObjectName(QStringLiteral("harnessBuilderShield_") + id);
+        shield->setStyleSheet(QStringLiteral("QCheckBox{font-weight:normal;}QCheckBox::indicator{width:18px;height:18px;}"));
+        shield->setChecked(shielded);
+        shield->setToolTip(QStringLiteral("Screen everything arriving at this connector, drawn just inboard of its pins"));
+        connect(shield, &QCheckBox::toggled, this, [changed, id, left](bool on) {
+            changed(id, [left, on](HarnessConnector& cc) { (left ? cc.shieldLeft : cc.shieldRight) = on; });
+        });
+        g->addWidget(shield, 0, 0, 1, 3);
+        // WHERE ITS DRAIN GOES: nowhere, the body, or a pin of any connector.
+        auto* to = new QComboBox(card);
+        to->setObjectName(QStringLiteral("harnessBuilderDrainTo_") + id);
+        to->addItem(QStringLiteral("Not terminated"), QString());
+        to->addItem(QStringLiteral("Connector body"), QStringLiteral("body"));
+        for (const HarnessConnector& other : def_.connectors)
+            for (int pin = 1; pin <= std::max(1, other.pinCount); ++pin)
+                to->addItem(QStringLiteral("%1  pin %2").arg(other.designator.isEmpty() ? other.id : other.designator,
+                                                            harnessPinLabel(other, pin)),
+                            QStringLiteral("pin:%1:%2").arg(other.id).arg(pin));
+        to->setCurrentIndex(std::max(0, to->findData(c.drainTo)));
+        connect(to, &QComboBox::currentIndexChanged, this, [changed, id, to](int i) {
+            const QString pick = to->itemData(i).toString();
+            changed(id, [pick](HarnessConnector& cc) { cc.drainTo = pick; });
+        });
+        g->addWidget(new QLabel(QStringLiteral("Drain goes to"), card), 1, 0);
+        g->addWidget(to, 1, 1, 1, 2);
+        // HOW: the screen's own drain, or a hook-up wire spliced on.
+        auto* via = new QComboBox(card);
+        via->setObjectName(QStringLiteral("harnessBuilderDrainVia_") + id);
+        via->addItem(QStringLiteral("Direct - the shield's own drain"), QStringLiteral("direct"));
+        via->addItem(QStringLiteral("Through a hook-up wire"), QStringLiteral("wire"));
+        via->setCurrentIndex(c.drainVia == QLatin1String("wire") ? 1 : 0);
+        connect(via, &QComboBox::currentIndexChanged, this, [changed, id, via](int i) {
+            const QString pick = via->itemData(i).toString();
+            changed(id, [pick](HarnessConnector& cc) { cc.drainVia = pick; });
+        });
+        g->addWidget(new QLabel(QStringLiteral("Connected"), card), 2, 0);
+        g->addWidget(via, 2, 1, 1, 2);
+        // THE HOOK-UP WIRE: one from the library, or the gauge and colour of one.
+        auto* wire = libraryPartBox(card, {PartKind::Wire}, c.drainLibPart);
+        wire->setObjectName(QStringLiteral("harnessBuilderDrainWire_") + id);
+        wire->setItemText(0, QStringLiteral("Not from the library"));
+        connect(wire, &QComboBox::currentIndexChanged, this, [changed, id, wire](int i) {
+            const QString pick = wire->itemData(i).toString();
+            changed(id, [pick](HarnessConnector& cc) {
+                cc.drainLibPart = pick;
+                // The library's wire says its own cross-section.
+                if (const LibraryPart* part = sharedLibrary().byId(pick)) {
+                    const QString gauge = part->value(QStringLiteral("gauge"));
+                    if (!gauge.isEmpty()) cc.drainGauge = gauge;
+                }
             });
-            lay->addWidget(box);
-            shieldTable_->setCellWidget(row, col, cell);
-        };
-        tick(2, left ? c.shieldLeft : c.shieldRight, QStringLiteral("harnessBuilderShield_") + id,
-             QStringLiteral("Overall shield: screen everything arriving at this connector, drawn just inboard of its pins"), true);
-        tick(3, left ? c.bodyBondLeft : c.bodyBondRight, QStringLiteral("harnessBuilderBond_") + id,
-             QStringLiteral("Bond this connector's overall shield drain back to its own body"), false);
+        });
+        auto* gauge = new QComboBox(card);
+        gauge->setObjectName(QStringLiteral("harnessBuilderDrainGauge_") + id);
+        for (const QString& mm2 : wireGaugeChoices()) gauge->addItem(gaugeLabelFor(mm2), mm2);
+        gauge->setCurrentIndex(std::max(0, gauge->findData(c.drainGauge)));
+        connect(gauge, &QComboBox::currentIndexChanged, this, [changed, id, gauge](int i) {
+            const QString pick = gauge->itemData(i).toString();
+            changed(id, [pick](HarnessConnector& cc) { cc.drainGauge = pick; });
+        });
+        auto* colour = new QComboBox(card);
+        colour->setObjectName(QStringLiteral("harnessBuilderDrainColour_") + id);
+        for (const QString& code : QStringList(QStringLiteral("DRAIN")) + wireColorCodes()) {
+            if (code == QLatin1String("DRAIN") && colour->findData(code) >= 0) continue;
+            colour->addItem(colorSwatch(wireColorHex(code)), QStringLiteral("%1 - %2").arg(code, wireColorName(code)), code);
+        }
+        colour->setCurrentIndex(std::max(0, colour->findData(c.drainColor)));
+        connect(colour, &QComboBox::currentIndexChanged, this, [changed, id, colour](int i) {
+            const QString pick = colour->itemData(i).toString();
+            changed(id, [pick](HarnessConnector& cc) { cc.drainColor = pick; });
+        });
+        g->addWidget(new QLabel(QStringLiteral("Hook-up wire"), card), 3, 0);
+        g->addWidget(wire, 3, 1, 1, 2);
+        g->addWidget(new QLabel(QStringLiteral("Gauge / colour"), card), 4, 0);
+        g->addWidget(gauge, 4, 1);
+        g->addWidget(colour, 4, 2);
+        // WHAT IS ASKED ONLY WHEN IT MEANS SOMETHING: the drain with a shield, the wire with a wire.
+        const bool viaWire = c.drainVia == QLatin1String("wire");
+        for (QWidget* w : {static_cast<QWidget*>(to), static_cast<QWidget*>(via)}) w->setEnabled(shielded);
+        for (QWidget* w : {static_cast<QWidget*>(wire), static_cast<QWidget*>(gauge), static_cast<QWidget*>(colour)})
+            w->setEnabled(shielded && viaWire && !c.drainTo.isEmpty());
+        gauge->setEnabled(gauge->isEnabled() && c.drainLibPart.isEmpty());
+        cardsLay->addWidget(card);
     }
 }
 
@@ -1443,13 +1687,42 @@ QIcon stepMark(int issues) {
 
 int HarnessBuilderDialog::stepOfIssue(const HarnessIssue& issue) {
     const QString kind = issue.key.section(QLatin1Char(':'), 0, 0);
-    if (kind == QLatin1String("duppin") || kind == QLatin1String("dupdes")) return 0;
-    if (kind == QLatin1String("duporder") || kind == QLatin1String("shieldsplit") || kind == QLatin1String("twistsplit")) return 2;
-    if (kind == QLatin1String("shieldnowire") || kind == QLatin1String("bondnoshield")) return 3;
-    return 4;   // a wire's ends, a pin carrying two, a coax's halves, a twist of one: the Wires step
+    if (kind == QLatin1String("duppin") || kind == QLatin1String("dupdes") || kind == QLatin1String("duporder")) return 0;
+    if (kind == QLatin1String("shieldnowire") || kind == QLatin1String("bondnoshield")) return 1;
+    // A wire's ends, a pin carrying two, a coax's halves, a twist of one, a group split by another wire (put right from
+    // the pin map's optimisers, beside the wires): the Wires step.
+    return 2;
 }
 
 int HarnessBuilderDialog::currentStep() const { return pages_ ? pages_->currentIndex() : 0; }
+
+bool HarnessBuilderDialog::showingPinMap() const { return viewStack_ && viewStack_->currentIndex() == 1; }
+
+void HarnessBuilderDialog::showPinMap(bool on) {
+    if (!viewStack_) return;
+    viewStack_->setCurrentIndex(on ? 1 : 0);
+    if (pinMapBtn_) pinMapBtn_->setChecked(on);
+    if (drawingBtn_) drawingBtn_->setChecked(!on);
+    if (viewCaption_) viewCaption_->setText(on ? QStringLiteral("PIN MAP") : QStringLiteral("AS IT WILL BE DRAWN"));
+    if (shieldPreviewBox_) shieldPreviewBox_->setVisible(!on);
+}
+
+void HarnessBuilderDialog::applyStepLayout(int step) {
+    if (!mainSplit_) return;
+    // THE WIRES WANT THE WIDTH: on their step the table runs the full width, the drawing (or the pin map) under it.
+    const bool wires = step == 2;
+    const Qt::Orientation want = wires ? Qt::Vertical : Qt::Horizontal;
+    if (mainSplit_->orientation() == want) return;
+    mainSplit_->setOrientation(want);
+    const int room = wires ? mainSplit_->height() : mainSplit_->width();
+    mainSplit_->setSizes({room * 3 / 5, room - room * 3 / 5});
+}
+
+void HarnessBuilderDialog::calmSpinBoxes() {
+    // A NUMBER IS TAKEN WHEN IT IS FINISHED - Enter, or leaving the field - not at each digit: typing 10 into Pins used to
+    // take the 1, rebuild the table and lose the field before the 0 could be typed.
+    for (QAbstractSpinBox* box : findChildren<QAbstractSpinBox*>()) box->setKeyboardTracking(false);
+}
 
 void HarnessBuilderDialog::setStep(int step) {
     if (!stepList_ || step < 0 || step >= stepList_->count()) return;
@@ -1558,12 +1831,23 @@ void HarnessBuilderDialog::refreshPreview() {
 }
 
 void HarnessBuilderDialog::reloadPinMap() {
-    // Rebuild the columns from scratch: one per connector, in table order.
+    // Rebuild the columns from scratch: one per connector. The old ones hidden at once, not left showing until deleted.
     while (QLayoutItem* item = pinMapLayout_->takeAt(0)) {
-        if (QWidget* w = item->widget()) w->deleteLater();
+        if (QWidget* w = item->widget()) {
+            w->hide();
+            w->deleteLater();
+        }
         delete item;
     }
-    for (const auto& c : def_.connectors) {
+    // IN THE ORDER THEY ARE PLACED: the left side top to bottom, then the right.
+    std::vector<const HarnessConnector*> placedOrder;
+    for (const auto& c : def_.connectors) placedOrder.push_back(&c);
+    std::stable_sort(placedOrder.begin(), placedOrder.end(), [](const HarnessConnector* a, const HarnessConnector* b) {
+        if (a->side != b->side) return a->side == HarnessSide::Left;
+        return a->order < b->order;
+    });
+    for (const HarnessConnector* cp : placedOrder) {
+        const HarnessConnector& c = *cp;
         auto* col = new QWidget(pinMapHost_);
         auto* v = new QVBoxLayout(col);
         v->setContentsMargins(0, 0, 0, 0);
@@ -1571,7 +1855,7 @@ void HarnessBuilderDialog::reloadPinMap() {
         auto* cap = new QLabel(c.designator.isEmpty() ? c.id : c.designator, col);
         cap->setAlignment(Qt::AlignHCenter);
         cap->setMinimumHeight(18); // its own row, so nothing can shave the top off the letters
-        cap->setStyleSheet(QStringLiteral("color:#cfd8e6;font-weight:600;"));
+        cap->setStyleSheet(QStringLiteral("font-weight:700;")); // the window's own text colour, light or dark
         v->addWidget(cap);
 
         auto* list = new QListWidget(col);
@@ -2667,7 +2951,7 @@ void HarnessBuilderDialog::mergeGroupCells() {
                     "The part all %1 of these rows are made of — one cable, one part number. "
                     "Choosing here names it for every one of them.").arg(count));
                 if (!tint.isEmpty())
-                    box->setStyleSheet(QStringLiteral("background:%1;").arg(tint));
+                    box->setStyleSheet(tintStyle(tint));
                 connect(box, &QComboBox::currentIndexChanged, this, [this, ids, box](int i) {
                     if (syncing_ || i < 0) return;
                     const QString part = box->itemData(i).toString();
@@ -2730,6 +3014,9 @@ void HarnessBuilderDialog::mergeGroupCells() {
                 sheet += QStringLiteral("border:none;");
                 if (!tint.isEmpty()) sheet += QStringLiteral("background:%1;").arg(tint);
             }
+            // Its text in a colour that reads on that ground.
+            if (const QString ground = own.isEmpty() ? tint : own; !ground.isEmpty())
+                sheet += QStringLiteral("color:%1;").arg(QColor(ground).lightness() < 128 ? QStringLiteral("#f0f4f8") : QStringLiteral("#151a20"));
             one->setStyleSheet(sheet);
             const QString before = value;
             QString HarnessWire::*field = gc.field;
@@ -2884,7 +3171,7 @@ void HarnessBuilderDialog::buildWireRow(int row, const HarnessWire& wRef,
             if (end == 0) box->setProperty("wireId", id);
             // Each connector and each screen has its own colour (see endpointTint), so a row
             // says which parts it runs between without reading the text.
-            box->setStyleSheet(QStringLiteral("background:%1;").arg(tint));
+            box->setStyleSheet(tintStyle(tint));
             connect(box, &QComboBox::currentIndexChanged, this,
                     [this, id, end, box, wireById](int i) {
                         if (syncing_ || i < 0) return;
@@ -2916,7 +3203,7 @@ void HarnessBuilderDialog::buildWireRow(int row, const HarnessWire& wRef,
                                                    "a pin")
                                     : QStringLiteral("An open end lands on nothing"));
             }
-            pin->setStyleSheet(QStringLiteral("background:%1;").arg(tint));
+            pin->setStyleSheet(tintStyle(tint));
             connect(pin, &QSpinBox::valueChanged, this, [this, id, end, wireById](int v) {
                 if (syncing_) return;
                 if (auto* ww = wireById(id)) {
@@ -3136,10 +3423,11 @@ void HarnessBuilderDialog::buildWireRow(int row, const HarnessWire& wRef,
                     // A field that already carries a colour of its own (an endpoint, a pin)
                     // keeps it: which end a wire is on matters more than which cable it is in.
                     if (cell->styleSheet().isEmpty())
-                        cell->setStyleSheet(QStringLiteral("background:%1;").arg(tint));
+                        cell->setStyleSheet(tintStyle(tint));
                 }
                 if (!wireTable_->item(row, c)) wireTable_->setItem(row, c, new QTableWidgetItem);
                 wireTable_->item(row, c)->setBackground(QColor(tint));
+                wireTable_->item(row, c)->setForeground(QColor(tint).lightness() < 128 ? QColor("#f0f4f8") : QColor("#151a20"));
             }
 
         auto* del = new QToolButton(wireTable_);
@@ -3766,6 +4054,7 @@ void HarnessBuilderDialog::reloadAll() {
     reloadWires();
     reloadLayout();
     reloadShields();
+    calmSpinBoxes();
     // ... and the wiring picture, which is the whole point of looking at this window. It was left out,
     // so re-ordering the pinout - "Minimise crossings", "Optimise by shield", "Optimise by twist" - did
     // the work and then showed the OLD tangle: the numbers changed, the drawing did not, and the

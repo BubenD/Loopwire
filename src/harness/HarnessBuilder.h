@@ -55,6 +55,18 @@ struct HarnessConnector {
     // The pin numbers in the order they appear top-to-bottom. Empty = natural 1..pinCount.
     // Re-ordering this is how crossings are minimised without moving any connector.
     std::vector<int> pinOrder;
+    // ITS CONTACTS: in the connector (as most are bought), or a part of their own - a library contact, or a P/N typed.
+    bool contactsIncluded = true;
+    QString contactPn;
+    QString contactLibPart;
+    // ITS OVERALL SHIELD'S DRAIN: where it goes - "" nowhere, "body" the connector's body, "pin:<connector id>:<pin>" a
+    // pin - and how: "direct" (the screen's own drain) or "wire" (a hook-up wire spliced on: a library wire, or the
+    // gauge and colour given here).
+    QString drainTo;
+    QString drainVia = QStringLiteral("direct");
+    QString drainLibPart;
+    QString drainGauge = QStringLiteral("0.5");
+    QString drainColor = QStringLiteral("DRAIN");
 };
 
 struct HarnessWire {
@@ -172,6 +184,13 @@ struct HarnessDef {
 // file, a preset and the builder's own undo keep. A field a file does not have takes its default.
 QJsonObject harnessDefToJson(const HarnessDef& def);
 HarnessDef harnessDefFromJson(const QJsonObject& root);
+
+// THE DRAINS AS THE CONNECTORS SAY: each connector's overall-shield drain made what its drainTo asks - bonded to its body,
+// or a wire (id "drain-<connector id>") from its screen to the pin named - and none where it asks for nothing. A
+// connector without an overall shield has no drain. Run after a connector's shield or drain is changed.
+void harnessSyncDrains(HarnessDef& def);
+// Whether a wire row is a connector's drain, made by harnessSyncDrains rather than by hand.
+bool harnessIsDrainRow(const HarnessWire& w);
 
 const HarnessConnector* harnessConnById(const HarnessDef& def, const QString& id);
 
