@@ -34,7 +34,7 @@
 #include <cmath>
 #include <functional>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // ---- INSERT ----
 void MainWindow::buildInsertTab() {
@@ -148,4 +148,4 @@ void MainWindow::buildInsertTab() {
     ribbon_->addTab(page, QStringLiteral("Import"));
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

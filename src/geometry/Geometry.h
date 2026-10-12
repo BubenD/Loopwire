@@ -4,7 +4,7 @@
 #include <optional>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // Axis-aligned bounding box in world coordinates.
 struct Bounds {
@@ -222,4 +222,4 @@ std::vector<Vec2> nurbsCurvePoints(const std::vector<Vec2>& ctrl, const std::vec
                                    int degree, const std::vector<double>& weights = {},
                                    int samplesPerSegment = 16);
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

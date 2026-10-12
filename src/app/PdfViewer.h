@@ -9,7 +9,7 @@ class QSpinBox;
 class QThread;
 class QTimer;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 class PdfViewer : public QWidget {
     Q_OBJECT
 public:

@@ -5,7 +5,7 @@
 CMakeCache.txt
 CMakeFiles/
 
-# Scratch drawings and smoke-test debris at the repo root. Edraw ships no sample drawings - a new
+# Scratch drawings and smoke-test debris at the repo root. Loopwire ships no sample drawings - a new
 # install draws in the house style from resources/defaults - so anything that looks like one here is
 # somebody's working file and does not belong in the tree.
 /*.dwx

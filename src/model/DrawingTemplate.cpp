@@ -14,7 +14,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 const std::vector<TemplateSheet>& templateSheets() {
     // ISO A sizes, plus the two ANSI ones a harness drawing is sometimes asked for.
@@ -164,7 +164,7 @@ QString templateZoneAt(const DrawingTemplate& tpl, const Vec2& at) {
 QString DrawingTemplate::extension() { return QStringLiteral("etp"); }
 
 QString DrawingTemplate::fileFilter() {
-    return QStringLiteral("Edraw template (*.etp);;All files (*)");
+    return QStringLiteral("Loopwire template (*.etp);;All files (*)");
 }
 
 QString DrawingTemplate::pathFor(const QString& name) {
@@ -750,4 +750,4 @@ QJsonArray defaultSheetContent(const DrawingTemplate& tpl) {
     return out;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

@@ -35,7 +35,7 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 void MainWindow::buildView3DTab() {
     auto [page, lay] = makeTabPage();
@@ -767,4 +767,4 @@ void MainWindow::showPreview3D(bool on) {
     }
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

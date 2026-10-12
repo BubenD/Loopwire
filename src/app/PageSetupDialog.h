@@ -11,7 +11,7 @@ class QLabel;
 class QPushButton;
 class QRadioButton;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // What a sheet is printed on: the machine, the paper, how much of the sheet goes on it, where, and in what
 // ink. Our own arrangement, and our own words - a print setup is a short list of decisions and it reads
@@ -74,4 +74,4 @@ private:
     QCheckBox* paperLast_ = nullptr;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

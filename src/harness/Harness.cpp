@@ -10,7 +10,7 @@
 #include <array>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 struct WireColor { const char* code; const char* name; const char* hex; };
@@ -2228,7 +2228,7 @@ std::vector<WireAnnot> wireAnnots(const Entity& wire) {
 // ---- Connector -------------------------------------------------------------
 
 namespace {
-// 1 -> "A", 26 -> "Z", 27 -> "AA" (spreadsheet-style, matching Edraw's letters mode).
+// 1 -> "A", 26 -> "Z", 27 -> "AA" (spreadsheet-style, matching Loopwire's letters mode).
 QString ordinalToLetters(int ordinal) {
     QString out;
     for (int n = ordinal; n > 0; n = (n - 1) / 26) out.prepend(QChar('A' + (n - 1) % 26));
@@ -2391,4 +2391,4 @@ ConnectorGeometry connectorGeometry(const Vec2& origin, const ConnectorSpec& spe
     return g;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

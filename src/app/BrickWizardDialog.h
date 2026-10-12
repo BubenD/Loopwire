@@ -31,7 +31,7 @@ class QTableWidget;
 class QToolButton;
 class QTreeWidget;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 class Document;
 class DrawingPreview;
@@ -606,4 +606,4 @@ private:
     QSpinBox* linkWires_ = nullptr;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

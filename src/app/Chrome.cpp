@@ -1,6 +1,6 @@
 #include "app/Chrome.h"
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 namespace Chrome {
 
 namespace {
@@ -68,4 +68,4 @@ QColor edge() { return dark_ ? QColor("#3a3f47") : QColor("#c8c8ce"); }
 QColor line() { return dark_ ? QColor("#b3afa6") : QColor("#b8b8be"); }
 
 } // namespace Chrome
-} // namespace Edraw_Desktop
+} // namespace Loopwire

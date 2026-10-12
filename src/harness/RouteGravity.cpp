@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 const std::vector<CableTension>& cableTensions() {
     static const std::vector<CableTension> all{
@@ -237,4 +237,4 @@ std::vector<CableSag3D> hangRoute(const Route3D& r, const V3& down, double densi
     return out;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

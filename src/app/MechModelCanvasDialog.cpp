@@ -12,7 +12,7 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -238,4 +238,4 @@ void MechModelCanvasDialog::useTool(int toolId) {
     if (editor_) editor_->setTool(static_cast<ToolId>(toolId));
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

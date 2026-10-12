@@ -24,7 +24,7 @@
 #include <cmath>
 #include <limits>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -1874,4 +1874,4 @@ void SystemCanvas::keyPressEvent(QKeyEvent* e) {
     QWidget::keyPressEvent(e);
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

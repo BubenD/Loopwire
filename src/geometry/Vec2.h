@@ -2,7 +2,7 @@
 
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // 2D point/vector in world (drawing) coordinates. Doubles for CAD precision.
 struct Vec2 {
@@ -49,4 +49,4 @@ inline double angleOf(const Vec2& v) { return std::atan2(v.y, v.x); }
 // Linear interpolation a -> b.
 inline Vec2 lerp(const Vec2& a, const Vec2& b, double t) { return a + (b - a) * t; }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

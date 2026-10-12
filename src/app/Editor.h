@@ -29,7 +29,7 @@
 class QPainter;
 class QTimer;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // One schematic design-rule discrepancy. `key` is a stable identity used to match
 // user "bypass" (accept) decisions across re-validations; `entityId` + `at` let the
@@ -55,7 +55,7 @@ enum class ShrinkRouteMode { Sleeve, Cable, CableEnds, Transition };
 // The interaction brain: owns the active tool, snapping, selection, undo stack,
 // and in-progress geometry. The CanvasWidget forwards input here and asks it to
 // paint overlays (previews, selection highlights, snap markers). Mirrors the
-// role of Edraw's global `state` plus its tool/command logic.
+// role of Loopwire's global `state` plus its tool/command logic.
 // Where any point goes under a move, a turn, a scale or a mirror - see Editor::selectionTransformed.
 using PointMap = std::function<Vec2(const Vec2&)>;
 
@@ -1543,7 +1543,7 @@ public:
 signals:
     // THE PICKED OBJECTS WERE MOVED, TURNED, SCALED OR MIRRORED: which ones, and where any point went. A model
     // being drawn carries its marks - its connection point, its ends, its output faces - along the same way.
-    void selectionTransformed(const std::vector<QString>& ids, const Edraw_Desktop::PointMap& map);
+    void selectionTransformed(const std::vector<QString>& ids, const Loopwire::PointMap& map);
     void changed();
     void validationStatusChanged();
     void drawingDetailsChanged();              // geometry/document mutated -> repaint + panels
@@ -1811,9 +1811,9 @@ private:
     // Whether this object is a table with one of its cells picked, and which cell. What is drawn and
     // what can be grabbed both ask, so they cannot disagree.
     bool pickedCellOf(const Entity& e, int& row, int& col) const;
-    void onDragTick(); // promotes a held box-drag into a lasso (Edraw behavior)
+    void onDragTick(); // promotes a held box-drag into a lasso (Loopwire behavior)
 
-    // Direct manipulation (Edraw-style): grab a joint (click-to-place) / apply edit.
+    // Direct manipulation (Loopwire-style): grab a joint (click-to-place) / apply edit.
     bool beginGripGrab(const Vec2& at, bool shift = false);
     void applyEditDrag(const Vec2& target);
     // Wires whose vertex sits exactly on one of `conn`'s pin ends are CONNECTED:
@@ -2250,7 +2250,7 @@ private:
     int drawFieldIndex_ = 0;
     std::vector<std::optional<double>> drawFieldVals_;
 
-    // Region-selection state machine (Edraw model):
+    // Region-selection state machine (Loopwire model):
     //   first click on empty space -> RectPending (rubber-band rectangle),
     //   second click -> commit; holding the first click ~0.2s -> Lasso.
     enum class RegionMode { None, Deciding, RectPending, Lasso };
@@ -2516,4 +2516,4 @@ private:
     Vec2 harnessBase_{0.0, 0.0};
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

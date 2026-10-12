@@ -2,10 +2,10 @@
 
 #include <QString>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // Active interaction tool. Select is the default idle tool; the rest are
-// draw/modify modes mirroring Edraw's tool set.
+// draw/modify modes mirroring Loopwire's tool set.
 enum class ToolId {
     Select,
     // Draw
@@ -229,4 +229,4 @@ inline QString toolLabel(ToolId t) {
     return QStringLiteral("Select");
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

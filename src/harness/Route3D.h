@@ -10,7 +10,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // THE HARNESS ROUTED IN 3D, through the environment: where its ends are, where it divides and where it is clipped
 // down, and the way each bundle runs between them - over the faces it was laid along, kept off them by its own radius,
@@ -193,4 +193,4 @@ private:
     std::vector<V3> overOne(const V3& a, const V3& b, const V3& na, const V3& nb, double r) const;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

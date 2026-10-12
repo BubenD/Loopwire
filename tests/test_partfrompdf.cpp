@@ -14,7 +14,7 @@
 #include <cmath>
 #include <cstdio>
 
-using namespace Edraw_Desktop;
+using namespace Loopwire;
 
 namespace {
 int g_fail = 0;
@@ -162,7 +162,7 @@ int run_partfrompdf_tests() {
     }
 
     // ---- THE DIALOG, on a real PDF ------------------------------------------------------------------
-    const QString pdfPath = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_part_from_pdf.pdf"));
+    const QString pdfPath = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_part_from_pdf.pdf"));
     {
         QFile f(pdfPath);
         check(f.open(QIODevice::WriteOnly) && f.write(samplePdf()) > 0, "dialog: a datasheet PDF written");
@@ -192,14 +192,14 @@ int run_partfrompdf_tests() {
               "dialog: at the width typed, in proportion");
     }
     {
-        PartFromPdfDialog bad(QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_no_such.pdf")),
+        PartFromPdfDialog bad(QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_no_such.pdf")),
                               QStringLiteral("NONE"));
         check(!bad.loaded() && !bad.error().isEmpty(), "dialog: a PDF that cannot be read says why");
     }
 
     // ---- INTO THE LIBRARY ---------------------------------------------------------------------------
     {
-        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_part_from_pdf_lib.json"));
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_part_from_pdf_lib.json"));
         QFile::remove(libFile);
         {
             PartsLibrary lib;

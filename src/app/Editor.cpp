@@ -31,7 +31,7 @@
 #include <cmath>
 #include <limits>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // Soft orange: the colour every piece of table editing chrome is drawn in - the table's own
 // highlight, its row / column headers, and the cells picked inside it. Table work is a different
@@ -145,7 +145,7 @@ Entity heatshrinkFromRoute(const std::vector<Vec2>& route, double width,
     return e;
 }
 
-// Hold this long during a drag before the rectangle becomes a lasso (Edraw's
+// Hold this long during a drag before the rectangle becomes a lasso (Loopwire's
 // LASSO_DELAY_MS).
 constexpr qint64 kLassoDelayMs = 200;
 
@@ -20368,7 +20368,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     }
 
     // Region select: rectangle (Deciding / RectPending) or freeform lasso, with
-    // Edraw's exact colors. Window (left->right): blue, solid, fully enclose.
+    // Loopwire's exact colors. Window (left->right): blue, solid, fully enclose.
     // Crossing (right->left): green, dashed, touch.
     const bool isLasso = regionMode_ == RegionMode::Lasso;
     const bool isRect = regionMode_ == RegionMode::Deciding ||
@@ -21894,4 +21894,4 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     }
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

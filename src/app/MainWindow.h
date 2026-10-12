@@ -56,7 +56,7 @@ class QShortcut;
 class QSplitter;
 class QResizeEvent;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 class CanvasWidget;
 class Editor;
@@ -195,7 +195,7 @@ public:
 
     // About, and the licence paperwork behind it. Public for the same reason as the rest of this section:
     // both are modal windows, and what is worth checking is what they SAY. The licence notice is not a
-    // nicety - Edraw ships Qt's libraries, and the LGPL asks that every copy of the program state that it
+    // nicety - Loopwire ships Qt's libraries, and the LGPL asks that every copy of the program state that it
     // uses Qt under that licence and supply the licence texts. A test that reads these is a test that the
     // obligation is still being met, so it has to be able to reach them. `document` names the licence to
     // open on (a ":/licenses/..." resource path); empty opens on the notices.
@@ -718,7 +718,7 @@ private:
 
     void showConnectorDialog();
     // Populate the Schematic-build "Connector build" ribbon (Identity / Pins / Body /
-    // Text / Actions), mirroring the Edraw web connector builder.
+    // Text / Actions), mirroring the Loopwire web connector builder.
     void buildConnectorBuildTab(QWidget* page, QHBoxLayout* lay);
     void showBomDialog();
     void showVoltageDropDialog();
@@ -1178,4 +1178,4 @@ private:
     bool darkTheme_ = true;   // current color scheme
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

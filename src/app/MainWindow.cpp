@@ -148,7 +148,7 @@
 #include <cstdio>
 #include <functional>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -663,9 +663,9 @@ QIcon makeHatchSwatch(const QString& key, int W = 52, int H = 34) {
     QPainter p(&pm);
     p.setRenderHint(QPainter::Antialiasing, true);
 
-    Edraw_Desktop::Document doc; // default layers; the override color drives the ink
-    Edraw_Desktop::Entity e;
-    e.type = Edraw_Desktop::EntityType::Hatch;
+    Loopwire::Document doc; // default layers; the override color drives the ink
+    Loopwire::Entity e;
+    e.type = Loopwire::EntityType::Hatch;
     e.layer = QStringLiteral("0");
     e.points = {{2, 2}, {W - 2.0, 2}, {W - 2.0, H - 2.0}, {2, H - 2.0}};
     e.meta.insert(QStringLiteral("pattern"), key);
@@ -673,11 +673,11 @@ QIcon makeHatchSwatch(const QString& key, int W = 52, int H = 34) {
     // grid) regardless of icon size.
     e.meta.insert(QStringLiteral("hatchScale"), H / 22.0);
     // Identity transform, but flip Y back into the icon (toScreen negates Y).
-    Edraw_Desktop::ViewTransform vt;
+    Loopwire::ViewTransform vt;
     vt.view.scale = 1.0;
     vt.view.x = 0.0;
     vt.view.y = H;
-    Edraw_Desktop::EntityRenderer::draw(p, e, doc, vt, QColor("#e3e7ee"));
+    Loopwire::EntityRenderer::draw(p, e, doc, vt, QColor("#e3e7ee"));
 
     QPen border(QColor("#7d8590"));
     border.setWidthF(1.0);
@@ -2344,9 +2344,9 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
     const QDateTime built =
         QFileInfo(QCoreApplication::applicationFilePath()).lastModified();
     setWindowTitle(built.isValid()
-                       ? QStringLiteral("Edraw — build %1").arg(built.toString(
+                       ? QStringLiteral("Loopwire — build %1").arg(built.toString(
                              QStringLiteral("yyyy-MM-dd HH:mm")))
-                       : QStringLiteral("Edraw"));
+                       : QStringLiteral("Loopwire"));
     resize(1340, 860);
 
     note(QStringLiteral("Drawing canvas"));
@@ -3856,7 +3856,7 @@ QAction* MainWindow::makeToolAction(const QString& text, ToolId id) {
     return a;
 }
 
-// Wrap ribbon content with a centered group label underneath (Edraw style).
+// Wrap ribbon content with a centered group label underneath (Loopwire style).
 QWidget* MainWindow::ribbonGroup(const QString& title, QWidget* content) {
     auto* g = new QWidget(ribbon_);
     auto* v = new QVBoxLayout(g);
@@ -7373,7 +7373,7 @@ void MainWindow::submitCommand(const QString& t) {
 
 void MainWindow::buildMenus() {
     // The File menu is presented as the red "E" application-logo button in the
-    // top-left corner of the menu bar (Edraw style).
+    // top-left corner of the menu bar (Loopwire style).
     auto* fileMenu = new QMenu(this);
     fileMenu->addAction(QStringLiteral("&New drawing"), QKeySequence::New, this, [this] { newDrawing(); });
     fileMenu->addAction(QStringLiteral("&Open DWX/DXF..."), QKeySequence::Open, this, [this] { openDrawing(); });
@@ -7446,9 +7446,9 @@ void MainWindow::buildMenus() {
     fileMenu->addAction(QStringLiteral("E&xit"), QKeySequence::Quit, qApp, &QApplication::quit);
 
     auto* logo = new QToolButton(this);
-    logo->setIcon(QIcon(QStringLiteral(":/edraw.ico"))); // the real Edraw logo
+    logo->setIcon(QIcon(QStringLiteral(":/loopwire.ico"))); // the real Loopwire logo
     logo->setIconSize(QSize(26, 26));
-    logo->setToolTip(QStringLiteral("Edraw — file menu"));
+    logo->setToolTip(QStringLiteral("Loopwire — file menu"));
     logo->setMenu(fileMenu);
     logo->setPopupMode(QToolButton::InstantPopup);
     logo->setAutoRaise(true);
@@ -7566,7 +7566,7 @@ void MainWindow::buildMenus() {
     helpMenu->addSeparator();
     // Where a person looks for it. It used to be under File, between the licences and Exit, which is
     // nowhere anybody looks for what version they are running.
-    helpMenu->addAction(QStringLiteral("&About Edraw..."), this, [this] { showAbout(); });
+    helpMenu->addAction(QStringLiteral("&About Loopwire..."), this, [this] { showAbout(); });
 }
 
 // ---- Theme (Dark / Light) --------------------------------------------------
@@ -8768,7 +8768,7 @@ void MainWindow::findText() {
 
 void MainWindow::showAbout() {
     QDialog dlg(this);
-    dlg.setWindowTitle(QStringLiteral("About Edraw"));
+    dlg.setWindowTitle(QStringLiteral("About Loopwire"));
     // Wider than it was. The Qt/LGPL notice below is a paragraph rather than a line, and at 380 it wrapped
     // into a column so narrow the dialog became taller than it was wide.
     dlg.setFixedWidth(520);
@@ -8778,13 +8778,13 @@ void MainWindow::showAbout() {
 
     // Logo: the red square + white "E".
     auto* logo = new QLabel(&dlg);
-    logo->setPixmap(QIcon(QStringLiteral(":/edraw.ico")).pixmap(64, 64));
+    logo->setPixmap(QIcon(QStringLiteral(":/loopwire.ico")).pixmap(64, 64));
     logo->setAlignment(Qt::AlignTop);
     row->addWidget(logo);
 
     auto* col = new QVBoxLayout();
     col->setSpacing(4);
-    auto* name = new QLabel(QStringLiteral("Edraw"), &dlg);
+    auto* name = new QLabel(QStringLiteral("Loopwire"), &dlg);
     name->setStyleSheet(QStringLiteral("font-size:22px;font-weight:700;"));
     auto* ver = new QLabel(QStringLiteral("Version %1").arg(QApplication::applicationVersion()),
                            &dlg);
@@ -8795,8 +8795,8 @@ void MainWindow::showAbout() {
     desc->setWordWrap(true);
 
     // THE NOTICE THE LGPL ASKS FOR, where the licence asks for it: with every copy of the program,
-    // plainly, not buried in a file somebody has to know to open. Edraw links Qt dynamically, so the
-    // toolkit is used under the LGPL v3. This label is the whole of Edraw's §4 notice, and every clause
+    // plainly, not buried in a file somebody has to know to open. Loopwire links Qt dynamically, so the
+    // toolkit is used under the LGPL v3. This label is the whole of Loopwire's §4 notice, and every clause
     // of it is here for a reason:
     //
     //   §4(a) prominent notice that the Library is used and that this License covers it
@@ -8822,7 +8822,7 @@ void MainWindow::showAbout() {
     qtNotice->setStyleSheet(QStringLiteral("color:#9aa7b8;font-size:11px;"));
     // OPEN CASCADE, WHERE THIS BUILD SHIPS IT: the same three things under LGPL-2.1 §6 - that it is used and under
     // which licence, its copyright among the ones shown, and where the licence copies are - and the notice its
-    // exception asks for, that Edraw "makes use of facilities provided by" it.
+    // exception asks for, that Loopwire "makes use of facilities provided by" it.
     QLabel* occtNotice = nullptr;
     if (fullStepReader()) {
         occtNotice = new QLabel(
@@ -8866,7 +8866,7 @@ void MainWindow::showAbout() {
 
 // ---- Third-party licences --------------------------------------------------
 //
-// WHAT THIS IS FOR. Edraw ships Qt's libraries beside its own executable, which makes Edraw a combined
+// WHAT THIS IS FOR. Loopwire ships Qt's libraries beside its own executable, which makes Loopwire a combined
 // work under the LGPL v3. Three things follow, and this dialog is where two of them are met: the notice
 // that Qt is used under the LGPL (also on the About dialog), and the supply of the licence texts
 // themselves. The third - the route to Qt's source code - is written into the notices document.
@@ -8894,7 +8894,7 @@ void MainWindow::showLicenses(const QString& document) {
     auto* outer = new QVBoxLayout(&dlg);
 
     auto* intro = new QLabel(
-        QStringLiteral("Edraw is proprietary software. It incorporates and distributes third-party "
+        QStringLiteral("Loopwire is proprietary software. It incorporates and distributes third-party "
                        "software, whose notices and licences are reproduced below. The same documents "
                        "are supplied as text files beside the program."),
         &dlg);
@@ -8918,9 +8918,9 @@ void MainWindow::showLicenses(const QString& document) {
             // A build that dropped the resource is a build that does not give the notice. Say so
             // loudly rather than showing an empty box that looks like there is nothing to declare.
             view->setPlainText(
-                QStringLiteral("This copy of Edraw is incomplete: the licence document\n\n    %1\n\n"
+                QStringLiteral("This copy of Loopwire is incomplete: the licence document\n\n    %1\n\n"
                                "is missing from the program. Please report this. The text is also "
-                               "supplied as a file in the \"licenses\" folder beside Edraw.exe, and "
+                               "supplied as a file in the \"licenses\" folder beside Loopwire.exe, and "
                                "the licences can be read at https://www.gnu.org/licenses/.")
                     .arg(d.path));
         }
@@ -12117,7 +12117,7 @@ std::vector<KeyRow> keyboardReference() {
     out.push_back(row(nativeKeys(QKeySequence::Print), "Print and export"));
     out.push_back(lit("Ctrl+Shift+F", "Fit the whole drawing on screen"));
     out.push_back(row(nativeKeys(QKeySequence::HelpContents), "This window"));
-    out.push_back(row(nativeKeys(QKeySequence::Quit), "Leave Edraw"));
+    out.push_back(row(nativeKeys(QKeySequence::Quit), "Leave Loopwire"));
     return out;
 }
 } // namespace
@@ -17042,10 +17042,10 @@ void MainWindow::updateActiveTabText() {
 
 void MainWindow::updateWindowTitleForActive() {
     const int i = activeIndex();
-    if (i < 0 || i >= static_cast<int>(docs_.size())) { setWindowTitle(QStringLiteral("Edraw")); return; }
+    if (i < 0 || i >= static_cast<int>(docs_.size())) { setWindowTitle(QStringLiteral("Loopwire")); return; }
     const QString base = docPaths_[i].isEmpty() ? docs_[i]->name()
                                                 : QFileInfo(docPaths_[i]).fileName();
-    setWindowTitle(QStringLiteral("Edraw - %1%2")
+    setWindowTitle(QStringLiteral("Loopwire - %1%2")
                        .arg(base, docs_[i]->dirty() ? QStringLiteral(" *") : QString()));
 }
 
@@ -17925,14 +17925,14 @@ void MainWindow::exportDwgAs() {
         return;
     }
 
-    // The converter is looked for now rather than at start-up: a user who installs it while Edraw is
+    // The converter is looked for now rather than at start-up: a user who installs it while Loopwire is
     // open should not have to restart to be able to use it.
     if (!odaExport_->available()) {
         switch (OdaSetupDialog::run(odaExport_, this)) {
         case OdaSetupDialog::Result::Cancelled:
             return;
         case OdaSetupDialog::Result::FallbackDxf:
-            // Their drawing, out of Edraw, now. Straight to the DXF export they would otherwise have
+            // Their drawing, out of Loopwire, now. Straight to the DXF export they would otherwise have
             // had to find on the menu themselves.
             exportDxfAs();
             return;
@@ -18480,4 +18480,4 @@ void MainWindow::exportTableCsv() {
     statusBar()->showMessage(QStringLiteral("Exported %1").arg(QFileInfo(path).fileName()));
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

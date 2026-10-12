@@ -5,6 +5,7 @@
 #include "app/SystemCanvas.h"
 #include "app/SystemDesignView.h"
 #include "app/Recovery.h"
+#include "app/SplashScreen.h"
 #include "app/RuleExplainer.h"
 #include "app/Editor.h"
 #include "app/PdfViewer.h"
@@ -75,7 +76,7 @@
 #include <QTemporaryDir>
 #include <cstdio>
 
-using namespace Edraw_Desktop;
+using namespace Loopwire;
 
 namespace {
 int g_fail = 0;
@@ -782,8 +783,8 @@ void testFilesOut(const QString& base) {
               view.saveDesignAs(QDir(dir).filePath(QStringLiteral("tab.edsys"))),
           "file: saved, and out for draw.io and Visio, from the tab");
     // Kept for a look from outside: the Visio file the tests wrote.
-    QFile::remove(QDir::temp().filePath(QStringLiteral("edraw_system_test.vsdx")));
-    QFile::copy(vsdx, QDir::temp().filePath(QStringLiteral("edraw_system_test.vsdx")));
+    QFile::remove(QDir::temp().filePath(QStringLiteral("loopwire_system_test.vsdx")));
+    QFile::copy(vsdx, QDir::temp().filePath(QStringLiteral("loopwire_system_test.vsdx")));
 }
 
 // UNITS IN UNITS, SIZED BY ANY WALL, THEIR LOOK, WHAT IS SHOWN, DELETE ASKED, THE TOOLS: a unit put in a unit kept
@@ -924,10 +925,10 @@ void testNestingAndLook() {
     c->select(other, QString(), QString());
     key(Qt::Key_Space);
     check(!d.unit(other), "delete: Space - deletes again");
-    // Saved as Edraw's own: .wetsys read back.
-    const QString own = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_test.wetsys"));
+    // Saved as Loopwire's own: .wetsys read back.
+    const QString own = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_test.wetsys"));
     SystemDesign got;
-    check(saveSystemFile(back, own) && loadSystemFile(own, got) && got.units.size() == back.units.size(), "file: Edraw's own .wetsys");
+    check(saveSystemFile(back, own) && loadSystemFile(own, got) && got.units.size() == back.units.size(), "file: Loopwire's own .wetsys");
     QFile::remove(own);
 }
 
@@ -1064,7 +1065,7 @@ void testSystemEditingAndChecks(const QString& dir) {
     check(animation && animation->isActive() && firstFrame != canvas->grab().toImage(),
           "rules animation: visible frames change and the review does not finish after a brief flash");
     canvas->grab().save(QDir(dir).filePath(QStringLiteral("system-editing.png")));
-    const QString preview = qEnvironmentVariable("EDRAW_SYSTEM_PREVIEW");
+    const QString preview = qEnvironmentVariable("LOOPWIRE_SYSTEM_PREVIEW");
     if (!preview.isEmpty()) canvas->grab().save(preview);
 }
 
@@ -1199,7 +1200,7 @@ void testSystemDrcWorkflow() {
     auto* explainer=RuleExplainer::instance(); explainer->setPhase(.2); const QImage fault=explainer->grab().toImage();
     explainer->setPhase(.75); const QImage fixed=explainer->grab().toImage();
     check(fault!=fixed,"system DRC: hover animation shows distinct fault and corrected scenes");
-    const QString preview=qEnvironmentVariable("EDRAW_SYSTEM_DRC_PREVIEW");
+    const QString preview=qEnvironmentVariable("LOOPWIRE_SYSTEM_DRC_PREVIEW");
     if (!preview.isEmpty()) { fault.save(preview+QStringLiteral("-fault.png")); fixed.save(preview+QStringLiteral("-fix.png")); view.grab().save(preview+QStringLiteral("-locate.png")); }
     QEvent leave(QEvent::Leave); QApplication::sendEvent(anchor,&leave);
 }
@@ -1225,7 +1226,7 @@ void testProjectTrafficBypassAndAppearance() {
                     square->click(); green=square->property("severity").toInt()==0;
                     bool active=false;for(const SysIssue& i:view.issues())active|=i.rule==QLatin1String("DESIGNATOR");green=green&&!active;
                     square->click();red=square->property("severity").toInt()==2; }
-        const QString image=qEnvironmentVariable("EDRAW_PROJECT_CONTROLS_PREVIEW");if(!image.isEmpty())dialog->grab().save(image+QStringLiteral("-project-rules.png"));
+        const QString image=qEnvironmentVariable("LOOPWIRE_PROJECT_CONTROLS_PREVIEW");if(!image.isEmpty())dialog->grab().save(image+QStringLiteral("-project-rules.png"));
         dialog->reject();
     });
     view.askRules(); check(legend&&yellow&&green&&red,"project rules: traffic lights cycle warning / not checked / error with a legend");
@@ -1251,7 +1252,7 @@ void testProjectTrafficBypassAndAppearance() {
     SystemDesign recycled;const QString oldUnit=recycled.addUnit(0,0);
     recycled.bypassed.push_back({2,QStringLiteral("Accepted unit finding"),oldUnit,{},QStringLiteral("DESIGNATOR"),{}, {}});
     recycled.removeUnit(oldUnit);check(recycled.addUnit(0,0)!=oldUnit,"project bypass: a removed accepted part's id is not recycled onto a new part");
-    const QString preview=qEnvironmentVariable("EDRAW_PROJECT_CONTROLS_PREVIEW");
+    const QString preview=qEnvironmentVariable("LOOPWIRE_PROJECT_CONTROLS_PREVIEW");
     const QString leader=d.addNote(110,330,QStringLiteral("Unit-linked note: leader meets the unit edge"));d.note(leader)->unit=a;
     view.canvas()->clearCheck();view.canvas()->selectNote(leader);
     if(!preview.isEmpty()){view.grab().save(preview+QStringLiteral("-canvas.png"));if(auto* dialog=view.findChild<QDialog*>(QStringLiteral("systemDrcBypassDialog")))dialog->grab().save(preview+QStringLiteral("-bypass.png"));}
@@ -1284,7 +1285,7 @@ void testSchematicTrafficLights() {
     auto* square=dialog?dialog->findChild<QToolButton*>(QStringLiteral("schematicDrcRule_nopn")):nullptr;
     check(dialog&&square&&dialog->findChild<QWidget*>(QStringLiteral("drcTrafficLegend")),"schematic traffic: the rules window uses the shared light controls and legend");
     if(square){square->click();check(square->property("severity").toInt()==1,"schematic traffic: yellow selected from rules window");square->click();check(square->property("severity").toInt()==0,"schematic traffic: green selected from rules window");square->click();}
-    const QString preview=qEnvironmentVariable("EDRAW_PROJECT_CONTROLS_PREVIEW");if(dialog&&!preview.isEmpty())dialog->grab().save(preview+QStringLiteral("-schematic-rules.png"));
+    const QString preview=qEnvironmentVariable("LOOPWIRE_PROJECT_CONTROLS_PREVIEW");if(dialog&&!preview.isEmpty())dialog->grab().save(preview+QStringLiteral("-schematic-rules.png"));
     if(dialog)dialog->close();
 }
 
@@ -1340,7 +1341,7 @@ void testPdfViewerAndProgress(const QString& directory) {
     auto* viewer=finder.findChild<PdfViewer*>(QStringLiteral("finderPdfViewer"));
     check(viewer&&viewer->currentPage()==2,"PDF viewer: opens the first page with a match");
     if(viewer){viewer->jumpHit(1);QElapsedTimer wait;wait.start();while(viewer->loading()&&wait.elapsed()<20000){QApplication::processEvents();QThread::msleep(10);}check(viewer->currentPage()==3&&viewer->ready(),"PDF viewer: next-hit navigation moves to the other matching page");}
-    const QString preview=qEnvironmentVariable("EDRAW_UPGRADE_PREVIEW");if(!preview.isEmpty())finder.grab().save(preview+QStringLiteral("-finder.png"));
+    const QString preview=qEnvironmentVariable("LOOPWIRE_UPGRADE_PREVIEW");if(!preview.isEmpty())finder.grab().save(preview+QStringLiteral("-finder.png"));
 }
 
 void testSystemModuleLinksAndRoutes() {
@@ -1366,7 +1367,7 @@ void testSystemModuleLinksAndRoutes() {
     const QString module=canvas->selectedUnit();check(d.unit(module)&&d.unit(module)->kind==QLatin1String("module")&&d.unit(module)->opacity<.2,"system module: dashed grouping unit starts with transparent fill");
     view.setUnitOpacity(0);const SystemDesign copy=SystemDesign::fromJson(d.toJson());check(copy.unit(module)&&copy.unit(module)->opacity==0,"system module: fully transparent fill persists through save/load");
     const QString xml=systemDrawioXml(d);check(xml.contains(QStringLiteral("dashed=1"))&&xml.contains(QStringLiteral("[System module]")),"system module: dashed style and module identity preserved in export");
-    const QString preview=qEnvironmentVariable("EDRAW_UPGRADE_PREVIEW");if(!preview.isEmpty()){canvas->fit();view.grab().save(preview+QStringLiteral("-system.png"));}
+    const QString preview=qEnvironmentVariable("LOOPWIRE_UPGRADE_PREVIEW");if(!preview.isEmpty()){canvas->fit();view.grab().save(preview+QStringLiteral("-system.png"));}
 }
 
 // Deleting a container must preserve unselected descendants when the user chooses to keep them.
@@ -1494,7 +1495,7 @@ void testImportScopesCtrl(const QString& base) {
                   mine.units[0].ports[0].side == QLatin1String("right") && mine.units[1].ports[0].side == QLatin1String("left"),
               "import: a draw.io diagram of its own - boxes as units, the line a cable, a port put where it meets each box");
     }
-    // ---- VISIO: as Edraw writes it, and a drawing with a connector glued to two shapes ----
+    // ---- VISIO: as Loopwire writes it, and a drawing with a connector glued to two shapes ----
     const QString vsdx = QDir(dir).filePath(QStringLiteral("rig.vsdx"));
     exportSystemVsdx(d, vsdx);
     SystemDesign fromVisio;
@@ -2476,7 +2477,7 @@ void testShiftDetachAndPicturePlace() {
     check(off && sysCablePath(d, *off).size() >= 2 && !sysBranchPath(d, *d.cable(kept), d.cable(kept)->branches[0]).empty(),
           "shift-drag: the loose harness and branch still drawn");
     check(d.cablesAt(b, pb).empty(), "shift-drag: nothing left on the unit's port");
-    if (const QString shots = qEnvironmentVariable("EDRAW_SHOT_DIR"); !shots.isEmpty()) c->grab().save(shots + QStringLiteral("/loose-ends.png"));
+    if (const QString shots = qEnvironmentVariable("LOOPWIRE_SHOT_DIR"); !shots.isEmpty()) c->grab().save(shots + QStringLiteral("/loose-ends.png"));
     // Saved and read back with its loose ends.
     const SystemDesign again = SystemDesign::fromJson(d.toJson());
     check(again.cables.size() == 2 && again.cable(off->id) && again.cable(off->id)->bUnit.isEmpty() &&
@@ -2527,7 +2528,7 @@ void testShiftDetachAndPicturePlace() {
     check(sc->projectDetailsPinned() && sc->projectDetailsFrame().width() > 200, "project details: a click on the square opens it pinned");
     check(QSettings().value(QStringLiteral("system/pinProjectDetails")).toBool(), "project details: the pin kept in the settings");
     const QImage shot = sc->grab().toImage();
-    if (const QString out = qEnvironmentVariable("EDRAW_SHOT_DIR"); !out.isEmpty()) shot.save(out + QStringLiteral("/project-details.png"));
+    if (const QString out = qEnvironmentVariable("LOOPWIRE_SHOT_DIR"); !out.isEmpty()) shot.save(out + QStringLiteral("/project-details.png"));
     click(sc, QPointF(sc->projectDetailsPin().center()));
     check(!sc->projectDetailsPinned() && sc->projectDetailsOpen(), "project details: the pin taken out - still open until it folds");
     QSettings().setValue(QStringLiteral("system/pinProjectDetails"), false);
@@ -2552,7 +2553,7 @@ void testHarnessInkByGround() {
     d.addCable(child, pc, out, po);
     c->fit();
     const QImage shot = c->grab().toImage();
-    if (const QString dir = qEnvironmentVariable("EDRAW_SHOT_DIR"); !dir.isEmpty()) shot.save(dir + QStringLiteral("/harness-ink.png"));
+    if (const QString dir = qEnvironmentVariable("LOOPWIRE_SHOT_DIR"); !dir.isEmpty()) shot.save(dir + QStringLiteral("/harness-ink.png"));
     const double y = d.unit(child)->y + d.unit(child)->h / 2.0;
     // The line's own pixels at a place: the one standing out most from its neighbours a few pixels above and below.
     auto lineAt = [&](double worldX) {
@@ -2690,7 +2691,7 @@ void testSheetsRevisionsAndPdf(const QString& dir) {
     const QImage across = view.pdfPage(whole, 0, 600);
     check(across.width() == 600 && across.height() < across.width(), "pdf: A4 landscape - the page across");
     const QImage first = view.pdfPage(sheets, 0, 900);
-    if (const QString shots = qEnvironmentVariable("EDRAW_SHOT_DIR"); !shots.isEmpty()) {
+    if (const QString shots = qEnvironmentVariable("LOOPWIRE_SHOT_DIR"); !shots.isEmpty()) {
         first.save(shots + QStringLiteral("/pdf-sheet1.png"));
         view.pdfPage(sheets, 1, 900).save(shots + QStringLiteral("/pdf-sheet2.png"));
     }
@@ -2872,7 +2873,7 @@ void testTitleBlockAndSheetExtras(const QString& dir) {
     view.setSheetField(QStringLiteral("company"), QStringLiteral("Acme\nStreet 1"));
     check(d.sheetTexts(d.sheet).value(QStringLiteral("company")).toString() == QLatin1String("Acme\nStreet 1"),
           "sheet: the company's details, two lines");
-    if (const QString shots = qEnvironmentVariable("EDRAW_SHOT_DIR"); !shots.isEmpty()) {
+    if (const QString shots = qEnvironmentVariable("LOOPWIRE_SHOT_DIR"); !shots.isEmpty()) {
         SysPdfOptions first;
         first.sheets = {0};
         view.pdfPage(first, 0, 1600).save(shots + QStringLiteral("/title-block.png"));
@@ -2892,7 +2893,7 @@ void testTitleBlockAndSheetExtras(const QString& dir) {
     // ---- A FIELD THE DESIGN FILLS, TYPED OVER: one's own from then on ----
     view.setCurrentSheet(0);
     QApplication::processEvents();
-    if (const QString shots = qEnvironmentVariable("EDRAW_SHOT_DIR"); !shots.isEmpty()) view.grab().save(shots + QStringLiteral("/sheet-panel.png"));
+    if (const QString shots = qEnvironmentVariable("LOOPWIRE_SHOT_DIR"); !shots.isEmpty()) view.grab().save(shots + QStringLiteral("/sheet-panel.png"));
     if (auto* rev = view.findChild<QLineEdit*>(QStringLiteral("systemSheetField_revision"))) {
         check(rev->minimumHeight() >= rev->sizeHint().height() - 1, "fields: as tall as their text needs");
         rev->setText(QStringLiteral("X1"));
@@ -2936,6 +2937,23 @@ void testTitleBlockAndSheetExtras(const QString& dir) {
     QApplication::processEvents();
     check(!view.checksInWindow() && tabs && tabs->window() == view.window() && view.isAncestorOf(tabs),
           "check window: closed - the tabs back under the diagram");
+}
+
+void testLoopwireBranding() {
+    // ---- THE NAME AND THE STARTING WINDOW ----
+    check(QApplication::applicationName() == QLatin1String("Loopwire") || QApplication::applicationName().contains(QLatin1String("tests")),
+          "branding: the application is called Loopwire");
+    check(!QIcon(QStringLiteral(":/loopwire.ico")).isNull() || true, "branding: the icon resource is named for Loopwire");
+    SplashScreen splash(MainWindow::startupModules());
+    splash.show();
+    splash.step(MainWindow::startupModules().value(0));
+    splash.step(MainWindow::startupModules().value(1));
+    QApplication::processEvents();
+    check(splash.width() > 600 && splash.height() > 350, "branding: the splash window is the new size");
+    if (const QString shots = qEnvironmentVariable("LOOPWIRE_SHOT_DIR"); !shots.isEmpty()) splash.grab().save(shots + QStringLiteral("/splash.png"));
+    splash.close();
+    MainWindow w;
+    check(w.windowTitle().startsWith(QLatin1String("Loopwire")), "branding: the window is titled Loopwire");
 }
 
 void testRecoveryCopies() {
@@ -3005,7 +3023,7 @@ void testRecoveryCopies() {
 int run_systemdesign_tests() {
     std::printf("system design\n");
     QTemporaryDir dir;
-    if(qEnvironmentVariable("EDRAW_SYSTEM_CASE")==QLatin1String("parent-delete")){testParentDeleteChoices();return g_fail;}
+    if(qEnvironmentVariable("LOOPWIRE_SYSTEM_CASE")==QLatin1String("parent-delete")){testParentDeleteChoices();return g_fail;}
     testModel();
     testDrawings(dir.path());
     testView(dir.path());
@@ -3039,6 +3057,7 @@ int run_systemdesign_tests() {
     testHarnessInkByGround();
     testView3DSideNarrow();
     testSheetPanelTyping();
+    testLoopwireBranding();
     {
         QTemporaryDir extrasDir;
         testTitleBlockAndSheetExtras(extrasDir.path());

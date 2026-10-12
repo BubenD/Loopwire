@@ -7,7 +7,7 @@
 #include <QJsonDocument>
 #include <QSaveFile>
 
-namespace Edraw_Desktop::dwx {
+namespace Loopwire::dwx {
 
 QJsonObject toJson(const Document& doc) {
     QJsonObject root;
@@ -109,4 +109,4 @@ bool load(Document& doc, const QString& path, QString* error) {
     return true;
 }
 
-} // namespace Edraw_Desktop::dwx
+} // namespace Loopwire::dwx

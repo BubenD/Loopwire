@@ -23,7 +23,7 @@ class QSpinBox;
 class QTableWidget;
 class QComboBox;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 class DrawingPreview;
 
@@ -78,4 +78,4 @@ private:
     DrawingPreview* schematic_ = nullptr;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

@@ -18,7 +18,7 @@
 #include <cmath>
 #include <functional>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 constexpr int kWidth = 320;
@@ -708,4 +708,4 @@ void RuleExplainer::paintEvent(QPaintEvent*) {
     p.drawText(QRectF(10, kSceneH + 30, kWidth - 20, height() - kSceneH - 34), Qt::TextWordWrap, text_);
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

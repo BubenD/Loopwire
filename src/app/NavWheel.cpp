@@ -6,7 +6,7 @@
 
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // ==================================================================================================
 // The navigation wheel
@@ -273,4 +273,4 @@ void NavWheel::leaveEvent(QEvent*) {
     pressed_ = -1;
     update();
 }
-} // namespace Edraw_Desktop
+} // namespace Loopwire

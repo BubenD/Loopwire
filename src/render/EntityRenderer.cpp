@@ -19,7 +19,7 @@
 #include <algorithm>
 #include <cstdio>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 int g_dimDecimals = 2; // decimals on dimension labels (configurable via Options)
@@ -3147,4 +3147,4 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
     }
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

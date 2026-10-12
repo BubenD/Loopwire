@@ -19,7 +19,7 @@
 #include <QTextStream>
 #include <QVBoxLayout>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 VoltageDropDialog::VoltageDropDialog(Editor* editor, QWidget* parent)
     : QDialog(parent), editor_(editor) {
@@ -498,4 +498,4 @@ bool VoltageDropDialog::exportCsv(const QString& path) const {
     return true;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

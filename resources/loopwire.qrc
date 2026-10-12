@@ -1,10 +1,12 @@
 <!DOCTYPE RCC>
 <RCC version="1.0">
   <qresource prefix="/">
-    <file>edraw.qss</file>
+    <file>loopwire.qss</file>
     <file>defaults/mech-models.json</file>
-    <file>defaults/edrawlib.plb</file>
-    <file>edraw.ico</file>
+    <file>defaults/loopwirelib.plb</file>
+    <file>loopwire.ico</file>
+    <file>loopwire-logo.png</file>
+    <file>loopwire-mark.png</file>
     <file>caret-down.svg</file>
     <file>check.svg</file>
     <file>caret-up.svg</file>
@@ -37,8 +39,8 @@
 
     The LGPL requires that these texts accompany the program, and the build also copies them as plain
     files into the install folder - which is where a user or a lawyer will look for them. They are ALSO
-    in here, because "About Edraw -> Third-party licences" has to be able to show them, and a dialog that
-    reads them off disk is a dialog that shows an empty box the first time somebody runs Edraw.exe out of
+    in here, because "About Loopwire -> Third-party licences" has to be able to show them, and a dialog that
+    reads them off disk is a dialog that shows an empty box the first time somebody runs Loopwire.exe out of
     a folder that was copied without its subdirectories. The notice is then not given, which is the one
     thing the licence actually asks of us.
 

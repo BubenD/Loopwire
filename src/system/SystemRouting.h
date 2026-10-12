@@ -2,7 +2,7 @@
 #include "system/SystemDesign.h"
 #include <QPointF>
 #include <vector>
-namespace Edraw_Desktop {
+namespace Loopwire {
 // PORTS FOLLOW THEIR CONNECTIONS after a unit or a cable route is moved, keeping port identities intact.
 void arrangeSystemPorts(SystemDesign& design,const QStringList& movedUnits);
 bool systemPathCrossesBox(const std::vector<QPointF>& path,const QRectF& box);

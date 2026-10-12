@@ -29,7 +29,7 @@
 #include <cmath>
 #include <cstdio>
 
-using namespace Edraw_Desktop;
+using namespace Loopwire;
 
 namespace {
 
@@ -446,7 +446,7 @@ int run_mechmodelcanvas_tests() {
     // ---- a library part's mechanical drawing gets a real session too: grey canvas, seeded marks, and
     // a save that writes straight back into the library dialog's own catalog ------------------------
     {
-        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_libpart_session.json"));
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_libpart_session.json"));
         QFile::remove(libFile);
         {
             PartsLibrary lib;

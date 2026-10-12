@@ -5,7 +5,7 @@
 
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // A sheet of paper to plot on: what it is called, how big it is, and how much of it can be printed on.
 //
@@ -84,4 +84,4 @@ struct PageSetup {
     static PageSetup fromJson(const QJsonObject& obj);
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

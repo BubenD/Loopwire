@@ -12,7 +12,7 @@
 #include <cmath>
 #include <cstdio>
 
-using namespace Edraw_Desktop;
+using namespace Loopwire;
 
 namespace {
 int g_fail = 0;
@@ -45,7 +45,7 @@ Document makeSample() {
 
 // WHAT AUTOCAD NEEDS OF A DXF, checked as structure rather than as geometry.
 //
-// Edraw's DXF opened in Edraw, in ezdxf and in the Edo converter, and would not open in AutoCAD. All
+// Loopwire's DXF opened in Loopwire, in ezdxf and in the Edo converter, and would not open in AutoCAD. All
 // three of those normalise what AutoCAD refuses, so nothing in the project noticed for as long as
 // nobody tried the one program the format exists to talk to. Two faults, both invisible to a tolerant
 // reader:
@@ -127,7 +127,7 @@ int run_io_tests() {
     g_fail = 0;
     std::printf("io tests:\n");
 
-    // --- The DXF Edraw writes is one AutoCAD will open.
+    // --- The DXF Loopwire writes is one AutoCAD will open.
     {
         const QString text = dxf::toDxf(makeSample());
         checkDxfIsWellFormed(text);
@@ -210,10 +210,10 @@ int run_io_tests() {
         check(hasText, "dxf: text re-imported");
     }
 
-    // --- Parse a genuine Edraw-schema DWX (hand-written, not via our writer).
+    // --- Parse a genuine Loopwire-schema DWX (hand-written, not via our writer).
     {
         const char* raw = R"JSON({
-          "format":"DWX","version":1,"app":"Edraw","unit":"mm",
+          "format":"DWX","version":1,"app":"Loopwire","unit":"mm",
           "layers":[{"name":"0","color":"#ffffff","visible":true,"locked":false,"weight":2}],
           "entities":[
             {"type":"text","layer":"0","position":{"x":12,"y":34},"text":"HARNESS","size":6},

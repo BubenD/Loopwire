@@ -9,7 +9,7 @@
 
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // THE 3D ROUTE AND THE HARNESS WIZARD'S DESIGN, side by side: each node of the route put for a part of the harness
 // (an End brick - a connector, a splice), and each cable's length read off the route between the parts it joins.
@@ -49,4 +49,4 @@ RouteLengths routeLengthsFor(const BrickDesign& design, const Route3D& route);
 int addHarnessToRoute(Route3D& route, const BrickDesign& design, const std::function<bool(const QString& brick, V3& at)>& placeOf);
 void applyRouteLengths(BrickDesign& design, const RouteLengths& lengths);
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

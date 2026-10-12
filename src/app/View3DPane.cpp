@@ -62,7 +62,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -5975,4 +5975,4 @@ void View3DCanvas::wheelEvent(QWheelEvent* e) {
     update();
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

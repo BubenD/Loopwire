@@ -9,7 +9,7 @@
 #include <functional>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // THE MARKS ON A BRICK: whether its part is on the bill (-1 no part to put on it, 0 not on it, 1 on it), and how
 // well it suits what is linked to it (-1 not checked, 0 suits, 1 something unknown or not linked yet, 2 does not
@@ -64,4 +64,4 @@ std::vector<BrickIssue> brickDrc(const BrickDesign& d, const QString& harness, c
 // moved off its wires on the sheet is found here, whatever its design says.
 std::vector<BrickIssue> drawingConnectivity(const std::vector<Entity>& ents);
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

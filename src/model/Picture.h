@@ -14,7 +14,7 @@
 #include <QSize>
 #include <QString>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // Every meta key a picture uses, in one place.
 namespace PictureKeys {
@@ -57,4 +57,4 @@ bool isPicture(const Entity& e);
 // The file extensions the application will open as a picture, as a file-dialog filter.
 QString pictureFileFilter();
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

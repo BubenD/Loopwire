@@ -10,7 +10,7 @@
 #include <winrt/Windows.Storage.Streams.h>
 #endif
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 PdfRaster renderNativePdf(const QString& path, int pageIndex, int pixelWidth) {
     PdfRaster result;
 #ifdef _WIN32

@@ -7,7 +7,7 @@
 #include <limits>
 #include <queue>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 namespace {
 bool segmentBox(const QPointF& a,const QPointF& b,const QRectF& box) {
     const QRectF r=box.adjusted(.01,.01,-.01,-.01);

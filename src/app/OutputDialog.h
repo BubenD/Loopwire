@@ -13,7 +13,7 @@ class QCheckBox;
 class QToolButton;
 class QLabel;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // Output: what comes out of the drawing, in what order, and where it goes.
 //
@@ -54,4 +54,4 @@ private:
     QLabel* summary_ = nullptr;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

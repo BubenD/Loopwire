@@ -23,7 +23,7 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 MechanicalValidationDialog::MechanicalValidationDialog(Editor* editor, QWidget* parent)
     : QDialog(parent), editor_(editor) {
@@ -509,4 +509,4 @@ void MechanicalValidationDialog::refreshExplanation() {
     detail_->setHtml(html);
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

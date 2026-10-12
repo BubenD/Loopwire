@@ -8,7 +8,7 @@
 #include <QString>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // ==================================================================================================
 // THE BUILD SCRIPT: a harness as the ORDER IT IS BUILT IN, rather than as the tree it ends up being.
@@ -320,4 +320,4 @@ std::vector<MechStepIssue> mechScriptIssues(const MechBuildScript& script,
                                             const MechCompiled& compiled,
                                             const PartsCatalog* catalog);
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

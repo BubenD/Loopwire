@@ -23,7 +23,7 @@
 #include <QTableWidget>
 #include <QVBoxLayout>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -1425,4 +1425,4 @@ bool HarnessStepsDialog::approveAlreadyListed(const std::vector<BomRow>& adding,
     return true;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

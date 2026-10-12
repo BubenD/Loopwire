@@ -4,7 +4,7 @@
 
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -391,4 +391,4 @@ int applyWebFinds(LibraryPart& part, const std::vector<WebFieldFind>& finds) {
     return changed;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

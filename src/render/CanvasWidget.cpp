@@ -31,7 +31,7 @@
 #include <QVector>
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 // Transparent, click-through child that paints nothing but the crosshair, kept
@@ -477,7 +477,7 @@ void CanvasWidget::drawGrid(QPainter& p, const ViewTransform& vt) const {
 
 void CanvasWidget::drawOriginMarker(QPainter& p, const ViewTransform& vt) const {
     const QPointF o = vt.toScreen({0, 0});
-    // Full-canvas axes through the origin (red X, green Y), Edraw-style.
+    // Full-canvas axes through the origin (red X, green Y), Loopwire-style.
     QPen xPen(QColor("#c0413a"));
     xPen.setCosmetic(true);
     xPen.setWidthF(1.2);
@@ -1855,4 +1855,4 @@ bool CanvasWidget::focusNextPrevChild(bool next) {
     return QWidget::focusNextPrevChild(next);
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

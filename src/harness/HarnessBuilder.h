@@ -8,7 +8,7 @@
 #include <QStringList>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // ---- Harness definition ----------------------------------------------------
 // A complete, self-contained description of a wire harness: which connectors sit on
@@ -367,4 +367,4 @@ struct HarnessBuild {
 // Ids are left empty — the caller stamps them as it adds the entities.
 HarnessBuild buildHarness(const HarnessDef& def);
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

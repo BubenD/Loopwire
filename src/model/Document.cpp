@@ -7,7 +7,7 @@
 #include <QUuid>
 #include <algorithm>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 QString Document::validationFingerprint() const {
     QJsonObject content=dwx::toJson(*this);
@@ -128,4 +128,4 @@ Layer* Document::findLayer(const QString& name) {
     return nullptr;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

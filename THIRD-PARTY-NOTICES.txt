@@ -1,16 +1,16 @@
 ==================================================================================================
-EDRAW - THIRD-PARTY SOFTWARE NOTICES AND INFORMATION
+LOOPWIRE - THIRD-PARTY SOFTWARE NOTICES AND INFORMATION
 ==================================================================================================
 
-Edraw is proprietary software. Copyright (C) ETS. All rights reserved.
+Loopwire is proprietary software. Copyright (C) ETS. All rights reserved.
 
-Edraw incorporates and distributes third-party software. This document gives the notices and
+Loopwire incorporates and distributes third-party software. This document gives the notices and
 information required by the licences of that software. Nothing in this document limits or alters
-the licence under which Edraw itself is supplied; nothing in it grants any right in Edraw.
+the licence under which Loopwire itself is supplied; nothing in it grants any right in Loopwire.
 
 The full text of every licence referred to below is supplied alongside this document, in the
-"licenses" folder next to the Edraw program, and can also be read from within the application
-under "About Edraw" -> "Third-party licences".
+"licenses" folder next to the Loopwire program, and can also be read from within the application
+under "About Loopwire" -> "Third-party licences".
 
 
 --------------------------------------------------------------------------------------------------
@@ -21,13 +21,13 @@ under "About Edraw" -> "Third-party licences".
 
   Qt is Copyright (C) The Qt Company Ltd. and other contributors.
 
-  The Qt libraries distributed with Edraw, and their use by Edraw, are covered by the
+  The Qt libraries distributed with Loopwire, and their use by Loopwire, are covered by the
   GNU Lesser General Public License, version 3 (LGPL-3.0-only).
 
   WHY A COPY OF THE GNU GPL IS SUPPLIED WITH THIS PROGRAM
 
-  No part of Edraw, and none of the software distributed with it, is licensed under the GNU
-  General Public License. Edraw contains no GPL-licensed code.
+  No part of Loopwire, and none of the software distributed with it, is licensed under the GNU
+  General Public License. Loopwire contains no GPL-licensed code.
 
   The GPL text is supplied because the LGPL requires it. The LGPL version 3 is not a standalone
   licence: it states that it "incorporates the terms and conditions of version 3 of the GNU
@@ -41,32 +41,32 @@ under "About Edraw" -> "Third-party licences".
       licenses/LGPL-3.0.txt      GNU Lesser General Public License, version 3
                                  - the licence the Qt libraries are used under
       licenses/GPL-3.0.txt       GNU General Public License, version 3
-                                 - incorporated by reference into the above; no code in Edraw
+                                 - incorporated by reference into the above; no code in Loopwire
                                    is licensed under it
 
-  The following Qt modules are distributed with Edraw, as dynamically linked libraries placed
+  The following Qt modules are distributed with Loopwire, as dynamically linked libraries placed
   beside the program, together with the Qt plugins they require:
 
       Qt Core, Qt GUI, Qt Widgets, Qt Network, Qt PrintSupport, Qt SVG, Qt OpenGL
 
   HOW TO OBTAIN THE SOURCE CODE FOR QT
 
-  The Qt libraries distributed with Edraw are unmodified builds of the official Qt release. The
+  The Qt libraries distributed with Loopwire are unmodified builds of the official Qt release. The
   complete corresponding source code for the exact version used is published by The Qt Company
   and may be obtained from:
 
       https://download.qt.io/archive/qt/6.8/6.8.3/single/
 
   This is the designated place from which to copy that source code. Should it become
-  unavailable, contact ETS quoting the Edraw version shown in "About Edraw", and the
+  unavailable, contact ETS quoting the Loopwire version shown in "About Loopwire", and the
   corresponding source for the Qt version distributed with this copy will be made available.
 
   YOUR RIGHT TO REPLACE THE QT LIBRARIES
 
-  The LGPL entitles you to modify the Qt libraries and to run Edraw against your modified
-  version. Edraw is built to make this possible: it links to Qt dynamically, and loads the Qt
+  The LGPL entitles you to modify the Qt libraries and to run Loopwire against your modified
+  version. Loopwire is built to make this possible: it links to Qt dynamically, and loads the Qt
   libraries from ordinary files placed in the program's own folder. To use a Qt build of your
-  own, replace those files with your own binaries of the same Qt version and module set. Edraw
+  own, replace those files with your own binaries of the same Qt version and module set. Loopwire
   performs no integrity check on them and will not prevent their replacement.
 
 
@@ -75,7 +75,7 @@ under "About Edraw" -> "Third-party licences".
 --------------------------------------------------------------------------------------------------
 
   The Qt libraries listed above contain third-party code of their own, which is consequently
-  distributed with Edraw. Those components, their licences and their copyright notices are set
+  distributed with Loopwire. Those components, their licences and their copyright notices are set
   out in the schedule at the end of this document.
 
   Attention is drawn in particular to the FreeType Project, whose licence asks that credit be
@@ -94,7 +94,7 @@ under "About Edraw" -> "Third-party licences".
 
   Open CASCADE Technology is Copyright (C) Open CASCADE SAS and other contributors.
 
-  The Open CASCADE Technology libraries distributed with Edraw, and their use by Edraw, are
+  The Open CASCADE Technology libraries distributed with Loopwire, and their use by Loopwire, are
   covered by the GNU Lesser General Public License, version 2.1 (LGPL-2.1-only), with the
   Open CASCADE exception, version 1.0. Both texts are supplied with this program:
 
@@ -104,9 +104,9 @@ under "About Edraw" -> "Third-party licences".
   The exception permits object code that incorporates material from Open CASCADE Technology's
   header files to be distributed under terms of the distributor's choice, provided that notice
   is given that it makes use of Open CASCADE Technology. This section, and the notice in
-  "About Edraw", are that notice.
+  "About Loopwire", are that notice.
 
-  The Open CASCADE Technology libraries are distributed with Edraw as dynamically linked
+  The Open CASCADE Technology libraries are distributed with Loopwire as dynamically linked
   libraries placed beside the program - the files whose names begin "TK" (TKernel.dll,
   TKMath.dll, TKBRep.dll, TKDESTEP.dll, TKXCAF.dll, TKMesh.dll and the others they need). No
   other third-party library comes with them: they were built without any of Open CASCADE's
@@ -121,22 +121,22 @@ under "About Edraw" -> "Third-party licences".
 
       https://github.com/Open-Cascade-SAS/OCCT/releases/tag/V8.0.1
 
-  They were built with the configuration options set out in the CMakeLists.txt file of Edraw's
+  They were built with the configuration options set out in the CMakeLists.txt file of Loopwire's
   build, and with no change to the source. Should that address become unavailable, contact ETS
-  quoting the Edraw version shown in "About Edraw", and the corresponding source for the Open
+  quoting the Loopwire version shown in "About Loopwire", and the corresponding source for the Open
   CASCADE Technology version distributed with this copy will be made available.
 
   YOUR RIGHT TO REPLACE THE OPEN CASCADE TECHNOLOGY LIBRARIES
 
-  The LGPL entitles you to modify the Open CASCADE Technology libraries and to run Edraw against
-  your modified version. Edraw links to them dynamically and loads them from ordinary files in
+  The LGPL entitles you to modify the Open CASCADE Technology libraries and to run Loopwire against
+  your modified version. Loopwire links to them dynamically and loads them from ordinary files in
   the program's own folder. To use a build of your own, replace those files with your own
-  binaries of the same version, built for the same compiler. Edraw performs no integrity check
+  binaries of the same version, built for the same compiler. Loopwire performs no integrity check
   on them and will not prevent their replacement.
 
   COMPONENTS WITHIN OPEN CASCADE TECHNOLOGY
 
-  The Open CASCADE Technology libraries distributed with Edraw incorporate the following code by
+  The Open CASCADE Technology libraries distributed with Loopwire incorporate the following code by
   other authors, as published within Open CASCADE Technology's own source. Their notices follow.
 
   a) Flex - FlexLexer.h, and the STEP file scanner generated by flex (TKernel.dll, TKDESTEP.dll)
@@ -235,7 +235,7 @@ under "About Edraw" -> "Third-party licences".
 4. DEFLATE DECOMPRESSION - zlib LICENCE
 --------------------------------------------------------------------------------------------------
 
-  Edraw reads compressed data streams out of PDF files using its own implementation of the
+  Loopwire reads compressed data streams out of PDF files using its own implementation of the
   DEFLATE algorithm (RFC 1951) and of the zlib wrapper around it (RFC 1950), written in
   src/io/PdfText.cpp. The canonical Huffman decoder follows the approach of "puff.c", the
   reference implementation by Mark Adler distributed with zlib, which is acknowledged here:
@@ -252,25 +252,25 @@ under "About Edraw" -> "Third-party licences".
            misrepresented as being the original software.
         3. This notice may not be removed or altered from any source distribution.
 
-  Edraw's implementation is an altered version and is plainly marked as such in its source file.
-  No zlib code is distributed with Edraw in binary or source form.
+  Loopwire's implementation is an altered version and is plainly marked as such in its source file.
+  No zlib code is distributed with Loopwire in binary or source form.
 
 
 --------------------------------------------------------------------------------------------------
 5. TRADEMARKS AND REFERENCED STANDARDS
 --------------------------------------------------------------------------------------------------
 
-  The Edraw parts library identifies real components by manufacturer and part number so that
+  The Loopwire parts library identifies real components by manufacturer and part number so that
   users can select the parts they intend to build with. Names including Raychem, TE Connectivity,
   ITT, Molex, Amphenol and DR-25 are the trademarks or registered trademarks of their respective
   owners, and are used for identification only. Their use does not imply any affiliation with,
-  sponsorship by, or endorsement of Edraw or ETS by those owners.
+  sponsorship by, or endorsement of Loopwire or ETS by those owners.
 
-  DXF and AutoCAD are trademarks of Autodesk, Inc. Edraw reads and writes the DXF interchange
-  format from its published specification. Edraw is neither produced by nor endorsed by Autodesk.
+  DXF and AutoCAD are trademarks of Autodesk, Inc. Loopwire reads and writes the DXF interchange
+  format from its published specification. Loopwire is neither produced by nor endorsed by Autodesk.
 
-  Edraw's drawing conventions refer to industry standards, including IPC/WHMA-A-620 and
-  IEC 60617, by reference only. No part of any standards document is reproduced in Edraw, and
+  Loopwire's drawing conventions refer to industry standards, including IPC/WHMA-A-620 and
+  IEC 60617, by reference only. No part of any standards document is reproduced in Loopwire, and
   reference to a standard is not a claim of certification against it.
 
 ==================================================================================================
@@ -278,7 +278,7 @@ SCHEDULE OF THIRD-PARTY COMPONENTS WITHIN QT
 ==================================================================================================
 
 The following components are contained within the Qt 6.8.3 libraries listed above and are
-therefore distributed with Edraw. Each is reproduced here with the copyright notices its licence
+therefore distributed with Loopwire. Each is reproduced here with the copyright notices its licence
 requires be retained. This schedule is generated from the SPDX SBOM published with the Qt
 installation, and is deliberately inclusive: a component listed here may not be active in every
 build configuration.

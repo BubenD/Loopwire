@@ -20,7 +20,7 @@ class QPushButton;
 class QToolButton;
 class QWidget;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // ---- Inks that carry a MEANING --------------------------------------------------------------------
 //
@@ -139,4 +139,4 @@ QWidget* makeColorListEditor(QWidget* parent, const QStringList& codes, const QS
 // ordinary opaque popup, painted in the colours of the application stylesheet.
 void installOpaqueMenus(QCoreApplication* app);
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

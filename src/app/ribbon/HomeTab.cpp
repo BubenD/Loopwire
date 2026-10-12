@@ -34,7 +34,7 @@
 
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 QIcon modelSessionIcon(bool capture) {
@@ -397,4 +397,4 @@ void MainWindow::buildHomeTab() {
     ribbon_->addTab(page, QStringLiteral("Home"));
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

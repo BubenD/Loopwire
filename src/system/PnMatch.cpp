@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -88,4 +88,4 @@ void PnMatcher::snippet(const QString& text, int start, int end, QString& before
     match = collapse(text.mid(start, end - start));
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

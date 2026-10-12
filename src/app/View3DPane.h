@@ -45,7 +45,7 @@ class QWidget;
 class QSplitter;
 class QBoxLayout;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 class View3DCanvas;
 class View3DHelpDialog;
@@ -839,4 +839,4 @@ private:
     mutable bool planeDirty_ = true;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

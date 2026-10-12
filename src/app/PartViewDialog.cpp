@@ -12,7 +12,7 @@
 #include <QPushButton>
 #include <QVBoxLayout>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 PartViewDialog::PartViewDialog(QWidget* parent) : QDialog(parent) {
     setWindowTitle(QStringLiteral("Part"));
@@ -145,4 +145,4 @@ bool PartViewDialog::showPartById(const QString& partId, Show which, QWidget* pa
     return true;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

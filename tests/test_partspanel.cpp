@@ -57,7 +57,7 @@
 
 #include <cstdio>
 
-using namespace Edraw_Desktop;
+using namespace Loopwire;
 
 // The side panel's columns. It gained a leading "#" line number - which counts POSITIONS, so a line moved
 // is renumbered rather than carrying its old number - and everything after it shifted along by one. Named
@@ -936,7 +936,7 @@ int run_partspanel_tests() {
         // drawing itself is being checked, an orange line reads as part of the part, so it is in the way of
         // seeing what the part actually looks like. One eye over the three panes, because it is one question
         // about one part shown three ways.
-        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_eye_lib.json"));
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_eye_lib.json"));
         QFile::remove(libFile);
         {
             PartsLibrary lib;
@@ -1047,7 +1047,7 @@ int run_partspanel_tests() {
         // not the drawing but the row of BUTTONS under it. The fanout has five and the schematic four, so the
         // fanout's drawing was given half again the width of the schematic's for a reason that has nothing to
         // do with either drawing.
-        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_panes_lib.json"));
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_panes_lib.json"));
         QFile::remove(libFile);
         {
             PartsLibrary lib;
@@ -1167,7 +1167,7 @@ int run_partspanel_tests() {
         // and the generator hands the branches out in the order they were marked. A default model has been
         // able to say so all along; a library part, which is the same part with a part number on it, could
         // only be told where it connects.
-        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_faces_lib.json"));
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_faces_lib.json"));
         QFile::remove(libFile);
         {
             PartsLibrary lib;
@@ -1269,7 +1269,7 @@ int run_partspanel_tests() {
         // THE FANOUT BELONGS BESIDE THE SYMBOL IT BELONGS TO. Put down separately it has to be lined up by
         // hand every time, and a fanout lined up by eye against the wrong connector is a drawing that lies.
         // A toggle, because a sheet of forty connectors would otherwise be a sheet of forty fanouts.
-        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_fanout_place.json"));
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_fanout_place.json"));
         QFile::remove(libFile);
         {
             PartsLibrary lib;
@@ -1396,7 +1396,7 @@ int run_partspanel_tests() {
         // double-click on a placed part is nearly always a mis-click, and the answer to a mis-click is
         // nothing at all. Getting to the library is still wanted, and it is on the part's own right-click
         // menu - asked for rather than sprung.
-        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_dblclick_lib.json"));
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_dblclick_lib.json"));
         QFile::remove(libFile);
         {
             PartsLibrary lib;
@@ -1558,7 +1558,7 @@ int run_partspanel_tests() {
         // it is a part being USED. In the library it is being DRAWN, and every line of it has to be movable
         // on its own - a session where the first click selects all seventy-nine lines of a connector body is
         // a session in which nothing can be corrected.
-        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_editprim_lib.json"));
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_editprim_lib.json"));
         QFile::remove(libFile);
         {
             PartsLibrary lib;
@@ -1707,7 +1707,7 @@ int run_partspanel_tests() {
         // left behind twice over on the way out of a session: not shifted with the drawing as it was
         // squared up, and then not copied into the part - so the library still said "no output face
         // marked" over a part that had just been given one.
-        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_facesave_lib.json"));
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_facesave_lib.json"));
         QFile::remove(libFile);
         {
             PartsLibrary lib;
@@ -1816,7 +1816,7 @@ int run_partspanel_tests() {
     {
         // With the pins fitted there is no contact to order, so the menu is not a question with an answer:
         // it goes, rather than sitting there greyed, and the rows that describe the pins take its place.
-        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_pins_lib.json"));
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_pins_lib.json"));
         QFile::remove(libFile);
         {
             PartsLibrary lib;
@@ -1884,7 +1884,7 @@ int run_partspanel_tests() {
         // asked for on its own. And what a double-click on a part's NAME puts down is said once, under the
         // shelf, rather than guessed at: "the mechanical drawing if it has one" is right on an assembly
         // sheet and wrong all day on a schematic.
-        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_shelf_lib.json"));
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_shelf_lib.json"));
         QFile::remove(libFile);
         {
             PartsLibrary lib;
@@ -1998,7 +1998,7 @@ int run_partspanel_tests() {
         // A form is read down its columns - a figure against a field - and the fields were ragged: each had a
         // MAXIMUM width and a stretch shared with the gap behind it, which is not a width at all, so a combo
         // box sat at one size and the box under it at another and the eye did the aligning.
-        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_align_lib.json"));
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_align_lib.json"));
         QFile::remove(libFile);
         {
             PartsLibrary lib;
@@ -2057,7 +2057,7 @@ int run_partspanel_tests() {
         // FIVE BOXES IN A ROW WITH NOTHING OVER THEM is a row somebody works out by typing in it and seeing
         // what happens - and the two in the middle ("20", "AWG") read as one figure until you know the first
         // is the pin's own size and the second the conductor it takes.
-        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_pintbl_lib.json"));
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_pintbl_lib.json"));
         QFile::remove(libFile);
         {
             PartsLibrary lib;
@@ -2136,7 +2136,7 @@ int run_partspanel_tests() {
 
     // ---- the Place menu stays open, the fields still line up, and the bill agrees with itself -------
     {
-        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_four_lib.json"));
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_four_lib.json"));
         QFile::remove(libFile);
         {
             PartsLibrary lib;
@@ -2216,7 +2216,7 @@ int run_partspanel_tests() {
         // Every edit in the bill's window writes into the drawing as it is made, which is what keeps the side
         // panel in step - and it left no way out of a change made by accident: a unit picked from a menu on
         // the wrong row was the drawing's answer from then on.
-        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_bomtwo_lib.json"));
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_bomtwo_lib.json"));
         QFile::remove(libFile);
         {
             PartsLibrary lib;
@@ -2305,7 +2305,7 @@ int run_partspanel_tests() {
         // The figures went one way only: the library filled the pin table's empty cells, and a correction
         // made on the drawing stayed on that drawing - so the next connector placed from the same part came
         // down with the old ones, and the two disagreed with nothing to say which was right.
-        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_back_lib.json"));
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_back_lib.json"));
         QFile::remove(libFile);
         {
             PartsLibrary lib;
@@ -2564,7 +2564,7 @@ int run_partspanel_tests() {
         }
         // OPEN: from a connector to its contact and back - the part picked and shown, its folded group opened.
         {
-            const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_open_tie_lib.json"));
+            const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_open_tie_lib.json"));
             QFile::remove(libFile);
             {
                 PartsLibrary lib;
@@ -2677,7 +2677,7 @@ int run_partspanel_tests() {
 
     // ---- a connector that comes with its wires: a tick, and a row per pin saying what each wire is ----
     {
-        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_wired_lib.json"));
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_wired_lib.json"));
         QFile::remove(libFile);
         {
             PartsLibrary lib;
@@ -2991,7 +2991,7 @@ int run_partspanel_tests() {
                 check(group && group->childIndicatorPolicy() == QTreeWidgetItem::ShowIndicator && group->childCount() == 1 &&
                           group->child(0)->data(0, Qt::UserRole).toString().isEmpty(),
                       "contacts group: a group with its arrow, and a line saying how to add the first contact");
-                check(style.contains(QStringLiteral("branch:selected")) && style.contains(QStringLiteral("edraw_branch_closed")),
+                check(style.contains(QStringLiteral("branch:selected")) && style.contains(QStringLiteral("loopwire_branch_closed")),
                       "tree: the fold arrow is drawn on a picked group too");
             }
             // A FOLDED GROUP STAYS FOLDED when a part in it is picked.
@@ -3036,7 +3036,7 @@ int run_partspanel_tests() {
         // The pane worked on the front and nothing else: the side box only recorded a word, so the back of a
         // connector - which is not the front held up to a mirror, the wires being numbered the other way
         // about - could be neither drawn nor looked at from here.
-        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_sides_lib.json"));
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_sides_lib.json"));
         QFile::remove(libFile);
         {
             PartsLibrary lib;

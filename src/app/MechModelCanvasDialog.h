@@ -9,7 +9,7 @@
 class QLabel;
 class QToolButton;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 class CanvasWidget;
 class Editor;
@@ -60,4 +60,4 @@ private:
     QLabel* hint_ = nullptr;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

@@ -19,7 +19,7 @@
 #include <QStatusBar>
 #include <QUrl>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 void MainWindow::insertPictureFromFile() {
     if (!doc_) return;
@@ -88,4 +88,4 @@ void MainWindow::pasteFromClipboard() {
     editor_->paste();
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

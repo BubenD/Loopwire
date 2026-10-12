@@ -10,7 +10,7 @@ class QLabel;
 class QPushButton;
 class QTableWidget;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 class Editor;
 
@@ -70,4 +70,4 @@ private:
     QHash<QString, double> jointOverrides_;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

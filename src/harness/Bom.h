@@ -8,7 +8,7 @@
 #include <functional>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 class Document;
 struct MechHarnessDef;
@@ -156,4 +156,4 @@ bomItemLookup(const Document& doc, const PartsLibrary& lib);
 // An id nothing in `rows` is using, for a row about to be added.
 QString bomNextRowId(const std::vector<BomRow>& rows);
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

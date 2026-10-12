@@ -15,7 +15,7 @@
 #include <cmath>
 #include <algorithm>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 namespace DatasheetStore {
 
 QString dir() { return AppPaths::datasheetDir(); }
@@ -642,4 +642,4 @@ std::vector<PulledField> pullTechnicalFields(const QString& text, PartKind kind,
     return out;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

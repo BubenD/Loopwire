@@ -66,7 +66,7 @@
 #include <QPainter>
 #include <QSet>
 
-#ifdef EDRAW_HAVE_OCCT
+#ifdef LOOPWIRE_HAVE_OCCT
 // tests/test_occt_fixture.cpp
 bool writeTestStepAssembly(const QString& path);
 #endif
@@ -84,7 +84,7 @@ bool writeTestStepAssembly(const QString& path);
 #include <cmath>
 #include <cstdio>
 
-using namespace Edraw_Desktop;
+using namespace Loopwire;
 
 namespace {
 
@@ -2701,7 +2701,7 @@ void testRoundThirteen() {
 // A CONNECTOR ON THE BILL BRINGS ITS CONTACTS: several tied, the one chosen, one per way; one already on the bill,
 // nothing more.
 void testConnectorContactsOnBill() {
-    const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_bill_contacts.plb"));
+    const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_bill_contacts.plb"));
     QFile::remove(libFile);
     {
         PartsLibrary lib;
@@ -2916,7 +2916,7 @@ void testRoundFifteen() {
 void testRoundSixteen() {
     // THE LIVE BILL.
     {
-        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_live_bill.plb"));
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_live_bill.plb"));
         QFile::remove(libFile);
         {
             PartsLibrary lib;
@@ -3368,7 +3368,7 @@ void testRoundEighteen() {
 void testRoundNineteen() {
     // THE DOTS.
     {
-        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_marks.plb"));
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_marks.plb"));
         QFile::remove(libFile);
         {
             PartsLibrary lib;
@@ -3448,7 +3448,7 @@ void testRoundNineteen() {
     }
     // THE STACK FITS TOGETHER, AND GOES INTO WHAT IT GOES INTO.
     {
-        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_stack.plb"));
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_stack.plb"));
         QFile::remove(libFile);
         {
             PartsLibrary lib;
@@ -3666,7 +3666,7 @@ void testRoundTwenty() {
     }
     // UPDATE FROM LIBRARY: the part changed in the library, the brick and its line on the bill follow.
     {
-        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_update.plb"));
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_update.plb"));
         QFile::remove(libFile);
         auto write = [&libFile](const QString& description) {
             PartsLibrary lib;
@@ -3925,7 +3925,7 @@ void testRoundTwentyThree() {
     check(hasField(PartKind::Connector, "termination"), "library: a connector says whether its contacts crimp or solder");
     check(hasField(PartKind::HeatshrinkBoot, "wall") && hasField(PartKind::YSplit, "wall") && hasField(PartKind::Heatshrink, "wall"),
           "library: a heatshrink, a boot and a Y-split each have a recovered wall thickness");
-    const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_walls.plb"));
+    const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_walls.plb"));
     QFile::remove(libFile);
     {
         PartsLibrary lib;
@@ -4183,7 +4183,7 @@ void testRoundTwentyFive() {
 // step joint; the stretch of cable it takes for the preview only; its splice parts and wires out on the bill; the
 // bundle at the joint against the cover over it; kept with the harness; and the run itself not changed by it.
 void testRoundTwentySix() {
-    const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_joint.plb"));
+    const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_joint.plb"));
     QFile::remove(libFile);
     {
         PartsLibrary lib;
@@ -5970,7 +5970,7 @@ void testRoundFortyTwo() {
     const QString dir = QDir::tempPath() + QStringLiteral("/edraw3d");
     QDir().mkpath(dir);
     QString stepPath;
-#ifdef EDRAW_HAVE_OCCT
+#ifdef LOOPWIRE_HAVE_OCCT
     stepPath = dir + QStringLiteral("/assembly.step");
     check(writeTestStepAssembly(stepPath), "3d env: a STEP assembly written for the test");
     const Environment3D env = loadEnvironment3D(stepPath);
@@ -5988,14 +5988,14 @@ void testRoundFortyTwo() {
     V3 lo, hi;
     check(ball && ball->mesh.bounds(lo, hi) && std::abs(hi.x - 20.0) < 0.3 && std::abs(lo.z + 20.0) < 0.3 &&
               std::abs((lo.y + hi.y) / 2.0 - 40.0) < 0.3,
-          "3d env: a sphere - a surface Edraw's own reader cannot take - read whole, as big as it is and where it is");
+          "3d env: a sphere - a surface Loopwire's own reader cannot take - read whole, as big as it is and where it is");
     check(fullStepReader(), "3d env: this build reads STEP whole");
     QString how;
     check(loadMesh3D(stepPath, &how).f.size() == env.triangles(), "3d: a part's STEP model read whole too");
-    // A hand-written STEP Open CASCADE will not take still reads, by Edraw's own reader.
-    check(!loadMesh3D(dir + QStringLiteral("/cyl.stp"), &how).empty(), "3d: a STEP file Open CASCADE refuses - Edraw's own reader");
+    // A hand-written STEP Open CASCADE will not take still reads, by Loopwire's own reader.
+    check(!loadMesh3D(dir + QStringLiteral("/cyl.stp"), &how).empty(), "3d: a STEP file Open CASCADE refuses - Loopwire's own reader");
 #else
-    std::printf("  3d env: built without Open CASCADE - STEP read by Edraw's own reader\n");
+    std::printf("  3d env: built without Open CASCADE - STEP read by Loopwire's own reader\n");
     stepPath = dir + QStringLiteral("/envquad.obj");
     {
         QFile o(stepPath);
@@ -6030,7 +6030,7 @@ void testRoundFortyTwo() {
     std::printf("  3d view: %s\n", qPrintable(said.section(QLatin1Char('\n'), -1)));
     check(picked.hit && std::abs(picked.point.z - 10.0) < 0.05 && picked.normal.z > 0.99,
           "3d view: a click on the environment picks the point under it, and its face's normal");
-#ifdef EDRAW_HAVE_OCCT
+#ifdef LOOPWIRE_HAVE_OCCT
     check(said.contains(QStringLiteral("Picked Bracket")), "3d view: and says which solid it is, by its name");
 #endif
     // A SECTION across Z below the bracket's top: the click goes on to the first face left standing.
@@ -6038,7 +6038,7 @@ void testRoundFortyTwo() {
     auto* sectionAt = pane.findChild<QSlider*>(QStringLiteral("view3dSectionAt"));
     section->setCurrentIndex(3);
     emit section->activated(3);
-#ifdef EDRAW_HAVE_OCCT  // the stand-in without it is one flat square, with nothing below z = 7
+#ifdef LOOPWIRE_HAVE_OCCT  // the stand-in without it is one flat square, with nothing below z = 7
     V3 envLo, envHi;
     pane.environment().bounds(envLo, envHi);
     sectionAt->setValue(static_cast<int>(std::lround((7.0 - envLo.z) / (envHi.z - envLo.z) * 1000.0)));
@@ -6116,7 +6116,7 @@ void testRoundFortyThree() {
         Document plain(QStringLiteral("plain"));
         check(!dwx::toJson(plain).contains(QStringLiteral("routing3d")), "route: a drawing with none saves none - old files as they were");
     }
-#ifdef EDRAW_HAVE_OCCT
+#ifdef LOOPWIRE_HAVE_OCCT
     // ---- IN THE 3D VIEW: connectors clicked on, a bundle laid, a branch put on it, taken back, saved, read back ----
     const QString dir = QDir::tempPath() + QStringLiteral("/edraw3d");
     const QString stepPath = dir + QStringLiteral("/routing.step");
@@ -6504,7 +6504,7 @@ void testRoundFortyFive() {
             frames.push_back({img, 10});
         }
         frames.push_back({frames.back().image, 10});   // the same again: lengthens the one before
-        const QString path = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_gif_test.gif"));
+        const QString path = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_gif_test.gif"));
         check(gif::write(path, frames), "gif: written");
         QImageReader reader(path);
         int count = 0;
@@ -7135,7 +7135,7 @@ void testRoundFortyNine() {
 
     // ---- THE BAR WHILE A MODEL IS READ ----
     {
-        const QString obj = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_progress_test.obj"));
+        const QString obj = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_progress_test.obj"));
         {
             QFile f(obj);
             f.open(QIODevice::WriteOnly);
@@ -7197,7 +7197,7 @@ void testRoundFortyNine() {
     }
 }
 
-// ROUND FIFTY: A PART'S 3D MODEL BUILT IN EDRAW - simple solids and what is made from the part's drawing and pinout,
+// ROUND FIFTY: A PART'S 3D MODEL BUILT IN LOOPWIRE - simple solids and what is made from the part's drawing and pinout,
 // moved, turned, scaled, mirrored, arrayed, cut; kept as the part's model, and shown so in the 3D view.
 void testRoundFifty() {
     // ---- THE MODEL: KEPT AND READ BACK ----
@@ -7250,7 +7250,7 @@ void testRoundFifty() {
         }
         std::printf("  model: a box with a hole cut - %zu item(s), %zu triangles%s\n", items.size(), tris,
                     note.isEmpty() ? "" : qPrintable(QStringLiteral(" (") + note + QStringLiteral(")")));
-#ifdef EDRAW_HAVE_OCCT
+#ifdef LOOPWIRE_HAVE_OCCT
         check(items.size() == 1 && tris > 12 && inner, "model: a solid marked cut is a hole through the others - its wall inside them");
 #else
         check(items.size() == 2 && !note.isEmpty(), "model: without Open CASCADE a cut is shown, not made, and says why");
@@ -7303,7 +7303,7 @@ void testRoundFifty() {
         dlg.deleteSelected();
         check(dlg.model().bodies.size() == before + 2, "editor: deleted");
         // ---- KEPT AS THE PART'S MODEL, AND SHOWN SO ----
-        const QString file = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_built_test.e3d"));
+        const QString file = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_built_test.e3d"));
         check(dlg.model().save(file) && isPartModelFile(file), "editor: the model written as a file of its own");
         // A harness with the part at its end: its model the built one, in its own colours.
         std::vector<Entity> ents;
@@ -7327,7 +7327,7 @@ void testRoundFifty() {
             }
         std::printf("  editor: the built model in the 3D view - %d item(s) of its own\n", own);
         check(sc.modelled == 1 && own >= 3 && gold, "3d: a built model shown solid by solid, each its own colour - its pins gold");
-        const QString stl = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_built_test.stl"));
+        const QString stl = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_built_test.stl"));
         check(exportModelStl(dlg.items(), stl), "editor: written out as STL");
         QFile f(stl);
         check(f.open(QIODevice::ReadOnly) && f.readAll().contains("facet normal"), "editor: an STL another program reads");
@@ -7337,7 +7337,7 @@ void testRoundFifty() {
     }
     // ---- FROM THE PARTS LIBRARY ----
     {
-        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_build3d_lib.json"));
+        const QString libFile = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_build3d_lib.json"));
         QFile::remove(libFile);
         {
             PartsLibrary lib;
@@ -7642,7 +7642,7 @@ void testRoundFiftyThree() {
     check(canvas->growLength() && laid() > grown + 30.0, "pull: Add loose on - pulled out, the cable longer");
 
     // ---- THE PART'S 3D MODEL ----
-#ifdef EDRAW_HAVE_OCCT
+#ifdef LOOPWIRE_HAVE_OCCT
     LibraryPart part;
     part.kind = PartKind::Connector;
     Part3DEditorDialog dlg(part, PartModel3D{});
@@ -7789,7 +7789,7 @@ void testRoundFiftyFour() {
     canvas->setUseGpu(false);
     pane.reloadRouting(true);
     // A plate with a block on it, read as the environment.
-    const QString obj = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_round52.obj"));
+    const QString obj = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_round52.obj"));
     {
         QFile f(obj);
         f.open(QIODevice::WriteOnly);
@@ -8056,7 +8056,7 @@ void testRoundFiftyFour() {
 // listed on the left (ticked to show), the route on the right; a solid right-clicked hidden, all shown again; a model
 // read with its bar at the bottom right; the ribbon never squeezed - each button its whole name.
 void testRoundFiftyFive() {
-#ifdef EDRAW_HAVE_OCCT
+#ifdef LOOPWIRE_HAVE_OCCT
     const QString dir = QDir::tempPath() + QStringLiteral("/edraw3d");
     QDir().mkpath(dir);
     const QString stepPath = dir + QStringLiteral("/preview.step");
@@ -9314,7 +9314,7 @@ void testRoundSixtyFour() {
     }
 
     // ---- THE PANE: undo and redo, a click selects, attach ----
-    const QString obj = QDir(QDir::tempPath()).filePath(QStringLiteral("edraw_attach_test.obj"));
+    const QString obj = QDir(QDir::tempPath()).filePath(QStringLiteral("loopwire_attach_test.obj"));
     {
         QFile f(obj);
         f.open(QIODevice::WriteOnly);
@@ -9811,10 +9811,10 @@ void testRoundSixtyEight() {
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
-    // SOME ROUNDS ONLY (EDRAW_ROUNDS=FortyThree,FiftySix): each test whose name ends in one of them.
-    const QList<QByteArray> rounds = qgetenv("EDRAW_ROUNDS").split(',');
+    // SOME ROUNDS ONLY (LOOPWIRE_ROUNDS=FortyThree,FiftySix): each test whose name ends in one of them.
+    const QList<QByteArray> rounds = qgetenv("LOOPWIRE_ROUNDS").split(',');
     auto wanted = [&](const char* name) {
-        if (qgetenv("EDRAW_ROUNDS").isEmpty()) return true;
+        if (qgetenv("LOOPWIRE_ROUNDS").isEmpty()) return true;
         for (const QByteArray& r : rounds)
             if (!r.isEmpty() && QByteArray(name).endsWith(r)) return true;
         return false;

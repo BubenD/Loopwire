@@ -10,7 +10,7 @@ class QLabel;
 class QListWidget;
 class QPushButton;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // The Page Setup Manager: the setups a drawing has, and which one the layout showing is using.
 //
@@ -76,4 +76,4 @@ private:
     PageSetup resumeWorking_;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

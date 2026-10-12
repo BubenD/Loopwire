@@ -33,7 +33,7 @@
 
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // ---- MODIFY ----
 void MainWindow::buildModifyTab() {
@@ -58,4 +58,4 @@ void MainWindow::buildModifyTab() {
     ribbon_->addTab(page, QStringLiteral("Modify"));
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

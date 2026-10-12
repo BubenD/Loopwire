@@ -63,7 +63,7 @@
 
 #include <algorithm>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -1598,7 +1598,7 @@ bool SystemDesignView::copySelection() {
     lastPiece_ = piece;
     auto* mime = new QMimeData;
     mime->setData(QString::fromLatin1(kPieceMime), QJsonDocument(piece).toJson(QJsonDocument::Compact));
-    mime->setText(QStringLiteral("Edraw system design: %1 unit(s), %2 harness(es), %3 note(s)")
+    mime->setText(QStringLiteral("Loopwire system design: %1 unit(s), %2 harness(es), %3 note(s)")
                       .arg(check.units.size()).arg(check.cables.size()).arg(check.notes.size()));
     QApplication::clipboard()->setMimeData(mime);
     return true;
@@ -1848,7 +1848,7 @@ bool SystemDesignView::writePdf(const SysPdfOptions& o, const QString& path) con
     if (pages.empty()) return false;
     QPdfWriter writer(path);
     writer.setTitle(design_.name.isEmpty() ? QStringLiteral("System design") : design_.name);
-    writer.setCreator(QStringLiteral("Edraw"));
+    writer.setCreator(QStringLiteral("Loopwire"));
     writer.setResolution(96);
     writer.setPageMargins(QMarginsF(0, 0, 0, 0));
     // EACH PAGE ITS OWN PAPER: set before the page is begun.
@@ -2200,13 +2200,13 @@ bool SystemDesignView::applyTemplate(const QString& given, bool another) {
     }
     DrawingTemplate tpl;
     if (path.startsWith(QLatin1String("builtin:"))) {
-        // A PLAIN SHEET: the frame, zones, revision table and title block Edraw draws for one of that size.
+        // A PLAIN SHEET: the frame, zones, revision table and title block Loopwire draws for one of that size.
         const TemplateSheet* size = templateSheetByName(path.mid(8));
         if (!size) return false;
         tpl.name = size->name;
         tpl.sheet = *size;
     } else if (!tpl.load(path)) {
-        if (!confirm_) QMessageBox::warning(this, QStringLiteral("Template"), QStringLiteral("%1 could not be read as an Edraw template.").arg(QFileInfo(path).fileName()));
+        if (!confirm_) QMessageBox::warning(this, QStringLiteral("Template"), QStringLiteral("%1 could not be read as an Loopwire template.").arg(QFileInfo(path).fileName()));
         return false;
     }
     SysSheet sheet;
@@ -2635,7 +2635,7 @@ QString baseName(const SystemDesign& d) { return d.name.isEmpty() ? QStringLiter
 
 bool SystemDesignView::saveDesignAs(const QString& given) {
     const QString path = askPath(this, given, true, QStringLiteral("Save the system design"), baseName(design_) + QStringLiteral(".wetsys"),
-                                 QStringLiteral("Edraw system design (*.wetsys)"));
+                                 QStringLiteral("Loopwire system design (*.wetsys)"));
     if (path.isEmpty()) return false;
     QString error;
     if (!saveSystemFile(design_, path, &error)) {
@@ -2651,7 +2651,7 @@ bool SystemDesignView::saveDesignAs(const QString& given) {
 
 bool SystemDesignView::openDesign(const QString& given) {
     const QString path = askPath(this, given, false, QStringLiteral("Open a system design"), QString(),
-                                 QStringLiteral("Edraw system design (*.wetsys *.edsys)"));
+                                 QStringLiteral("Loopwire system design (*.wetsys *.edsys)"));
     if (path.isEmpty()) return false;
     SystemDesign read;
     QString error;
@@ -2721,4 +2721,4 @@ bool SystemDesignView::exportCableList(const QString& given) {
     return true;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

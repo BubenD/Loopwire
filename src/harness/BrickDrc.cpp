@@ -9,7 +9,7 @@
 #include <cmath>
 #include <optional>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 // A heatshrink's recovered wall where the library does not give it: 0.30 mm (0.012 in).
@@ -822,9 +822,9 @@ std::vector<BrickIssue> brickDrc(const BrickDesign& d, const QString& harness, c
     return out;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 std::vector<BrickIssue> drawingConnectivity(const std::vector<Entity>& ents) {
     std::vector<BrickIssue> out;
@@ -920,4 +920,4 @@ std::vector<BrickIssue> drawingConnectivity(const std::vector<Entity>& ents) {
     return out;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

@@ -29,7 +29,7 @@
 #include <cmath>
 #include <cstdio>
 
-using namespace Edraw_Desktop;
+using namespace Loopwire;
 
 namespace {
 
@@ -3240,7 +3240,7 @@ int run_mechmodels_tests() {
         // captured drawings - only ever existed in the machine's own app-data folder, so a fresh install
         // started from the bare seed and every drawing made on it was made without the house parts.
         PartsLibrary shipped;
-        const bool got = shipped.load(QStringLiteral(":/defaults/edrawlib.plb"));
+        const bool got = shipped.load(QStringLiteral(":/defaults/loopwirelib.plb"));
         int drawn = 0;
         for (const LibraryPart& p : shipped.parts)
             if (p.hasMechanical() || !p.schematic.isEmpty()) ++drawn;

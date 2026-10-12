@@ -8,7 +8,7 @@
 
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 struct LibraryPart;
 
@@ -54,4 +54,4 @@ void setPartPinout(LibraryPart& part, const std::vector<PdfPin>& pins);
 // What a pin is labelled with on a symbol: its pin and its signal, "1 GND"; the pin alone with no signal.
 QString pinLabelFor(const PdfPin& pin);
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

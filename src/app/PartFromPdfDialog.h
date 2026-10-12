@@ -15,7 +15,7 @@ class QDoubleSpinBox;
 class QLabel;
 class QTableWidget;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 class DrawingPreview;
 
@@ -71,4 +71,4 @@ private:
     QCheckBox* takePinout_ = nullptr;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

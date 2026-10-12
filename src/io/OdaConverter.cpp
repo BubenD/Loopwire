@@ -22,7 +22,7 @@
 #  include <windows.h>
 #endif
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -40,14 +40,14 @@ const char* const kSettingsKey = "io/odaFileConverterPath";
 
 // Whether the converter is run without its window. On by default; the escape hatch exists because
 // this depends on a Qt plugin in somebody else's build, and a user who hits a case the automatic
-// fallback does not cover needs a way to turn it off without waiting for a new Edraw.
+// fallback does not cover needs a way to turn it off without waiting for a new Loopwire.
 const char* const kHiddenRunKey = "io/odaRunHidden";
 
 // ODA's own vocabulary for the command line. Named rather than written inline at the call site: the
 // version string is not free text, and "ACAD2018" mistyped as "ACAD 2018" is rejected by the
 // converter with a message about arguments that says nothing about which one.
 const char* const kOutputVersion = "ACAD2018";
-// No kOutputType constant: the output format is per job now - "DWG" leaving Edraw, "DXF" coming in -
+// No kOutputType constant: the output format is per job now - "DWG" leaving Loopwire, "DXF" coming in -
 // and a constant here would be one of the two silently winning.
 const char* const kRecurse       = "0";   // one directory, which is the temporary one we just made
 const char* const kAudit         = "1";   // let it repair what it can rather than refusing the file
@@ -134,7 +134,7 @@ QString OdaConverter::downloadPageUrl() {
 QStringList OdaConverter::searchedLocations() {
     QStringList out;
     const QString saved = savedPath();
-    if (!saved.isEmpty()) out << QStringLiteral("The path set in Edraw: %1").arg(saved);
+    if (!saved.isEmpty()) out << QStringLiteral("The path set in Loopwire: %1").arg(saved);
 #ifdef Q_OS_WIN
     for (const QString& dir : windowsProgramDirs(false))
         out << QDir::toNativeSeparators(dir + QStringLiteral("/ODA/ODAFileConverter*/")
@@ -221,7 +221,7 @@ OdaConverter::Location OdaConverter::detect() {
 QString OdaConverter::describeOrigin(Origin origin) {
     switch (origin) {
     case Origin::NotFound:          return QStringLiteral("not found");
-    case Origin::Settings:          return QStringLiteral("the path set in Edraw");
+    case Origin::Settings:          return QStringLiteral("the path set in Loopwire");
     case Origin::ProgramFiles:      return QStringLiteral("installed in Program Files");
     case Origin::ProgramFilesX86:   return QStringLiteral("installed in Program Files (x86)");
     case Origin::ApplicationBundle: return QStringLiteral("installed in Applications");
@@ -239,7 +239,7 @@ OdaConverter::OdaConverter(QObject* parent) : QObject(parent) {
 }
 
 OdaConverter::~OdaConverter() {
-    // A converter still running when Edraw closes is killed rather than left parented to nothing.
+    // A converter still running when Loopwire closes is killed rather than left parented to nothing.
     // It is a GUI program: an orphan would sit on the user's desktop with no window they can
     // associate with anything.
     if (proc_ && proc_->state() != QProcess::NotRunning) {
@@ -277,11 +277,11 @@ bool OdaConverter::exportToDwg(const Document& doc, const QString& targetDwgPath
 
     // ---- The temporary directory ----------------------------------------------------------------
     //
-    // Cleared rather than merely created. A previous run that was killed, or an Edraw that crashed
+    // Cleared rather than merely created. A previous run that was killed, or an Loopwire that crashed
     // mid-export, leaves an input.dxf and an out/ behind; converting a stale input and then moving a
     // stale output to the user's chosen filename would hand them last week's drawing under this
     // week's name, with nothing anywhere reporting a problem.
-    tempRoot_ = QDir::tempPath() + QStringLiteral("/edraw_export");
+    tempRoot_ = QDir::tempPath() + QStringLiteral("/loopwire_export");
     cleanupTemp();
     QDir tmp(tempRoot_);
     if (!tmp.mkpath(QStringLiteral("out")))
@@ -331,7 +331,7 @@ bool OdaConverter::importDwgAsDxf(const QString& dwgPath, const QString& outDxfP
         return fail(QStringLiteral("That file could not be read:\n%1")
                         .arg(QDir::toNativeSeparators(dwgPath)));
 
-    tempRoot_ = QDir::tempPath() + QStringLiteral("/edraw_import");
+    tempRoot_ = QDir::tempPath() + QStringLiteral("/loopwire_import");
     cleanupTemp();
     if (!QDir(tempRoot_).mkpath(QStringLiteral("out")))
         return fail(QStringLiteral("Could not create the temporary folder:\n%1")
@@ -414,10 +414,10 @@ bool OdaConverter::startConverter(bool hidden, QString* error) {
         // THE CHILD'S ENVIRONMENT ONLY. Qt reads QT_QPA_PLATFORM once, at start-up, to choose the
         // plugin that owns the screen; "offscreen" owns none, so the converter runs with no window.
         // Setting it here rather than with qputenv matters - qputenv would change THIS process too,
-        // and Edraw is the program with the window the user is looking at.
+        // and Loopwire is the program with the window the user is looking at.
         env.insert(QStringLiteral("QT_QPA_PLATFORM"), QStringLiteral("offscreen"));
     } else {
-        // Never inherited from a system environment that already had it: Edraw's own test suite runs
+        // Never inherited from a system environment that already had it: Loopwire's own test suite runs
         // offscreen, and a converter that inherited that would hit the very dialog this avoids.
         env.remove(QStringLiteral("QT_QPA_PLATFORM"));
     }
@@ -709,9 +709,9 @@ void OdaConverter::cleanupTemp() {
     // Guarded, because this removes a directory tree: only ever the one this class made, never
     // whatever tempRoot_ might have been set to by a future edit.
     const QString here = QDir::cleanPath(tempRoot_);
-    if (here != QDir::cleanPath(QDir::tempPath() + QStringLiteral("/edraw_export"))
-        && here != QDir::cleanPath(QDir::tempPath() + QStringLiteral("/edraw_import"))) return;
+    if (here != QDir::cleanPath(QDir::tempPath() + QStringLiteral("/loopwire_export"))
+        && here != QDir::cleanPath(QDir::tempPath() + QStringLiteral("/loopwire_import"))) return;
     QDir(tempRoot_).removeRecursively();
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

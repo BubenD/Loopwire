@@ -32,7 +32,7 @@
 #include <cmath>
 #include <functional>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -2526,4 +2526,4 @@ void MechWizardDialog::place() {
     connect(editor_, &Editor::overlayChanged, placing, back);
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

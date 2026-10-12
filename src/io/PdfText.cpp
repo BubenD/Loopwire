@@ -8,7 +8,7 @@
 #include <algorithm>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 namespace PdfText {
 
 // ==================================================================================================
@@ -22,7 +22,7 @@ namespace PdfText {
 // ATTRIBUTION. The canonical-Huffman decoder below follows the approach of "puff.c", the reference
 // DEFLATE decoder written by Mark Adler and distributed with zlib (Copyright (C) 2002-2013 Mark Adler).
 // This is an ALTERED version and is marked as such here, as the zlib licence requires: it is a fresh
-// C++ implementation against RFC 1951 rather than a copy, and no zlib code ships with Edraw. The
+// C++ implementation against RFC 1951 rather than a copy, and no zlib code ships with Loopwire. The
 // requirement the licence puts on us is that the origin not be misrepresented - hence this paragraph,
 // which is repeated for the user in THIRD-PARTY-NOTICES.txt. Do not delete it.
 // ==================================================================================================
@@ -1020,4 +1020,4 @@ QByteArray unhex(const QByteArray& raw) { return decodeHexString(raw); }
 int estimateWidth(QChar c) { return helveticaWidth(c); }
 
 } // namespace PdfText
-} // namespace Edraw_Desktop
+} // namespace Loopwire

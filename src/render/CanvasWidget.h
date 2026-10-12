@@ -19,7 +19,7 @@ class QLineEdit;
 class QCompleter;
 class QTimer;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 class Editor;
 
@@ -99,7 +99,7 @@ public:
     // The editor receives input and paints interaction overlays.
     void setEditor(Editor* editor);
 
-    // Zoom to fit all entities (matches Edraw fitView()).
+    // Zoom to fit all entities (matches Loopwire fitView()).
     void fitView();
     // Center the view on a world point (keeping the current zoom, but at least
     // `minScale` if given) — used to jump to a validation discrepancy.
@@ -415,4 +415,4 @@ private:
     static constexpr double kMinViewScale = 0.0005;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

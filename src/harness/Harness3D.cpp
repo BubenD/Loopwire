@@ -14,7 +14,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -1138,7 +1138,7 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
         // next across, its shortest standing up - scaled to the length it is drawn.
         const QString file = modelOf && !p.lib.isEmpty() ? modelOf(p.lib) : QString();
         QString how;
-        // A MODEL BUILT IN EDRAW: each of its solids in its own colour and what it is made of, its X along the way the
+        // A MODEL BUILT IN LOOPWIRE: each of its solids in its own colour and what it is made of, its X along the way the
         // part goes in, its face towards the end away from the harness - scaled to the length it is drawn.
         bool built = false;
         if (!file.isEmpty() && isPartModelFile(file)) {
@@ -1359,4 +1359,4 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
     return scene;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

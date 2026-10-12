@@ -2,7 +2,7 @@
 
 #include <QColor>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // The colours of the CHROME - the ribbon, the menus, the panels, the strips a folded panel leaves behind.
 // Not the drawing: model space stays dark whichever way this is set, because a drawing is read against a
@@ -68,4 +68,4 @@ QColor line();
 
 } // namespace Chrome
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

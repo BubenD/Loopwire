@@ -18,7 +18,7 @@
 
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -344,4 +344,4 @@ void PageSetupManagerDialog::importFrom() {
     rebuild();
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

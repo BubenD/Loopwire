@@ -50,7 +50,7 @@
 #include <cmath>
 #include <mutex>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -344,4 +344,4 @@ bool readStepOcct(const QString& path, std::vector<EnvPart3D>& parts, QString* h
     return false;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

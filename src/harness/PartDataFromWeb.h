@@ -8,7 +8,7 @@
 
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // Reading a part's technical data off a manufacturer's page.
 //
@@ -56,4 +56,4 @@ std::vector<WebFieldFind> partFieldsFromText(const QString& text, const LibraryP
 // Write the finds that were ticked into the part. Returns how many fields it changed.
 int applyWebFinds(LibraryPart& part, const std::vector<WebFieldFind>& finds);
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

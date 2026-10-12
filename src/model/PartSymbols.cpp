@@ -5,7 +5,7 @@
 #include <QtMath>
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -319,4 +319,4 @@ std::vector<Entity> partSymbolEntities(PartSymbol s, const Vec2& at) {
     return d.take();
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

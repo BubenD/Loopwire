@@ -36,7 +36,7 @@
 
 #include <cstdio>
 
-using namespace Edraw_Desktop;
+using namespace Loopwire;
 
 namespace {
 
@@ -51,9 +51,9 @@ void check(bool ok, const char* what) {
 
 QString stubPath() {
 #ifdef Q_OS_WIN
-    return QStringLiteral(EDRAW_ODA_STUB_DIR "/ODAFileConverter.exe");
+    return QStringLiteral(LOOPWIRE_ODA_STUB_DIR "/ODAFileConverter.exe");
 #else
-    return QStringLiteral(EDRAW_ODA_STUB_DIR "/ODAFileConverter");
+    return QStringLiteral(LOOPWIRE_ODA_STUB_DIR "/ODAFileConverter");
 #endif
 }
 
@@ -70,7 +70,7 @@ Document drawingWithContent() {
     return doc;
 }
 
-QString tempRoot() { return QDir::tempPath() + QStringLiteral("/edraw_export"); }
+QString tempRoot() { return QDir::tempPath() + QStringLiteral("/loopwire_export"); }
 
 // Runs an export to completion and reports what finished() said. Returns false on timeout, which is
 // itself a failure worth distinguishing from a reported one.
@@ -138,7 +138,7 @@ void testSavedPathRoundTrip() {
 
 // A remembered path to something that has since been uninstalled must not be kept. Keeping it turns
 // one uninstall into every future export failing at conversion time with ODA's diagnostics rather
-// than at detection time with Edraw's.
+// than at detection time with Loopwire's.
 void testStaleSavedPathIsDropped() {
     QTemporaryDir tmp;
     const QString gone = tmp.path() + QStringLiteral("/ODAFileConverter.exe");
@@ -191,7 +191,7 @@ void testSuccessfulExport() {
 
     QTemporaryDir out;
     const QString target = out.path() + QStringLiteral("/harness.dwg");
-    qputenv("EDRAW_ODA_STUB_MODE", "ok");
+    qputenv("LOOPWIRE_ODA_STUB_MODE", "ok");
 
     bool ok = false;
     QString err;
@@ -215,7 +215,7 @@ void testSilentFailureIsCaught() {
     OdaConverter mgr;
     QTemporaryDir out;
     const QString target = out.path() + QStringLiteral("/silent.dwg");
-    qputenv("EDRAW_ODA_STUB_MODE", "no-output");
+    qputenv("LOOPWIRE_ODA_STUB_MODE", "no-output");
 
     bool ok = true;
     QString err;
@@ -225,7 +225,7 @@ void testSilentFailureIsCaught() {
     check(!QFileInfo(target).exists(), "and no file is left at the destination");
     check(!QDir(tempRoot()).exists(), "and the temporary directory is cleaned up");
 
-    qputenv("EDRAW_ODA_STUB_MODE", "ok");
+    qputenv("LOOPWIRE_ODA_STUB_MODE", "ok");
     OdaConverter::forgetPath();
 }
 
@@ -236,7 +236,7 @@ void testNonZeroExitWithOutputSucceeds() {
     OdaConverter mgr;
     QTemporaryDir out;
     const QString target = out.path() + QStringLiteral("/despite.dwg");
-    qputenv("EDRAW_ODA_STUB_MODE", "exit-fail-ok");
+    qputenv("LOOPWIRE_ODA_STUB_MODE", "exit-fail-ok");
 
     bool ok = false;
     QString err;
@@ -244,7 +244,7 @@ void testNonZeroExitWithOutputSucceeds() {
     check(ok, "a non-zero exit that still produced the DWG is accepted");
     check(QFileInfo(target).isFile(), "and the file is delivered");
 
-    qputenv("EDRAW_ODA_STUB_MODE", "ok");
+    qputenv("LOOPWIRE_ODA_STUB_MODE", "ok");
     OdaConverter::forgetPath();
 }
 
@@ -253,7 +253,7 @@ void testFailedExitIsReported() {
     OdaConverter mgr;
     QTemporaryDir out;
     const QString target = out.path() + QStringLiteral("/failed.dwg");
-    qputenv("EDRAW_ODA_STUB_MODE", "exit-fail");
+    qputenv("LOOPWIRE_ODA_STUB_MODE", "exit-fail");
 
     bool ok = true;
     QString err;
@@ -262,7 +262,7 @@ void testFailedExitIsReported() {
     check(err.contains(QStringLiteral("exit code")) || !err.isEmpty(),
           "the failure names what happened");
 
-    qputenv("EDRAW_ODA_STUB_MODE", "ok");
+    qputenv("LOOPWIRE_ODA_STUB_MODE", "ok");
     OdaConverter::forgetPath();
 }
 
@@ -285,7 +285,7 @@ void testStaleTempIsNotReused() {
     OdaConverter mgr;
     QTemporaryDir out;
     const QString target = out.path() + QStringLiteral("/fresh.dwg");
-    qputenv("EDRAW_ODA_STUB_MODE", "ok");
+    qputenv("LOOPWIRE_ODA_STUB_MODE", "ok");
 
     bool ok = false;
     QString err;
@@ -313,7 +313,7 @@ void testExistingDestinationIsReplaced() {
         f.open(QIODevice::WriteOnly);
         f.write("OLD-CONTENT-THAT-MUST-GO");
     }
-    qputenv("EDRAW_ODA_STUB_MODE", "ok");
+    qputenv("LOOPWIRE_ODA_STUB_MODE", "ok");
 
     bool ok = false;
     QString err;
@@ -329,7 +329,7 @@ void testExistingDestinationIsReplaced() {
 
 // ---- Running it without its window --------------------------------------------------------------
 //
-// THE BUG THESE EXIST FOR. Edraw asked for QT_QPA_PLATFORM=offscreen whenever hiding was wanted, and
+// THE BUG THESE EXIST FOR. Loopwire asked for QT_QPA_PLATFORM=offscreen whenever hiding was wanted, and
 // caught the failure afterwards. ODA's Windows build ships one platform plugin - qwindows.dll - and a
 // Qt program asked for a plugin it does not have does not degrade to a window: it puts up a MODAL
 // error box ("Available platform plugins are: windows") and waits. The process cannot exit until
@@ -367,7 +367,7 @@ QString converterWithOffscreenPlugin(const QTemporaryDir& dir) {
 }
 
 // The regression test. The stand-in has no platforms/ folder, so it stands for ODA's real Windows
-// build, and Edraw must NOT ask it for the offscreen platform.
+// build, and Loopwire must NOT ask it for the offscreen platform.
 void testOffscreenNotRequestedWhenPluginMissing() {
     check(!OdaConverter::offscreenPluginAvailable(stubPath()),
           "a converter with no platforms/ folder is seen to have no offscreen plugin");
@@ -378,8 +378,8 @@ void testOffscreenNotRequestedWhenPluginMissing() {
 
     QTemporaryDir out;
     const QString report = out.path() + QStringLiteral("/platform.txt");
-    qputenv("EDRAW_ODA_STUB_REPORT", report.toLocal8Bit());
-    qputenv("EDRAW_ODA_STUB_MODE", "ok");
+    qputenv("LOOPWIRE_ODA_STUB_REPORT", report.toLocal8Bit());
+    qputenv("LOOPWIRE_ODA_STUB_MODE", "ok");
 
     bool ok = false;
     QString err;
@@ -389,7 +389,7 @@ void testOffscreenNotRequestedWhenPluginMissing() {
     check(platformHandedToConverter(report) == QStringLiteral("unset"),
           "QT_QPA_PLATFORM is NOT set when the converter has no offscreen plugin");
 
-    qunsetenv("EDRAW_ODA_STUB_REPORT");
+    qunsetenv("LOOPWIRE_ODA_STUB_REPORT");
     OdaConverter::forgetPath();
 }
 
@@ -407,8 +407,8 @@ void testOffscreenRequestedWhenPluginPresent() {
 
     QTemporaryDir out;
     const QString report = out.path() + QStringLiteral("/platform.txt");
-    qputenv("EDRAW_ODA_STUB_REPORT", report.toLocal8Bit());
-    qputenv("EDRAW_ODA_STUB_MODE", "ok");
+    qputenv("LOOPWIRE_ODA_STUB_REPORT", report.toLocal8Bit());
+    qputenv("LOOPWIRE_ODA_STUB_MODE", "ok");
 
     bool ok = false;
     QString err;
@@ -419,7 +419,7 @@ void testOffscreenRequestedWhenPluginPresent() {
           "QT_QPA_PLATFORM=offscreen IS set when the plugin is there");
     check(mgr.lastRunWasHidden(), "and the run is reported as hidden");
 
-    qunsetenv("EDRAW_ODA_STUB_REPORT");
+    qunsetenv("LOOPWIRE_ODA_STUB_REPORT");
     OdaConverter::forgetPath();
 }
 
@@ -434,7 +434,7 @@ void testFallsBackWhenOffscreenFailsAnyway() {
 
     QTemporaryDir out;
     const QString target = out.path() + QStringLiteral("/fallback.dwg");
-    qputenv("EDRAW_ODA_STUB_MODE", "needs-display");
+    qputenv("LOOPWIRE_ODA_STUB_MODE", "needs-display");
 
     bool ok = false;
     QString err;
@@ -443,7 +443,7 @@ void testFallsBackWhenOffscreenFailsAnyway() {
     check(mgr.lastRunFellBackToVisible(), "it fell back to running with the window");
     check(QFileInfo(target).isFile(), "and the DWG was delivered");
 
-    qputenv("EDRAW_ODA_STUB_MODE", "ok");
+    qputenv("LOOPWIRE_ODA_STUB_MODE", "ok");
     OdaConverter::forgetPath();
 }
 
@@ -457,8 +457,8 @@ void testHiddenRunCanBeTurnedOff() {
 
     QTemporaryDir out;
     const QString report = out.path() + QStringLiteral("/platform.txt");
-    qputenv("EDRAW_ODA_STUB_REPORT", report.toLocal8Bit());
-    qputenv("EDRAW_ODA_STUB_MODE", "ok");
+    qputenv("LOOPWIRE_ODA_STUB_REPORT", report.toLocal8Bit());
+    qputenv("LOOPWIRE_ODA_STUB_MODE", "ok");
 
     bool ok = false;
     QString err;
@@ -468,7 +468,7 @@ void testHiddenRunCanBeTurnedOff() {
     check(platformHandedToConverter(report) == QStringLiteral("unset"),
           "the offscreen platform is not requested when hiding is off");
 
-    qunsetenv("EDRAW_ODA_STUB_REPORT");
+    qunsetenv("LOOPWIRE_ODA_STUB_REPORT");
     OdaConverter::setHiddenRunEnabled(true);
     OdaConverter::forgetPath();
 }
@@ -501,7 +501,7 @@ void testImportDxfAddsRatherThanReplaces() {
     const int before = static_cast<int>(doc->entities().size());
     check(before >= 5, "the drawing has something in it before the import");
 
-    // A DXF on disk, written by Edraw's own exporter so this is the real file format.
+    // A DXF on disk, written by Loopwire's own exporter so this is the real file format.
     QTemporaryDir tmp;
     Document source;
     source.entities().clear();
@@ -660,7 +660,7 @@ int run_odaexport_tests() {
     odaFailures = 0;
 
     // Saved under the test application's own name (see test_main.cpp), so none of this treads on the
-    // converter path somebody's real Edraw remembers.
+    // converter path somebody's real Loopwire remembers.
     const QString restore = OdaConverter::savedPath();
 
     testDetectionWithNothingInstalled();
@@ -687,7 +687,7 @@ int run_odaexport_tests() {
 
     if (restore.isEmpty()) OdaConverter::forgetPath();
     else OdaConverter::savePath(restore);
-    qunsetenv("EDRAW_ODA_STUB_MODE");
+    qunsetenv("LOOPWIRE_ODA_STUB_MODE");
 
     if (odaFailures == 0) std::printf("  ODA DWG export: OK\n");
     return odaFailures;

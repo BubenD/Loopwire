@@ -21,7 +21,7 @@
 
 #include <algorithm>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -1340,4 +1340,4 @@ SystemDesign SystemDesign::fromJson(const QJsonObject& o) {
     return d;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

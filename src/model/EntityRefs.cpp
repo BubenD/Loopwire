@@ -5,7 +5,7 @@
 #include <QJsonArray>
 #include <QUuid>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 const QStringList& entityRefKeys() {
     // One id each. "host" is the run a break mark or a marking is attached to; "wireId" the wire a label
@@ -88,4 +88,4 @@ void remapEntityReferences(std::vector<Entity>& copies, const QHash<QString, QSt
     }
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

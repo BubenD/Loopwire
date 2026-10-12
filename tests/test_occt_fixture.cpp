@@ -1,5 +1,5 @@
 // A STEP ASSEMBLY FOR THE TESTS, written by Open CASCADE itself: what a CAD program exports, with names, colours and a
-// surface Edraw's own reader cannot take (a sphere). Only in a build that has Open CASCADE.
+// surface Loopwire's own reader cannot take (a sphere). Only in a build that has Open CASCADE.
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeSphere.hxx>
 #include <Quantity_Color.hxx>

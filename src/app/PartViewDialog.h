@@ -16,7 +16,7 @@
 
 class QLabel;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 class DrawingPreview;
 
@@ -46,4 +46,4 @@ private:
     QLabel* data_ = nullptr;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

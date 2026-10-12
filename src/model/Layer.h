@@ -3,9 +3,9 @@
 #include <QJsonObject>
 #include <QString>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
-// A drawing layer. Mirrors Edraw's layer record:
+// A drawing layer. Mirrors Loopwire's layer record:
 // { name, color, visible, locked, weight }.
 struct Layer {
     QString name = "0";
@@ -40,4 +40,4 @@ struct Layer {
     }
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

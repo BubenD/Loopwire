@@ -9,7 +9,7 @@
 #include <functional>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 class Document;
 
@@ -781,4 +781,4 @@ PlacedLibraryPart placeLibraryPartAtFace(const LibraryPart& part, const Vec2& at
                                          const Vec2& bodySide, const MechDrawOptions& opt,
                                          const QString& role = QStringLiteral("fitting"));
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

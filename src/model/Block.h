@@ -10,7 +10,7 @@
 #include <memory>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 class Document;
 class PartsCatalog;
@@ -169,4 +169,4 @@ QStringList blockInstancesIn(const Document& doc, const QString& name);
 // was dropped. Returns how many copies were rebuilt - the point of editing a block.
 int updateBlockInstances(Document& doc, const BlockDef& block);
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

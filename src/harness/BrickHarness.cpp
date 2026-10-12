@@ -18,7 +18,7 @@
 #include <map>
 #include <optional>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // ---- Names ---------------------------------------------------------------------------------------
 
@@ -4493,4 +4493,4 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
     return out;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

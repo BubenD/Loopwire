@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -221,4 +221,4 @@ PageSetup PageSetup::fromJson(const QJsonObject& obj) {
     return setup;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

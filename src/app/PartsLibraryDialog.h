@@ -30,7 +30,7 @@ class QTreeWidgetItem;
 class QVBoxLayout;
 class QWidget;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 class Editor;
 class DrawingPreview;
@@ -306,4 +306,4 @@ private:
     QHash<QString, QWidget*> paramWidgets_; // field key (or key+"Min"/"Max") -> editor
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

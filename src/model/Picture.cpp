@@ -9,7 +9,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 // 96 dpi is what a screen pixel is worth, so a screenshot arrives on the sheet at the size it looked
@@ -108,4 +108,4 @@ QString pictureFileFilter() {
     return QStringLiteral("Pictures (%1);;All files (*)").arg(exts.join(QLatin1Char(' ')));
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

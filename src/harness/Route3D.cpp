@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -738,4 +738,4 @@ Route3D Route3D::fromJson(const QJsonObject& o) {
     return r;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

@@ -10,7 +10,7 @@ class QLineEdit;
 class QListWidget;
 class QPushButton;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 class DrawingPreview;
 class Editor;
@@ -60,4 +60,4 @@ private:
     QPushButton* addToBtn_ = nullptr;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(EdrawDesktop
+project(LoopwireDesktop
     VERSION 0.1.0
-    DESCRIPTION "Edraw desktop - native C++/Qt 2D CAD for wire harnesses"
+    DESCRIPTION "Loopwire desktop - native C++/Qt 2D CAD for wire harnesses"
     LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -27,7 +27,7 @@ endif()
 find_package(Qt6 REQUIRED COMPONENTS Widgets Gui Core PrintSupport Network OpenGL)
 
 # --- Core library (everything except main, so tests can link it) -------------
-add_library(edraw_core STATIC
+add_library(loopwire_core STATIC
     src/geometry/Vec2.h
     src/geometry/Geometry.h
     src/geometry/Geometry.cpp
@@ -237,23 +237,23 @@ add_library(edraw_core STATIC
     src/app/VoltageDropDialog.cpp
 )
 
-target_include_directories(edraw_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(edraw_core PUBLIC Qt6::Widgets Qt6::Gui Qt6::Core Qt6::PrintSupport
+target_include_directories(loopwire_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(loopwire_core PUBLIC Qt6::Widgets Qt6::Gui Qt6::Core Qt6::PrintSupport
                                        Qt6::Network Qt6::OpenGL)
 
 # --- Open CASCADE Technology: STEP models read whole (optional) --------------
 #
-# Edraw's own STEP reader takes planes, cylinders and cones; a real CAD export is mostly B-spline surfaces, and an
+# Loopwire's own STEP reader takes planes, cylinders and cones; a real CAD export is mostly B-spline surfaces, and an
 # assembly besides. Open CASCADE reads all of it. It is optional - without it the build still works, reading STEP
-# files with Edraw's own reader - and it is used through its DLLs only, never linked statically: Open CASCADE is
+# files with Loopwire's own reader - and it is used through its DLLs only, never linked statically: Open CASCADE is
 # LGPL-2.1 with the Open CASCADE exception, and replaceable DLLs are what the LGPL asks for (see
 # THIRD-PARTY-NOTICES.txt).
 #
 # THE BUILD OF IT MATTERS FOR THE LICENCE PAPERWORK. The prebuilt Windows package links FFmpeg, FreeImage, FreeType,
-# TBB, jemalloc and OpenVR - none of which Edraw uses, all of which would then ship and need notices of their own.
+# TBB, jemalloc and OpenVR - none of which Loopwire uses, all of which would then ship and need notices of their own.
 # Build it instead from the release source with only what reading STEP needs:
 #
-#   cmake -S OCCT-8.0.1 -B occt-build -G Ninja -DCMAKE_BUILD_TYPE=Release -DINSTALL_DIR=<EDRAW_OCCT_DIR>
+#   cmake -S OCCT-8.0.1 -B occt-build -G Ninja -DCMAKE_BUILD_TYPE=Release -DINSTALL_DIR=<LOOPWIRE_OCCT_DIR>
 #         -DBUILD_MODULE_FoundationClasses=OFF -DBUILD_MODULE_ModelingData=OFF -DBUILD_MODULE_ModelingAlgorithms=OFF
 #         -DBUILD_MODULE_Visualization=OFF -DBUILD_MODULE_ApplicationFramework=OFF -DBUILD_MODULE_DataExchange=OFF
 #         -DBUILD_MODULE_Draw=OFF -DBUILD_ADDITIONAL_TOOLKITS="TKDESTEP TKMesh TKXCAF TKFillet"
@@ -261,70 +261,70 @@ target_link_libraries(edraw_core PUBLIC Qt6::Widgets Qt6::Gui Qt6::Core Qt6::Pri
 #         -DUSE_RAPIDJSON=OFF -DUSE_DRACO=OFF -DUSE_VTK=OFF -DUSE_OPENGL=OFF -DUSE_GLES2=OFF -DUSE_D3D=OFF
 #   cmake --build occt-build && cmake --install occt-build
 #
-# Every DLL in its bin folder is then Open CASCADE's own, and they are all copied beside Edraw.exe.
-option(EDRAW_WITH_OCCT "Read STEP models through Open CASCADE Technology" ON)
-set(EDRAW_OCCT_DIR "C:/Software/occt-8.0.1/lean" CACHE PATH "Where Open CASCADE is installed")
-set(EDRAW_OCCT_DLLS "")
-if(EDRAW_WITH_OCCT)
-    find_package(OpenCASCADE CONFIG QUIET HINTS "${EDRAW_OCCT_DIR}" "${EDRAW_OCCT_DIR}/cmake")
+# Every DLL in its bin folder is then Open CASCADE's own, and they are all copied beside Loopwire.exe.
+option(LOOPWIRE_WITH_OCCT "Read STEP models through Open CASCADE Technology" ON)
+set(LOOPWIRE_OCCT_DIR "C:/Software/occt-8.0.1/lean" CACHE PATH "Where Open CASCADE is installed")
+set(LOOPWIRE_OCCT_DLLS "")
+if(LOOPWIRE_WITH_OCCT)
+    find_package(OpenCASCADE CONFIG QUIET HINTS "${LOOPWIRE_OCCT_DIR}" "${LOOPWIRE_OCCT_DIR}/cmake")
     if(OpenCASCADE_FOUND)
         message(STATUS "Open CASCADE ${OpenCASCADE_VERSION}: STEP models read whole (${OpenCASCADE_BINARY_DIR})")
-        target_sources(edraw_core PRIVATE src/geometry/StepOcct.h src/geometry/StepOcct.cpp)
-        target_compile_definitions(edraw_core PUBLIC EDRAW_HAVE_OCCT)
-        target_include_directories(edraw_core PRIVATE "${OpenCASCADE_INCLUDE_DIR}")
-        target_link_libraries(edraw_core PRIVATE ${OpenCASCADE_LIBRARIES})
-        file(GLOB EDRAW_OCCT_DLLS "${OpenCASCADE_BINARY_DIR}/*.dll")
+        target_sources(loopwire_core PRIVATE src/geometry/StepOcct.h src/geometry/StepOcct.cpp)
+        target_compile_definitions(loopwire_core PUBLIC LOOPWIRE_HAVE_OCCT)
+        target_include_directories(loopwire_core PRIVATE "${OpenCASCADE_INCLUDE_DIR}")
+        target_link_libraries(loopwire_core PRIVATE ${OpenCASCADE_LIBRARIES})
+        file(GLOB LOOPWIRE_OCCT_DLLS "${OpenCASCADE_BINARY_DIR}/*.dll")
         # A DLL beside it that is not Open CASCADE's own is one the notices do not cover.
-        foreach(_dll IN LISTS EDRAW_OCCT_DLLS)
+        foreach(_dll IN LISTS LOOPWIRE_OCCT_DLLS)
             get_filename_component(_name "${_dll}" NAME)
             if(NOT _name MATCHES "^TK")
                 message(FATAL_ERROR
                     "${_name} in ${OpenCASCADE_BINARY_DIR} is not an Open CASCADE toolkit. It would ship beside "
-                    "Edraw with no notice for it. Build Open CASCADE with its third-party options off (see above).")
+                    "Loopwire with no notice for it. Build Open CASCADE with its third-party options off (see above).")
             endif()
         endforeach()
     else()
         message(WARNING
-            "Open CASCADE was not found in ${EDRAW_OCCT_DIR}. STEP models will be read by Edraw's own reader, "
-            "which takes planes, cylinders and cones only. Set EDRAW_OCCT_DIR, or EDRAW_WITH_OCCT=OFF to silence this.")
+            "Open CASCADE was not found in ${LOOPWIRE_OCCT_DIR}. STEP models will be read by Loopwire's own reader, "
+            "which takes planes, cylinders and cones only. Set LOOPWIRE_OCCT_DIR, or LOOPWIRE_WITH_OCCT=OFF to silence this.")
     endif()
 endif()
 
 # --- Application executable --------------------------------------------------
 # The .rc (compiled by the MSVC resource compiler) embeds the Explorer/taskbar
-# icon in Edraw.exe.
-set(EDRAW_WIN_RESOURCES "")
+# icon in Loopwire.exe.
+set(LOOPWIRE_WIN_RESOURCES "")
 if(WIN32)
-    set(EDRAW_WIN_RESOURCES resources/edraw.rc)
-    target_link_libraries(edraw_core PRIVATE windowsapp)
+    set(LOOPWIRE_WIN_RESOURCES resources/loopwire.rc)
+    target_link_libraries(loopwire_core PRIVATE windowsapp)
 endif()
 
-qt_add_executable(Edraw WIN32
+qt_add_executable(Loopwire WIN32
     src/main.cpp
     # The stylesheet and the SVG carets it names. In the EXECUTABLE, not the library: a .qrc compiled
     # into a plain static library is not reliably registered - the linker may drop its initialiser -
     # and a stylesheet that silently is not there is a bad way to find that out.
-    resources/edraw.qrc
-    ${EDRAW_WIN_RESOURCES}
+    resources/loopwire.qrc
+    ${LOOPWIRE_WIN_RESOURCES}
 )
-target_link_libraries(Edraw PRIVATE edraw_core)
+target_link_libraries(Loopwire PRIVATE loopwire_core)
 
-set_target_properties(Edraw PROPERTIES
+set_target_properties(Loopwire PROPERTIES
     WIN32_EXECUTABLE ON
-    OUTPUT_NAME "Edraw"
+    OUTPUT_NAME "Loopwire"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
     RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}"
     RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}"
     RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}"
     RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${CMAKE_BINARY_DIR}")
 
-# Recompile the .rc (and thus refresh the embedded icon) when edraw.ico changes.
+# Recompile the .rc (and thus refresh the embedded icon) when loopwire.ico changes.
 if(WIN32)
-    set_property(SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/resources/edraw.rc
-                 PROPERTY OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/resources/edraw.ico)
+    set_property(SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/resources/loopwire.rc
+                 PROPERTY OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/resources/loopwire.ico)
 endif()
 
-# The Qt runtime is deployed beside Edraw.exe by every build.
+# The Qt runtime is deployed beside Loopwire.exe by every build.
 #
 # It used to be deployed by hand, once, by whoever set the machine up - and that holds only until the
 # application starts using a Qt module it did not use before. Adding Qt6::PrintSupport (for printing) left
@@ -333,20 +333,20 @@ endif()
 # exactly which DLLs and plugins the binary needs; it is asked after every link, and it copies only what is
 # missing or out of date, so the cost is a second and the failure cannot come back.
 if(WIN32)
-    get_target_property(_edraw_qmake Qt6::qmake IMPORTED_LOCATION)
-    get_filename_component(_edraw_qt_bin "${_edraw_qmake}" DIRECTORY)
-    find_program(EDRAW_WINDEPLOYQT windeployqt HINTS "${_edraw_qt_bin}")
-    if(EDRAW_WINDEPLOYQT)
+    get_target_property(_loopwire_qmake Qt6::qmake IMPORTED_LOCATION)
+    get_filename_component(_loopwire_qt_bin "${_loopwire_qmake}" DIRECTORY)
+    find_program(LOOPWIRE_WINDEPLOYQT windeployqt HINTS "${_loopwire_qt_bin}")
+    if(LOOPWIRE_WINDEPLOYQT)
         # THE THREE --no-* GRAPHICS FLAGS ARE LICENCE DECISIONS as much as size ones.
         #
-        # Left to itself windeployqt copies four graphics libraries beside Edraw.exe:
+        # Left to itself windeployqt copies four graphics libraries beside Loopwire.exe:
         #
         #   opengl32sw.dll                  Mesa's software rasteriser. MIT - so shipping it means
         #                                   carrying Mesa's attribution.
         #   d3dcompiler_47.dll              Microsoft. Not open source; redistributable only on
         #   dxcompiler.dll, dxil.dll        Microsoft's own terms, which would have to be read and met.
         #
-        # Edraw uses none of them. The canvas draws through QPainter. The 3D view draws through OpenGL
+        # Loopwire uses none of them. The canvas draws through QPainter. The 3D view draws through OpenGL
         # (src/render/GlRender3D.cpp), but through the graphics driver's own opengl32.dll; where a machine
         # has no usable OpenGL it falls back to its software renderer, so Mesa's opengl32sw.dll is still not
         # needed - and there is no QRhi or Qt Quick anywhere in the source. Not shipping them is simpler than
@@ -357,107 +357,107 @@ if(WIN32)
         # their own flag, --no-system-dxc-compiler. Dropping one and assuming the other followed is how
         # two undeclared Microsoft binaries end up in a release.
         #
-        # If Edraw ever does take up Qt Quick, or comes to need OpenGL where the driver has none, these flags
+        # If Loopwire ever does take up Qt Quick, or comes to need OpenGL where the driver has none, these flags
         # come off and the notices file has to grow to match.
-        add_custom_command(TARGET Edraw POST_BUILD
-            COMMAND "${EDRAW_WINDEPLOYQT}"
+        add_custom_command(TARGET Loopwire POST_BUILD
+            COMMAND "${LOOPWIRE_WINDEPLOYQT}"
                     "--$<IF:$<CONFIG:Debug>,debug,release>"
                     --no-translations --no-compiler-runtime
                     --no-opengl-sw
                     --no-system-d3d-compiler
                     --no-system-dxc-compiler
                     --verbose 0
-                    "$<TARGET_FILE:Edraw>"
-            COMMENT "Deploying the Qt runtime beside Edraw.exe")
+                    "$<TARGET_FILE:Loopwire>"
+            COMMENT "Deploying the Qt runtime beside Loopwire.exe")
     else()
         message(WARNING
-            "windeployqt was not found next to qmake (${_edraw_qt_bin}). The Qt DLLs will not be kept up "
-            "to date beside Edraw.exe, so adding a Qt module can leave an executable that will not start.")
+            "windeployqt was not found next to qmake (${_loopwire_qt_bin}). The Qt DLLs will not be kept up "
+            "to date beside Loopwire.exe, so adding a Qt module can leave an executable that will not start.")
     endif()
 endif()
 
 # --- The licence paperwork, beside the executable ----------------------------
 #
-# THIS IS NOT HOUSEKEEPING, IT IS THE CONDITION ON WHICH EDRAW MAY SHIP.
+# THIS IS NOT HOUSEKEEPING, IT IS THE CONDITION ON WHICH LOOPWIRE MAY SHIP.
 #
-# Edraw links Qt dynamically and ships Qt's DLLs. That makes Edraw a combined work under the LGPL v3,
+# Loopwire links Qt dynamically and ships Qt's DLLs. That makes Loopwire a combined work under the LGPL v3,
 # and the LGPL asks three things of us in return for it: say that Qt is used and that it is used under
 # the LGPL (§4(a) - the About dialog does that), supply the licence texts (§4(b) - these files), and
 # make Qt's own source code obtainable (the address is written into the notices document).
 #
-# The files are copied on every build rather than only at install time, because build\Edraw.exe IS what
+# The files are copied on every build rather than only at install time, because build\Loopwire.exe IS what
 # gets zipped up and sent to somebody. A copy of the program without these files beside it is a copy
 # that was distributed in breach of the licence, and the way to make that impossible is to leave no
 # build in which they are absent.
 #
-# They are ALSO compiled into the executable (see resources/edraw.qrc), so "About Edraw -> Third-party
+# They are ALSO compiled into the executable (see resources/loopwire.qrc), so "About Loopwire -> Third-party
 # licences" can always show them. Belt and braces on purpose: the file on disk is what an auditor
 # reads, the resource is what the user is shown, and neither can go missing without the other noticing.
-set(EDRAW_LICENSE_FILES
+set(LOOPWIRE_LICENSE_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/THIRD-PARTY-NOTICES.txt")
-set(EDRAW_LICENSE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/licenses")
+set(LOOPWIRE_LICENSE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/licenses")
 
-foreach(_f IN LISTS EDRAW_LICENSE_FILES)
+foreach(_f IN LISTS LOOPWIRE_LICENSE_FILES)
     if(NOT EXISTS "${_f}")
         message(FATAL_ERROR
             "Missing licence document: ${_f}\n"
-            "Edraw may not be built without the notices it is obliged to ship. Regenerate it with:\n"
+            "Loopwire may not be built without the notices it is obliged to ship. Regenerate it with:\n"
             "    python resources/notices/gen_notices.py")
     endif()
 endforeach()
 foreach(_f "LGPL-3.0.txt" "GPL-3.0.txt" "LGPL-2.1.txt" "OCCT-LGPL-EXCEPTION-1.0.txt")
-    if(NOT EXISTS "${EDRAW_LICENSE_DIR}/${_f}")
+    if(NOT EXISTS "${LOOPWIRE_LICENSE_DIR}/${_f}")
         message(FATAL_ERROR
-            "Missing licence text: ${EDRAW_LICENSE_DIR}/${_f}\n"
+            "Missing licence text: ${LOOPWIRE_LICENSE_DIR}/${_f}\n"
             "The LGPL requires both the LGPL and the GPL texts accompany the program. Fetch them from "
             "https://www.gnu.org/licenses/ .")
     endif()
 endforeach()
 
-if(EDRAW_OCCT_DLLS)
-    add_custom_command(TARGET Edraw POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${EDRAW_OCCT_DLLS} "$<TARGET_FILE_DIR:Edraw>"
-        COMMENT "Copying the Open CASCADE DLLs beside Edraw.exe")
+if(LOOPWIRE_OCCT_DLLS)
+    add_custom_command(TARGET Loopwire POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${LOOPWIRE_OCCT_DLLS} "$<TARGET_FILE_DIR:Loopwire>"
+        COMMENT "Copying the Open CASCADE DLLs beside Loopwire.exe")
 endif()
 
-add_custom_command(TARGET Edraw POST_BUILD
+add_custom_command(TARGET Loopwire POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${EDRAW_LICENSE_FILES} "${CMAKE_BINARY_DIR}"
+            ${LOOPWIRE_LICENSE_FILES} "${CMAKE_BINARY_DIR}"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${EDRAW_LICENSE_DIR}" "${CMAKE_BINARY_DIR}/licenses"
-    COMMENT "Copying the third-party notices and licence texts beside Edraw.exe")
+            "${LOOPWIRE_LICENSE_DIR}" "${CMAKE_BINARY_DIR}/licenses"
+    COMMENT "Copying the third-party notices and licence texts beside Loopwire.exe")
 
 # Regenerating the notices from the Qt SBOM, and auditing for GPL exposure. Neither is part of the
 # normal build - the generated file is committed, so a build needs no Python - but:
 #
-#   cmake --build build --target edraw_notices        refresh the notices after a Qt upgrade
-#   cmake --build build --target edraw_notices_check  fail if somebody upgraded Qt and forgot
-#   cmake --build build --target edraw_gpl_audit      fail if anything linked or shipped is GPL-only
+#   cmake --build build --target loopwire_notices        refresh the notices after a Qt upgrade
+#   cmake --build build --target loopwire_notices_check  fail if somebody upgraded Qt and forgot
+#   cmake --build build --target loopwire_gpl_audit      fail if anything linked or shipped is GPL-only
 #
-# The audit is the one to run when changing what Edraw links. Not every Qt module is available under the
+# The audit is the one to run when changing what Loopwire links. Not every Qt module is available under the
 # LGPL - Qt Charts, Qt Data Visualization, Qt Quick 3D and the Qt Virtual Keyboard are GPL-or-commercial
-# only - and adding one would oblige ETS either to publish Edraw's source or to buy a commercial licence.
+# only - and adding one would oblige ETS either to publish Loopwire's source or to buy a commercial licence.
 # Nothing about adding a find_package component looks like that decision at the time, so it is checked.
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_FOUND)
     # Derived here rather than borrowed from the windeployqt block above, which only runs on Windows:
     # the notices describe the Qt that is installed, and that is worth knowing on any platform.
-    get_target_property(_edraw_qmake_n Qt6::qmake IMPORTED_LOCATION)
-    get_filename_component(_edraw_qt_bin_n "${_edraw_qmake_n}" DIRECTORY)
-    get_filename_component(_edraw_qt_root "${_edraw_qt_bin_n}" DIRECTORY)
-    set(_edraw_gen "${CMAKE_CURRENT_SOURCE_DIR}/resources/notices/gen_notices.py")
-    add_custom_target(edraw_notices
-        COMMAND "${Python3_EXECUTABLE}" "${_edraw_gen}" --qt "${_edraw_qt_root}"
+    get_target_property(_loopwire_qmake_n Qt6::qmake IMPORTED_LOCATION)
+    get_filename_component(_loopwire_qt_bin_n "${_loopwire_qmake_n}" DIRECTORY)
+    get_filename_component(_loopwire_qt_root "${_loopwire_qt_bin_n}" DIRECTORY)
+    set(_loopwire_gen "${CMAKE_CURRENT_SOURCE_DIR}/resources/notices/gen_notices.py")
+    add_custom_target(loopwire_notices
+        COMMAND "${Python3_EXECUTABLE}" "${_loopwire_gen}" --qt "${_loopwire_qt_root}"
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
         COMMENT "Regenerating THIRD-PARTY-NOTICES.txt from the Qt SBOM")
-    add_custom_target(edraw_notices_check
-        COMMAND "${Python3_EXECUTABLE}" "${_edraw_gen}" --qt "${_edraw_qt_root}" --check
+    add_custom_target(loopwire_notices_check
+        COMMAND "${Python3_EXECUTABLE}" "${_loopwire_gen}" --qt "${_loopwire_qt_root}" --check
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
         COMMENT "Checking THIRD-PARTY-NOTICES.txt against the installed Qt")
-    add_custom_target(edraw_gpl_audit
-        COMMAND "${Python3_EXECUTABLE}" "${_edraw_gen}" --qt "${_edraw_qt_root}" --audit-gpl
+    add_custom_target(loopwire_gpl_audit
+        COMMAND "${Python3_EXECUTABLE}" "${_loopwire_gen}" --qt "${_loopwire_qt_root}" --audit-gpl
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-        COMMENT "Auditing for GPL exposure in what Edraw links and ships")
+        COMMENT "Auditing for GPL exposure in what Loopwire links and ships")
 
     # THE AUDIT RUNS ON EVERY BUILD, and a GPL-only dependency FAILS the build.
     #
@@ -467,33 +467,33 @@ if(Python3_FOUND)
     # they were making a licensing decision. The build is the only place that is certain to be watching.
     #
     # It costs a fraction of a second: five JSON files read, no network, no compilation. A missing SBOM
-    # warns rather than fails, so this cannot make Edraw unbuildable on a Qt that predates SBOMs.
+    # warns rather than fails, so this cannot make Loopwire unbuildable on a Qt that predates SBOMs.
     #
-    # Python is optional for building Edraw, so a machine without it simply does not get the check - which
+    # Python is optional for building Loopwire, so a machine without it simply does not get the check - which
     # is why the audit is also a target that can be run deliberately, and why the rule is written down in
     # the README rather than living only here.
-    add_dependencies(Edraw edraw_gpl_audit)
+    add_dependencies(Loopwire loopwire_gpl_audit)
 else()
     message(WARNING
-        "Python 3 was not found, so the GPL audit will not run on this machine. Edraw is proprietary and "
+        "Python 3 was not found, so the GPL audit will not run on this machine. Loopwire is proprietary and "
         "must not link GPL-only code; not every Qt module is available under the LGPL. Run "
         "'python resources/notices/gen_notices.py --audit-gpl' on a machine that has Python before "
         "shipping, and see the Licensing section of README.md.")
 endif()
 
 # --- Scratch GUI smoke target (only when a source is pointed at it) ----------
-if(EDRAW_SMOKE_SRC)
-    qt_add_executable(hb_smoke ${EDRAW_SMOKE_SRC} resources/edraw.qrc)
-    target_link_libraries(hb_smoke PRIVATE edraw_core)
+if(LOOPWIRE_SMOKE_SRC)
+    qt_add_executable(hb_smoke ${LOOPWIRE_SMOKE_SRC} resources/loopwire.qrc)
+    target_link_libraries(hb_smoke PRIVATE loopwire_core)
 endif()
 
 # --- The 3D view's help, recorded (built only when asked for: see tools/help3d_gifs.cpp) ---
-qt_add_executable(edraw_help3d_gifs tools/help3d_gifs.cpp)
-set_target_properties(edraw_help3d_gifs PROPERTIES EXCLUDE_FROM_ALL TRUE)
-target_link_libraries(edraw_help3d_gifs PRIVATE edraw_core)
+qt_add_executable(loopwire_help3d_gifs tools/help3d_gifs.cpp)
+set_target_properties(loopwire_help3d_gifs PROPERTIES EXCLUDE_FROM_ALL TRUE)
+target_link_libraries(loopwire_help3d_gifs PRIVATE loopwire_core)
 
 # --- Tests (optional) --------------------------------------------------------
-option(EWIRE_BUILD_TESTS "Build Edraw unit tests" OFF)
+option(EWIRE_BUILD_TESTS "Build Loopwire unit tests" OFF)
 if(EWIRE_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)

@@ -9,7 +9,7 @@
 
 #include <algorithm>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 QStringList loadLibrary() {
@@ -63,4 +63,4 @@ void FontLibrary::applyTo(QFontComboBox* box) {
     box->setCurrentFont(keep);
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

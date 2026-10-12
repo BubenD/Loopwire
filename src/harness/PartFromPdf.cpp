@@ -11,7 +11,7 @@
 #include <cmath>
 #include <map>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -264,4 +264,4 @@ QString pinLabelFor(const PdfPin& pin) {
     return pin.name.trimmed().isEmpty() ? pin.pin : QStringLiteral("%1 %2").arg(pin.pin, pin.name.trimmed());
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

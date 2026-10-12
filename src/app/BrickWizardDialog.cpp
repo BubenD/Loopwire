@@ -60,7 +60,7 @@
 #include <QHelpEvent>
 #include <QShortcut>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -289,8 +289,8 @@ QPointF BrickCanvas::portPoint(const Brick& b, int port) const {
     const double t = std::clamp(reach > 1e-9 ? dot(m, across) / reach : 0.0, -1.0, 1.0);
     // TURNED AND MIRRORED AS ON THE DRAWING (R 45, Space 90, M): its connections go round the brick with it.
     const Brick shown = d_->asOnPane(b);
-    const Vec2 wo = Edraw_Desktop::turnOnDrawing(shown, o).normalized();
-    const Vec2 wa = Edraw_Desktop::turnOnDrawing(shown, across).normalized();
+    const Vec2 wo = Loopwire::turnOnDrawing(shown, o).normalized();
+    const Vec2 wa = Loopwire::turnOnDrawing(shown, across).normalized();
     const QPointF d(wo.x, -wo.y), a(wa.x, -wa.y);
     // Out to the edge of the brick the way the connection looks - at a slant, to its corner side.
     auto toEdge = [&r](const QPointF& u) {
@@ -5780,4 +5780,4 @@ void BrickWizardDialog::place() {
     connect(editor_, &Editor::overlayChanged, placing, back);
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

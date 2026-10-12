@@ -54,7 +54,7 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -4146,4 +4146,4 @@ void HarnessBuilderDialog::reloadAll() {
                                .arg(crossings));
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

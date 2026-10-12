@@ -19,7 +19,7 @@
 #include <QStringList>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // What one element of the make-up is. A "single" is one conductor on its own; the rest are groups that
 // are laid up together and drawn as such.
@@ -200,4 +200,4 @@ std::vector<Entity> cableCrossSection(const CableSpec& spec, double diameterMm);
 // `lengthMm` is how long the run is drawn; the height follows from how many conductors there are.
 std::vector<Entity> cableSchematic(const CableSpec& spec, double lengthMm = 90.0);
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

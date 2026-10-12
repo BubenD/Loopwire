@@ -18,7 +18,7 @@
 #include <QTableWidget>
 #include <QVBoxLayout>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -566,4 +566,4 @@ void CableBuilderDialog::refreshSummary() {
     setStructureText(cableSpecToText(spec_));
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

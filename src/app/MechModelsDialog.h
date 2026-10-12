@@ -19,7 +19,7 @@ class QTreeWidgetItem;
 class QPushButton;
 class QSpinBox;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 class DrawingPreview;
 class Editor;
@@ -175,4 +175,4 @@ private:
     QPushButton* defaultBtn_ = nullptr;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

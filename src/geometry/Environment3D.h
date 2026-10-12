@@ -8,7 +8,7 @@
 
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // ONE SOLID OF THE SPACE A HARNESS IS ROUTED IN: its name in the model and its colour, if the model gives them.
 struct EnvPart3D {
@@ -33,7 +33,7 @@ struct Environment3D {
 using Load3DProgress = std::function<void(int percent, const QString& stage)>;
 
 // Read from a file by its extension. A STEP file through Open CASCADE where this build has it - every surface, the
-// assembly's solids with their names and colours - and through Edraw's own reader where it has not.
+// assembly's solids with their names and colours - and through Loopwire's own reader where it has not.
 Environment3D loadEnvironment3D(const QString& path, const Load3DProgress& progress = {});
 QString environment3DFileFilter();
 // Whether STEP files are read whole, through Open CASCADE.
@@ -75,4 +75,4 @@ private:
     std::vector<Node> nodes_;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

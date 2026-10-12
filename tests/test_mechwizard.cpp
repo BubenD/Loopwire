@@ -29,7 +29,7 @@
 #include <map>
 #include <cstdio>
 
-using namespace Edraw_Desktop;
+using namespace Loopwire;
 
 namespace {
 
@@ -3213,7 +3213,7 @@ void testTheFanFromAModelLeavesItsOwnHousing() {
     // A model for open wires at a connector: two lines running along +x, which is all that is needed -
     // what matters is WHERE it is stretched from, not what it draws.
     // Installed by writing the office's model file, which is what the application reads - and in the
-    // test binary that file is in the TESTS' own app-data folder ("Edraw tests"), so nothing anybody
+    // test binary that file is in the TESTS' own app-data folder ("Loopwire tests"), so nothing anybody
     // has drawn is touched. Taken away again at the end.
     MechModel om;
     om.kind = MechModelKind::ConnectorToCableWires;

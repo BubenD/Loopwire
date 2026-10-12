@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -338,4 +338,4 @@ std::vector<QString> quickSelectDistinctValues(const std::vector<Entity>& pool,
     return out;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

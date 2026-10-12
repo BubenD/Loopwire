@@ -10,7 +10,7 @@
 
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // Shared CAD pictograms: a 24-unit grid, consistent strokes, and an accent for the action.
 // Four raster pixels per logical pixel keep the ribbon sharp at Windows display scaling.
@@ -181,7 +181,7 @@ QIcon makeCadActionIcon(const QString& key, const QColor& ink) {
     p.end();return QIcon(pm);
 }
 
-// Draw a simple monochrome glyph for a tool so the ribbon reads like Edraw's
+// Draw a simple monochrome glyph for a tool so the ribbon reads like Loopwire's
 // icon grid without external assets.
 QIcon makeToolIcon(ToolId id, const QColor& ink, int variant) {
     QString action;
@@ -371,4 +371,4 @@ QIcon makePartSymbolIcon(PartSymbol s, const QColor& ink) {
     return QIcon(pm);
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

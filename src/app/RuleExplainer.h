@@ -8,7 +8,7 @@ class QTimer;
 class QToolButton;
 class QVBoxLayout;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // THE RULE EXPLAINER: hovered over a design rule in a rules list, a small animated picture of what the rule catches -
 // the fault, pulsing red, then the fix, ticked green, round and round - with the rule's name and what it means under
@@ -50,4 +50,4 @@ private:
     QTimer* timer_ = nullptr;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

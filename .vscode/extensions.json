@@ -1,11 +1,11 @@
 {
     // WHAT THIS PROJECT NEEDS INSTALLED BEFORE IT CAN BE BUILT OR TESTED FROM THE EDITOR.
     //
-    // VS Code offers these when the folder is opened, so a machine that has just cloned Edraw is one
+    // VS Code offers these when the folder is opened, so a machine that has just cloned Loopwire is one
     // click from being able to configure, build and run the suite - rather than finding out a piece is
     // missing when a command silently does nothing.
     //
-    // NOTE THAT NONE OF THEM IS A COMPILER. They drive one; they do not supply one. Edraw is built with
+    // NOTE THAT NONE OF THEM IS A COMPILER. They drive one; they do not supply one. Loopwire is built with
     // the MSVC toolchain from Visual Studio Build Tools 2022 ("Desktop development with C++"), which
     // carries cl.exe, CMake and Ninja, and against Qt 6.8 for MSVC 2022. Without those installed
     // CMake Tools has nothing to configure with, whatever extensions are present.

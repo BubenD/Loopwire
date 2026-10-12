@@ -6,7 +6,7 @@
 #include <optional>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 class Document;
 
@@ -61,7 +61,7 @@ enum class SnapMarker {
 
 SnapMarker snapMarkerFor(SnapKind k);
 
-// Drafting settings, mirroring Edraw's snap/ortho/polar toggles.
+// Drafting settings, mirroring Loopwire's snap/ortho/polar toggles.
 struct SnapSettings {
     bool gridSnap = false;
     double gridSize = 10.0;
@@ -95,4 +95,4 @@ SnapResult resolveSnap(const Document& doc, const Vec2& raw,
 
 QString snapKindLabel(SnapKind k);
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

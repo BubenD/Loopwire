@@ -11,7 +11,7 @@ class QPushButton;
 class QTableWidget;
 class QTextBrowser;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 class Editor;
 
@@ -61,4 +61,4 @@ private:
     QTextBrowser* working_ = nullptr;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

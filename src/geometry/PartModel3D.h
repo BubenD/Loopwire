@@ -9,9 +9,9 @@
 
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
-// ---- A part's 3D model, built in Edraw ---------------------------------------------------------------------
+// ---- A part's 3D model, built in Loopwire ---------------------------------------------------------------------
 //
 // A library part with no CAD model of its own can be given one here, put together from simple solids - a box, a
 // cylinder, a tube, a cone, a sphere, a ring, a hexagon - and from the part's own 2D drawing (turned round the way it
@@ -105,4 +105,4 @@ bool modelBounds(const std::vector<ModelItem3D>& items, V3& lo, V3& hi);
 bool exportModelStl(const std::vector<ModelItem3D>& items, const QString& path, QString* error = nullptr);
 bool exportModelObj(const std::vector<ModelItem3D>& items, const QString& path, QString* error = nullptr);
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

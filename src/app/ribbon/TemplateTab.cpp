@@ -42,7 +42,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 void MainWindow::buildTemplateRibbonTab() {
     templateTab_ = new QWidget(ribbon_);
@@ -532,4 +532,4 @@ void MainWindow::applyTemplateRibbon() {
     syncTemplateRibbon();
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

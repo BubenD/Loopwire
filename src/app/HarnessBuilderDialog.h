@@ -23,7 +23,7 @@ class QTableWidget;
 class QTextBrowser;
 class QVBoxLayout;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 class Editor;
 struct LibraryPart;
@@ -281,4 +281,4 @@ private:
     QCheckBox* terminateBox_ = nullptr;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

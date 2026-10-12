@@ -11,7 +11,7 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -192,4 +192,4 @@ bool OutputDialog::oneFilePerSheet() const {
     return perSheet_ && perSheet_->isChecked() && !toPrinter();
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

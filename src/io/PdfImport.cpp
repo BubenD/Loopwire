@@ -14,7 +14,7 @@
 #include <functional>
 #include <vector>
 
-namespace Edraw_Desktop::pdf {
+namespace Loopwire::pdf {
 namespace {
 
 struct Matrix {
@@ -1107,4 +1107,4 @@ bool importFile(Document& doc, const QString& path, QString* error, const Progre
     return parse(file.readAll(), doc, error, progress, pages);
 }
 
-} // namespace Edraw_Desktop::pdf
+} // namespace Loopwire::pdf

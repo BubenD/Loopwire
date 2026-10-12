@@ -7,7 +7,7 @@
 #include <QStringList>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 class Document;
 
@@ -202,4 +202,4 @@ std::vector<QString> voltageDropPath(const VdGraph& graph, const QString& fromNo
 bool voltageDropPathIsSeries(const VdGraph& graph, const std::vector<QString>& segmentIds,
                              const QString& fromNode, const QString& toNode);
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

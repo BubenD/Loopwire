@@ -22,7 +22,7 @@
 #include <QToolButton>
 #include <QWidget>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -362,4 +362,4 @@ void MainWindow::setPanelsVisible(bool on) {
         }
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

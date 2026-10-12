@@ -10,7 +10,7 @@
 #include <cmath>
 #include <limits>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 struct TypeName { EntityType type; const char* name; };
@@ -794,7 +794,7 @@ QJsonObject Entity::toJson() const {
     if (hasExplicitColor()) obj["color"] = color;
     if (weight != 0.0) obj["weight"] = weight;
 
-    // Field names mirror Edraw's DWX schema exactly so files round-trip.
+    // Field names mirror Loopwire's DWX schema exactly so files round-trip.
     switch (type) {
     case EntityType::Line:
     case EntityType::DoubleLine:
@@ -940,4 +940,4 @@ Entity Entity::fromJson(const QJsonObject& obj) {
     return e;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

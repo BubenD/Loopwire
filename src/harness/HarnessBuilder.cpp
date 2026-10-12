@@ -9,7 +9,7 @@
 #include <cmath>
 #include <numeric>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -2528,4 +2528,4 @@ HarnessBuild buildHarness(const HarnessDef& def) {
     return out;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

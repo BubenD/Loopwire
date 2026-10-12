@@ -23,7 +23,7 @@ class QSpinBox;
 class QStackedWidget;
 class QToolButton;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 class DrawingPreview;
 class Editor;
@@ -500,4 +500,4 @@ private:
     QPushButton* backBtn_ = nullptr;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

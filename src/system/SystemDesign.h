@@ -10,7 +10,7 @@
 #include <functional>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // THE SYSTEM DIAGRAM: the units of a system - boxes, each with its part number and revision - their ports (where a
 // cable plugs in), and the cables between ports. Each cable has its own part number and revision and can be linked to
@@ -301,4 +301,4 @@ struct SystemDesign {
     QString freshId(const QString& prefix) const;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

@@ -6,7 +6,7 @@
 
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // FINDING A PART NUMBER IN TEXT, as a person means it. Exact: the P/N stands on its own - "ABC-123" is found in
 // "ABC-123", "(ABC-123)" and "ABC-123." but not in "XABC-1234" or "ABC-123-01" (a joiner - . / _ followed by a letter
@@ -42,4 +42,4 @@ private:
     bool valid_ = false;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

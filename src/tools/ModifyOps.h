@@ -6,7 +6,7 @@
 #include <optional>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // Result of a fillet/chamfer: the two source lines are trimmed in place and a
 // connector entity (arc for fillet, line for chamfer) is returned.
@@ -218,4 +218,4 @@ std::vector<Entity> rectArray(const Entity& src, int rows, int cols,
 // empty for entities that are already primitive (line, circle, arc, text...).
 std::vector<Entity> explodeEntity(const Entity& e);
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

@@ -5,9 +5,9 @@
 
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
-// Snapshot-based undo/redo of the entity list, mirroring Edraw's
+// Snapshot-based undo/redo of the entity list, mirroring Loopwire's
 // pushUndo()/undoAction() model: capture the whole entity vector before a
 // mutation and restore it on undo. Simple and robust for drawing-sized data.
 class UndoStack {
@@ -35,4 +35,4 @@ private:
     static constexpr size_t kMaxDepth = 200;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

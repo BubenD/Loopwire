@@ -22,7 +22,7 @@
 #include <cstdio>
 #include <functional>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -3801,4 +3801,4 @@ PlacedLibraryPart placeLibraryPartAtFace(const LibraryPart& part, const Vec2& at
     return r;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

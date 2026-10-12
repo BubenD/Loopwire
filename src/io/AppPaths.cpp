@@ -5,7 +5,7 @@
 #include <QFileInfo>
 #include <QStandardPaths>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 namespace AppPaths {
 namespace {
 
@@ -18,7 +18,7 @@ QString ensure(const QString& path) {
 
 QString root() {
     // AppDataLocation already ends in the organisation and the application name, so nothing is
-    // added here: appending them again once buried the library under Whatson/Edraw/Whatson/Edraw.
+    // added here: appending them again once buried the library under Whatson/Loopwire/Whatson/Loopwire.
     return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
 }
 
@@ -36,4 +36,4 @@ bool adopt(const QString& from, const QString& to) {
 }
 
 } // namespace AppPaths
-} // namespace Edraw_Desktop
+} // namespace Loopwire

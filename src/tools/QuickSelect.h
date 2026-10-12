@@ -5,7 +5,7 @@
 #include <QString>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // Quick Select (AutoCAD QSELECT): build a selection set from a property filter.
 // The property list offered is derived from the sample object, so a circle offers
@@ -61,4 +61,4 @@ std::vector<QString> quickSelectMatchIds(const std::vector<Entity>& pool,
 std::vector<QString> quickSelectDistinctValues(const std::vector<Entity>& pool,
                                                const QString& key);
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

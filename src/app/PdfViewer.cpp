@@ -18,7 +18,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 PdfViewer::PdfViewer(QWidget* parent):QWidget(parent) {
     setObjectName(QStringLiteral("pdfViewer"));
     auto* layout=new QVBoxLayout(this);layout->setContentsMargins(0,0,0,0);

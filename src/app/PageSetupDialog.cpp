@@ -18,7 +18,7 @@
 
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // The page, drawn small: the paper, the margin the printer will not reach, and the part of the sheet that
 // will land on it. The point of it is that "full bleed", "fit to paper" and an offset stop being words and
@@ -493,4 +493,4 @@ PageSetup PageSetupDialog::setup() const {
     return out;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

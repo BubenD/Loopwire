@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -363,4 +363,4 @@ void mirrorEntity(Entity& e, const Vec2& a, const Vec2& b) {
     e.rotation = 2.0 * axis - e.rotation;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

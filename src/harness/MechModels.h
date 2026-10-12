@@ -8,7 +8,7 @@
 
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // ---- Default mechanical models -------------------------------------------------------------------
 // The standard pieces a harness drawing is made of, each drawn ONCE and used everywhere.
@@ -302,4 +302,4 @@ double mechModelDrawnAcross(const MechModel& model);
 // Distance between the two marked connection points, or 0 when the model has no complete pair.
 double mechModelAnchorLength(const MechModel& model);
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

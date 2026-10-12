@@ -14,7 +14,7 @@
 #include <cmath>
 #include <limits>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -1946,4 +1946,4 @@ std::vector<Entity> explodeEntity(const Entity& e) {
     return out;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

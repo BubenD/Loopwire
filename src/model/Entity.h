@@ -7,9 +7,9 @@
 #include <QString>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
-// Discriminated entity type. Mirrors the Edraw `type` string values so DWX/DXF
+// Discriminated entity type. Mirrors the Loopwire `type` string values so DWX/DXF
 // round-trips stay 1:1 with the original web app.
 enum class EntityType {
     Unknown,
@@ -87,7 +87,7 @@ QString entityTypeToString(EntityType t);
 // ends. Nobody drawing one of those is drawing a twisted pair.
 QString entityTypeDisplayName(EntityType t);
 
-// A single drawing entity. The model deliberately follows Edraw's dynamic
+// A single drawing entity. The model deliberately follows Loopwire's dynamic
 // object: a typed common core plus shared geometry holders, with `meta` carrying
 // type-specific and unknown fields so nothing is lost across a load/save cycle.
 struct Entity {
@@ -255,4 +255,4 @@ bool tableMergeAt(const Entity& e, int row, int col, TableMerge& out);
 // so the caller can leave it alone.
 bool dimensionLineEnds(const Entity& e, Vec2& d1, Vec2& d2);
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

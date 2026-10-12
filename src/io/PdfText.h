@@ -18,7 +18,7 @@
 #include <QHash>
 #include <QString>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 namespace PdfText {
 
 // The text of a PDF, page by page in file order, pages separated by a blank line. Empty when there is
@@ -57,4 +57,4 @@ QByteArray unhex(const QByteArray& raw);
 int estimateWidth(QChar c);
 
 } // namespace PdfText
-} // namespace Edraw_Desktop
+} // namespace Loopwire

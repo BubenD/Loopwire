@@ -1,6 +1,6 @@
 #include "commands/UndoStack.h"
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 void UndoStack::clear() {
     undo_.clear();
@@ -33,4 +33,4 @@ std::vector<Entity> UndoStack::redo(const std::vector<Entity>& current, const QJ
     return next;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

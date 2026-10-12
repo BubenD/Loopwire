@@ -3,7 +3,7 @@
 #include <QJsonObject>
 #include <QString>
 #include <vector>
-namespace Edraw_Desktop {
+namespace Loopwire {
 class Document;
 struct DrawingFieldIssue {
     QString key, field, message, entityId, layout;

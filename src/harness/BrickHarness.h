@@ -13,7 +13,7 @@
 #include <functional>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // ==================================================================================================
 // A HARNESS DESCRIBED AS BRICKS.
@@ -529,4 +529,4 @@ struct BrickBuild {
 BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* catalog,
                              const std::function<int(const QString& libPart)>& itemOf = nullptr);
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

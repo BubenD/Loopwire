@@ -7,7 +7,7 @@
 
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -735,4 +735,4 @@ QIcon icon3D(const QString& key, const QColor& ink, const QColor& accent) {
     return icon;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

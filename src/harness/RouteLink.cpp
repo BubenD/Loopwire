@@ -7,7 +7,7 @@
 #include <limits>
 #include <queue>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -182,4 +182,4 @@ void applyRouteLengths(BrickDesign& design, const RouteLengths& lengths) {
     }
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

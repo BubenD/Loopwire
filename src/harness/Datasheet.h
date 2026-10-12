@@ -6,7 +6,7 @@
 #include <QStringList>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // ---- Datasheets ---------------------------------------------------------------------------------
 // A part's datasheet, kept with the application rather than left wherever it was downloaded to.
@@ -92,4 +92,4 @@ QString sizeTokenOf(const LibraryPart& part);
 // text is not a size at all.
 double sizeAsNumber(const QString& text);
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

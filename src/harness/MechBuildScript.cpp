@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -934,4 +934,4 @@ std::vector<MechStepIssue> mechScriptIssues(const MechBuildScript& script,
     return out;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

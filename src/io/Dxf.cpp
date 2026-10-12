@@ -21,7 +21,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Edraw_Desktop::dxf {
+namespace Loopwire::dxf {
 
 namespace {
 
@@ -34,7 +34,7 @@ QString pair(int code, double value) {
     return QStringLiteral("%1\n%2").arg(code).arg(value, 0, 'g', 12);
 }
 
-// hex -> DXF ACI color index (matches Edraw dxfColor()).
+// hex -> DXF ACI color index (matches Loopwire dxfColor()).
 int colorToIndex(const QString& hex, int fallback = 7) {
     static const QHash<QString, int> map = {
         {"#ff0000", 1}, {"#ffff00", 2}, {"#00ff00", 3}, {"#00ffff", 4},
@@ -45,7 +45,7 @@ int colorToIndex(const QString& hex, int fallback = 7) {
     return map.value(k, (fallback % 7) + 1);
 }
 
-// DXF ACI color index -> hex (matches Edraw colorIndexToHex()).
+// DXF ACI color index -> hex (matches Loopwire colorIndexToHex()).
 QString indexToColor(int index, int fallback) {
     static const QHash<int, QString> map = {
         {1, "#ff0000"}, {2, "#ffff00"}, {3, "#00ff00"}, {4, "#00ffff"},
@@ -84,7 +84,7 @@ QString colorFromTrueColor(const QString& value) {
 // than the nearest of the 255 ACI indices. Code 420 was introduced in AutoCAD 2004 (AC1018). This
 // file declares itself AC1009 - R12, from 1992 - in its header, and a reader that has been told R12
 // and then meets a group code that did not exist for another twelve years is entitled to reject the
-// file. AutoCAD does. Every tolerant reader - Edraw's own importer, ezdxf, the Edo converter - skips
+// file. AutoCAD does. Every tolerant reader - Loopwire's own importer, ezdxf, the Edo converter - skips
 // the unknown code and says nothing, which is why the file looked fine everywhere except the one
 // program the format exists to talk to.
 //
@@ -93,8 +93,8 @@ QString colorFromTrueColor(const QString& value) {
 // R2000+ file - means handles on every entity, a BLOCK_RECORD table and an OBJECTS section, which is
 // a different piece of work and not one to do by accident.
 //
-// The READER still understands 420, and must: files from AutoCAD 2004 onwards carry it, and Edraw
-// imports those. This is a constraint on what Edraw writes, not on what it accepts.
+// The READER still understands 420, and must: files from AutoCAD 2004 onwards carry it, and Loopwire
+// imports those. This is a constraint on what Loopwire writes, not on what it accepts.
 QString commonDxf(const Entity& e, const Document& doc) {
     const QString color = resolveEntityColor(e, doc);
     return pair(8, e.layer.isEmpty() ? QStringLiteral("0") : e.layer) + "\n" +
@@ -175,7 +175,7 @@ QString toDxf(const Document& docIn) {
 
     // THE TABLES AutoCAD EXPECTS TO FIND, in the order R12 puts them.
     //
-    // Edraw used to write LTYPE and LAYER and stop there, which is enough for a reader that only
+    // Loopwire used to write LTYPE and LAYER and stop there, which is enough for a reader that only
     // wants the geometry and not enough for AutoCAD. Three are added here because entities in this
     // file refer to them, directly or by omission:
     //
@@ -362,7 +362,7 @@ QString toDxf(const Document& docIn) {
     //     0<LF>SECTION<CR><LF>
     //
     // - the code line ending LF and the value line ending CRLF, alternating, all the way down.
-    // Tolerant readers normalise that and never mention it, which is why it survived: Edraw's own
+    // Tolerant readers normalise that and never mention it, which is why it survived: Loopwire's own
     // importer, ezdxf and the Edo converter all read those files without complaint. AutoCAD reads
     // lines strictly and would not open them at all.
     //
@@ -1941,4 +1941,4 @@ bool importFile(Document& doc, const QString& path, QString* error) {
     return parseBytes(doc, file.readAll(), error);
 }
 
-} // namespace Edraw_Desktop::dxf
+} // namespace Loopwire::dxf

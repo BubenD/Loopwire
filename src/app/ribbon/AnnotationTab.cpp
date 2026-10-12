@@ -33,7 +33,7 @@
 
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // ---- ANNOTATION ----
 void MainWindow::buildAnnotationTab() {
@@ -105,4 +105,4 @@ void MainWindow::buildAnnotationTab() {
     ribbon_->addTab(page, QStringLiteral("Annotation"));
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

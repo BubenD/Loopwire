@@ -6,7 +6,7 @@
 
 #include <vector>
 
-namespace Edraw_Desktop::gif {
+namespace Loopwire::gif {
 
 // ONE PICTURE OF AN ANIMATION, and how long it stays up, in hundredths of a second.
 struct Frame {
@@ -24,4 +24,4 @@ struct Frame {
 QByteArray encode(const std::vector<Frame>& frames);
 bool write(const QString& path, const std::vector<Frame>& frames, QString* error = nullptr);
 
-} // namespace Edraw_Desktop::gif
+} // namespace Loopwire::gif

@@ -5,7 +5,7 @@
 #include <functional>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // THE NAVIGATION WHEEL: round and see-through, in a pane's corner - the harness wizard's brick pane, the 3D view -
 // segments round a middle that names the one under the pointer. Each segment an action, drawn as its own little
@@ -56,4 +56,4 @@ private:
 };
 
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

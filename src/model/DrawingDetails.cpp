@@ -4,7 +4,7 @@
 #include <QHash>
 #include <algorithm>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 QString drawingFieldKey(const QString& key) {
     if(key.compare(QLatin1String("DDpntxt"),Qt::CaseInsensitive)==0)return QStringLiteral("drawingNo");
     if(key.compare(QLatin1String("DDrvtxt"),Qt::CaseInsensitive)==0)return QStringLiteral("revision");

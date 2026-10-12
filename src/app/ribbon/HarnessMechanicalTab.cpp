@@ -42,7 +42,7 @@
 
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 namespace {
 // THE LONG PARAMETER STRIP KEEPS ITS FIELD WIDTHS. Only its viewport fits the ribbon, so independent
 // start and finish settings can be scrolled into view without cutting labels or stacking controls.
@@ -1778,4 +1778,4 @@ void MainWindow::buildHarnessMechanicalTab() {
     ribbon_->addTab(page, QStringLiteral("Harness mechanical"));
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

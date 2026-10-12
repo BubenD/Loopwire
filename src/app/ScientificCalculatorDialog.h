@@ -8,7 +8,7 @@ class QLineEdit;
 class QListWidget;
 class QToolButton;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // A calculator for expressions rather than a row of disconnected one-key operations. The field takes
 // ordinary arithmetic as well as functions - sin(30), sqrt(2*pi), 2^10 - and the keypad only writes the
@@ -48,4 +48,4 @@ private:
     bool resultShown_ = false;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

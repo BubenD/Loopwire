@@ -20,7 +20,7 @@
 #include <QTableWidget>
 #include <QVBoxLayout>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 PartFromPdfDialog::PartFromPdfDialog(const QString& pdfPath, const QString& partTitle, QWidget* parent)
     : QDialog(parent) {
@@ -299,4 +299,4 @@ std::vector<PdfPin> PartFromPdfDialog::pinout() const {
     return out;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

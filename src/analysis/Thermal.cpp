@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 namespace {
 
 constexpr double kPi = 3.14159265358979323846;
@@ -323,4 +323,4 @@ double thermalSuggestedMm2(const ThRequest& request, double targetC) {
     return 0.0;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

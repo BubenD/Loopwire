@@ -14,7 +14,7 @@
 #include <cmath>
 #include <functional>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -45,7 +45,7 @@ QHash<QString, QString> styleOf(const QString& style) {
 }
 
 // A BOX'S TEXT TO A UNIT: what it is ("[PCBA]", "[Mechanical]") and its description after it, its name, its part number
-// and its revision ("rev X") - as Edraw writes them, or a name and a description from any other.
+// and its revision ("rev X") - as Loopwire writes them, or a name and a description from any other.
 void unitFromLabel(SysUnit& u, const QString& label) {
     QStringList lines = label.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
     for (QString& l : lines) l = l.trimmed();
@@ -94,7 +94,7 @@ void cableFromLabel(SysCable& c, const QString& label) {
     if (!words.isEmpty()) c.description = words.join(QLatin1Char(' '));
 }
 
-// A PORT'S TEXT: its name, and its connector's part number in brackets after it, as Edraw writes it.
+// A PORT'S TEXT: its name, and its connector's part number in brackets after it, as Loopwire writes it.
 void portFromLabel(SysPort& p, const QString& label) {
     static const QRegularExpression withPn(QStringLiteral("^(.*?)\\s*\\((.+)\\)\\s*$"));
     if (const QRegularExpressionMatch m = withPn.match(label.trimmed()); m.hasMatch()) {
@@ -592,7 +592,7 @@ bool importSystemVsdx(const QString& path, SystemDesign& out, QString* error) {
             continue;
         }
         if (s.noFill && s.geometry.size() >= 2) {
-            // A LINE DRAWN AS A SHAPE (as Edraw writes a cable): its corners, from the shape's corner.
+            // A LINE DRAWN AS A SHAPE (as Loopwire writes a cable): its corners, from the shape's corner.
             Line l;
             l.id = s.id;
             l.text = s.words.trimmed();
@@ -615,7 +615,7 @@ bool importSystemVsdx(const QString& path, SystemDesign& out, QString* error) {
             continue;
         shapes.push_back(sh);
     }
-    // A PORT'S NAME, written beside its square (as Edraw writes it): given to the square nearest it.
+    // A PORT'S NAME, written beside its square (as Loopwire writes it): given to the square nearest it.
     for (const VShape& s : found) {
         const double w = s.cell.value(QStringLiteral("Width")), h = s.cell.value(QStringLiteral("Height"));
         if (!(s.text.value(QStringLiteral("LineColor")).compare(QLatin1String("#FFFFFF"), Qt::CaseInsensitive) == 0 && w * perInch <= 70)) continue;
@@ -646,4 +646,4 @@ bool importSystemDiagram(const QString& path, SystemDesign& out, QString* error)
     return false;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

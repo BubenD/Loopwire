@@ -19,7 +19,7 @@
 #include <QUrl>
 #include <QVBoxLayout>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 BlockDialog::BlockDialog(Editor* editor, QWidget* parent) : QDialog(parent), editor_(editor) {
     setWindowTitle(QStringLiteral("Blocks"));
@@ -304,4 +304,4 @@ void BlockDialog::removeSelected() {
     if (summary_) summary_->setText(QStringLiteral("Deleted %1.").arg(name));
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

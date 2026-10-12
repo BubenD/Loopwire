@@ -20,7 +20,7 @@ class QSpinBox;
 class QStackedWidget;
 class QTableWidget;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 class DrawingPreview;
 class Editor;
@@ -252,4 +252,4 @@ private:
     QDoubleSpinBox* splitOd_ = nullptr;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

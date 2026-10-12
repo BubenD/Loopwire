@@ -1,4 +1,4 @@
-add_executable(edraw_tests
+add_executable(loopwire_tests
     test_geometry.cpp
     test_editor.cpp
     test_io.cpp
@@ -40,39 +40,39 @@ add_executable(edraw_tests
     # cannot check that from a binary the resource was never compiled into. Listed on the target rather than
     # on the core library for the same reason the application lists it: a .qrc compiled into a plain static
     # library is not reliably registered.
-    ../resources/edraw.qrc
+    ../resources/loopwire.qrc
 )
 # Widgets, because the step builder is a window and is tested as one.
-target_link_libraries(edraw_tests PRIVATE edraw_core Qt6::Core Qt6::Gui Qt6::Widgets)
+target_link_libraries(loopwire_tests PRIVATE loopwire_core Qt6::Core Qt6::Gui Qt6::Widgets)
 # The editor tests build deep call trees (recursive entity traversal, large
 # local buffers in test cases). The Windows default 1 MB stack is not enough
 # and the runner silently overflows before it can print anything. 16 MB
 # matches the desktop application's headroom.
 if(WIN32 AND MSVC)
-    target_link_options(edraw_tests PRIVATE /STACK:16777216,16777216)
+    target_link_options(loopwire_tests PRIVATE /STACK:16777216,16777216)
 endif()
 
 # THE QT RUNTIME BESIDE THE TEST BINARY, TOO.
 #
-# windeployqt runs for Edraw.exe and leaves the DLLs in the build root. Nothing put them next to
-# edraw_tests.exe, so running the tests the obvious way - double-clicking them, or from their own
+# windeployqt runs for Loopwire.exe and leaves the DLLs in the build root. Nothing put them next to
+# loopwire_tests.exe, so running the tests the obvious way - double-clicking them, or from their own
 # directory - stopped dead at "Qt6Widgets.dll was not found" before a single test had run. They worked
 # only when started from the build root, which is a thing somebody has to know and tell you; a test
 # suite that cannot be run by running it is one that quietly stops being run.
 #
 # Same flags as the application's own deployment, and for the same licence reasons - see the long note
 # beside them in the top-level CMakeLists.
-if(WIN32 AND EDRAW_WINDEPLOYQT)
-    add_custom_command(TARGET edraw_tests POST_BUILD
-        COMMAND "${EDRAW_WINDEPLOYQT}"
+if(WIN32 AND LOOPWIRE_WINDEPLOYQT)
+    add_custom_command(TARGET loopwire_tests POST_BUILD
+        COMMAND "${LOOPWIRE_WINDEPLOYQT}"
                 "--$<IF:$<CONFIG:Debug>,debug,release>"
                 --no-translations --no-compiler-runtime
                 --no-opengl-sw
                 --no-system-d3d-compiler
                 --no-system-dxc-compiler
                 --verbose 0
-                "$<TARGET_FILE:edraw_tests>"
-        COMMENT "Deploying the Qt runtime beside edraw_tests.exe")
+                "$<TARGET_FILE:loopwire_tests>"
+        COMMENT "Deploying the Qt runtime beside loopwire_tests.exe")
 endif()
 
 # AND THE OFFSCREEN PLATFORM PLUGIN, WHICH WINDEPLOYQT DOES NOT BRING.
@@ -87,33 +87,33 @@ endif()
 # and the release build gets qoffscreen.dll without either being spelled out here.
 if(WIN32)
     if(TARGET Qt6::QOffscreenIntegrationPlugin)
-        add_custom_command(TARGET edraw_tests POST_BUILD
+        add_custom_command(TARGET loopwire_tests POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E make_directory
-                    "$<TARGET_FILE_DIR:edraw_tests>/platforms"
+                    "$<TARGET_FILE_DIR:loopwire_tests>/platforms"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     "$<TARGET_FILE:Qt6::QOffscreenIntegrationPlugin>"
-                    "$<TARGET_FILE_DIR:edraw_tests>/platforms"
-            COMMENT "Copying the offscreen platform plugin beside edraw_tests.exe")
+                    "$<TARGET_FILE_DIR:loopwire_tests>/platforms"
+            COMMENT "Copying the offscreen platform plugin beside loopwire_tests.exe")
     else()
         message(WARNING
             "Qt6::QOffscreenIntegrationPlugin was not found, so qoffscreen.dll will not be copied beside "
-            "edraw_tests.exe. The suite forces QT_QPA_PLATFORM=offscreen and will fail fast on startup "
+            "loopwire_tests.exe. The suite forces QT_QPA_PLATFORM=offscreen and will fail fast on startup "
             "with no output unless QT_QPA_PLATFORM_PLUGIN_PATH points at a Qt that has it.")
     endif()
 endif()
 
 # Open CASCADE's DLLs beside the test binary too, where the build reads STEP through it - and the fixture that writes
 # a STEP assembly with it for the tests.
-if(EDRAW_OCCT_DLLS)
-    target_sources(edraw_tests PRIVATE test_occt_fixture.cpp)
-    target_include_directories(edraw_tests PRIVATE "${OpenCASCADE_INCLUDE_DIR}")
-    target_link_libraries(edraw_tests PRIVATE ${OpenCASCADE_LIBRARIES})
-    add_custom_command(TARGET edraw_tests POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${EDRAW_OCCT_DLLS} "$<TARGET_FILE_DIR:edraw_tests>"
-        COMMENT "Copying the Open CASCADE DLLs beside edraw_tests.exe")
+if(LOOPWIRE_OCCT_DLLS)
+    target_sources(loopwire_tests PRIVATE test_occt_fixture.cpp)
+    target_include_directories(loopwire_tests PRIVATE "${OpenCASCADE_INCLUDE_DIR}")
+    target_link_libraries(loopwire_tests PRIVATE ${OpenCASCADE_LIBRARIES})
+    add_custom_command(TARGET loopwire_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${LOOPWIRE_OCCT_DLLS} "$<TARGET_FILE_DIR:loopwire_tests>"
+        COMMENT "Copying the Open CASCADE DLLs beside loopwire_tests.exe")
 endif()
 
-add_test(NAME edraw_tests COMMAND edraw_tests)
+add_test(NAME loopwire_tests COMMAND loopwire_tests)
 
 # THE STAND-IN FOR THE ODA FILE CONVERTER.
 #
@@ -122,7 +122,7 @@ add_test(NAME edraw_tests COMMAND edraw_tests)
 # its own directory so the name cannot collide with anything, and so a test can point the manager at
 # it by path.
 #
-# Deliberately free of Qt: it stands in for a program Edraw only ever talks to through argv and the
+# Deliberately free of Qt: it stands in for a program Loopwire only ever talks to through argv and the
 # filesystem, and giving it Qt would make the test binary's dependencies say something untrue about
 # what the manager needs.
 add_executable(oda_stub oda_stub.cpp)
@@ -133,7 +133,7 @@ set_target_properties(oda_stub PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_CURRENT_BINARY_DIR}/odastub"
     RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_CURRENT_BINARY_DIR}/odastub"
     RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${CMAKE_CURRENT_BINARY_DIR}/odastub")
-add_dependencies(edraw_tests oda_stub)
+add_dependencies(loopwire_tests oda_stub)
 # Where it landed, so the test does not have to guess at the generator's directory layout.
-target_compile_definitions(edraw_tests PRIVATE
-    EDRAW_ODA_STUB_DIR="${CMAKE_CURRENT_BINARY_DIR}/odastub")
+target_compile_definitions(loopwire_tests PRIVATE
+    LOOPWIRE_ODA_STUB_DIR="${CMAKE_CURRENT_BINARY_DIR}/odastub")

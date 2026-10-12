@@ -1,0 +1,28 @@
+// Windows application icon and version information for Loopwire.exe.
+// The lowest-numbered ICON resource is used as the executable's icon.
+IDI_ICON1 ICON "loopwire.ico"
+
+1 VERSIONINFO
+FILEVERSION 0,1,0,0
+PRODUCTVERSION 0,1,0,0
+FILEOS 0x4
+FILETYPE 0x1
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "Whatson"
+            VALUE "FileDescription", "Loopwire - harness and cable CAD"
+            VALUE "FileVersion", "0.1.0"
+            VALUE "InternalName", "Loopwire"
+            VALUE "OriginalFilename", "Loopwire.exe"
+            VALUE "ProductName", "Loopwire"
+            VALUE "ProductVersion", "0.1.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

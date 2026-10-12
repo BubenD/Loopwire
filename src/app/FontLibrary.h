@@ -4,7 +4,7 @@
 
 class QFontComboBox;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // Central font library shared by every text editor in the app (the on-canvas
 // text editor, the Text dialog and the Connector build fonts). Bundled font
@@ -20,4 +20,4 @@ public:
     static void applyTo(QFontComboBox* box);
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

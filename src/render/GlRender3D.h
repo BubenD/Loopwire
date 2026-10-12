@@ -4,7 +4,7 @@
 
 #include <memory>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // THE SAME PICTURE AS renderScene3D, DRAWN BY THE GRAPHICS CARD - for a CAD model of a million triangles, which the
 // software renderer cannot turn smoothly. Drawn off screen into a picture, so the 3D view paints it as it paints the
@@ -30,4 +30,4 @@ private:
     std::unique_ptr<Impl> d_;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

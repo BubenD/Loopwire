@@ -12,7 +12,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 namespace {
 
 // A part's identity for totalling: its library id if it came from the library, else the P/N it was
@@ -485,4 +485,4 @@ std::vector<BomRow> bomFromDrawing(const Document& doc, const PartsLibrary& lib)
     return out;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

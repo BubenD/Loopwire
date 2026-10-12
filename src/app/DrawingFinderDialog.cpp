@@ -37,7 +37,7 @@
 #include <QUrl>
 #include <QVBoxLayout>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -461,7 +461,7 @@ void DrawingFinderDialog::showResult(int row) {
 }
 
 void DrawingFinderDialog::open(const QString& path) {
-    // A drawing in Edraw; a PDF or a list in what opens it.
+    // A drawing in Loopwire; a PDF or a list in what opens it.
     const QString suffix = QFileInfo(path).suffix().toLower();
     if (suffix == QLatin1String("pdf") || suffix == QLatin1String("csv")) QDesktopServices::openUrl(QUrl::fromLocalFile(path));
     else emit openRequested(path);
@@ -572,4 +572,4 @@ QString DrawingFinderDialog::choose(QWidget* parent, const QString& text) {
     return dlg.chosen();
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

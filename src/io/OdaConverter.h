@@ -8,7 +8,7 @@
 class QProcess;
 class QTimer;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 class Document;
 
@@ -19,20 +19,20 @@ class Document;
 //
 // DWG is Autodesk's proprietary binary format. Writing it correctly is not a weekend's work, and a
 // DWG writer that is *almost* right is worse than none: it produces a file that opens, reports no
-// error, and is missing the drawing. That is not hypothetical - Edraw's sibling utility edo-convert
+// error, and is missing the drawing. That is not hypothetical - Loopwire's sibling utility edo-convert
 // can nominally write DWG, and a DXF -> DWG -> DXF round trip through it came back with an empty
 // ENTITIES section: 210 entities in, 0 out, exit code 0, a valid AC1015 header and a plausible file
-// size. Nothing about the result said it had failed. So Edraw does not write DWG itself and does not
+// size. Nothing about the result said it had failed. So Loopwire does not write DWG itself and does not
 // use edo-convert to do it; it asks a converter that is known to get it right.
 //
-// WHY EDRAW DOES NOT SHIP IT
+// WHY LOOPWIRE DOES NOT SHIP IT
 //
 // The ODA File Converter is free of charge, but "free of charge" is not "free to redistribute". Its
 // licence is granted to the person who downloads it, from the Open Design Alliance, on acceptance of
-// their terms. Bundling it in Edraw's installer would put ETS in the business of redistributing
+// their terms. Bundling it in Loopwire's installer would put ETS in the business of redistributing
 // somebody else's licensed binary, and silently downloading it in the background would take the
 // acceptance of those terms out of the user's hands - which is the same problem wearing a different
-// hat. So Edraw does neither. It looks for a copy the user installed, and when there is none it says
+// hat. So Loopwire does neither. It looks for a copy the user installed, and when there is none it says
 // so and offers to open the download page, where the user meets ODA's terms themselves.
 //
 // The consequence to keep in mind: THE CONVERTER MAY LEGITIMATELY BE ABSENT. That is not an error
@@ -43,7 +43,7 @@ class Document;
 // WHY OUT OF PROCESS
 //
 // The same reason it is out of process for edo-convert: a separate program that we run and whose
-// output we read is a program whose licence does not reach into Edraw. Nothing here links or includes
+// output we read is a program whose licence does not reach into Loopwire. Nothing here links or includes
 // anything of ODA's. The only things that cross the boundary are a command line, a file on disk and
 // an exit code.
 // ==================================================================================================
@@ -122,7 +122,7 @@ public:
     // A false return means finished() will NOT be emitted.
     bool exportToDwg(const Document& doc, const QString& targetDwgPath, QString* error);
 
-    // THE OTHER DIRECTION: a DWG turned into a DXF that Edraw can read.
+    // THE OTHER DIRECTION: a DWG turned into a DXF that Loopwire can read.
     //
     // Asynchronous like the export, and reports on the same finished() signal. `outDxfPath` is where
     // the converted DXF is put - a caller's temporary file, normally, which it then parses and
@@ -180,7 +180,7 @@ public:
     // How long a conversion may take before it is assumed to have hung. The ODA converter is a GUI
     // program driven by a command line, and a GUI program that hits an unexpected condition puts a
     // dialog on screen and waits - forever, when nobody is looking at it. Without this, that is an
-    // Edraw that never finishes exporting and cannot be made to stop.
+    // Loopwire that never finishes exporting and cannot be made to stop.
     static constexpr int kTimeoutMs = 180000;   // three minutes
 
     // How long the window-hiding keeps hiding before it puts everything back. A conversion that has
@@ -235,9 +235,9 @@ private:
     QString outputType_;
     QString producedSuffix_;
 
-    QString tempRoot_;      // <temp>/edraw_export when exporting, <temp>/edraw_import when importing
-    QString tempInput_;     // <temp>/edraw_export/input.dxf
-    QString tempOutDir_;    // <temp>/edraw_export/out
+    QString tempRoot_;      // <temp>/loopwire_export when exporting, <temp>/loopwire_import when importing
+    QString tempInput_;     // <temp>/loopwire_export/input.dxf
+    QString tempOutDir_;    // <temp>/loopwire_export/out
     QString target_;        // where the finished .dwg is to end up
     bool reportedDone_ = false;   // finished() is emitted exactly once per export
     bool lastRunHidden_ = false;        // did the attempt just made hide the window?
@@ -250,4 +250,4 @@ private:
     qint64 hideStartedMs_ = 0;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

@@ -5,14 +5,14 @@
 #include <QStringList>
 #include <QWidget>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
-// The window shown while the application builds itself: the Edraw logo, and the module
+// The window shown while the application builds itself: the Loopwire logo, and the module
 // currently being loaded. The steps are real - MainWindow reports each one as it finishes -
 // so the line under the logo says what the wait is actually spent on.
 //
 // The logo is a picture file, looked for beside the executable (and in the source tree while
-// developing) as "edraw-logo.png". With no file there, the wordmark is drawn instead, so the
+// developing) as "loopwire-logo.png". With no file there, the wordmark is drawn instead, so the
 // splash never depends on an asset being present.
 class SplashScreen : public QWidget {
     Q_OBJECT
@@ -35,4 +35,4 @@ private:
     QElapsedTimer shown_;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

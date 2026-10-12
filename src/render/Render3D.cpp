@@ -6,7 +6,7 @@
 #include <cmath>
 #include <limits>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 V3 Camera3D::eye() const {
     const double y = yawDeg * M_PI / 180.0, p = pitchDeg * M_PI / 180.0;
@@ -228,4 +228,4 @@ void renderScene3D(QImage& image, const std::vector<DrawItem3D>& items, const Ca
     }
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

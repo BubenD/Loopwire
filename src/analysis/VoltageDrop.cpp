@@ -11,7 +11,7 @@
 #include <limits>
 #include <queue>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 namespace {
 
 // Two points are the same node when they are this close: wires are routed to pin ends exactly, and
@@ -762,4 +762,4 @@ VdReport analyzeVoltageDrop(const VdGraph& g, const VdRequest& req) {
     return out;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

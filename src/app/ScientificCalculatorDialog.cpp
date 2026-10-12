@@ -16,7 +16,7 @@
 #include <functional>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 namespace {
 
 constexpr double kPi = 3.141592653589793238462643383279502884;
@@ -597,4 +597,4 @@ QString ScientificCalculatorDialog::displayForTest() const { return result_->tex
 int ScientificCalculatorDialog::historyCountForTest() const { return history_->count(); }
 void ScientificCalculatorDialog::focusExpression() const { expression_->setFocus(Qt::OtherFocusReason); }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

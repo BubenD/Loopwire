@@ -10,7 +10,7 @@ REM
 REM Run this after saving models in the manager or parts in the library, then BUILD - the files are read into
 REM the executable at build time - and commit what changed.
 setlocal
-set "SRC=%APPDATA%\Whatson\Edraw"
+set "SRC=%APPDATA%\Whatson\Loopwire"
 set "DST=%~dp0resources\defaults"
 if not exist "%DST%" mkdir "%DST%"
 
@@ -21,12 +21,12 @@ if not exist "%SRC%\mech-models.json" (
     if errorlevel 1 (echo FAILED to copy the models & exit /b 1)
     echo models  : %SRC%\mech-models.json
 )
-if not exist "%SRC%\library\edrawlib.plb" (
-    echo No parts library on this machine yet: %SRC%\library\edrawlib.plb
+if not exist "%SRC%\library\loopwirelib.plb" (
+    echo No parts library on this machine yet: %SRC%\library\loopwirelib.plb
 ) else (
-    copy /Y "%SRC%\library\edrawlib.plb" "%DST%\edrawlib.plb" >nul
+    copy /Y "%SRC%\library\loopwirelib.plb" "%DST%\loopwirelib.plb" >nul
     if errorlevel 1 (echo FAILED to copy the library & exit /b 1)
-    echo library : %SRC%\library\edrawlib.plb
+    echo library : %SRC%\library\loopwirelib.plb
 )
 
 echo.

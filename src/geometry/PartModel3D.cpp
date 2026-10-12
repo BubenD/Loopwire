@@ -1,6 +1,6 @@
 #include "geometry/PartModel3D.h"
 
-#ifdef EDRAW_HAVE_OCCT
+#ifdef LOOPWIRE_HAVE_OCCT
 #include "geometry/StepOcct.h"
 #endif
 
@@ -13,7 +13,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -311,7 +311,7 @@ bool PartModel3D::load(const QString& path, PartModel3D& model, QString* error) 
     }
     const QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
     if (!doc.isObject() || !doc.object().contains(QStringLiteral("edrawPartModel"))) {
-        if (error) *error = QStringLiteral("not a part model made in Edraw");
+        if (error) *error = QStringLiteral("not a part model made in Loopwire");
         return false;
     }
     model = fromJson(doc.object());
@@ -388,7 +388,7 @@ std::vector<ModelItem3D> modelItems(const PartModel3D& model, QString* note) {
     auto byOcct = [&](const Body3D& b) {
         return bodyIsPrimitive(b.shape) && (anyCut || b.fillet > 1e-6 || b.chamfer > 1e-6 || b.shape == BodyShape::Sketch);
     };
-#ifdef EDRAW_HAVE_OCCT
+#ifdef LOOPWIRE_HAVE_OCCT
     std::vector<OcctSolid> cuts;
     auto solidOf = [](const Body3D& b) {
         OcctSolid s;
@@ -415,7 +415,7 @@ std::vector<ModelItem3D> modelItems(const PartModel3D& model, QString* note) {
     for (const Body3D& b : model.bodies) {
         if (!b.shown) continue;
         if (b.cut) {
-#ifdef EDRAW_HAVE_OCCT
+#ifdef LOOPWIRE_HAVE_OCCT
             continue;   // taken out of the others
 #else
             // NO OPEN CASCADE: the hole shown where it is, see-through red, and not taken out.
@@ -429,7 +429,7 @@ std::vector<ModelItem3D> modelItems(const PartModel3D& model, QString* note) {
             continue;
         }
         Mesh3D mesh;
-#ifdef EDRAW_HAVE_OCCT
+#ifdef LOOPWIRE_HAVE_OCCT
         if (byOcct(b)) {
             QString why;
             if (!occtCutSolid(solidOf(b), cuts, mesh, &why)) {
@@ -441,7 +441,7 @@ std::vector<ModelItem3D> modelItems(const PartModel3D& model, QString* note) {
         if (mesh.empty()) mesh = bodyMesh(b);
         out.push_back({std::move(mesh), b.color, b.texture, b.id, 1.0});
     }
-#ifndef EDRAW_HAVE_OCCT
+#ifndef LOOPWIRE_HAVE_OCCT
     if (anyCut && note) *note = QStringLiteral("Cutting needs Open CASCADE, which this build has not got - the cuts are shown "
                                                "in red, and not taken out");
 #endif
@@ -502,4 +502,4 @@ bool exportModelObj(const std::vector<ModelItem3D>& items, const QString& path, 
     return true;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

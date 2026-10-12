@@ -23,7 +23,7 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 void MainWindow::buildSystemTab() {
     auto [page, lay] = makeTabPage();
@@ -236,7 +236,7 @@ void MainWindow::buildSystemTab() {
     // THE DESIGN AS A FILE OF ITS OWN - saved, opened - and the diagram out for draw.io and Visio.
     group(QStringLiteral("File"), [&](QWidget* w, QHBoxLayout* row) {
         big(w, row, "systemSave", QStringLiteral("Save as"), QStringLiteral("export"),
-            QStringLiteral("Save the system design as a file of its own (.wetsys, Edraw's own) - it is kept in the drawing too"),
+            QStringLiteral("Save the system design as a file of its own (.wetsys, Loopwire's own) - it is kept in the drawing too"),
             [this] { if (systemView_) systemView_->saveDesignAs(); });
         big(w, row, "systemImport", QStringLiteral("Import"), QStringLiteral("import"),
             QStringLiteral("A system diagram from draw.io (.drawio) or Visio (.vsdx) - its boxes as units, the small squares on "
@@ -290,4 +290,4 @@ void MainWindow::showSystemDesign(bool on) {
     }
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

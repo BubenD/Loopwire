@@ -16,7 +16,7 @@
 #include <array>
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -521,7 +521,7 @@ QString MechModelSet::defaultPath() {
 // of them again. A set of default models is not personal data; it is part of what the program IS.
 //
 // Inside the executable rather than beside it, so there is no file to lose, no install step to forget, and
-// no folder that a copied Edraw.exe leaves behind.
+// no folder that a copied Loopwire.exe leaves behind.
 QString MechModelSet::shippedPath() {
     return QStringLiteral(":/defaults/mech-models.json");
 }
@@ -873,4 +873,4 @@ std::vector<Entity> mechModelEntities(const MechModel& model, const Vec2& at, do
     return built;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

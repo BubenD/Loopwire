@@ -3,8 +3,8 @@
 // goes. Over each picture: the pointer, a ring where it clicks, the key pressed, and a line saying what is being
 // done. Written as the animated GIFs the help shows, into resources/help3d.
 //
-//   cmake --build build --config Release --target edraw_help3d_gifs
-//   build\Release\edraw_help3d_gifs.exe <repo>\resources\help3d
+//   cmake --build build --config Release --target loopwire_help3d_gifs
+//   build\Release\loopwire_help3d_gifs.exe <repo>\resources\help3d
 //
 // Run on the screen (not the offscreen platform) with Qt's binaries on PATH. Recorded from the program itself, the
 // help cannot show the view doing something it does not do.
@@ -34,7 +34,7 @@
 #include <functional>
 #include <iterator>
 
-using namespace Edraw_Desktop;
+using namespace Loopwire;
 
 namespace {
 

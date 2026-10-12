@@ -10,7 +10,7 @@
 #include <functional>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // THE HARNESS IN 3D: its runs as tubes - a cable's body, the transition sleeves on it, each wire where the wires fan
 // out - and each end part as its 3D model, fitted to where and how big it is drawn, or as a box where it has none.
@@ -85,4 +85,4 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
 // A model file read once and kept while it is unchanged on disk.
 const Mesh3D& cachedMesh3D(const QString& path, QString* how = nullptr);
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

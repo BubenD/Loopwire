@@ -2,7 +2,7 @@
 
 WHY THIS IS GENERATED RATHER THAN WRITTEN BY HAND.
 
-Edraw ships Qt's binaries beside Edraw.exe. Qt's DLLs statically contain third-party code - FreeType,
+Loopwire ships Qt's binaries beside Loopwire.exe. Qt's DLLs statically contain third-party code - FreeType,
 libpng, libjpeg, zlib, PCRE2, HarfBuzz, the Unicode tables, the Public Suffix List - whose licences
 require their copyright notices to travel with the binary. A hand-written list of those components is
 a list that goes stale the first time somebody adds a Qt module, and nothing in the build would say so.
@@ -38,14 +38,14 @@ DEFAULT_QT = r"C:\Qt\6.8.3\msvc2022_64"
 
 WIDTH = 98
 
-# The Qt modules Edraw actually links and deploys. Everything credited below is credited because it is
+# The Qt modules Loopwire actually links and deploys. Everything credited below is credited because it is
 # inside one of these, or inside a plugin windeployqt copies for them.
 SHIPPED_QT_MODULES = [
     "Qt Core", "Qt GUI", "Qt Widgets", "Qt Network", "Qt PrintSupport", "Qt SVG", "Qt OpenGL",
 ]
 
 # The Qt REPOSITORIES those modules come from, and therefore the only SBOMs worth reading. A Qt install
-# describes everything it shipped, including repositories Edraw does not link: qtdeclarative (QML/Quick)
+# describes everything it shipped, including repositories Loopwire does not link: qtdeclarative (QML/Quick)
 # and qttools (Qt Help, Designer, Linguist) between them account for Catch2, litehtml, Gumbo, XSVG and
 # the JavaScriptCore assembler. Crediting those would not be generous, it would be false - it would tell
 # the reader that code is inside a binary they were handed when it is not.
@@ -57,7 +57,7 @@ SHIPPED_QT_REPOS = ("qtbase", "qtsvg")
 #
 #   Qt's build tools (moc, rcc, uic, qmake, windeployqt and friends) are GPL-3.0 with the Qt GPL
 #   Exception 1.0. The exception is what lets them build proprietary software; it holds because we run
-#   them and do not ship them. If Edraw ever ships a Qt tool, that tool needs its own notice and this
+#   them and do not ship them. If Loopwire ever ships a Qt tool, that tool needs its own notice and this
 #   list is wrong.
 #
 #   Qt Test, Qt SQL and Qt D-Bus are not linked, so their bundled components (Catch2, valgrind headers,
@@ -95,12 +95,12 @@ SKIP_UNIX_ONLY = {
 # ==================================================================================================
 # THE GPL AUDIT
 #
-# Edraw is proprietary. It may link code that is available under the LGPL, because the LGPL permits a
+# Loopwire is proprietary. It may link code that is available under the LGPL, because the LGPL permits a
 # proprietary combined work; it may NOT link code that is only available under the GPL, because the GPL
-# would require Edraw's own source to be published. The distance between those two is one line in a
+# would require Loopwire's own source to be published. The distance between those two is one line in a
 # CMakeLists, and nothing about adding that line looks like a licensing decision at the time.
 #
-# So it is checked rather than remembered. `--audit-gpl` answers one question: is anything Edraw links or
+# So it is checked rather than remembered. `--audit-gpl` answers one question: is anything Loopwire links or
 # ships available ONLY under the GPL?
 #
 # Two traps this is built around:
@@ -141,7 +141,7 @@ def gpl_variants_only(license_expr: str) -> bool:
 
     "FTL OR GPL-2.0-only" is fine - FreeType can be taken under the FTL. "GPL-3.0-only" alone is not.
     The LGPL is deliberately NOT counted as a GPL variant here: it is the licence that makes a
-    proprietary combined work possible, and is the whole basis on which Edraw ships Qt.
+    proprietary combined work possible, and is the whole basis on which Loopwire ships Qt.
     """
     options = [o.strip().strip("()") for o in license_expr.split(" OR ")]
     if not options:
@@ -181,7 +181,7 @@ def linked_qt_modules(repo_root: str) -> list[str]:
 
 
 def audit_gpl(sbom_dir: str, qt_version: str) -> int:
-    """Report anything Edraw links or ships that is available only under the GPL. Returns a failure count."""
+    """Report anything Loopwire links or ships that is available only under the GPL. Returns a failure count."""
     problems: list[str] = []
     notes: list[str] = []
 
@@ -192,7 +192,7 @@ def audit_gpl(sbom_dir: str, qt_version: str) -> int:
         if mod in QT_MODULES_WITHOUT_LGPL:
             problems.append(
                 f"Qt{mod} has NO LGPL option - it is GPL-or-commercial only. Linking it obliges ETS "
-                f"either to publish Edraw's source or to hold a commercial Qt licence.")
+                f"either to publish Loopwire's source or to hold a commercial Qt licence.")
             continue
         repo = QT_MODULE_REPO.get(mod)
         if repo is None:
@@ -209,14 +209,14 @@ def audit_gpl(sbom_dir: str, qt_version: str) -> int:
     # ---- 2. Everything inside the repositories that are shipped ----------------------------------
     #
     # A missing SBOM is not a violation, so it must not fail the build - this runs on every build, and a
-    # Qt too old to publish an SBOM would otherwise make Edraw unbuildable. It IS worth shouting about,
+    # Qt too old to publish an SBOM would otherwise make Loopwire unbuildable. It IS worth shouting about,
     # because it means part of this audit did not happen.
     all_sboms = sorted(glob.glob(os.path.join(sbom_dir, "*.spdx.json")))
     if not all_sboms:
         print(f"\nWARNING: no SPDX SBOM in {sbom_dir}.\n"
               f"         The component-level half of the GPL audit did not run. The module-level check "
               f"above did.\n"
-              f"         Qt 6.8 and later publish an SBOM; check the licence of anything Edraw links by "
+              f"         Qt 6.8 and later publish an SBOM; check the licence of anything Loopwire links by "
               f"hand until then.", file=sys.stderr)
         if problems:
             print(f"\nGPL EXPOSURE - {len(problems)} problem(s):", file=sys.stderr)
@@ -251,8 +251,8 @@ def audit_gpl(sbom_dir: str, qt_version: str) -> int:
                              f"{' (build tool, Qt GPL Exception applies to its use)' if is_tool else ''}")
             else:
                 problems.append(
-                    f"{name} is available only under {lic}, and is inside something Edraw ships. "
-                    f"Either it must not be shipped, or Edraw's source must be published.")
+                    f"{name} is available only under {lic}, and is inside something Loopwire ships. "
+                    f"Either it must not be shipped, or Loopwire's source must be published.")
 
     print(f"Components examined in {', '.join(SHIPPED_QT_REPOS)} (Qt {qt_version}): {checked}")
     if notes:
@@ -266,7 +266,7 @@ def audit_gpl(sbom_dir: str, qt_version: str) -> int:
             print(f"\n  * {p}", file=sys.stderr)
         print("", file=sys.stderr)
     else:
-        print("\nNo GPL exposure: nothing Edraw links or ships is GPL-only.")
+        print("\nNo GPL exposure: nothing Loopwire links or ships is GPL-only.")
     return len(problems)
 
 
@@ -363,7 +363,7 @@ def render(components: list[dict], qt_version: str) -> str:
     lines.append("")
     lines.append(wrap(
         f"The following components are contained within the Qt {qt_version} libraries listed above and "
-        f"are therefore distributed with Edraw. Each is reproduced here with the copyright notices its "
+        f"are therefore distributed with Loopwire. Each is reproduced here with the copyright notices its "
         f"licence requires be retained. This schedule is generated from the SPDX SBOM published with "
         f"the Qt installation, and is deliberately inclusive: a component listed here may not be active "
         f"in every build configuration.", indent=""))
@@ -399,7 +399,7 @@ def render(components: list[dict], qt_version: str) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--qt", default=os.environ.get("EDRAW_QT_DIR", DEFAULT_QT),
+    ap.add_argument("--qt", default=os.environ.get("LOOPWIRE_QT_DIR", DEFAULT_QT),
                     help="Qt install whose DLLs are shipped (default: %(default)s)")
     ap.add_argument("--check", action="store_true",
                     help="do not write; exit non-zero if the committed file is out of date")

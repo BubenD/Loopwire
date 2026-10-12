@@ -20,7 +20,7 @@
 #include <cmath>
 #include <iterator>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 namespace {
 
 // One row of the kind table: the key a file stores, and the name shown.
@@ -1467,10 +1467,12 @@ QString LibraryPart::title() const {
 }
 
 QString PartsLibrary::defaultPath() {
-    // The application's own library, and it has a name of its own: edrawlib. Libraries live in a
+    // The application's own library, and it has a name of its own: loopwirelib. Libraries live in a
     // folder of their own, so a shelf of them can be kept side by side and the application's files do
     // not all sit in one heap.
-    const QString path = AppPaths::libraryDir() + QStringLiteral("/edrawlib.plb");
+    const QString path = AppPaths::libraryDir() + QStringLiteral("/loopwirelib.plb");
+    // THE LIBRARY OF THE APPLICATION'S FIRST NAME, edrawlib.plb: taken over under its new one.
+    AppPaths::adopt(AppPaths::libraryDir() + QStringLiteral("/edrawlib.plb"), path);
     // Every place a library of ours has ever been written is taken over on the way past - MOVED, not
     // copied, so there is never a second copy of the same shelf to wonder which one is being edited.
     // The parts already in it are the parts that must still be there afterwards.
@@ -1484,7 +1486,7 @@ QString PartsLibrary::defaultPath() {
 // repeated. A library kept there is taken over rather than left behind.
 QString legacyLibraryPath() {
     return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
-           QStringLiteral("/Whatson/Edraw/parts-library.plb");
+           QStringLiteral("/Whatson/Loopwire/parts-library.plb");
 }
 
 QString PartsLibrary::fileFilter() {
@@ -1905,10 +1907,10 @@ void PartsCatalog::openRemembered() {
         const QString key = QLatin1String(kCatalogKey);
         QStringList remembered = st.value(key).toStringList();
         bool changed = false;
-        const QString oldName = QStringLiteral("/parts-library.plb");
-        const QString newPath = AppPaths::libraryDir() + QStringLiteral("/edrawlib.plb");
+        const QString oldName = QStringLiteral("/parts-library.plb"), firstName = QStringLiteral("/edrawlib.plb");
+        const QString newPath = AppPaths::libraryDir() + QStringLiteral("/loopwirelib.plb");
         for (QString& p : remembered)
-            if (p.endsWith(oldName)) {
+            if (p.endsWith(oldName) || p.endsWith(firstName)) {
                 p = newPath;
                 changed = true;
             }
@@ -1949,7 +1951,7 @@ void PartsCatalog::openRemembered() {
             // own app-data folder, so a fresh install started from the bare seed and every drawing made on it
             // was made without the house parts until somebody entered them all again.
             PartsLibrary shipped;
-            if (shipped.load(QStringLiteral(":/defaults/edrawlib.plb")) && !shipped.parts.empty()) {
+            if (shipped.load(QStringLiteral(":/defaults/loopwirelib.plb")) && !shipped.parts.empty()) {
                 lib = shipped;
                 lib.save(p);
             }
@@ -2929,4 +2931,4 @@ QJsonArray partDrawingFromEntities(const std::vector<Entity>& ents) {
     return arr;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

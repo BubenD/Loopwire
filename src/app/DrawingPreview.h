@@ -10,7 +10,7 @@
 
 class QToolButton;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // A set of entities drawn the way they will look on the sheet: framed to fit, through the same
 // renderer the canvas uses, so the preview IS the drawing rather than a picture of one. An empty
@@ -130,4 +130,4 @@ private:
     Bounds box_;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

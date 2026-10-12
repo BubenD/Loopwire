@@ -12,7 +12,7 @@
 #include <cmath>
 #include <unordered_map>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -311,4 +311,4 @@ bool GlRenderer3D::render(QImage& image, const std::vector<DrawItem3D>& items, c
     return true;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

@@ -5,7 +5,7 @@
 // directory, write a DXF into it, invoke another program with six positional arguments in an order
 // that is not ours to choose, work out from the result whether a DWG appeared, and move it. Every one
 // of those steps can be wrong in a way that compiles. None of them can be exercised without something
-// on the other end of QProcess, and the real converter cannot be a build dependency: Edraw is not
+// on the other end of QProcess, and the real converter cannot be a build dependency: Loopwire is not
 // allowed to redistribute it (that is the whole reason for the setup dialog), so it will not be
 // present on a build machine or in CI.
 //
@@ -14,9 +14,9 @@
 //
 // It deliberately does NOT produce a real DWG. Nothing downstream of the manager reads the bytes; the
 // manager's contract is "a non-empty file with the right name appeared in the output directory", and
-// that is what is checked. A test that needed a genuine DWG here would be testing ODA, not Edraw.
+// that is what is checked. A test that needed a genuine DWG here would be testing ODA, not Loopwire.
 //
-// Behaviour is steered by EDRAW_ODA_STUB_MODE, so the failure paths are reachable too:
+// Behaviour is steered by LOOPWIRE_ODA_STUB_MODE, so the failure paths are reachable too:
 //
 //   (unset) / "ok"    convert every .dxf in the input directory
 //   "no-output"       exit 0 having written nothing   - the silent failure the manager guards against
@@ -49,7 +49,7 @@ int main(int argc, char** argv) {
     const std::string recurse = argv[5];
     const std::string audit   = argv[6];
 
-    // The arguments Edraw is expected to send. Checked rather than ignored: if the manager ever sends
+    // The arguments Loopwire is expected to send. Checked rather than ignored: if the manager ever sends
     // "ACAD2018" as "ACAD 2018", or swaps type and version, the real converter would reject it with a
     // message about arguments and no clue which one. Here that becomes a named test failure.
     if (version != "ACAD2018") {
@@ -66,27 +66,27 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    const char* modeEnv = std::getenv("EDRAW_ODA_STUB_MODE");
+    const char* modeEnv = std::getenv("LOOPWIRE_ODA_STUB_MODE");
     const std::string mode = modeEnv ? modeEnv : "ok";
 
     // WHAT THE REAL CONVERTER DOES WHEN IT CANNOT DRAW.
     //
-    // Edraw runs it with QT_QPA_PLATFORM=offscreen so no window appears. That works only if ODA's
+    // Loopwire runs it with QT_QPA_PLATFORM=offscreen so no window appears. That works only if ODA's
     // build shipped the offscreen plugin; when it did not, Qt does not quietly fall back to a window,
     // it refuses to start with "no Qt platform plugin could be initialized" and converts nothing.
     // Reproduced here so the retry that follows is exercised rather than assumed.
     const char* platform = std::getenv("QT_QPA_PLATFORM");
 
-    // WHAT ENVIRONMENT DID EDRAW ACTUALLY HAND US? Written down where the test can read it.
+    // WHAT ENVIRONMENT DID LOOPWIRE ACTUALLY HAND US? Written down where the test can read it.
     //
     // Whether QT_QPA_PLATFORM was set is the single thing that decides if the real converter shows a
     // modal error box instead of converting, and it is invisible from outside the process. Recording
-    // it here is what lets a test assert that Edraw only asks for the offscreen platform when the
+    // it here is what lets a test assert that Loopwire only asks for the offscreen platform when the
     // plugin to serve it actually exists.
-    // Written to EDRAW_ODA_STUB_REPORT when the test names one, because the manager deletes its
+    // Written to LOOPWIRE_ODA_STUB_REPORT when the test names one, because the manager deletes its
     // temporary directory on the way out and a report left in there would be gone before it could be
     // read.
-    if (const char* report = std::getenv("EDRAW_ODA_STUB_REPORT")) {
+    if (const char* report = std::getenv("LOOPWIRE_ODA_STUB_REPORT")) {
         std::ofstream pf(report);
         if (pf) pf << ((platform && *platform) ? platform : "unset");
     }

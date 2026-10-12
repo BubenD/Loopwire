@@ -14,7 +14,7 @@
 #include <QUrl>
 #include <QVBoxLayout>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -55,21 +55,21 @@ OdaSetupDialog::OdaSetupDialog(OdaConverter* manager, QWidget* parent, Purpose p
     col->addWidget(head);
     col->addSpacing(6);
 
-    // WHY, in the user's terms. "Not found" on its own reads as a fault in Edraw, and the user's
+    // WHY, in the user's terms. "Not found" on its own reads as a fault in Loopwire, and the user's
     // next move depends on understanding that this is a free tool they install once.
     auto* why = new QLabel(
         importing
             ? QStringLiteral(
-                  "Edraw reads DWG using the <b>ODA File Converter</b>, a free utility from the Open "
-                  "Design Alliance. Edraw cannot include it, because its licence is granted to you by "
-                  "ODA when you download it &mdash; so it is installed once, by you, and Edraw finds "
+                  "Loopwire reads DWG using the <b>ODA File Converter</b>, a free utility from the Open "
+                  "Design Alliance. Loopwire cannot include it, because its licence is granted to you by "
+                  "ODA when you download it &mdash; so it is installed once, by you, and Loopwire finds "
                   "it from then on.<br><br>"
                   "If you only need this one drawing, whoever sent it can usually save it as DXF, "
-                  "which Edraw opens on its own.")
+                  "which Loopwire opens on its own.")
             : QStringLiteral(
-                  "Edraw writes DWG using the <b>ODA File Converter</b>, a free utility from the Open "
-                  "Design Alliance. Edraw cannot include it, because its licence is granted to you by "
-                  "ODA when you download it &mdash; so it is installed once, by you, and Edraw finds "
+                  "Loopwire writes DWG using the <b>ODA File Converter</b>, a free utility from the Open "
+                  "Design Alliance. Loopwire cannot include it, because its licence is granted to you by "
+                  "ODA when you download it &mdash; so it is installed once, by you, and Loopwire finds "
                   "it from then on.<br><br>"
                   "You do not need it to keep working: DXF is read by every CAD program, including "
                   "AutoCAD."),
@@ -93,7 +93,7 @@ OdaSetupDialog::OdaSetupDialog(OdaConverter* manager, QWidget* parent, Purpose p
 
     auto* browseBtn = addChoice(
         col, this, QStringLiteral("Browse Executable..."),
-        QStringLiteral("Point Edraw at the converter yourself, if it is installed somewhere "
+        QStringLiteral("Point Loopwire at the converter yourself, if it is installed somewhere "
                        "unusual. Remembered for next time."),
         false);
 
@@ -104,7 +104,7 @@ OdaSetupDialog::OdaSetupDialog(OdaConverter* manager, QWidget* parent, Purpose p
         dxfBtn = addChoice(
             col, this, QStringLiteral("Export as DXF Instead"),
             QStringLiteral("Save the drawing as DXF now, with no extra software. This is the option "
-                           "to take if you just need the drawing out of Edraw."),
+                           "to take if you just need the drawing out of Loopwire."),
             false);
     }
 
@@ -157,7 +157,7 @@ void OdaSetupDialog::redetect() {
     for (const QString& p : OdaConverter::searchedLocations())
         where += QStringLiteral("<br>&nbsp;&nbsp;%1").arg(p.toHtmlEscaped());
     status_->setText(QStringLiteral(
-        "<span style='color:#e0a852;'>Still not found.</span> Edraw looked in:%1<br><br>"
+        "<span style='color:#e0a852;'>Still not found.</span> Loopwire looked in:%1<br><br>"
         "If it is installed somewhere else, use <b>Browse Executable...</b>").arg(where));
     status_->setVisible(true);
 }
@@ -177,7 +177,7 @@ void OdaSetupDialog::browse() {
         // Named, not guessed at: the user picked a file and is owed a reason it was refused.
         status_->setText(QStringLiteral(
             "<span style='color:#e0a852;'>That is not the ODA File Converter.</span><br>"
-            "Edraw needs the file named <b>%1</b>, which the installer puts in its own folder.<br>"
+            "Loopwire needs the file named <b>%1</b>, which the installer puts in its own folder.<br>"
             "You chose: %2")
                              .arg(QString::fromLatin1(
 #ifdef Q_OS_WIN
@@ -226,4 +226,4 @@ OdaSetupDialog::Result OdaSetupDialog::run(OdaConverter* manager, QWidget* paren
     return dlg.result();
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

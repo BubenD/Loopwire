@@ -28,7 +28,7 @@
 
 #include <algorithm>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 BomDialog::BomDialog(Editor* editor, QWidget* parent) : QDialog(parent), editor_(editor) {
     setWindowTitle(QStringLiteral("Bill of materials"));
@@ -740,4 +740,4 @@ void BomDialog::placeOnDrawing() {
     hide();
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <unordered_map>
 
-namespace Edraw_Desktop::gif {
+namespace Loopwire::gif {
 
 namespace {
 
@@ -259,4 +259,4 @@ bool write(const QString& path, const std::vector<Frame>& frames, QString* error
     return true;
 }
 
-} // namespace Edraw_Desktop::gif
+} // namespace Loopwire::gif

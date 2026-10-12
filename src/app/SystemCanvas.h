@@ -14,7 +14,7 @@ class QTimer;
 
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // WHAT A CLICK ON THE SYSTEM DIAGRAM DOES: select (and drag a unit, a note, or a port along its unit's sides; a unit's
 // corner or edge to size it), put a unit, put a port on a unit's side, draw a cable from one port to another (a unit
@@ -222,4 +222,4 @@ private:
     mutable QHash<QString,std::vector<QPointF>> routes_;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

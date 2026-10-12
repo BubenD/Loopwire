@@ -13,7 +13,7 @@
 
 #include <algorithm>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 DrawingPreview::DrawingPreview(const QString& caption, QWidget* parent)
     : QWidget(parent), caption_(caption), emptyText_(QStringLiteral("no drawing yet")) {
@@ -465,4 +465,4 @@ void DrawingPreview::setShowConnection(bool on) {
     update();
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

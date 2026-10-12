@@ -2,7 +2,7 @@
 
 #include <QString>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // Where the application keeps the files it owns. One place that decides, so a folder is never
 // spelled twice and a file written by one window is found by another.
@@ -17,7 +17,7 @@ namespace Edraw_Desktop {
 // moved, not copied, so there is never a second stale copy of a library to wonder about.
 namespace AppPaths {
 
-// %APPDATA%/Whatson/Edraw on Windows. Everything below lives under this.
+// %APPDATA%/Whatson/Loopwire on Windows. Everything below lives under this.
 QString root();
 
 // Each of the three, created on first use. The returned path always exists.
@@ -33,4 +33,4 @@ QString datasheetDir();
 bool adopt(const QString& from, const QString& to);
 
 } // namespace AppPaths
-} // namespace Edraw_Desktop
+} // namespace Loopwire

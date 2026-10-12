@@ -18,7 +18,7 @@
 #include <limits>
 #include <functional>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 namespace {
 constexpr auto kBlockKey = "block";
 constexpr auto kInstanceKey = "blockInst";
@@ -28,7 +28,7 @@ constexpr auto kOriginY = "blockOriginY";
 
 QString BlockDef::extension() { return QStringLiteral("ebk"); }
 
-QString BlockDef::fileFilter() { return QStringLiteral("Edraw block (*.ebk);;All files (*)"); }
+QString BlockDef::fileFilter() { return QStringLiteral("Loopwire block (*.ebk);;All files (*)"); }
 
 QString BlockDef::pathFor(const QString& name) {
     QString safe = name.trimmed();
@@ -585,4 +585,4 @@ int updateBlockInstances(Document& doc, const BlockDef& block) {
     return static_cast<int>(found.size());
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

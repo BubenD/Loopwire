@@ -18,7 +18,7 @@
 #include <QTextBrowser>
 #include <QVBoxLayout>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 namespace {
 constexpr int kColLabel = 0, kColMm2 = 1, kColAmps = 2, kColLen = 3, kColRating = 4;
 
@@ -428,4 +428,4 @@ void ThermalModelDialog::refreshResults() {
     working_->setHtml(html);
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

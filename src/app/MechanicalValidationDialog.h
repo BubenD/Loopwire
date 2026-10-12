@@ -12,7 +12,7 @@ class QPushButton;
 class QTableWidget;
 class QTextBrowser;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 class Editor;
 
@@ -80,4 +80,4 @@ private:
     QDialog* bypassDlg_ = nullptr;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

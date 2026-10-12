@@ -6,7 +6,7 @@
 
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // WHERE A CABLE PASSES THROUGH A KEEP-OUT: which cable, which keep-out, the first point of it inside, and whether the
 // keep-out blocks it (or only warns of it).
@@ -25,4 +25,4 @@ bool crossesKeepOut(const KeepOut3D& k, const V3& a, const V3& b, double radius,
 // Every cable of the route through every keep-out, once each, at the first point it goes in.
 std::vector<KeepOutHit> keepOutHits(const Route3D& r);
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

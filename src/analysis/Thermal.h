@@ -6,7 +6,7 @@
 #include <QStringList>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // ---- The lumped thermal model -------------------------------------------------------------------
 // How hot a bundle gets, and what that does back to the copper.
@@ -137,4 +137,4 @@ double thermalSuggestedMm2(const ThRequest& request, double targetC);
 // The standard cross-sections, thinnest first - what a suggestion is chosen from.
 const std::vector<double>& thermalStandardMm2();
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

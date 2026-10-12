@@ -8,7 +8,7 @@
 #include <functional>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 class Document;
 struct Bounds;
@@ -29,4 +29,4 @@ bool importFile(Document& doc, const QString& path, QString* error = nullptr,
                 const Progress& progress = nullptr, std::vector<Bounds>* pages = nullptr);
 
 } // namespace pdf
-} // namespace Edraw_Desktop
+} // namespace Loopwire

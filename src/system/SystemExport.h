@@ -7,9 +7,9 @@
 
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
-// THE SYSTEM DIAGRAM OUT OF EDRAW: saved as a file of its own (and read back), and drawn for draw.io (diagrams.net)
+// THE SYSTEM DIAGRAM OUT OF LOOPWIRE: saved as a file of its own (and read back), and drawn for draw.io (diagrams.net)
 // and for Visio - units, ports, cables (with their bends and labels) and notes where they are on the diagram.
 
 // WHERE THINGS ARE ON THE DIAGRAM, as the System design tab draws them: a port's point on its unit's side, the way
@@ -26,7 +26,7 @@ std::vector<QPointF> sysCableWaypoints(const SystemDesign& d, const SysCable& c,
 // A BRANCH OF A HARNESS: from the trunk's middle (the first point) square to its port (the last).
 std::vector<QPointF> sysBranchPath(const SystemDesign& d, const SysCable& c, const SysBranch& b, double end = 8.0);
 
-// A FILE OF ITS OWN (.wetsys - Edraw's own extension, Whatson ETS system; .edsys read too): the design as JSON, marked
+// A FILE OF ITS OWN (.wetsys - Loopwire's own extension, Whatson ETS system; .edsys read too): the design as JSON, marked
 // as one. Read back: false where it is not one.
 bool saveSystemFile(const SystemDesign& d, const QString& path, QString* error = nullptr);
 bool loadSystemFile(const QString& path, SystemDesign& d, QString* error = nullptr);
@@ -39,4 +39,4 @@ bool exportSystemDrawio(const SystemDesign& d, const QString& path, QString* err
 // the inch.
 bool exportSystemVsdx(const SystemDesign& d, const QString& path, QString* error = nullptr);
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

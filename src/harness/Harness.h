@@ -8,9 +8,9 @@
 #include <QStringList>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
-// ---- Wire color codes & gauges (mirror Edraw's WIRE_COLORS / gauge table) ----
+// ---- Wire color codes & gauges (mirror Loopwire's WIRE_COLORS / gauge table) ----
 
 // Resolve a wire color code (e.g. "WH", "BK", "GNYE", or "#rrggbb") to hex.
 QString wireColorHex(const QString& code, const QString& fallback = "#e8e8e8");
@@ -373,7 +373,7 @@ QString connectorPinLabel(int index, const ConnectorSpec& spec);
 void regenPinLabels(ConnectorSpec& spec);
 
 // Computed geometry for rendering / hit-testing / bounds. `origin` is the body
-// top corner on the non-exit side (matches Edraw's connectorEntitiesAt origin).
+// top corner on the non-exit side (matches Loopwire's connectorEntitiesAt origin).
 struct ConnectorGeometry {
     Vec2 rectMin;             // bottom-left
     Vec2 rectMax;             // top-right
@@ -388,4 +388,4 @@ struct ConnectorGeometry {
 
 ConnectorGeometry connectorGeometry(const Vec2& origin, const ConnectorSpec& spec);
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

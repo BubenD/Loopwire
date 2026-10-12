@@ -44,7 +44,7 @@
 #include <cmath>
 #include <cstdio>
 
-using namespace Edraw_Desktop;
+using namespace Loopwire;
 
 namespace {
 
@@ -2017,7 +2017,7 @@ int run_drawingspace_tests() {
             if (s.startsWith(QLatin1String("About"))) aboutInHelp = true;
         for (const QString& s : itemsOf(file))
             if (s.startsWith(QLatin1String("About"))) aboutInFile = true;
-        check(aboutInHelp, "menus: Help has About Edraw");
+        check(aboutInHelp, "menus: Help has About Loopwire");
         check(!aboutInFile, "menus: and File no longer does");
         bool commandsInHelp = false;
         for (const QString& s : helpItems)

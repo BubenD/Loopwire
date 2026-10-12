@@ -10,7 +10,7 @@
 #include <QStringList>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // The parts library: the raw materials a harness is built from. Every part carries what a
 // purchasing department needs (description, manufacturer and its part number), the technical
@@ -265,7 +265,7 @@ struct PartsLibrary {
     // And the Alpha Wire hook-up shelf: 2626 and 3079, in every colour each is made in.
     bool standardAlphaHookup = false;
 
-    // %APPDATA%/Whatson/Edraw/library/edrawlib.plb (created on first save). A library is a .plb
+    // %APPDATA%/Whatson/Loopwire/library/loopwirelib.plb (created on first save). A library is a .plb
     // file - a part library - so it can be kept beside a project and opened by name.
     static QString defaultPath();
     static QString fileFilter(); // "Part library (*.plb);;All files (*)"
@@ -569,4 +569,4 @@ std::vector<Entity> partDrawingEntities(const QJsonArray& drawing);
 // The other way: the entities of a drawing, as stored in a part.
 QJsonArray partDrawingFromEntities(const std::vector<Entity>& ents);
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

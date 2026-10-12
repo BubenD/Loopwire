@@ -8,7 +8,7 @@
 #include <algorithm>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // THE CAMERA OF THE 3D VIEW: turned round a point it looks at - round the upright (yaw), up and down (pitch) and round
 // the way it looks (roll) - from so far away, with so wide a lens. ALL THE WAY ROUND on every one: pitched past the
@@ -67,4 +67,4 @@ void textureAt(int texture, const V3& at, const V3& normal, const V3& light, con
 void renderScene3D(QImage& image, const std::vector<DrawItem3D>& items, const Camera3D& camera, bool wireframe,
                    const QColor& background, const Section3D& section = Section3D());
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

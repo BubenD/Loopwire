@@ -1,3 +1,0 @@
-// Windows application icon for Edraw.exe.
-// The lowest-numbered ICON resource is used as the executable's icon.
-IDI_ICON1 ICON "edraw.ico"

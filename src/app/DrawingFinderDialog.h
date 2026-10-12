@@ -17,7 +17,7 @@ class QThread;
 class QProgressBar;
 class QStackedWidget;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 class DrawingPreview;
 class PdfViewer;
@@ -123,4 +123,4 @@ private:
     QPointer<OdaConverter> oda_;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

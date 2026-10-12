@@ -8,7 +8,7 @@
 #include <QString>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // View transform state: world origin offset and zoom scale (screen px per world unit).
 struct ViewState {
@@ -45,7 +45,7 @@ struct DrawingLayout {
     static DrawingLayout fromJson(const QJsonObject& obj);
 };
 
-// A single drawing document. Mirrors Edraw's per-document state created by
+// A single drawing document. Mirrors Loopwire's per-document state created by
 // createDocument(); selection/interaction transients live on the editor, not here.
 class Document {
 public:
@@ -134,7 +134,7 @@ public:
     bool dirty() const { return dirty_; }
     void setDirty(bool d) { dirty_ = d; if(d)validationStamps_=QJsonObject{}; }
 
-    // Default three-layer set matching Edraw's defaultLayers().
+    // Default three-layer set matching Loopwire's defaultLayers().
     static std::vector<Layer> defaultLayers();
 
 private:
@@ -162,4 +162,4 @@ private:
     bool dirty_ = false;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

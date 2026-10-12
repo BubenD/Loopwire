@@ -29,7 +29,7 @@ class QTabWidget;
 
 class QMenu;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // WHAT THE PDF IS MADE OF: which part of the diagram goes out - every sheet a page, the whole diagram, what the window
 // shows, or the units selected - the paper ("" as the sheet, else "A4" to "A0", "Letter", "Tabloid") and its way round,
@@ -147,7 +147,7 @@ public:
     int pdfPageCount(const SysPdfOptions& o) const;
     QImage pdfPage(const SysPdfOptions& o, int page, int longSide) const;
     bool writePdf(const SysPdfOptions& o, const QString& path) const;
-    // A TEMPLATE'S SHEET round the diagram: an Edraw drawing template (.etp) - its frame and title block - fitted round what
+    // A TEMPLATE'S SHEET round the diagram: an Loopwire drawing template (.etp) - its frame and title block - fitted round what
     // is drawn, its title filled in; chosen from those installed (or a file) where none is given. Its fields; taken away.
     // ANOTHER: a sheet more, beside the last - a page more in the PDF. The rest work on the sheet chosen in the panel.
     bool applyTemplate(const QString& path = QString(), bool another = false);
@@ -288,4 +288,4 @@ private:
     QTableWidget* connections_ = nullptr;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

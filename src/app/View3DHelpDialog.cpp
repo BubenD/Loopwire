@@ -14,7 +14,7 @@
 
 #include <algorithm>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -532,4 +532,4 @@ void View3DHelpDialog::fitWindow() {
     fitPicture();
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

@@ -7,7 +7,7 @@
 #include <cmath>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // A POINT OR A DIRECTION IN SPACE. The harness lies in the XY plane of the drawing, Z standing up out of the sheet.
 struct V3 {
@@ -74,4 +74,4 @@ Mesh3D loadMesh3D(const QString& path, QString* how = nullptr);
 // The model files that can be attached to a part, for a file dialog.
 QString mesh3DFileFilter();
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

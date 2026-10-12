@@ -1,6 +1,6 @@
 #include "geometry/Mesh3D.h"
 
-#ifdef EDRAW_HAVE_OCCT
+#ifdef LOOPWIRE_HAVE_OCCT
 #include "geometry/StepOcct.h"
 #endif
 
@@ -15,7 +15,7 @@
 #include <cctype>
 #include <cstring>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 bool Mesh3D::bounds(V3& lo, V3& hi) const {
     if (v.empty()) return false;
@@ -706,8 +706,8 @@ Mesh3D loadMesh3D(const QString& path, QString* how) {
     const QString ext = QFileInfo(path).suffix().toLower();
     if (ext == QLatin1String("stl")) return loadStl(path, how);
     if (ext == QLatin1String("obj")) return loadObj(path, how);
-#ifdef EDRAW_HAVE_OCCT
-    // A STEP MODEL WHOLE, every surface, through Open CASCADE - its solids as one mesh; Edraw's own reader where Open
+#ifdef LOOPWIRE_HAVE_OCCT
+    // A STEP MODEL WHOLE, every surface, through Open CASCADE - its solids as one mesh; Loopwire's own reader where Open
     // CASCADE cannot take the file.
     if (ext == QLatin1String("stp") || ext == QLatin1String("step")) {
         std::vector<EnvPart3D> parts;
@@ -729,4 +729,4 @@ QString mesh3DFileFilter() {
     return QStringLiteral("3D models (*.stp *.step *.stl *.obj);;STEP (*.stp *.step);;STL (*.stl);;OBJ (*.obj);;All files (*)");
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

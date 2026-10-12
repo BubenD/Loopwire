@@ -29,7 +29,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 namespace {
 
 // The columns, named. A bundle is described by more than a diameter now - what each conductor is
@@ -1012,4 +1012,4 @@ void BundleDiameterDialog::showSummary() {
     dlg.exec();
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

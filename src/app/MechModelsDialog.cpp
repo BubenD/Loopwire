@@ -29,7 +29,7 @@
 
 #include <utility>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -992,4 +992,4 @@ void MechModelsDialog::setModels(const MechModelSet& set) {
     refreshDetails();
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

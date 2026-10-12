@@ -11,7 +11,7 @@
 #include <algorithm>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 class Document;
 
@@ -189,7 +189,7 @@ struct DrawingTemplate {
     bool load(const QString& path);
 
     static QString extension();     // "etp"
-    static QString fileFilter();    // "Edraw template (*.etp);;All files (*)"
+    static QString fileFilter();    // "Loopwire template (*.etp);;All files (*)"
     // <app data>/template/<name>.etp - where Save with no path puts it.
     static QString pathFor(const QString& name);
     // The templates in the template folder, by full path.
@@ -225,4 +225,4 @@ QString templateZoneAt(const DrawingTemplate& tpl, const Vec2& at);
 QJsonArray defaultSheetContent(const TemplateSheet& sheet);
 QJsonArray defaultSheetContent(const DrawingTemplate& tpl);
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

@@ -14,7 +14,7 @@ class QPushButton;
 class QTableWidget;
 class QTextBrowser;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 class Editor;
 struct LibraryPart;
@@ -109,4 +109,4 @@ private:
     QPushButton* matchBtn_ = nullptr;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

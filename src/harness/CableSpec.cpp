@@ -9,7 +9,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -974,4 +974,4 @@ std::vector<Entity> cableSchematic(const CableSpec& spec, double lengthMm) {
     return out;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

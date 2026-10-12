@@ -6,7 +6,7 @@
 
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // A CABLE HUNG UNDER ITS OWN WEIGHT: each bundle of a route, held where it is held - at its two nodes, straight out of
 // a connector for its lead, and wherever it lies on something (a face right under it, the way gravity pulls) - and
@@ -60,4 +60,4 @@ double fallShown(double diameter);
 // none slack, more the tauter.
 int stiffnessOf(double tension);
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

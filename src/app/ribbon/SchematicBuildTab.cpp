@@ -33,7 +33,7 @@
 
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // ---- SCHEMATIC BUILD: placement tools; the "Connector build" groups live in a
 //      contextual tab that opens only when a connector is being placed / edited. ----
@@ -483,4 +483,4 @@ void MainWindow::buildSchematicBuildTab() {
     ribbon_->addTab(page, QStringLiteral("Schematic build"));
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

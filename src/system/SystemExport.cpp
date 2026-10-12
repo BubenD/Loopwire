@@ -11,7 +11,7 @@
 
 #include <limits>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -332,7 +332,7 @@ bool loadSystemFile(const QString& path, SystemDesign& d, QString* error) {
 QString systemDrawioXml(const SystemDesign& d) {
     const QRectF box = bounds(d);
     QString x;
-    x += QStringLiteral("<mxfile host=\"Edraw\" type=\"device\">\n<diagram id=\"system\" name=\"%1\">\n")
+    x += QStringLiteral("<mxfile host=\"Loopwire\" type=\"device\">\n<diagram id=\"system\" name=\"%1\">\n")
              .arg(esc(d.name.isEmpty() ? QStringLiteral("System") : d.name));
     x += QStringLiteral("<mxGraphModel dx=\"1000\" dy=\"800\" grid=\"1\" gridSize=\"10\" guides=\"1\" tooltips=\"1\" connect=\"1\" "
                         "arrows=\"1\" fold=\"1\" page=\"1\" pageScale=\"1\" pageWidth=\"%1\" pageHeight=\"%2\" math=\"0\" shadow=\"0\">\n"
@@ -552,7 +552,7 @@ bool exportSystemVsdx(const SystemDesign& d, const QString& path, QString* error
                          .toUtf8()});
     parts.push_back({QStringLiteral("docProps/core.xml"),
                      (xmlHead + QStringLiteral("<cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\" "
-                                               "xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:title>%1</dc:title><dc:creator>Edraw</dc:creator>"
+                                               "xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:title>%1</dc:title><dc:creator>Loopwire</dc:creator>"
                                                "</cp:coreProperties>")
                                     .arg(esc(d.name.isEmpty() ? QStringLiteral("System") : d.name)))
                          .toUtf8()});
@@ -628,4 +628,4 @@ bool exportSystemVsdx(const SystemDesign& d, const QString& path, QString* error
     return writeFile(path, zipStored(parts), error);
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

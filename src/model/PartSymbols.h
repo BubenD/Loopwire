@@ -6,7 +6,7 @@
 #include <QString>
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // ---- The stock electronic parts, as drawings -------------------------------
 //
@@ -61,4 +61,4 @@ inline constexpr char kPartSymbolInstKey[] = "symbolInst";
 // the symbol has been turned or mirrored under the cursor nothing else can say where those tips are.
 inline constexpr char kPartSymbolPinKey[] = "symbolPin";
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

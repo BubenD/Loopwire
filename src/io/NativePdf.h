@@ -3,7 +3,7 @@
 #include <QSizeF>
 #include <QString>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 struct PdfRaster {
     QImage image;
     QSizeF pageSize;

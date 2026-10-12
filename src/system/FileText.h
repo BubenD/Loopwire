@@ -4,7 +4,7 @@
 
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // THE WORDS IN A FILE, to be searched: each piece of text with where it is - a drawing's texts, notes, table cells and
 // attributes (DWX); a DXF's text strings, line by line; a PDF's text; a CSV's cells, row and column. A DWG holds its text
@@ -15,4 +15,4 @@ struct TextPiece {
 };
 std::vector<TextPiece> fileText(const QString& path, QString* why = nullptr);
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

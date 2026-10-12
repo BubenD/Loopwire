@@ -11,9 +11,9 @@
 
 class QPainter;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
-// World <-> screen mapping, matching Edraw's worldToScreen/screenToWorld:
+// World <-> screen mapping, matching Loopwire's worldToScreen/screenToWorld:
 //   screen.x =  world.x * scale + view.x
 //   screen.y = -world.y * scale + view.y
 // WHERE A DETAIL VIEW'S WORDS SIT, in world coordinates: the letter beside the circle round the thing
@@ -166,4 +166,4 @@ public:
     static bool whitePaper();
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

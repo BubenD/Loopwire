@@ -21,7 +21,7 @@ class QPushButton;
 class QSpinBox;
 class QToolButton;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 class View3DCanvas;
 class NavWheel;
@@ -137,4 +137,4 @@ private:
     double dragPerPixel_ = 0.0;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

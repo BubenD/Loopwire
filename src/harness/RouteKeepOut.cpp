@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -67,4 +67,4 @@ std::vector<KeepOutHit> keepOutHits(const Route3D& r) {
     return out;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

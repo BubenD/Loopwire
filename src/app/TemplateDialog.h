@@ -15,7 +15,7 @@ class QPushButton;
 class QSpinBox;
 class QTableWidget;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 class DrawingPreview;
 class Editor;
@@ -131,4 +131,4 @@ private:
     QLabel* summary_ = nullptr;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

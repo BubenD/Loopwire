@@ -12,7 +12,7 @@
 #include <QSet>
 #include <QStringDecoder>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -158,4 +158,4 @@ std::vector<TextPiece> fileText(const QString& path, QString* why) {
     return out;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

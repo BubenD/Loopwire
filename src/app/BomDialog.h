@@ -13,7 +13,7 @@ class QLabel;
 class QLineEdit;
 class QTableWidget;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 class Editor;
 
@@ -109,4 +109,4 @@ private:
     QLabel* cfgSummary_ = nullptr;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

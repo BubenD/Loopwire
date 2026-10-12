@@ -10,7 +10,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -742,4 +742,4 @@ SnapResult resolveSnap(const Document& doc, const Vec2& raw,
     return result;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

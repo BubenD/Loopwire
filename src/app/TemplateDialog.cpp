@@ -36,7 +36,7 @@
 #include <QUrl>
 #include <QVBoxLayout>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 namespace {
 constexpr int kLayName = 0, kLayColour = 1, kLayWeight = 2, kLayVisible = 3, kLayLocked = 4;
 
@@ -984,7 +984,7 @@ bool TemplateDialog::loadFrom(const QString& path) {
     DrawingTemplate loaded;
     if (!loaded.load(path)) {
         if (summary_)
-            summary_->setText(QStringLiteral("%1 is not an Edraw template.")
+            summary_->setText(QStringLiteral("%1 is not an Loopwire template.")
                                   .arg(QFileInfo(path).fileName()));
         return false;
     }
@@ -1034,4 +1034,4 @@ void TemplateDialog::refreshInstalled() {
     }
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

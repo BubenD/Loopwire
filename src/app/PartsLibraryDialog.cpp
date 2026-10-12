@@ -80,7 +80,7 @@
 
 #include <algorithm>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 
@@ -103,8 +103,8 @@ QString roleStyle() {
 // The fold arrows, drawn: the style's own were painted over by the picked row's colour, so a picked group showed
 // a blank square where its arrow should be. Drawn once into files the style sheet can name.
 QString branchArrow(bool open) {
-    const QString path = QDir(QDir::tempPath()).filePath(open ? QStringLiteral("edraw_branch_open.png")
-                                                              : QStringLiteral("edraw_branch_closed.png"));
+    const QString path = QDir(QDir::tempPath()).filePath(open ? QStringLiteral("loopwire_branch_open.png")
+                                                              : QStringLiteral("loopwire_branch_closed.png"));
     if (!QFileInfo::exists(path)) {
         QPixmap pm(12, 12);
         pm.fill(Qt::transparent);
@@ -4252,4 +4252,4 @@ bool PartsLibraryDialog::saveLibrary() {
     return catalog_.saveAll();
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

@@ -1,4 +1,4 @@
-/* Edraw — AutoCAD-style charcoal-gray chrome (canvas stays dark via its own paint). */
+/* Loopwire — AutoCAD-style charcoal-gray chrome (canvas stays dark via its own paint). */
 QMainWindow, QWidget {
     background-color: #3a3d43;
     color: #c9ccd1;

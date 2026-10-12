@@ -5,7 +5,7 @@
 #include <limits>
 #include <map>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 void Bounds::expand(const Vec2& p) {
     if (!valid) {
@@ -909,4 +909,4 @@ std::vector<Vec2> shrunkSleeveOutline(const std::vector<Vec2>& route, double bod
 }
 
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

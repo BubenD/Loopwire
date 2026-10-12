@@ -9,7 +9,7 @@
 #include <QDir>
 #include <cstdio>
 
-using namespace Edraw_Desktop;
+using namespace Loopwire;
 
 namespace {
 int g_fail = 0;

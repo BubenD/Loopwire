@@ -31,7 +31,7 @@
 
 #include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 const char* kAxes[3] = {"X", "Y", "Z"};
@@ -971,4 +971,4 @@ void Part3DEditorDialog::exportModel() {
     else said_->setText(QStringLiteral("Written to %1.").arg(path));
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

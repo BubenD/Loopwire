@@ -1,6 +1,6 @@
 #include "geometry/Environment3D.h"
 
-#ifdef EDRAW_HAVE_OCCT
+#ifdef LOOPWIRE_HAVE_OCCT
 #include "geometry/StepOcct.h"
 #endif
 
@@ -11,7 +11,7 @@
 #include <cmath>
 #include <limits>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 bool Environment3D::empty() const {
     for (const EnvPart3D& p : parts)
@@ -38,7 +38,7 @@ bool Environment3D::bounds(V3& lo, V3& hi) const {
 }
 
 bool fullStepReader() {
-#ifdef EDRAW_HAVE_OCCT
+#ifdef LOOPWIRE_HAVE_OCCT
     return true;
 #else
     return false;
@@ -54,11 +54,11 @@ Environment3D loadEnvironment3D(const QString& path, const Load3DProgress& progr
     env.path = path;
     const QString ext = QFileInfo(path).suffix().toLower();
     if (progress) progress(2, QStringLiteral("Reading the file"));
-#ifdef EDRAW_HAVE_OCCT
+#ifdef LOOPWIRE_HAVE_OCCT
     if (ext == QLatin1String("stp") || ext == QLatin1String("step")) {
         if (readStepOcct(path, env.parts, &env.how, progress)) return env;
-        if (progress) progress(60, QStringLiteral("Reading it with Edraw's own reader"));
-        // Not a file Open CASCADE takes whole - Edraw's own reader may still find faces in it.
+        if (progress) progress(60, QStringLiteral("Reading it with Loopwire's own reader"));
+        // Not a file Open CASCADE takes whole - Loopwire's own reader may still find faces in it.
         const QString why = env.how;
         QElapsedTimer clock;
         clock.start();
@@ -240,4 +240,4 @@ Pick3D RayIndex3D::cast(const V3& origin, const V3& dirIn, const Skip3D& skip) c
     return best;
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

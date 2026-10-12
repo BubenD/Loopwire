@@ -112,21 +112,21 @@ int main(int argc, char** argv) {
     // has no file at all - it answers AccessError and every write is dropped - so anything the program
     // REMEMBERS between sessions was untestable, and a test of it passed or failed for reasons that had
     // nothing to do with the code. Its own name, not the application's, so a test run cannot tread on what
-    // somebody's real Edraw remembers.
+    // somebody's real Loopwire remembers.
     QApplication::setOrganizationName(QStringLiteral("Whatson"));
-    QApplication::setApplicationName(QStringLiteral("Edraw tests"));
+    QApplication::setApplicationName(QStringLiteral("Loopwire tests"));
     QApplication app(argc, argv);
     // THE HOUSE MODELS ARE SHIPPED INSIDE THE BINARY, and the tests must not stand on them. Half of what
     // is checked here is what the program does when NOTHING is drawn for a kind yet - a wizard asked for a
     // boot it has no model of, a manager showing a kind with an empty drawing - and with a set of models
     // built into the executable there is no such thing as nothing unless it is asked for. So it is asked
     // for: the application starts from the house style, a test starts from an empty sheet.
-    Edraw_Desktop::MechModelSet::setShippedDefaultsEnabled(false);
+    Loopwire::MechModelSet::setShippedDefaultsEnabled(false);
     // Unbuffered, so a crash mid-suite still shows how far it got.
     setvbuf(stdout, nullptr, _IONBF, 0);
-    // SOME SUITES ONLY, by name (EDRAW_TEST_ONLY=brickharness,io): a failure looked into without the whole run.
-    const QList<QByteArray> onlySuites = qgetenv("EDRAW_TEST_ONLY").split(',');
-    auto only = [&](const char* name) { return qgetenv("EDRAW_TEST_ONLY").isEmpty() || onlySuites.contains(QByteArray(name)); };
+    // SOME SUITES ONLY, by name (LOOPWIRE_TEST_ONLY=brickharness,io): a failure looked into without the whole run.
+    const QList<QByteArray> onlySuites = qgetenv("LOOPWIRE_TEST_ONLY").split(',');
+    auto only = [&](const char* name) { return qgetenv("LOOPWIRE_TEST_ONLY").isEmpty() || onlySuites.contains(QByteArray(name)); };
     int failures = 0;
     if (only("geometry")) failures += run_geometry_tests();
     if (only("editor")) failures += run_editor_tests();

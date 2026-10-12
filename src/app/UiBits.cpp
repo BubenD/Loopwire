@@ -31,7 +31,7 @@
 
 #include <algorithm>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 namespace {
 class SectionGripWidget : public QWidget {
@@ -710,4 +710,4 @@ void wheelScrollsNotFieldsAnywhere() {
     qApp->installEventFilter(new WheelPassFilter(nullptr));
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

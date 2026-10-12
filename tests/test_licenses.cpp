@@ -1,6 +1,6 @@
 // THE LICENCE PAPERWORK, CHECKED LIKE ANYTHING ELSE THE PROGRAM HAS TO DO.
 //
-// Edraw links Qt dynamically and ships Qt's DLLs, which makes it a combined work under the LGPL v3.
+// Loopwire links Qt dynamically and ships Qt's DLLs, which makes it a combined work under the LGPL v3.
 // Three things are owed in return: a notice that Qt is used and used under the LGPL, the licence texts
 // themselves, and a route to Qt's source code. All three are discharged by text - a label in the About
 // dialog and three documents compiled into the executable - and text is exactly the kind of thing that
@@ -27,7 +27,7 @@
 
 #include <cstdio>
 
-using namespace Edraw_Desktop;
+using namespace Loopwire;
 
 namespace {
 
@@ -130,7 +130,7 @@ void testNoticesSayWhatIsOwed() {
     // the GPL rather than a standalone licence. A reader who cannot find that explanation is left to
     // draw the wrong conclusion from a 35 KB GPL sitting in the install folder, so the explanation is
     // part of the notice and is tested like the rest of it.
-    check(n.contains(QStringLiteral("Edraw contains no GPL-licensed code")),
+    check(n.contains(QStringLiteral("Loopwire contains no GPL-licensed code")),
           "the notices state plainly that there is no GPL code in the product");
     check(n.contains(QStringLiteral("incorporates the terms and conditions")),
           "the notices explain that the LGPL incorporates the GPL, which is why the GPL ships");
@@ -140,7 +140,7 @@ void testNoticesSayWhatIsOwed() {
     check(n.contains(QStringLiteral("Mark Adler")),
           "the DEFLATE decoder's origin is acknowledged (zlib licence)");
 
-    // Components that belong to Qt modules Edraw does not ship. Crediting them is not harmless
+    // Components that belong to Qt modules Loopwire does not ship. Crediting them is not harmless
     // generosity - it tells the reader that code is inside a binary they were never given.
     // OPEN CASCADE: named, its licence and its exception named, and the place for its source given.
     check(n.contains(QStringLiteral("Open CASCADE Technology")), "the notices name Open CASCADE Technology");
@@ -172,7 +172,7 @@ void testAboutGivesTheNotice() {
         QDialog* dlg = nullptr;
         for (QWidget* top : QApplication::topLevelWidgets()) {
             auto* d = qobject_cast<QDialog*>(top);
-            if (d && d->isVisible() && d->windowTitle() == QStringLiteral("About Edraw")) { dlg = d; break; }
+            if (d && d->isVisible() && d->windowTitle() == QStringLiteral("About Loopwire")) { dlg = d; break; }
         }
         if (!dlg) { check(false, "the About dialog opened"); return; }
 
@@ -265,9 +265,9 @@ void testAboutIsTheRouteToTheLicences() {
 
     bool aboutIsReachable = false;
     for (const QAction* a : w.findChildren<QAction*>()) {
-        if (a->text().contains(QStringLiteral("About Edraw"))) aboutIsReachable = true;
+        if (a->text().contains(QStringLiteral("About Loopwire"))) aboutIsReachable = true;
     }
-    check(aboutIsReachable, "About Edraw is reachable from the menu");
+    check(aboutIsReachable, "About Loopwire is reachable from the menu");
 
     // And the button on it actually opens the licences, rather than merely being labelled as if it did.
     bool licencesOpened = false;
@@ -275,7 +275,7 @@ void testAboutIsTheRouteToTheLicences() {
         QDialog* about = nullptr;
         for (QWidget* top : QApplication::topLevelWidgets()) {
             auto* d = qobject_cast<QDialog*>(top);
-            if (d && d->isVisible() && d->windowTitle() == QStringLiteral("About Edraw")) { about = d; break; }
+            if (d && d->isVisible() && d->windowTitle() == QStringLiteral("About Loopwire")) { about = d; break; }
         }
         if (!about) { check(false, "the About dialog opened"); return; }
 

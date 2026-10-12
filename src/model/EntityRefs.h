@@ -7,7 +7,7 @@
 
 #include <vector>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // Entities point at one another by id, and a copy has to point at the copies.
 //
@@ -34,4 +34,4 @@ void remapEntityReferences(Entity& copy, const QHash<QString, QString>& oldToNew
 const QStringList& entityRefKeys();
 const QStringList& entityRefListKeys();
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

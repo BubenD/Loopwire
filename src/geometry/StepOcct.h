@@ -1,11 +1,11 @@
 #pragma once
 
-// READING A STEP FILE THROUGH OPEN CASCADE. Only in a build that has it (EDRAW_HAVE_OCCT); nothing outside
-// src/geometry includes this, so no Open CASCADE header reaches the rest of Edraw.
+// READING A STEP FILE THROUGH OPEN CASCADE. Only in a build that has it (LOOPWIRE_HAVE_OCCT); nothing outside
+// src/geometry includes this, so no Open CASCADE header reaches the rest of Loopwire.
 
 #include "geometry/Environment3D.h"
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // Every solid of the file, tessellated, placed where the assembly puts it, with its name and colour. False, and
 // why in `how`, when the file cannot be read.
@@ -27,4 +27,4 @@ bool occtCutSolid(const OcctSolid& solid, const std::vector<OcctSolid>& cuts, Me
 
 bool readStepOcct(const QString& path, std::vector<EnvPart3D>& parts, QString* how, const Load3DProgress& progress = {});
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

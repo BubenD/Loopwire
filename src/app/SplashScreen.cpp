@@ -11,29 +11,32 @@
 #include <QScreen>
 
 #include <algorithm>
+#include <cmath>
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 namespace {
 
-constexpr int kW = 640;
-constexpr int kH = 380;
+constexpr int kW = 760;
+constexpr int kH = 440;
+constexpr int kShadow = 20;   // the room round the card for its shadow
 
-// Brand colours, taken from the logo.
-const QColor kCard(247, 249, 251);
-const QColor kInk(24, 38, 56);
-const QColor kRed(178, 32, 46);
-const QColor kTeal(31, 122, 140);
-const QColor kLine(214, 222, 230);
+// Brand colours, taken from the logo: its dark lettering, and the wires it is made of.
+const QColor kCard(255, 255, 255);
+const QColor kInk(24, 30, 42);
+const QColor kSoft(122, 132, 148);
+const QColor kLine(226, 231, 238);
+const QColor kWires[] = {QColor(222, 38, 44), QColor(24, 96, 214), QColor(247, 196, 22), QColor(32, 158, 86)};
+const QColor kDot(22, 98, 232);   // the blue dot over the i
 
 // Where a logo picture may be. Beside the executable for an installed copy; up one and into
-// resources/ for a build tree (build/Edraw.exe -> ../resources); and the compiled-in copy last,
+// resources/ for a build tree (build/Loopwire.exe -> ../resources); and the compiled-in copy last,
 // so dropping a file next to the exe overrides it without a rebuild.
 QPixmap findLogo() {
     const QString exeDir = QCoreApplication::applicationDirPath();
-    const QStringList paths = {exeDir + QStringLiteral("/edraw-logo.png"),
-                              exeDir + QStringLiteral("/resources/edraw-logo.png"),
-                              exeDir + QStringLiteral("/../resources/edraw-logo.png"),
-                              QStringLiteral(":/edraw-logo.png")};
+    const QStringList paths = {exeDir + QStringLiteral("/loopwire-logo.png"),
+                              exeDir + QStringLiteral("/resources/loopwire-logo.png"),
+                              exeDir + QStringLiteral("/../resources/loopwire-logo.png"),
+                              QStringLiteral(":/loopwire-logo.png")};
     for (const QString& p : paths) {
         if (!p.startsWith(QLatin1Char(':')) && !QFileInfo::exists(p)) continue;
         QPixmap pm(p);
@@ -80,85 +83,91 @@ void SplashScreen::paintEvent(QPaintEvent*) {
     p.setRenderHint(QPainter::Antialiasing, true);
     p.setRenderHint(QPainter::SmoothPixmapTransform, true);
 
-    // The card.
+    // THE CARD, floating: a soft shadow of stacked translucent rounded rectangles, then a white plate.
+    const QRectF plate(kShadow, kShadow - 6, width() - 2.0 * kShadow, height() - 2.0 * kShadow);
+    p.setPen(Qt::NoPen);
+    for (int i = 0; i < kShadow; ++i) {
+        p.setBrush(QColor(20, 30, 50, 3));
+        p.drawRoundedRect(plate.adjusted(-i * 0.8, -i * 0.8 + 8, i * 0.8, i * 0.8 + 8), 18 + i, 18 + i);
+    }
     QPainterPath card;
-    card.addRoundedRect(QRectF(0, 0, width(), height()), 14, 14);
+    card.addRoundedRect(plate, 18, 18);
     p.setClipPath(card);
     p.fillPath(card, kCard);
+    // A band of the wires' colours along the top edge - the logo's wires, laid side by side.
+    const double bandW = plate.width() / 4.0;
+    for (int i = 0; i < 4; ++i) p.fillRect(QRectF(plate.left() + i * bandW, plate.top(), bandW + 1, 5), kWires[i]);
 
-    // A faint drafting grid, so the plate reads as a drawing sheet.
-    p.setPen(QPen(kLine, 1));
-    for (int x = 20; x < width(); x += 20) p.drawLine(x, 0, x, height());
-    for (int y = 20; y < height(); y += 20) p.drawLine(0, y, width(), y);
-
-    const int pad = 34;
-    const QRect logoBox(pad, 28, width() - pad * 2, 214);
+    const int pad = 44;
+    const QRectF inner = plate.adjusted(pad, 0, -pad, 0);
+    // THE LOGO, as large as the card allows, in the upper part.
+    const QRectF logoBox(inner.left(), plate.top() + 34, inner.width(), 236);
     if (!logo_.isNull()) {
-        const QPixmap scaled = logo_.scaled(logoBox.size(), Qt::KeepAspectRatio,
-                                            Qt::SmoothTransformation);
-        p.drawPixmap(logoBox.center().x() - scaled.width() / 2,
-                     logoBox.center().y() - scaled.height() / 2, scaled);
+        const QPixmap scaled = logo_.scaled(logoBox.size().toSize(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        p.drawPixmap(QPointF(logoBox.center().x() - scaled.width() / 2.0, logoBox.center().y() - scaled.height() / 2.0), scaled);
     } else {
         // No picture: the wordmark, drawn.
-        QFont f = font();
-        f.setPixelSize(58);
-        f.setBold(true);
-        f.setLetterSpacing(QFont::AbsoluteSpacing, 2);
-        p.setFont(f);
-        const QFontMetrics fm(f);
-        const QString a = QStringLiteral("E"), b = QStringLiteral("DRAW");
-        const int total = fm.horizontalAdvance(a + b);
-        int x = logoBox.center().x() - total / 2;
-        const int y = logoBox.center().y() + 6;
-        p.setPen(kRed);
-        p.drawText(x, y, a);
-        x += fm.horizontalAdvance(a);
+        QFont wf = font();
+        wf.setPixelSize(86);
+        wf.setBold(true);
+        p.setFont(wf);
         p.setPen(kInk);
-        p.drawText(x, y, b);
-
-        f.setPixelSize(15);
-        f.setBold(false);
-        f.setLetterSpacing(QFont::AbsoluteSpacing, 3);
-        p.setFont(f);
-        p.setPen(kInk);
-        p.drawText(QRect(logoBox.left(), y + 12, logoBox.width(), 24), Qt::AlignHCenter,
-                   QStringLiteral("HARNESS & CABLE CAD SUITE"));
+        p.drawText(logoBox, Qt::AlignCenter, QStringLiteral("Loopwire"));
     }
-
-    // The module line: what is loading right now, and how far through the list it is.
     QFont f = font();
+    f.setPixelSize(12);
+    f.setLetterSpacing(QFont::AbsoluteSpacing, 3.2);
+    p.setFont(f);
+    p.setPen(kSoft);
+    p.drawText(QRectF(inner.left(), logoBox.bottom() + 2, inner.width(), 20), Qt::AlignHCenter | Qt::AlignVCenter,
+               QStringLiteral("HARNESS  &  CABLE  DESIGN"));
+
+    // WHAT IS LOADING right now, and how far through the list it is.
+    f = font();
     f.setPixelSize(13);
     p.setFont(f);
+    const double barY = plate.bottom() - 52;
+    const bool ready = current_ == QLatin1String("Ready");
     p.setPen(kInk);
-    const int barY = height() - 62;
-    p.drawText(QRect(pad, barY - 26, width() - pad * 2, 20), Qt::AlignLeft | Qt::AlignVCenter,
-               current_ == QLatin1String("Ready")
-                   ? QStringLiteral("Ready")
-                   : QStringLiteral("Loading %1…").arg(current_));
+    p.drawText(QRectF(inner.left(), barY - 28, inner.width(), 20), Qt::AlignLeft | Qt::AlignVCenter,
+               ready ? QStringLiteral("Ready") : QStringLiteral("Loading %1…").arg(current_));
     const int total = std::max(1, static_cast<int>(modules_.size()));
-    p.setPen(QColor(120, 132, 146));
-    p.drawText(QRect(pad, barY - 26, width() - pad * 2, 20), Qt::AlignRight | Qt::AlignVCenter,
+    p.setPen(kSoft);
+    p.drawText(QRectF(inner.left(), barY - 28, inner.width(), 20), Qt::AlignRight | Qt::AlignVCenter,
                QStringLiteral("%1 / %2").arg(std::min(done_, total)).arg(total));
 
-    // The bar.
-    const QRectF track(pad, barY, width() - pad * 2, 4);
+    // THE PROGRESS, a cable being pulled: a grey track, and over it four strands - the logo's red, blue, yellow and
+    // green - as far as it has got, ending in the logo's blue dot.
+    const QRectF track(inner.left(), barY, inner.width(), 8);
     p.setPen(Qt::NoPen);
     p.setBrush(kLine);
-    p.drawRoundedRect(track, 2, 2);
+    p.drawRoundedRect(track, 4, 4);
     const double frac = std::min(1.0, static_cast<double>(done_) / total);
-    QLinearGradient g(track.topLeft(), track.topRight());
-    g.setColorAt(0.0, kTeal);
-    g.setColorAt(1.0, kRed);
-    p.setBrush(g);
-    p.drawRoundedRect(QRectF(track.left(), track.top(), track.width() * frac, track.height()), 2,
-                      2);
+    const double filled = track.width() * frac;
+    if (filled > 0.5) {
+        p.save();
+        QPainterPath cable;
+        cable.addRoundedRect(QRectF(track.left(), track.top(), filled, track.height()), 4, 4);
+        p.setClipPath(cable);
+        const double strand = track.height() / 4.0;
+        for (int i = 0; i < 4; ++i) p.fillRect(QRectF(track.left(), track.top() + i * strand, filled, strand + 0.5), kWires[i]);
+        // A gleam along the top, as on the logo's cable.
+        p.fillRect(QRectF(track.left(), track.top(), filled, 1.5), QColor(255, 255, 255, 70));
+        p.restore();
+    }
+    const double pulse = 0.5 + 0.5 * std::sin(shown_.elapsed() / 160.0);
+    const double dotR = ready ? 6.0 : 5.0 + pulse;
+    p.setBrush(QColor(kDot.red(), kDot.green(), kDot.blue(), 60));
+    p.drawEllipse(QPointF(track.left() + filled, track.center().y()), dotR + 4.0, dotR + 4.0);
+    p.setBrush(kDot);
+    p.drawEllipse(QPointF(track.left() + filled, track.center().y()), dotR, dotR);
 
     f.setPixelSize(11);
-    f.setLetterSpacing(QFont::AbsoluteSpacing, 2);
+    f.setLetterSpacing(QFont::AbsoluteSpacing, 1.0);
     p.setFont(f);
-    p.setPen(QColor(140, 150, 162));
-    p.drawText(QRect(pad, height() - 40, width() - pad * 2, 24), Qt::AlignHCenter,
-               QStringLiteral("PRECISE  |  CONNECTED"));
+    p.setPen(QColor(150, 158, 172));
+    p.drawText(QRectF(inner.left(), plate.bottom() - 30, inner.width(), 18), Qt::AlignHCenter | Qt::AlignVCenter,
+               QStringLiteral("Version %1   |   Whatson").arg(QCoreApplication::applicationVersion()));
 }
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire

@@ -8,7 +8,7 @@ class QMovie;
 class QScrollArea;
 class QToolButton;
 
-namespace Edraw_Desktop {
+namespace Loopwire {
 
 // HOW TO WORK IN THE 3D VIEW, SHOWN: each topic a short recording of the view itself being used - the mouse
 // moving, the buttons pressed, what comes of it - and beside it the same steps written out. Recorded from the
@@ -51,4 +51,4 @@ private:
     QToolButton* again_ = nullptr;
 };
 
-} // namespace Edraw_Desktop
+} // namespace Loopwire
