@@ -1,4 +1,4 @@
-# Loopwire desktop
+# Loopwire
 
 Native C++20 / Qt 6 CAD application for 2D wire-harness drawings, built as `Loopwire.exe`. It is a
 port of the web prototype in `../Loopwire`. This file is standing project memory: keep it short and

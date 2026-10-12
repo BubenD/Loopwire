@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(LoopwireDesktop
+project(Loopwire
     VERSION 0.1.0
-    DESCRIPTION "Loopwire desktop - native C++/Qt 2D CAD for wire harnesses"
+    DESCRIPTION "Loopwire - native C++/Qt 2D CAD for wire harnesses"
     LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)

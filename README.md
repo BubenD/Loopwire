@@ -1,6 +1,6 @@
-# Loopwire desktop
+# Loopwire
 
-**Loopwire desktop** is a native C++/Qt 6 standalone CAD application for 2D
+**Loopwire** is a native C++/Qt 6 standalone CAD application for 2D
 wire-harness drawings — a from-scratch port of the web-based **Loopwire** prototype.
 The built application is named **Loopwire** (`Loopwire.exe`).
 
@@ -11,6 +11,9 @@ custom canvas (pan/zoom/fit, grid, origin), full draw + modify tool set, snappin
 selection (click / rectangle / lasso, grips, multi-select), layers/properties
 panels, DWX + DXF import/export, and the wire-harness domain (connectors, wires,
 nets, splices, BOM). See `../Loopwire` for the reference web app.
+
+For a full explanation of what the application does and how it is built, see
+[docs/app-overview.md](docs/app-overview.md).
 
 ## Build prerequisites
 
@@ -26,7 +29,7 @@ configure and build with Ninja:
 
 ```powershell
 $vcvars = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
-$src    = "C:\Whatson\ETS\Software\LoopwireDesktop"
+$src    = "C:\Whatson\ETS\Software\Loopwire"
 
 cmd /c "`"$vcvars`" && cmake -S `"$src`" -B `"$src\build`" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=C:/Qt/6.8.3/msvc2022_64"
 cmd /c "`"$vcvars`" && cmake --build `"$src\build`""
@@ -44,7 +47,7 @@ refuses to run. To deploy by hand, or to a folder of your own:
 ```powershell
 & "C:\Qt\6.8.3\msvc2022_64\bin\windeployqt.exe" --release `
     --no-opengl-sw --no-system-d3d-compiler --no-system-dxc-compiler `
-    "C:\Whatson\ETS\Software\LoopwireDesktop\build\Loopwire.exe"
+    "C:\Whatson\ETS\Software\Loopwire\build\Loopwire.exe"
 .\build\Loopwire.exe                     # or pass a .dwx / .dxf path to open it
 ```
 
