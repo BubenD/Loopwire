@@ -31,6 +31,8 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QListWidgetItem>
+#include <QStackedWidget>
 #include <QMessageBox>
 #include <QItemSelectionModel>
 #include <QMouseEvent>
@@ -530,54 +532,7 @@ private:
     QTableWidget* table_ = nullptr;
 };
 
-// A thin grab strip under a section: dragging it changes THAT section's height and nothing
-// else's. The sections then simply move down (or up) the scrolling column, instead of one
-// growing at another's expense the way a splitter would — enlarging the wire list must not
-// squeeze the connector table shut.
-class SectionResizer : public QWidget {
-public:
-    SectionResizer(QWidget* target, QWidget* parent)
-        : QWidget(parent), target_(target) {
-        setFixedHeight(7);
-        setCursor(Qt::SizeVerCursor);
-        setToolTip(QStringLiteral("Drag to make this section taller or shorter"));
-    }
 
-protected:
-    void paintEvent(QPaintEvent*) override {
-        QPainter p(this);
-        // Three short bars, the usual "grab me" hint.
-        p.setPen(QPen(QColor("#5b6572"), 1.4));
-        const double cx = width() / 2.0, cy = height() / 2.0;
-        for (int i = -1; i <= 1; ++i)
-            p.drawLine(QPointF(cx + i * 14 - 5, cy), QPointF(cx + i * 14 + 5, cy));
-    }
-    void mousePressEvent(QMouseEvent* e) override {
-        if (e->button() != Qt::LeftButton || !target_) return;
-        dragging_ = true;
-        startY_ = e->globalPosition().toPoint().y();
-        startH_ = target_->height();
-        e->accept();
-    }
-    void mouseMoveEvent(QMouseEvent* e) override {
-        if (!dragging_ || !target_) return;
-        const int dy = e->globalPosition().toPoint().y() - startY_;
-        // A floor rather than a collapse: a section can be made small but never shut, so the
-        // controls inside it stay reachable.
-        target_->setFixedHeight(std::max(60, startH_ + dy));
-        e->accept();
-    }
-    void mouseReleaseEvent(QMouseEvent* e) override {
-        dragging_ = false;
-        e->accept();
-    }
-
-private:
-    QWidget* target_ = nullptr;
-    bool dragging_ = false;
-    int startY_ = 0;
-    int startH_ = 0;
-};
 
 // The whole harness, beside the pin tables, so the effect of a pin drag is seen at once - the full wiring, not one
 // connector at a time.
@@ -727,58 +682,77 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
     root->setContentsMargins(12, 10, 12, 10);
     root->setSpacing(6);
 
-    // The middle of the dialog scrolls, so a harness with many connectors/wires still fits
-    // on a small screen without the footer buttons ever leaving the view.
-    auto* scroll = new QScrollArea(this);
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-    // The sections stack in a plain scrolling column, each with its own grab strip under it.
-    // Dragging one changes only ITS height and pushes the rest along — growing the wire list
-    // never squeezes the connector table shut, which is what a splitter would have done.
-    auto* page = new QWidget(scroll);
-    auto* pageLay = new QVBoxLayout(page);
-    pageLay->setContentsMargins(0, 0, 0, 0);
-    pageLay->setSpacing(0);
-    struct Sec { QWidget* w; int height; };
-    const Sec secs[] = {{buildConnectorsSection(), 190}, {buildBlockMapSection(), 150},
-                        {buildPinMapSection(), 250},    {buildWiresSection(), 260},
-                        {buildLayoutSection(), 0},      {buildIssuesSection(), 110}};
-    for (const Sec& s : secs) {
-        // 0 = open at its natural height: a grid of fields has one right size, and starting it
-        // shorter than that is what made the rows overlap.
-        s.w->setFixedHeight(s.height > 0 ? s.height : s.w->sizeHint().height());
-        sections_.push_back(s.w);
-        pageLay->addWidget(s.w);
-        pageLay->addWidget(new SectionResizer(s.w, page));
+    // ONE STEP AT A TIME: the steps down the left - each with a tick, or a warning and how many - the step's own page in
+    // the middle, and the harness as Generate will draw it always on the right with the step's checks under it. A step can be
+    // opened by clicking it, or with Back and Next.
+    auto* body = new QHBoxLayout();
+    body->setSpacing(10);
+    stepList_ = new QListWidget(this);
+    stepList_->setObjectName(QStringLiteral("harnessBuilderSteps"));
+    stepList_->setFixedWidth(190);
+    stepList_->setSpacing(2);
+    stepList_->setStyleSheet(QStringLiteral("QListWidget{font-size:13px;}QListWidget::item{padding:8px 6px;}"
+                                            "QListWidget::item:selected{background:#2d5a80;color:white;}"));
+    body->addWidget(stepList_);
+    pages_ = new QStackedWidget(this);
+    pages_->setObjectName(QStringLiteral("harnessBuilderPages"));
+    struct Step { const char* title; const char* help; QWidget* page; };
+    const Step steps[] = {
+        {"Connectors", "Add the connectors at each end of the harness: designator, side, library part or P/N, and how many pins.",
+         buildConnectorsSection()},
+        {"Placement", "Arrange the connectors: drag each one up or down its side; the drawing follows that order.",
+         buildBlockMapSection()},
+        {"Pin map", "Check what lands on each pin and drag pins to re-order them. The optimisers re-order the pins for you - "
+                    "fewest crossings, or shields and twisted pairs on neighbouring pins.",
+         buildPinMapSection()},
+        {"Shields", "Say which connector ends have an overall shield over the wires arriving there, and whether its drain is "
+                    "bonded to the connector body. A cable's own screens come with the cable.",
+         buildShieldsSection()},
+        {"Wires", "Add the connections between pins: hook-up wires, cables from the library, coax - with gauge, colour and "
+                  "part number.",
+         buildWiresSection()},
+        {"Layout", "How the drawing looks - spacing, text and symbols - then Generate draws it on the sheet.", buildLayoutSection()},
+    };
+    for (int i = 0; i < 6; ++i) {
+        auto* page = new QWidget(pages_);
+        auto* pv = new QVBoxLayout(page);
+        pv->setContentsMargins(0, 0, 0, 0);
+        pv->setSpacing(6);
+        auto* title = new QLabel(QStringLiteral("Step %1 of 6 · %2").arg(i + 1).arg(QString::fromLatin1(steps[i].title)), page);
+        // In the window's own text colour, light or dark as the chrome is.
+        title->setStyleSheet(QStringLiteral("font-size:16px;font-weight:700;"));
+        auto* help = new QLabel(QString::fromLatin1(steps[i].help), page);
+        help->setWordWrap(true);
+        help->setStyleSheet(QStringLiteral("color:#7f8fa0;"));
+        pv->addWidget(title);
+        pv->addWidget(help);
+        auto* scroll = new QScrollArea(page);
+        scroll->setWidgetResizable(true);
+        scroll->setFrameShape(QFrame::NoFrame);
+        scroll->setWidget(steps[i].page);
+        pv->addWidget(scroll, 1);
+        pages_->addWidget(page);
+        auto* item = new QListWidgetItem(QStringLiteral("%1  %2").arg(i + 1).arg(QString::fromLatin1(steps[i].title)), stepList_);
+        item->setData(Qt::UserRole, QString::fromLatin1(steps[i].title));
     }
-    pageLay->addStretch(1);
-    scroll->setWidget(page);
-    root->addWidget(scroll, 1);
+    body->addWidget(pages_, 3);
+    body->addWidget(buildPreviewColumn(), 2);
+    connect(stepList_, &QListWidget::currentRowChanged, this, [this](int row) {
+        if (row >= 0 && row < pages_->count()) pages_->setCurrentIndex(row);
+        if (backBtn_) backBtn_->setEnabled(row > 0);
+        if (nextBtn_) nextBtn_->setEnabled(row < pages_->count() - 1);
+        updateSteps();
+    });
+    root->addLayout(body, 1);
 
     // ---- Footer: validate / minimise on the left, the commit buttons on the right ----
     auto* footer = new QHBoxLayout();
-    auto* validateBtn = new QPushButton(QStringLiteral("Validate"), this);
-    validateBtn->setToolTip(QStringLiteral(
-        "Check the definition: repeated pin names, shields or twisted groups split by "
-        "another wire, wires on missing pins, and pins carrying two wires"));
-    connect(validateBtn, &QPushButton::clicked, this, [this] { runValidate(); });
-    auto* minBtn = new QPushButton(QStringLiteral("Minimise crossings"), this);
-    minBtn->setToolTip(QStringLiteral(
-        "Re-order the pins of every connector for the fewest crossings while keeping "
-        "twisted pairs and shielded wires on neighbouring pins (the connectors themselves "
-        "stay where they are)"));
-    connect(minBtn, &QPushButton::clicked, this, [this] { runMinimizeCrossings(); });
-    // Targeted versions of the same optimiser, for when one kind of bundling has to win.
-    auto* shieldBtn = new QPushButton(QStringLiteral("Optimise by shield"), this);
-    shieldBtn->setToolTip(QStringLiteral(
-        "Re-order the pins so every shielded group lands on neighbouring pins, so each "
-        "screen encloses a solid band"));
-    connect(shieldBtn, &QPushButton::clicked, this, [this] { runOptimizeBy(/*shield=*/true); });
-    auto* twistBtn = new QPushButton(QStringLiteral("Optimise by twist"), this);
-    twistBtn->setToolTip(QStringLiteral(
-        "Re-order the pins so every twisted group lands on neighbouring pins, so each pair "
-        "can actually be braided"));
-    connect(twistBtn, &QPushButton::clicked, this, [this] { runOptimizeBy(/*shield=*/false); });
+    backBtn_ = new QPushButton(QStringLiteral("\u25C2 Back"), this);
+    backBtn_->setObjectName(QStringLiteral("harnessBuilderBack"));
+    connect(backBtn_, &QPushButton::clicked, this, [this] { setStep(currentStep() - 1); });
+    nextBtn_ = new QPushButton(QStringLiteral("Next \u25B8"), this);
+    nextBtn_->setObjectName(QStringLiteral("harnessBuilderNext"));
+    connect(nextBtn_, &QPushButton::clicked, this, [this] { setStep(currentStep() + 1); });
     summaryLabel_ = new QLabel(this);
     summaryLabel_->setStyleSheet(QStringLiteral("color:#8fb0d6;"));
     undoBtn_ = new QPushButton(QStringLiteral("Undo"), this);
@@ -800,10 +774,6 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
     connect(redoKey2, &QShortcut::activated, this, [this] { redo(); });
     footer->addWidget(undoBtn_);
     footer->addWidget(redoBtn_);
-    footer->addWidget(validateBtn);
-    footer->addWidget(minBtn);
-    footer->addWidget(shieldBtn);
-    footer->addWidget(twistBtn);
     footer->addWidget(summaryLabel_, 1);
 
     genModeBox_ = new QComboBox(this);
@@ -861,12 +831,15 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
     connect(closeBtn, &QPushButton::clicked, this, &QDialog::close);
     // Clear sits in the bottom row with the rest, between Generate and Save. (It used to be built
     // and wired but never put in a layout, which left it stranded at the corner of the window.)
-    footer->addWidget(genModeBox_);
-    footer->addWidget(generateBtn);
     footer->addWidget(clearBtn);
     footer->addWidget(saveBtn);
     footer->addWidget(loadBtn);
     footer->addWidget(presetBtn);
+    footer->addSpacing(16);
+    footer->addWidget(backBtn_);
+    footer->addWidget(nextBtn_);
+    footer->addWidget(genModeBox_);
+    footer->addWidget(generateBtn);
     footer->addWidget(closeBtn);
     root->addLayout(footer);
 
@@ -889,9 +862,8 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
         addConnector(HarnessSide::Right);
     }
     reloadAll();
-    // Sized to what is in them, so everything is in view from the start. Deferred once so the
-    // tables have been laid out and can report a real row height.
-    QTimer::singleShot(0, this, [this] { spreadSections(); });
+    // Opened at the first step.
+    setStep(0);
 }
 
 // ---- Step 1: connectors ----------------------------------------------------
@@ -931,6 +903,8 @@ QWidget* HarnessBuilderDialog::buildConnectorsSection() {
                      QStringLiteral("The connector %1").arg(c.designator));
     });
     connTable_->setMinimumHeight(140);
+    // ITS OVERALL SHIELDS on a step of their own (Shields): the four columns kept, out of sight, for what fills them.
+    for (int col = 8; col <= 11; ++col) connTable_->setColumnHidden(col, true);
     return section(QStringLiteral("Connectors"), connTable_, this, {addLeft, addRight});
 }
 
@@ -1317,18 +1291,43 @@ QWidget* HarnessBuilderDialog::buildPinMapSection() {
     pinMapHost_->setMinimumHeight(250);
     tables->setMinimumHeight(250);
 
-    wiringPreview_ = new HarnessWiringPreview(host);
-    wiringPreview_->setOnActivate([this] {
-        auto* big = new HarnessWiringPreview;
-        big->setDefinition(def_);
-        big->setShowShields(shieldPreviewBox_ && shieldPreviewBox_->isChecked());
-        showPreviewPopup(this, QStringLiteral("Harness wiring"), big);
-    });
-    row->addWidget(wiringPreview_, 2);
+    // THE OPTIMISERS, here where the pins are: each only re-orders pins.
+    auto* minBtn = new QPushButton(QStringLiteral("Minimise crossings"), this);
+    minBtn->setObjectName(QStringLiteral("harnessBuilderMinimise"));
+    minBtn->setToolTip(QStringLiteral(
+        "Re-order the pins of every connector for the fewest crossings while keeping "
+        "twisted pairs and shielded wires on neighbouring pins (the connectors themselves "
+        "stay where they are)"));
+    connect(minBtn, &QPushButton::clicked, this, [this] { runMinimizeCrossings(); });
+    auto* shieldBtn = new QPushButton(QStringLiteral("Optimise by shield"), this);
+    shieldBtn->setToolTip(QStringLiteral(
+        "Re-order the pins so every shielded group lands on neighbouring pins, so each "
+        "screen encloses a solid band"));
+    connect(shieldBtn, &QPushButton::clicked, this, [this] { runOptimizeBy(/*shield=*/true); });
+    auto* twistBtn = new QPushButton(QStringLiteral("Optimise by twist"), this);
+    twistBtn->setToolTip(QStringLiteral(
+        "Re-order the pins so every twisted group lands on neighbouring pins, so each pair "
+        "can actually be braided"));
+    connect(twistBtn, &QPushButton::clicked, this, [this] { runOptimizeBy(/*shield=*/false); });
+    return section(QStringLiteral("Pin map"), host, this, {minBtn, shieldBtn, twistBtn});
+}
 
+// THE COLUMN ON THE RIGHT, the same at every step: the harness as Generate will draw it, and under it what the checks find
+// in the step that is open.
+QWidget* HarnessBuilderDialog::buildPreviewColumn() {
+    auto* column = new QWidget(this);
+    column->setObjectName(QStringLiteral("harnessBuilderPreviewColumn"));
+    auto* v = new QVBoxLayout(column);
+    v->setContentsMargins(0, 0, 0, 0);
+    v->setSpacing(6);
+    auto* head = new QHBoxLayout();
+    auto* cap = new QLabel(QStringLiteral("AS IT WILL BE DRAWN"), column);
+    cap->setStyleSheet(QStringLiteral("color:#4aa8d8;font-weight:700;letter-spacing:1px;"));
+    head->addWidget(cap);
+    head->addStretch(1);
     // The screens can be switched off: on a busy harness the outlines cover the wiring they
     // are drawn over, and the pinout is easier to read without them.
-    shieldPreviewBox_ = new QCheckBox(QStringLiteral("Show shields"), this);
+    shieldPreviewBox_ = new QCheckBox(QStringLiteral("Show shields"), column);
     shieldPreviewBox_->setChecked(true);
     shieldPreviewBox_->setToolTip(QStringLiteral(
         "Draw the screens over the preview: an overall one inboard of its connector's pins, an "
@@ -1336,16 +1335,169 @@ QWidget* HarnessBuilderDialog::buildPinMapSection() {
     connect(shieldPreviewBox_, &QCheckBox::toggled, this, [this](bool on) {
         if (wiringPreview_) wiringPreview_->setShowShields(on);
     });
-    // Clipped, not squeezed: dragging the section shorter slides the previews under its edge
-    // rather than crushing the pictures out of shape.
-    return section(QStringLiteral("Pin map"), host, this, {shieldPreviewBox_},
-                   /*clipBody=*/true);
+    head->addWidget(shieldPreviewBox_);
+    v->addLayout(head);
+    wiringPreview_ = new HarnessWiringPreview(column);
+    wiringPreview_->setOnActivate([this] {
+        auto* big = new HarnessWiringPreview;
+        big->setDefinition(def_);
+        big->setShowShields(shieldPreviewBox_ && shieldPreviewBox_->isChecked());
+        showPreviewPopup(this, QStringLiteral("Harness wiring"), big);
+    });
+    v->addWidget(wiringPreview_, 3);
+    v->addWidget(buildIssuesSection(), 1);
+    return column;
 }
 
-// Push the definition into the wiring preview and redraw it. A layout field - the shield
-// amounts, the pin pitch, the wire colours - changes what the preview shows without changing a
-// row, so those handlers call this rather than rebuilding the whole pin map: the picture keeps up
-// with every parameter, and typing in a spin box stays responsive.
+// ---- The Shields step ----------------------------------------------------------------------------------------------
+
+// A LINE A CONNECTOR: whether everything arriving at it is under an overall shield, and whether that shield's drain is
+// bonded back to the connector's body. The shield is on the connector's own end of the harness - its side.
+QWidget* HarnessBuilderDialog::buildShieldsSection() {
+    shieldTable_ = new QTableWidget(this);
+    shieldTable_->setObjectName(QStringLiteral("harnessBuilderShields"));
+    shieldTable_->setColumnCount(4);
+    shieldTable_->setHorizontalHeaderLabels({QStringLiteral("Connector"), QStringLiteral("End"), QStringLiteral("Overall shield"),
+                                             QStringLiteral("Drain bonded to body")});
+    shieldTable_->verticalHeader()->setVisible(false);
+    shieldTable_->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    shieldTable_->setSelectionMode(QAbstractItemView::NoSelection);
+    shieldTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    auto* host = new QWidget(this);
+    auto* v = new QVBoxLayout(host);
+    v->setContentsMargins(0, 0, 0, 0);
+    v->addWidget(shieldTable_, 1);
+    auto* note = new QLabel(QStringLiteral("Shields inside a cable - a screened pair, a coax - come with the cable from the library. "
+                                           "A group of loose wires under a screen of its own is still marked on the Wires step "
+                                           "(Internal shield)."),
+                            host);
+    note->setWordWrap(true);
+    note->setStyleSheet(QStringLiteral("color:#8a96a3;"));
+    v->addWidget(note);
+    return section(QStringLiteral("Overall shields"), host, this);
+}
+
+void HarnessBuilderDialog::reloadShields() {
+    if (!shieldTable_) return;
+    shieldTable_->setRowCount(static_cast<int>(def_.connectors.size()));
+    for (int row = 0; row < static_cast<int>(def_.connectors.size()); ++row) {
+        const HarnessConnector& c = def_.connectors[static_cast<size_t>(row)];
+        const bool left = c.side == HarnessSide::Left;
+        shieldTable_->setItem(row, 0, new QTableWidgetItem(c.designator.isEmpty() ? c.id : c.designator));
+        shieldTable_->setItem(row, 1, new QTableWidgetItem(left ? QStringLiteral("Left end") : QStringLiteral("Right end")));
+        const QString id = c.id;
+        auto tick = [&](int col, bool value, const QString& name, const QString& tip, bool shield) {
+            auto* cell = new QWidget(shieldTable_);
+            auto* lay = new QHBoxLayout(cell);
+            lay->setContentsMargins(0, 0, 0, 0);
+            lay->setAlignment(Qt::AlignCenter);
+            auto* box = new QCheckBox(cell);
+            box->setObjectName(name);
+            box->setChecked(value);
+            box->setToolTip(tip);
+            connect(box, &QCheckBox::toggled, this, [this, id, left, shield](bool on) {
+                if (syncing_) return;
+                HarnessConnector* cc = connById(id);
+                if (!cc) return;
+                bool& flag = shield ? (left ? cc->shieldLeft : cc->shieldRight) : (left ? cc->bodyBondLeft : cc->bodyBondRight);
+                flag = on;
+                // A shield ticked is a screen the wires can drain to - the wire table hears of it at once.
+                QTimer::singleShot(0, this, [this] { reloadAll(); });
+            });
+            lay->addWidget(box);
+            shieldTable_->setCellWidget(row, col, cell);
+        };
+        tick(2, left ? c.shieldLeft : c.shieldRight, QStringLiteral("harnessBuilderShield_") + id,
+             QStringLiteral("Overall shield: screen everything arriving at this connector, drawn just inboard of its pins"), true);
+        tick(3, left ? c.bodyBondLeft : c.bodyBondRight, QStringLiteral("harnessBuilderBond_") + id,
+             QStringLiteral("Bond this connector's overall shield drain back to its own body"), false);
+    }
+}
+
+// ---- The steps: which is open, and what each one's checks say ------------------------------------------------------
+
+namespace {
+// A STEP'S MARK, drawn - so it shows whatever the font has: a green tick, or an amber disc with the count of what is wrong.
+QIcon stepMark(int issues) {
+    QPixmap pm(36, 36);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    if (issues == 0) {
+        p.setPen(QPen(QColor("#3fbf6f"), 4.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.drawPolyline(QPolygonF({QPointF(8, 19), QPointF(15, 26), QPointF(28, 10)}));
+    } else {
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor("#f0a020"));
+        p.drawEllipse(QRectF(3, 3, 30, 30));
+        QFont f;
+        f.setBold(true);
+        f.setPixelSize(issues > 9 ? 15 : 19);
+        p.setFont(f);
+        p.setPen(Qt::white);
+        p.drawText(QRectF(3, 3, 30, 30), Qt::AlignCenter, issues > 99 ? QStringLiteral("99") : QString::number(issues));
+    }
+    return QIcon(pm);
+}
+}
+
+int HarnessBuilderDialog::stepOfIssue(const HarnessIssue& issue) {
+    const QString kind = issue.key.section(QLatin1Char(':'), 0, 0);
+    if (kind == QLatin1String("duppin") || kind == QLatin1String("dupdes")) return 0;
+    if (kind == QLatin1String("duporder") || kind == QLatin1String("shieldsplit") || kind == QLatin1String("twistsplit")) return 2;
+    if (kind == QLatin1String("shieldnowire") || kind == QLatin1String("bondnoshield")) return 3;
+    return 4;   // a wire's ends, a pin carrying two, a coax's halves, a twist of one: the Wires step
+}
+
+int HarnessBuilderDialog::currentStep() const { return pages_ ? pages_->currentIndex() : 0; }
+
+void HarnessBuilderDialog::setStep(int step) {
+    if (!stepList_ || step < 0 || step >= stepList_->count()) return;
+    stepList_->setCurrentRow(step);
+}
+
+int HarnessBuilderDialog::stepIssueCount(int step) const {
+    int n = 0;
+    for (const HarnessIssue& i : liveIssues_) n += stepOfIssue(i) == step ? 1 : 0;
+    return n;
+}
+
+void HarnessBuilderDialog::updateSteps() {
+    if (!stepList_) return;
+    // THE CHECKS, AT EVERY CHANGE: each step marked with a tick, or a warning and how many; under the picture, what is wrong
+    // in the step that is open - and a word on the others.
+    liveIssues_ = validateHarness(def_);
+    for (int i = 0; i < stepList_->count(); ++i) {
+        QListWidgetItem* item = stepList_->item(i);
+        const int n = stepIssueCount(i);
+        const QString title = item->data(Qt::UserRole).toString();
+        item->setText(QStringLiteral("%1  %2").arg(i + 1).arg(title));
+        item->setIcon(stepMark(n));
+        item->setData(Qt::UserRole + 1, n);
+        QStringList said;
+        for (const HarnessIssue& issue : liveIssues_)
+            if (stepOfIssue(issue) == i) said << issue.message;
+        item->setToolTip(said.isEmpty() ? QStringLiteral("Nothing wrong in this step") : said.join(QLatin1Char('\n')));
+    }
+    if (!issueView_) return;
+    const int step = currentStep();
+    std::vector<HarnessIssue> here;
+    for (const HarnessIssue& issue : liveIssues_)
+        if (stepOfIssue(issue) == step) here.push_back(issue);
+    const int elsewhere = static_cast<int>(liveIssues_.size() - here.size());
+    QString html;
+    if (here.empty())
+        html = QStringLiteral("<span style='color:#7ee0a0'>Nothing wrong in this step.</span>");
+    else {
+        html = QStringLiteral("<span style='color:#ffb038'>%1 to put right in this step:</span><ul>").arg(here.size());
+        for (const HarnessIssue& issue : here) html += QStringLiteral("<li>%1</li>").arg(issue.message.toHtmlEscaped());
+        html += QStringLiteral("</ul>");
+    }
+    if (elsewhere > 0)
+        html += QStringLiteral("<p style='color:#8a96a3'>%1 more in other steps - see the marks on the left.</p>").arg(elsewhere);
+    issueView_->setHtml(html);
+}
+
 void HarnessBuilderDialog::noteChange() {
     // THE HARNESS AS IT IS NOW against how it was at the last change: different, and the old one is a step to undo. Quick
     // edits one after another - the letters typed into one field - are one step, not one a letter.
@@ -1393,8 +1545,13 @@ void HarnessBuilderDialog::redo() {
     summaryLabel_->setText(QStringLiteral("Done again"));
 }
 
+// Push the definition into the wiring preview and redraw it. A layout field - the shield
+// amounts, the pin pitch, the wire colours - changes what the preview shows without changing a
+// row, so those handlers call this rather than rebuilding the whole pin map: the picture keeps up
+// with every parameter, and typing in a spin box stays responsive.
 void HarnessBuilderDialog::refreshPreview() {
     noteChange();
+    updateSteps();
     if (!wiringPreview_) return;
     wiringPreview_->setDefinition(def_);
     if (shieldPreviewBox_) wiringPreview_->setShowShields(shieldPreviewBox_->isChecked());
@@ -1617,7 +1774,6 @@ QWidget* HarnessBuilderDialog::buildWiresSection() {
         }
         addWire();
         reloadAll();
-        spreadSections(); // the new row is in view, not under the section's edge
         if (wireTable_ && wireTable_->rowCount())
             wireTable_->scrollToBottom();
     });
@@ -1630,7 +1786,6 @@ QWidget* HarnessBuilderDialog::buildWiresSection() {
         "with the colours and cross-sections the cable itself says."));
     connect(placeCableBtn, &QPushButton::clicked, this, [this] {
         if (addCableFromLibrary() > 0) {
-            spreadSections();
             if (wireTable_ && wireTable_->rowCount()) wireTable_->scrollToBottom();
         }
     });
@@ -2647,7 +2802,6 @@ void HarnessBuilderDialog::addWireToGroup(const QString& key) {
         w.twistGroup = key.mid(2);
     }
     reloadAll();
-    spreadSections();
     summaryLabel_->setText(QStringLiteral("Wire added"));
 }
 
@@ -3307,9 +3461,9 @@ void HarnessBuilderDialog::reloadLayout() {
 QWidget* HarnessBuilderDialog::buildIssuesSection() {
     issueView_ = new QTextBrowser(this);
     issueView_->setMinimumHeight(84);
-    issueView_->setPlaceholderText(QStringLiteral("Validate reports anything wrong with the "
-                                                "definition here."));
-    return section(QStringLiteral("Validation"), issueView_, this);
+    issueView_->setObjectName(QStringLiteral("harnessBuilderChecks"));
+    issueView_->setPlaceholderText(QStringLiteral("What is wrong in the step that is open is said here, as you work."));
+    return section(QStringLiteral("Checks"), issueView_, this);
 }
 
 void HarnessBuilderDialog::showIssues(const std::vector<HarnessIssue>& issues, bool sayWhenClean) {
@@ -3551,7 +3705,6 @@ void HarnessBuilderDialog::loadPresetFromDrawing(const QString& name) {
         return;
     }
     applyDefinitionJson(def);
-    spreadSections();
     summaryLabel_->setText(QStringLiteral("Loaded \"%1\" from the drawing").arg(name));
 }
 
@@ -3594,7 +3747,6 @@ void HarnessBuilderDialog::loadDefinition() {
     }
     st.setValue(QLatin1String(kLastPathKey), path);
     applyDefinitionJson(root);
-    spreadSections(); // a loaded harness is in view without dragging anything
     summaryLabel_->setText(QStringLiteral("Loaded %1").arg(QFileInfo(path).fileName()));
 }
 
@@ -3606,40 +3758,6 @@ void HarnessBuilderDialog::applyDefinitionJson(const QJsonObject& root) {
     if (connTable_) reloadAll();
 }
 
-// Give every section the height its contents actually need, so a harness can be read the
-// moment it is opened or loaded instead of being dragged into view section by section. A table
-// asks for its rows; everything else asks for its own size hint. Each is capped, because one
-// long wire list must not push the rest off the page.
-void HarnessBuilderDialog::spreadSections() {
-    if (sections_.size() < 6) return;
-    auto tableHeight = [](QTableWidget* t, int maxRows) {
-        if (!t) return 0;
-        int h = t->horizontalHeader()->height() + 8;
-        int shown = 0;
-        for (int r = 0; r < t->rowCount() && shown < maxRows; ++r) {
-            if (t->isRowHidden(r)) continue;
-            h += t->rowHeight(r);
-            ++shown;
-        }
-        // Room for one more row, so the next Add lands somewhere visible rather than under
-        // the edge.
-        h += t->rowCount() ? t->rowHeight(0) : 30;
-        if (t->horizontalScrollBar() && t->horizontalScrollBar()->isVisible())
-            h += t->horizontalScrollBar()->height();
-        return h;
-    };
-    // caption + body, and the caption is about 22px of the section.
-    const int cap = 26;
-    const int connH = std::clamp(tableHeight(connTable_, 8) + cap, 150, 340);
-    const int wireH = std::clamp(tableHeight(wireTable_, 12) + cap, 170, 460);
-    sections_[0]->setFixedHeight(connH);
-    sections_[1]->setFixedHeight(150);
-    sections_[2]->setFixedHeight(260);
-    sections_[3]->setFixedHeight(wireH);
-    sections_[4]->setFixedHeight(sections_[4]->sizeHint().height());
-    sections_[5]->setFixedHeight(110);
-}
-
 void HarnessBuilderDialog::reloadAll() {
     syncing_ = true;
     reloadConnectors();
@@ -3647,6 +3765,7 @@ void HarnessBuilderDialog::reloadAll() {
     reloadPinMap();
     reloadWires();
     reloadLayout();
+    reloadShields();
     // ... and the wiring picture, which is the whole point of looking at this window. It was left out,
     // so re-ordering the pinout - "Minimise crossings", "Optimise by shield", "Optimise by twist" - did
     // the work and then showed the OLD tangle: the numbers changed, the drawing did not, and the

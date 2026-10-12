@@ -18,6 +18,7 @@ class QListWidget;
 class QPushButton;
 class QSpinBox;
 class QSplitter;
+class QStackedWidget;
 class QTableWidget;
 class QTextBrowser;
 class QVBoxLayout;
@@ -57,6 +58,14 @@ public:
     void redo();
     bool canUndo() const { return !undoStack_.isEmpty(); }
     bool canRedo() const { return !redoStack_.isEmpty(); }
+
+    // THE STEPS, one on screen at a time: 0 Connectors, 1 Placement, 2 Pin map, 3 Shields, 4 Wires, 5 Layout. Which is
+    // open; open another; how many a step's checks find wrong.
+    int currentStep() const;
+    void setStep(int step);
+    int stepIssueCount(int step) const;
+    // The step a check's finding belongs to - where it is put right.
+    static int stepOfIssue(const HarnessIssue& issue);
 
 signals:
     // "See it in the library": the host owns the library window, so it is asked to open it at the part.
@@ -101,7 +110,6 @@ private:
     void armCellMenu(QWidget* cell, const QString& wireId);
     void reloadLayout();
     // Give each section the height its contents need, so nothing has to be dragged into view.
-    void spreadSections();
     void showIssues(const std::vector<HarnessIssue>& issues, bool sayWhenClean);
 
     // --- Actions ---
@@ -168,6 +176,17 @@ private:
 
     Editor* editor_ = nullptr;
     HarnessDef def_;
+    // THE STEP SHELL: the steps down the left, each step's page, Back and Next, the Shields step's table.
+    QListWidget* stepList_ = nullptr;
+    QStackedWidget* pages_ = nullptr;
+    QPushButton* backBtn_ = nullptr;
+    QPushButton* nextBtn_ = nullptr;
+    QTableWidget* shieldTable_ = nullptr;
+    std::vector<HarnessIssue> liveIssues_;   // the checks, run again at every change. Not saved.
+    QWidget* buildShieldsSection();
+    QWidget* buildPreviewColumn();
+    void reloadShields();
+    void updateSteps();
     // UNDO: the harness as it was before each change, as the file keeps it; and what was taken back. Not saved.
     QList<QByteArray> undoStack_, redoStack_;
     QByteArray lastSnapshot_;
@@ -180,8 +199,6 @@ private:
     int connSeq_ = 0;
     int wireSeq_ = 0;
 
-    // The six section frames, in the order they appear, for spreadSections().
-    QList<QWidget*> sections_;
     QTableWidget* connTable_ = nullptr;
     QListWidget* leftBlocks_ = nullptr;
     QListWidget* rightBlocks_ = nullptr;

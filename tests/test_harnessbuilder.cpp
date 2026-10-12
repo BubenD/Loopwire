@@ -10,6 +10,13 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QPushButton>
+#include <QHeaderView>
+#include <QTextBrowser>
+#include <QTableWidget>
+#include <QStackedWidget>
+#include <QListWidget>
+#include <QLineEdit>
+#include <QCheckBox>
 
 #include <cstdio>
 
@@ -152,12 +159,89 @@ void testPhaseZero() {
               picture->entities().size() > dialog.definition().connectors.size(),
           "builder preview: the real drawing Generate makes - the same entities, not a sketch of them");
 }
+
+// PHASE 1: ONE STEP AT A TIME - the steps down the left with their marks, Back and Next, the drawing always on the right.
+void testPhaseOne() {
+    Document doc(QStringLiteral("builder steps"));
+    Editor editor;
+    editor.setDocument(&doc);
+    HarnessBuilderDialog dialog(&editor);
+    dialog.resize(1400, 860);
+    dialog.show();
+    QApplication::processEvents();
+    auto* steps = dialog.findChild<QListWidget*>(QStringLiteral("harnessBuilderSteps"));
+    auto* pages = dialog.findChild<QStackedWidget*>(QStringLiteral("harnessBuilderPages"));
+    QStringList titles;
+    if (steps)
+        for (int i = 0; i < steps->count(); ++i) titles << steps->item(i)->data(Qt::UserRole).toString();
+    std::printf("  builder steps: %s; open at %d\n", qPrintable(titles.join(QStringLiteral(" > "))), dialog.currentStep());
+    check(steps && pages && pages->count() == 6 &&
+              titles == QStringList({QStringLiteral("Connectors"), QStringLiteral("Placement"), QStringLiteral("Pin map"),
+                                     QStringLiteral("Shields"), QStringLiteral("Wires"), QStringLiteral("Layout")}) &&
+              dialog.currentStep() == 0,
+          "builder steps: six steps in order - Connectors, Placement, Pin map, Shields, Wires, Layout - opened at the first");
+    // ---- BACK AND NEXT, AND A STEP CLICKED ----
+    auto* next = dialog.findChild<QPushButton*>(QStringLiteral("harnessBuilderNext"));
+    auto* back = dialog.findChild<QPushButton*>(QStringLiteral("harnessBuilderBack"));
+    const bool backOffAtFirst = back && !back->isEnabled();
+    if (next) next->click();
+    const int afterNext = dialog.currentStep();
+    if (back) back->click();
+    const int afterBack = dialog.currentStep();
+    steps->setCurrentRow(5);
+    QApplication::processEvents();
+    const bool lastNextOff = next && !next->isEnabled() && pages->currentIndex() == 5;
+    check(backOffAtFirst && afterNext == 1 && afterBack == 0 && lastNextOff,
+          "builder steps: Next and Back walk the steps, a step clicked opens it; no Back at the first, no Next at the last");
+    // ---- THE DRAWING ON THE RIGHT AT EVERY STEP ----
+    auto* picture = dialog.findChild<DrawingPreview*>(QStringLiteral("harnessBuilderPreviewPicture"));
+    bool alwaysShown = picture != nullptr;
+    for (int i = 0; i < 6; ++i) {
+        dialog.setStep(i);
+        QApplication::processEvents();
+        alwaysShown = alwaysShown && picture->isVisible();
+    }
+    check(alwaysShown, "builder steps: the drawing, as Generate will draw it, beside every step");
+    // ---- THE OPTIMISERS ON THE PIN MAP STEP ----
+    auto* minimise = dialog.findChild<QPushButton*>(QStringLiteral("harnessBuilderMinimise"));
+    check(minimise && pages->widget(2)->isAncestorOf(minimise), "builder steps: the pin optimisers on the Pin map step");
+    // ---- THE SHIELDS STEP: an overall shield ticked there is the harness's ----
+    const QString left = dialog.definition().connectors.front().id;
+    auto* shield = dialog.findChild<QCheckBox*>(QStringLiteral("harnessBuilderShield_") + left);
+    dialog.setStep(3);
+    QApplication::processEvents();
+    if (shield) shield->setChecked(true);
+    for (int k = 0; k < 3; ++k) QApplication::processEvents();
+    check(shield && dialog.definition().connectors.front().shieldLeft, "builder steps: the Shields step - an overall shield ticked on a connector's end");
+    QTableWidget* connectorTable = nullptr;
+    for (QTableWidget* t : dialog.findChildren<QTableWidget*>())
+        if (t->columnCount() == 14 && t->horizontalHeaderItem(0) && t->horizontalHeaderItem(0)->text() == QLatin1String("Side")) connectorTable = t;
+    bool hidden = connectorTable != nullptr;
+    for (int col = 8; col <= 11 && connectorTable; ++col) hidden = hidden && connectorTable->isColumnHidden(col);
+    check(hidden, "builder steps: the shield columns gone from the Connectors table - they are on the Shields step");
+    // ---- THE MARKS: a fault on a step is marked there, and said beside the drawing ----
+    dialog.setStep(0);
+    QApplication::processEvents();
+    const int cleanAtStart = dialog.stepIssueCount(0);
+    QLineEdit* designator = connectorTable ? qobject_cast<QLineEdit*>(connectorTable->cellWidget(1, 1)) : nullptr;
+    if (designator) {
+        designator->setText(dialog.definition().connectors.front().designator);
+        emit designator->editingFinished();
+    }
+    for (int k = 0; k < 3; ++k) QApplication::processEvents();
+    auto* said = dialog.findChild<QTextBrowser*>(QStringLiteral("harnessBuilderChecks"));
+    std::printf("  builder marks: step 1 %d issue(s) after two connectors given one name\n", dialog.stepIssueCount(0));
+    check(designator && cleanAtStart == 0 && dialog.stepIssueCount(0) >= 1 && steps->item(0)->data(Qt::UserRole + 1).toInt() >= 1 &&
+              said && said->toPlainText().contains(QLatin1String("this step")),
+          "builder marks: two connectors given one name - the Connectors step marked, and what is wrong said beside the drawing");
+}
 } // namespace
 
 int run_harnessbuilder_tests() {
     g_fail = 0;
     std::printf("harness builder tests:\n");
     testPhaseZero();
+    testPhaseOne();
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }
