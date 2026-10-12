@@ -49,6 +49,7 @@
 #include <QPlainTextEdit>
 #include <QTableWidget>
 #include <QToolButton>
+#include <QGroupBox>
 #include <QScrollBar>
 #include <QScrollArea>
 #include "render/EntityRenderer.h"
@@ -1980,30 +1981,57 @@ void testViewSplitAndTiles() {
     for (QDockWidget* other : window.findChildren<QDockWidget*>(Qt::FindDirectChildrenOnly))
         if (other != options && other->isVisible() && !other->isFloating() && window.dockWidgetArea(other) == Qt::RightDockWidgetArea) ++rightOthers;
     const bool optionsRight = options && options->isVisible() && window.dockWidgetArea(options) == Qt::RightDockWidgetArea &&
-                              options->findChild<QWidget*>(QStringLiteral("view3dRows")) != nullptr && rightOthers == 0;
-    // DOWN THE PANEL, NOT ACROSS: every option inside the panel's width, nothing to scroll across to.
+                              options->findChild<QWidget*>(QStringLiteral("view3dOptionsPanel")) != nullptr && rightOthers == 0;
+    // A PANEL LAID OUT ONCE: its sections in a set order, each control inside its width - and the same however wide it is.
     {
         for (int k = 0; k < 4; ++k) QApplication::processEvents();
         QWidget* host = options ? options->findChild<QWidget*>(QStringLiteral("view3dOptionsHost")) : nullptr;
-        auto* rows = options ? options->findChild<QScrollArea*>(QStringLiteral("view3dRows")) : nullptr;
+        QWidget* panel = options ? options->findChild<QWidget*>(QStringLiteral("view3dOptionsPanel")) : nullptr;
+        // THE SECTIONS, top to bottom.
+        QStringList order;
+        int lastY = -1;
+        bool inOrder = true;
+        for (const char* name : {"view3dSectionView", "view3dSectionEnvironment", "view3dSectionRoute", "view3dSectionBundle", "view3dSectionPlane"}) {
+            QWidget* box = panel ? panel->findChild<QWidget*>(QLatin1String(name)) : nullptr;
+            if (!box || !box->isVisible()) continue;
+            order << QString::fromLatin1(name).mid(13);
+            inOrder = inOrder && box->y() > lastY;
+            lastY = box->y();
+        }
+        // EVERY CONTROL INSIDE IT.
         int outside = 0, shown = 0;
-        if (host && rows)
-            for (QWidget* w : rows->widget()->findChildren<QWidget*>()) {
-                if (!w->isVisible() || qobject_cast<QScrollBar*>(w) || w->parentWidget() == nullptr) continue;
+        if (host && panel)
+            for (QWidget* w : panel->findChildren<QWidget*>()) {
+                if (!w->isVisible() || qobject_cast<QGroupBox*>(w)) continue;
                 const QRect at(w->mapTo(host, QPoint(0, 0)), w->size());
                 ++shown;
                 if (at.right() > host->width() + 1) ++outside;
             }
-        std::printf("  3D options panel: %d px wide, %d control(s) shown, %d past its edge, scroll across %d\n", host ? host->width() : -1, shown, outside,
-                    rows && rows->horizontalScrollBar()->isVisible() ? 1 : 0);
-        check(host && rows && shown > 10 && outside == 0 && !rows->horizontalScrollBar()->isVisible(),
-              "view: side by side, the 3D options ordered down the right-hand panel - none past its edge, nothing to scroll across");
+        // THE SAME AT ANOTHER WIDTH: where each control is, line by line, does not change.
+        auto where = [&](const char* name) {
+            QWidget* w = panel ? panel->findChild<QWidget*>(QLatin1String(name)) : nullptr;
+            return w && host ? w->mapTo(host, QPoint(0, 0)).y() : -1;
+        };
+        const int selectY = where("view3dToolSelect"), measureY = where("view3dToolMeasure"), diameterY = where("view3dRouteDiameter");
+        window.resizeDocks({options}, {options->width() + 140}, Qt::Horizontal);
+        for (int k = 0; k < 4; ++k) QApplication::processEvents();
+        const bool same = where("view3dToolSelect") == selectY && where("view3dToolMeasure") == measureY && where("view3dRouteDiameter") == diameterY;
+        std::printf("  3D options panel: sections %s; %d control(s), %d past its edge; the same wider %d\n", qPrintable(order.join(QStringLiteral(", "))),
+                    shown, outside, same ? 1 : 0);
+        check(panel && inOrder && order.size() >= 4 && order.first() == QLatin1String("View") && shown > 20 && outside == 0,
+              "view: side by side, the 3D options in sections down the right-hand panel - View, Route, Bundle, Work plane - none past its edge");
+        check(same && selectY >= 0 && measureY > selectY, "view: the 3D options panel the same at any width - nothing moves about when it is widened");
     }
     splitBelow->click();
-    QApplication::processEvents();
-    const bool optionsBack = options && !options->isVisible() && options->findChild<QWidget*>(QStringLiteral("view3dRows")) == nullptr &&
-                             window.view3dSplitter()->findChild<QWidget*>(QStringLiteral("view3dRows")) != nullptr;
-    check(optionsRight && optionsBack, "view: side by side, the 3D options in the right-hand panel alone; one over the other, back with the 3D view");
+    for (int k = 0; k < 3; ++k) QApplication::processEvents();
+    // EACH CONTROL BACK IN ITS ROW, the rows with the 3D view again.
+    QWidget* selectTool = window.findChild<QWidget*>(QStringLiteral("view3dToolSelect"));
+    QWidget* rowsHome = window.view3dSplitter()->findChild<QWidget*>(QStringLiteral("view3dRows"));
+    bool inRows = false;
+    for (QWidget* p = selectTool ? selectTool->parentWidget() : nullptr; p; p = p->parentWidget()) inRows = inRows || p == rowsHome;
+    const bool optionsBack = options && !options->isVisible() && options->findChild<QWidget*>(QStringLiteral("view3dOptionsPanel")) == nullptr &&
+                             rowsHome && rowsHome->isVisible() && inRows;
+    check(optionsRight && optionsBack, "view: side by side, the 3D options in the right-hand panel alone; one over the other, back in their rows with the 3D view");
     // DRAGGED: either side to four fifths, not past it.
     const QList<int> was = split->sizes();
     const int total = was[0] + was[1];

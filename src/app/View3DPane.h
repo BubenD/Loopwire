@@ -361,7 +361,19 @@ private:
     QWidget* side_ = nullptr;
     QSplitter* split_ = nullptr;   // the picture, and the side panels either side of it
     QWidget* optionsHost_ = nullptr;
-    std::vector<QBoxLayout*> foldingRows_;   // the option rows, folded down the panel while the options are in it
+    // THE OPTIONS PANEL: each control taken out of its row - where it was, to be put back - into a section of its own.
+    struct OptionHome {
+        QPointer<QWidget> widget;
+        QPointer<QBoxLayout> row;
+        int index = 0;
+        QSizePolicy policy;
+        int style = -1;   // a tool button's own way of showing itself
+    };
+    std::vector<OptionHome> optionHomes_;
+    QList<QPair<QPointer<QWidget>, QPointer<QWidget>>> optionSections_;   // each section, and the row it stands for
+    QPointer<QWidget> optionsPanel_;
+    void buildOptionsPanel(QVBoxLayout* column);
+    void takeDownOptionsPanel();
     // The harness the route is for.
     std::function<RouteHarness()> harness_;
     std::function<void(const QString&, const BrickDesign&)> applyHarness_;

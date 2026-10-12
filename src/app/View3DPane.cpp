@@ -17,6 +17,9 @@
 #include <QFileInfo>
 #include <QFile>
 #include <QGridLayout>
+#include <functional>
+#include <QSet>
+#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QKeyEvent>
@@ -103,107 +106,6 @@ public:
 // THE GROUPS OF CONTROLS SIDE BY SIDE, on as few lines as the width allows: the next group on the same line while it
 // fits, on the next line where it does not - so the strip is one or two lines deep in a wide pane, more only where it
 // is narrow. Each group kept whole, never squeezed.
-// A ROW OF CONTROLS THAT FOLDS ONTO MORE LINES - while folding is on: the 3D view's options in the panel at the right -
-// where it is narrower than it is long, and lies on one line, as a plain row does, where there is room. A label is kept
-// with what it names; the rows nested in it fold with it. Folding off (the options with the 3D view), a plain row.
-class WrapRowLayout : public QHBoxLayout {
-public:
-    explicit WrapRowLayout(QWidget* parent) : QHBoxLayout(parent) {}
-    void setFolding(bool on) {
-        if (fold_ == on) return;
-        fold_ = on;
-        invalidate();
-    }
-    bool hasHeightForWidth() const override { return fold_ || QHBoxLayout::hasHeightForWidth(); }
-    int heightForWidth(int width) const override {
-        if (!fold_) return QHBoxLayout::heightForWidth(width);
-        if (width >= QHBoxLayout::sizeHint().width()) return QHBoxLayout::sizeHint().height();
-        return fold(QRect(0, 0, width, 0), false);
-    }
-    // AS NARROW AS ITS WIDEST GROUP: everything else can go onto another line.
-    QSize minimumSize() const override {
-        if (!fold_) return QHBoxLayout::minimumSize();
-        int wide = 0, tall = 0;
-        for (const Group& g : groups()) {
-            wide = std::max(wide, g.width);
-            tall = std::max(tall, g.height);
-        }
-        const QMargins m = contentsMargins();
-        return QSize(wide + m.left() + m.right(), tall + m.top() + m.bottom());
-    }
-    void setGeometry(const QRect& rect) override {
-        if (!fold_ || rect.width() >= QHBoxLayout::sizeHint().width()) {
-            QHBoxLayout::setGeometry(rect);
-            return;
-        }
-        QLayout::setGeometry(rect);
-        fold(rect, true);
-    }
-
-private:
-    bool fold_ = false;
-    struct Group {
-        QList<QLayoutItem*> items;
-        int width = 0, height = 0;
-    };
-    // EVERYTHING SHOWN IN IT, in order - the rows nested in it opened out, its stretches left out.
-    static void flatten(const QLayout* layout, QList<QLayoutItem*>& out) {
-        for (int i = 0; i < layout->count(); ++i) {
-            QLayoutItem* it = layout->itemAt(i);
-            if (!it || it->spacerItem()) continue;
-            if (const QLayout* inner = it->layout()) {
-                flatten(inner, out);
-                continue;
-            }
-            if (!it->isEmpty()) out.append(it);
-        }
-    }
-    QList<Group> groups() const {
-        QList<QLayoutItem*> pieces;
-        flatten(this, pieces);
-        const int gap = std::max(0, spacing());
-        QList<Group> out;
-        for (int i = 0; i < pieces.size(); ++i) {
-            Group g;
-            auto add = [&](QLayoutItem* it) {
-                const QSize h = it->sizeHint();
-                g.width += (g.items.isEmpty() ? 0 : gap) + h.width();
-                g.height = std::max(g.height, h.height());
-                g.items.append(it);
-            };
-            add(pieces[i]);
-            // A LABEL KEPT WITH WHAT IT NAMES: "Wires" with its box, "at" with its height.
-            if (qobject_cast<QLabel*>(pieces[i]->widget()) && i + 1 < pieces.size()) add(pieces[++i]);
-            out.append(g);
-        }
-        return out;
-    }
-    int fold(const QRect& rect, bool apply) const {
-        const QMargins m = contentsMargins();
-        const int left = rect.x() + m.left(), right = rect.x() + rect.width() - m.right();
-        const int gap = std::max(0, spacing()), groupGap = gap + 6, lineGap = 3;
-        int x = left, y = rect.y() + m.top(), line = 0;
-        for (const Group& g : groups()) {
-            if (x > left && x + g.width > right) {
-                x = left;
-                y += line + lineGap;
-                line = 0;
-            }
-            if (apply) {
-                int at = x;
-                for (QLayoutItem* it : g.items) {
-                    const QSize h = it->sizeHint();
-                    it->setGeometry(QRect(QPoint(at, y + (g.height - h.height()) / 2), h));
-                    at += h.width() + gap;
-                }
-            }
-            x += g.width + groupGap;
-            line = std::max(line, g.height);
-        }
-        return y + line - rect.y() + m.bottom();
-    }
-};
-
 class FlowLayout : public QLayout {
 public:
     FlowLayout(QWidget* parent, int hGap, int vGap) : QLayout(parent), hGap_(hGap), vGap_(vGap) { setContentsMargins(0, 0, 0, 0); }
@@ -222,11 +124,11 @@ public:
         place(rect, true);
     }
     QSize sizeHint() const override { return minimumSize(); }
-    // As wide as its widest group - a row that folds as wide as the widest thing it cannot fold; as tall as one line.
+    // As wide as its widest group; as tall as one line.
     QSize minimumSize() const override {
         QSize s;
         for (QLayoutItem* it : items_)
-            if (!it->isEmpty()) s = s.expandedTo(it->hasHeightForWidth() ? it->minimumSize() : it->sizeHint());
+            if (!it->isEmpty()) s = s.expandedTo(it->sizeHint());
         return s;
     }
 
@@ -235,9 +137,7 @@ private:
         int x = rect.x(), y = rect.y(), line = 0;
         for (QLayoutItem* it : items_) {
             if (it->isEmpty()) continue;
-            QSize h = it->sizeHint();
-            // LONGER THAN THE LINE, AND IT CAN FOLD: the whole line for it, as deep as it folds to.
-            if (h.width() > rect.width() && it->hasHeightForWidth()) h = QSize(rect.width(), it->heightForWidth(rect.width()));
+            const QSize h = it->sizeHint();
             if (x > rect.x() && x + h.width() > rect.right() + 1) {
                 x = rect.x();
                 y += line + vGap_;
@@ -278,8 +178,7 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     lay->setContentsMargins(4, 4, 4, 4);
     lay->setSpacing(4);
     topRow_ = new QWidget(this);
-    auto* bar = new WrapRowLayout(topRow_);
-    foldingRows_.push_back(bar);
+    auto* bar = new QHBoxLayout(topRow_);
     bar->setContentsMargins(0, 0, 0, 0);
     bar->setSpacing(3);
     source_ = new QComboBox(this);
@@ -394,8 +293,7 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
 
     // THE ENVIRONMENT'S ROW: the model the harness is routed in, how it shows, and a section through it.
     envRow_ = new QWidget(this);
-    auto* env = new WrapRowLayout(envRow_);
-    foldingRows_.push_back(env);
+    auto* env = new QHBoxLayout(envRow_);
     env->setContentsMargins(0, 0, 0, 0);
     env->setSpacing(3);
     env->addWidget(new QLabel(QStringLiteral("Environment:"), envRow_));
@@ -458,14 +356,12 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     // THE ROUTE'S ROW: what a click does, and the bundles' diameter, bend radius and lead out of a connector.
     // TWO GROUPS, each kept whole in the strip: placing and laying; changing and measuring.
     routeRow_ = new QWidget(this);
-    auto* rr = new WrapRowLayout(routeRow_);
-    foldingRows_.push_back(rr);
+    auto* rr = new QHBoxLayout(routeRow_);
     rr->setContentsMargins(0, 0, 0, 0);
     rr->setSpacing(3);
     editRow_ = new QWidget(this);
     editRow_->setObjectName(QStringLiteral("view3dEditRow"));
-    auto* rr2 = new WrapRowLayout(editRow_);
-    foldingRows_.push_back(rr2);
+    auto* rr2 = new QHBoxLayout(editRow_);
     rr2->setContentsMargins(0, 0, 0, 0);
     rr2->setSpacing(3);
     rr->addWidget(new QLabel(QStringLiteral("Route:"), routeRow_));
@@ -525,8 +421,7 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     });
     // THE BUNDLES' SIZES, on a row of their own - the tools before it want the room for their names.
     bundleRow_ = new QWidget(this);
-    auto* br = new WrapRowLayout(bundleRow_);
-    foldingRows_.push_back(br);
+    auto* br = new QHBoxLayout(bundleRow_);
     br->setContentsMargins(0, 0, 0, 0);
     br->setSpacing(3);
     br->addWidget(new QLabel(QStringLiteral("Bundle:"), bundleRow_));
@@ -704,8 +599,7 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
     // gap, at the height it really runs.
     // WHERE A ROUTE LANDS, and the view's angles beside it.
     planeRow_ = new QWidget(this);
-    auto* pv = new WrapRowLayout(planeRow_);
-    foldingRows_.push_back(pv);
+    auto* pv = new QHBoxLayout(planeRow_);
     pv->setContentsMargins(0, 0, 0, 0);
     pv->setSpacing(1);
     auto* pr = new QHBoxLayout;
@@ -1737,29 +1631,210 @@ void View3DPane::setRowsShown(bool on) {
 
 void View3DPane::setOptionsHost(QWidget* host) {
     if (host == optionsHost_) return;
-    auto* lay = qobject_cast<QVBoxLayout*>(layout());
     if (host) {
-        // INTO THE PANEL: the rows above, the route table under them - the rows flowing to the panel's width, down it.
+        // INTO THE PANEL, SECTION BY SECTION, the route table under them: the same panel whatever its width.
         auto* column = qobject_cast<QVBoxLayout*>(host->layout());
-        if (!column || !lay) return;
-        lay->removeWidget(rowsArea_);
-        column->addWidget(rowsArea_);
+        if (!column) return;
+        optionsHost_ = host;
+        buildOptionsPanel(column);
         column->addWidget(side_, 1);
         side_->setVisible(envChoice_);
     } else {
-        // BACK: the rows on top of the pane, the route table at the right of the picture.
-        if (!lay) return;
-        if (optionsHost_ && optionsHost_->layout()) {
-            optionsHost_->layout()->removeWidget(rowsArea_);
-            optionsHost_->layout()->removeWidget(side_);
-        }
-        lay->insertWidget(0, rowsArea_);
+        // BACK: every control in its row where it was, the route table at the right of the picture.
+        if (optionsHost_ && optionsHost_->layout()) optionsHost_->layout()->removeWidget(side_);
+        takeDownOptionsPanel();
         split_->addWidget(side_);
+        optionsHost_ = nullptr;
     }
-    optionsHost_ = host;
-    // IN THE PANEL, DOWN IT: each row folded to the panel's width. With the 3D view, a line each, as ever.
-    for (QBoxLayout* row : foldingRows_) static_cast<WrapRowLayout*>(row)->setFolding(host != nullptr);
     applyLayout();
+}
+
+void View3DPane::buildOptionsPanel(QVBoxLayout* column) {
+    // WHERE EACH CONTROL LIVES IN ITS ROW - its row and its place there - noted before any is moved, so each goes back to
+    // exactly where it was. The rows' own titles ("Route:", "Bundle:") stay: the sections say it.
+    optionHomes_.clear();
+    std::function<void(QBoxLayout*)> note = [&](QBoxLayout* row) {
+        for (int i = 0; i < row->count(); ++i) {
+            QLayoutItem* it = row->itemAt(i);
+            if (auto* inner = qobject_cast<QBoxLayout*>(it->layout())) {
+                note(inner);
+                continue;
+            }
+            QWidget* w = it->widget();
+            if (!w || w == viewBits_ || w == toLeft_ || w == toRight_) continue;
+            optionHomes_.push_back({w, row, i, w->sizePolicy(), qobject_cast<QToolButton*>(w) ? int(qobject_cast<QToolButton*>(w)->toolButtonStyle()) : -1});
+        }
+    };
+    for (QWidget* row : {topRow_, envRow_, routeRow_, editRow_, bundleRow_, planeRow_, viewBits_})
+        if (auto* lay = qobject_cast<QBoxLayout*>(row->layout())) note(lay);
+    if (auto* lay = qobject_cast<QBoxLayout*>(viewBits_->layout()))
+        for (int i = 0; i < lay->count(); ++i) {
+            QWidget* w = lay->itemAt(i)->widget();
+            if (w && std::none_of(optionHomes_.begin(), optionHomes_.end(), [w](const OptionHome& h) { return h.widget == w; }))
+                optionHomes_.push_back({w, lay, i, w->sizePolicy(), -1});
+        }
+    QSet<QWidget*> placed;
+    auto take = [&](QWidget* w) -> QWidget* {
+        if (!w || placed.contains(w)) return nullptr;
+        for (const OptionHome& h : optionHomes_)
+            if (h.widget == w) {
+                if (h.row) h.row->removeWidget(w);
+                placed.insert(w);
+                return w;
+            }
+        return nullptr;
+    };
+    auto named = [this](const char* name) { return findChild<QWidget*>(QLatin1String(name)); };
+
+    optionsPanel_ = new QWidget(optionsHost_);
+    optionsPanel_->setObjectName(QStringLiteral("view3dOptionsPanel"));
+    auto* v = new QVBoxLayout(optionsPanel_);
+    v->setContentsMargins(0, 0, 0, 0);
+    v->setSpacing(8);
+    optionSections_.clear();
+    // A SECTION: its title, and under it its blocks - each block a grid of its own.
+    auto section = [&](const char* name, const QString& title, QWidget* row) {
+        auto* box = new QGroupBox(title, optionsPanel_);
+        box->setObjectName(QLatin1String(name));
+        box->setStyleSheet(QStringLiteral("QGroupBox{font-weight:bold;border:1px solid #3c4550;border-radius:4px;margin-top:10px;padding-top:6px;}"
+                                          "QGroupBox::title{subcontrol-origin:margin;left:8px;padding:0 4px;}"));
+        auto* lay = new QVBoxLayout(box);
+        lay->setContentsMargins(8, 6, 8, 8);
+        lay->setSpacing(6);
+        v->addWidget(box);
+        optionSections_.append({box, row});
+        return box;
+    };
+    // BUTTONS IN A GRID, so many to a line, each as wide as the others.
+    auto buttons = [&](QGroupBox* box, std::initializer_list<QWidget*> list, int across) {
+        auto* block = new QWidget(box);
+        auto* g = new QGridLayout(block);
+        g->setContentsMargins(0, 0, 0, 0);
+        g->setHorizontalSpacing(4);
+        g->setVerticalSpacing(4);
+        int n = 0;
+        for (QWidget* w : list)
+            if (take(w)) {
+                w->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+                if (auto* b = qobject_cast<QToolButton*>(w)) b->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+                g->addWidget(w, n / across, n % across);
+                ++n;
+            }
+        for (int c = 0; c < across; ++c) g->setColumnStretch(c, 1);
+        if (n) box->layout()->addWidget(block); else delete block;
+    };
+    // NAMED FIELDS, A LINE EACH: the name on the left, the field (and its A, or what goes with it) on the right.
+    auto fields = [&](QGroupBox* box, const QList<QPair<QString, QList<QWidget*>>>& list) {
+        auto* block = new QWidget(box);
+        auto* g = new QGridLayout(block);
+        g->setContentsMargins(0, 0, 0, 0);
+        g->setHorizontalSpacing(6);
+        g->setVerticalSpacing(4);
+        g->setColumnStretch(1, 1);
+        int r = 0;
+        for (const auto& [label, ws] : list) {
+            auto* line = new QHBoxLayout;
+            line->setSpacing(4);
+            bool any = false;
+            for (QWidget* w : ws)
+                if (take(w)) {
+                    line->addWidget(w, qobject_cast<QToolButton*>(w) && ws.size() > 1 ? 0 : 1);
+                    any = true;
+                }
+            if (!any) { delete line; continue; }
+            if (!label.isEmpty()) g->addWidget(new QLabel(label, block), r, 0);
+            g->addLayout(line, r, 1);
+            ++r;
+        }
+        if (r) box->layout()->addWidget(block); else delete block;
+    };
+
+    // ---- VIEW: what is shown, from where, and how ----
+    QGroupBox* view = section("view3dSectionView", QStringLiteral("View"), topRow_);
+    fields(view, {{QStringLiteral("Show"), {source_}}, {QStringLiteral("Parts"), {look_}}});
+    buttons(view, {named("view3dFit"), named("view3dIso"), named("view3dTop"), named("view3dFront"), named("view3dSide"), named("view3dFlip")}, 3);
+    buttons(view, {named("view3dRefresh"), fullBtn_, lockBtn_}, 3);
+    buttons(view, {named("view3dWireframe"), wheelShown_}, 2);
+    fields(view, {{QStringLiteral("Turn"), {turn_}}, {QStringLiteral("Tilt"), {tilt_}}, {QStringLiteral("Roll"), {roll_}}});
+    // ---- ENVIRONMENT: the model it is routed in ----
+    QGroupBox* env = section("view3dSectionEnvironment", QStringLiteral("Environment"), envRow_);
+    buttons(env, {envLoad_, envClear_, named("view3dParts")}, 3);
+    fields(env, {{QString(), {envProgress_}}});
+    buttons(env, {envShown_, harnessShown_}, 2);
+    fields(env, {{QStringLiteral("Opacity"), {envOpacity_}}, {QStringLiteral("Section"), {section_}}, {QString(), {sectionAt_}}});
+    // ---- ROUTE: the tools, and what goes with them ----
+    QGroupBox* route = section("view3dSectionRoute", QStringLiteral("Route"), routeRow_);
+    buttons(route, {named("view3dToolSelect"), named("view3dToolConnector"), named("view3dToolRoute"), named("view3dToolBranch"),
+                    named("view3dToolClip"), named("view3dToolMove"), named("view3dToolStretch"), named("view3dToolDelete"),
+                    named("view3dToolMeasure")}, 3);
+    fields(route, {{QStringLiteral("Measure"), {named("view3dMeasureMode")}}});
+    buttons(route, {named("view3dKeepOuts"), keepShown_, undo_, named("view3dAttach"), named("view3dHelp")}, 2);
+    // ---- BUNDLE: its sizes, a line each ----
+    QGroupBox* bundle = section("view3dSectionBundle", QStringLiteral("Bundle"), bundleRow_);
+    fields(bundle, {{QStringLiteral("Diameter"), {diameter_, diameterAuto_}},
+                    {QStringLiteral("Wires"), {wires_}},
+                    {QStringLiteral("Wire Ø"), {wireD_}},
+                    {QStringLiteral("Bend radius"), {bend_, bendAuto_}},
+                    {QStringLiteral("Lead"), {lead_}},
+                    {QStringLiteral("Tension"), {tension_}},
+                    {QStringLiteral("Gravity"), {gravity_, down_}}});
+    // ---- WORK PLANE: where a click lands ----
+    QGroupBox* plane = section("view3dSectionPlane", QStringLiteral("Work plane"), planeRow_);
+    fields(plane, {{QStringLiteral("Lands on"), {plane_}}, {QStringLiteral("At"), {planeAt_}}});
+    buttons(plane, {named("view3dWorkPlaneHere")}, 1);
+    // ANYTHING ELSE IN THE ROWS - a control added to one later - kept in its row's section, not lost.
+    const QList<QPair<QWidget*, QGroupBox*>> owners{{topRow_, view}, {viewBits_, view}, {envRow_, env}, {routeRow_, route},
+                                                    {editRow_, route}, {bundleRow_, bundle}, {planeRow_, plane}};
+    for (const auto& [row, box] : owners) {
+        QList<QWidget*> rest;
+        for (const OptionHome& h : optionHomes_)
+            if (h.widget && !placed.contains(h.widget) && !qobject_cast<QLabel*>(h.widget.data()) && h.row &&
+                h.row->parentWidget() == row)
+                rest << h.widget;
+        auto* block = new QWidget(box);
+        auto* g = new QGridLayout(block);
+        g->setContentsMargins(0, 0, 0, 0);
+        int n = 0;
+        for (QWidget* w : rest)
+            if (take(w)) { g->addWidget(w, n / 2, n % 2); ++n; }
+        if (n) box->layout()->addWidget(block); else delete block;
+    }
+    column->addWidget(optionsPanel_);
+}
+
+void View3DPane::takeDownOptionsPanel() {
+    // EACH BACK IN ITS ROW, at the place it had there - row by row, in the order they stood - as it was.
+    std::vector<OptionHome> homes = optionHomes_;
+    for (const OptionHome& h : homes)
+        if (h.widget && h.widget->parentWidget() && h.widget->parentWidget()->layout())
+            if (auto* grid = qobject_cast<QGridLayout*>(h.widget->parentWidget()->layout())) grid->removeWidget(h.widget);
+    for (const OptionHome& h : homes)
+        if (h.widget && h.row) {
+            // Its own line inside a field's grid, where it was in one.
+            for (QWidget* p = h.widget->parentWidget(); p && p != optionsPanel_; p = p->parentWidget())
+                if (auto* g = qobject_cast<QGridLayout*>(p->layout()))
+                    for (int i = 0; i < g->count(); ++i)
+                        if (auto* line = qobject_cast<QBoxLayout*>(g->itemAt(i)->layout())) line->removeWidget(h.widget);
+        }
+    std::stable_sort(homes.begin(), homes.end(), [](const OptionHome& a, const OptionHome& b) {
+        return a.row.data() != b.row.data() ? a.row.data() < b.row.data() : a.index < b.index;
+    });
+    for (const OptionHome& h : homes) {
+        if (!h.widget || !h.row) continue;
+        h.row->insertWidget(std::min(h.index, h.row->count()), h.widget);
+        h.widget->setSizePolicy(h.policy);
+        if (auto* b = qobject_cast<QToolButton*>(h.widget.data()); b && h.style >= 0) b->setToolButtonStyle(static_cast<Qt::ToolButtonStyle>(h.style));
+    }
+    optionHomes_.clear();
+    optionSections_.clear();
+    if (optionsPanel_) {
+        // Out of the panel's column now - not left there, hidden, until it is deleted.
+        optionsPanel_->hide();
+        optionsPanel_->setParent(nullptr);
+        optionsPanel_->deleteLater();
+    }
+    optionsPanel_ = nullptr;
+    fitRows();
 }
 
 void View3DPane::setCompact(bool on) {
@@ -1783,6 +1858,9 @@ void View3DPane::applyLayout() {
         if (b) b->setVisible(!compact_ && (dockedBelow_ || sideDocked_));
     if (sideRefresh_) sideRefresh_->setVisible(compact_);
     if (hoverSaid_ && compact_) hoverSaid_->hide();
+    // IN THE PANEL: each section shown as its row would be - the environment's with an environment to route in.
+    for (const auto& [box, row] : optionSections_)
+        if (box && row) box->setVisible(!row->isHidden());
     fitRows();
     placeWheel();
 }
@@ -2215,6 +2293,11 @@ void View3DPane::setEnvironmentChoice(bool shown) {
 }
 
 void View3DPane::fitRows() {
+    // IN THE PANEL: the strip of rows put away - its controls are in the panel's sections.
+    if (optionsHost_) {
+        rowsArea_->hide();
+        return;
+    }
     bool any = false;
     for (QWidget* w : {topRow_, envRow_, routeRow_, editRow_, bundleRow_, planeRow_}) any = any || (w && !w->isHidden());
     rowsArea_->setVisible(any);
