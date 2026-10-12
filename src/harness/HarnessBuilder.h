@@ -3,6 +3,7 @@
 #include "harness/Harness.h"
 #include "model/Entity.h"
 
+#include <QJsonObject>
 #include <QString>
 #include <QStringList>
 #include <vector>
@@ -31,7 +32,7 @@ struct HarnessConnector {
     // The library part this connector IS, when it comes from the library (its id). What lets the
     // bill of materials order it by the manufacturer's number.
     QString libPart;
-    QString annotation = QStringLiteral("numbers"); // "numbers" | "letters"
+    QString annotation = QStringLiteral("numbers"); // "numbers" | "letters" | "mixed"
     int pinCount = 4;
     double pitch = 15.0;
     double pinLength = 40.0;
@@ -166,6 +167,11 @@ struct HarnessDef {
     std::vector<HarnessWire> wires;
     HarnessLayout layout;
 };
+
+// THE DEFINITION AS A FILE HAS IT, and back: every field of every connector, wire and the layout - what a builder
+// file, a preset and the builder's own undo keep. A field a file does not have takes its default.
+QJsonObject harnessDefToJson(const HarnessDef& def);
+HarnessDef harnessDefFromJson(const QJsonObject& root);
 
 const HarnessConnector* harnessConnById(const HarnessDef& def, const QString& id);
 

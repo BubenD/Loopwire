@@ -57,6 +57,7 @@ int run_geometry_tests();
 int run_editor_tests();
 int run_io_tests();
 int run_harness_tests();
+int run_harnessbuilder_tests();
 int run_voltagedrop_tests();
 int run_mechbuilder_tests();
 int run_thermal_tests();
@@ -131,6 +132,7 @@ int main(int argc, char** argv) {
     if (only("editor")) failures += run_editor_tests();
     if (only("io")) failures += run_io_tests();
     if (only("harness")) failures += run_harness_tests();
+    if (only("harnessbuilder")) failures += run_harnessbuilder_tests();
     if (only("voltagedrop")) failures += run_voltagedrop_tests();
     if (only("mechbuilder")) failures += run_mechbuilder_tests();
     if (only("thermal")) failures += run_thermal_tests();

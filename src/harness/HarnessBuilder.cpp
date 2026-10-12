@@ -3,6 +3,7 @@
 #include "geometry/Geometry.h"
 
 #include <QJsonArray>
+#include <QJsonObject>
 #include <QSet>
 #include <algorithm>
 #include <cmath>
@@ -1133,6 +1134,169 @@ std::vector<int> harnessKneeLanes(const std::vector<std::pair<double, double>>& 
     std::vector<int> lane(n, 0);
     for (int i = 0; i < n; ++i) lane[best[i]] = i;
     return lane;
+}
+
+QJsonObject harnessDefToJson(const HarnessDef& def) {
+    QJsonObject root;
+    QJsonArray conns;
+    for (const auto& c : def.connectors) {
+        QJsonObject o;
+        o["id"] = c.id;
+        o["side"] = (c.side == HarnessSide::Right) ? QStringLiteral("right") : QStringLiteral("left");
+        o["designator"] = c.designator;
+        o["partNumber"] = c.partNumber;
+        o["libPart"] = c.libPart;
+        o["annotation"] = c.annotation;
+        o["pinCount"] = c.pinCount;
+        o["pitch"] = c.pitch;
+        o["pinLength"] = c.pinLength;
+        o["order"] = c.order;
+        o["leg"] = c.leg;
+        o["shieldLeft"] = c.shieldLeft;
+        o["shieldRight"] = c.shieldRight;
+        o["bodyBondLeft"] = c.bodyBondLeft;
+        o["bodyBondRight"] = c.bodyBondRight;
+        QJsonArray po;
+        for (int p : c.pinOrder) po.append(p);
+        o["pinOrder"] = po;
+        conns.append(o);
+    }
+    QJsonArray wires;
+    for (const auto& w : def.wires) {
+        QJsonObject o;
+        o["id"] = w.id;
+        o["fromConn"] = w.fromConn;
+        o["fromPin"] = w.fromPin;
+        o["toConn"] = w.toConn;
+        o["toPin"] = w.toPin;
+        o["gauge"] = w.gauge;
+        o["color"] = w.color;
+        o["kind"] = w.kind;
+        o["bundle"] = w.bundle;
+        o["label"] = w.label;
+        o["showColor"] = w.showColor;
+        o["showGauge"] = w.showGauge;
+        o["showLabel"] = w.showLabel;
+        o["shieldGroup"] = w.shieldGroup;
+        o["twistGroup"] = w.twistGroup;
+        o["libPart"] = w.libPart;
+        wires.append(o);
+    }
+    QJsonObject lay;
+    lay["leftX"] = def.layout.leftX;
+    lay["leftY"] = def.layout.leftY;
+    lay["rightX"] = def.layout.rightX;
+    lay["connectorGap"] = def.layout.connectorGap;
+    lay["legGap"] = def.layout.legGap;
+    lay["bridgeCrossings"] = def.layout.bridgeCrossings;
+    lay["terminateUnconnected"] = def.layout.terminateUnconnected;
+    lay["twistCount"] = def.layout.twistCount;
+    lay["twistAmount"] = def.layout.twistAmount;
+    lay["shieldAmount"] = def.layout.shieldAmount;
+    lay["wireShieldAmount"] = def.layout.wireShieldAmount;
+    lay["shieldLegLength"] = def.layout.shieldLegLength;
+    lay["leadLength"] = def.layout.leadLength;
+    lay["pinPitch"] = def.layout.pinPitch;
+    lay["twistType"] = def.layout.twistType;
+    lay["shieldType"] = def.layout.shieldType;
+    lay["wireColorMode"] = def.layout.wireColorMode;
+    lay["textGap"] = def.layout.textGap;
+    lay["spliceSize"] = def.layout.spliceSize;
+    lay["textHeight"] = def.layout.textHeight;
+    lay["colorNameMode"] = def.layout.colorNameMode;
+    lay["terminateUnconnectedWires"] = def.layout.terminateUnconnectedWires;
+    lay["spliceAtJoins"] = def.layout.spliceAtJoins;
+    root["format"] = QStringLiteral("edraw-harness-builder");
+    // Version 2: an overall shield is drawn ONCE per connector by default. A version-1 file was
+    // written before that was the default, so its stored 2 was nobody's choice - see the loader.
+    // Version 3: each row says what it is (a wire, a coax...) and which cable it belongs to - before it, a cable or a
+    // coax came back from a file, a preset or Generate's own preset as loose wires.
+    root["version"] = 3;
+    root["connectors"] = conns;
+    root["wires"] = wires;
+    root["layout"] = lay;
+    return root;
+}
+
+HarnessDef harnessDefFromJson(const QJsonObject& root) {
+    HarnessDef loaded;
+    for (const auto& v : root.value("connectors").toArray()) {
+        const QJsonObject o = v.toObject();
+        HarnessConnector c;
+        c.id = o.value("id").toString();
+        c.side = o.value("side").toString() == QLatin1String("right") ? HarnessSide::Right
+                                                                     : HarnessSide::Left;
+        c.designator = o.value("designator").toString();
+        c.partNumber = o.value("partNumber").toString();
+        c.libPart = o.value("libPart").toString();
+        c.annotation = o.value("annotation").toString(QStringLiteral("numbers"));
+        c.pinCount = o.value("pinCount").toInt(4);
+        c.pitch = o.value("pitch").toDouble(15.0);
+        c.pinLength = o.value("pinLength").toDouble(40.0);
+        c.order = o.value("order").toInt(0);
+        c.leg = o.value("leg").toString();
+        c.shieldLeft = o.value("shieldLeft").toBool(false);
+        c.shieldRight = o.value("shieldRight").toBool(false);
+        c.bodyBondLeft = o.value("bodyBondLeft").toBool(false);
+        c.bodyBondRight = o.value("bodyBondRight").toBool(false);
+        for (const auto& p : o.value("pinOrder").toArray()) c.pinOrder.push_back(p.toInt());
+        if (!c.id.isEmpty()) loaded.connectors.push_back(c);
+    }
+    for (const auto& v : root.value("wires").toArray()) {
+        const QJsonObject o = v.toObject();
+        HarnessWire w;
+        w.id = o.value("id").toString();
+        w.fromConn = o.value("fromConn").toString();
+        w.fromPin = o.value("fromPin").toInt(1);
+        w.toConn = o.value("toConn").toString();
+        w.toPin = o.value("toPin").toInt(1);
+        w.gauge = o.value("gauge").toString(QStringLiteral("0.5"));
+        w.color = o.value("color").toString(QStringLiteral("WH"));
+        w.kind = o.value("kind").toString(QStringLiteral("wire"));
+        w.bundle = o.value("bundle").toString();
+        w.label = o.value("label").toString();
+        w.showColor = o.value("showColor").toBool(false);
+        w.showGauge = o.value("showGauge").toBool(false);
+        w.showLabel = o.value("showLabel").toBool(true);
+        w.shieldGroup = o.value("shieldGroup").toString();
+        w.twistGroup = o.value("twistGroup").toString();
+        w.libPart = o.value("libPart").toString();
+        if (!w.id.isEmpty()) loaded.wires.push_back(w);
+    }
+    const QJsonObject lay = root.value("layout").toObject();
+    loaded.layout.leftX = lay.value("leftX").toDouble(100.0);
+    loaded.layout.leftY = lay.value("leftY").toDouble(300.0);
+    loaded.layout.rightX = lay.value("rightX").toDouble(700.0);
+    loaded.layout.connectorGap = lay.value("connectorGap").toDouble(30.0);
+    loaded.layout.legGap = lay.value("legGap").toDouble(60.0);
+    loaded.layout.bridgeCrossings = lay.value("bridgeCrossings").toBool(true);
+    loaded.layout.terminateUnconnected = lay.value("terminateUnconnected").toBool(false);
+    loaded.layout.twistCount = lay.value("twistCount").toInt(2);
+    loaded.layout.twistAmount = lay.value("twistAmount").toInt(2);
+    // An overall screen is drawn once unless asked for more. A pattern written before that was
+    // the default stored the old 2 without anyone choosing it, so a version-1 file takes the new
+    // default instead; from version 2 on, whatever the file says is what the user set.
+    const int fileVersion = root.value(QStringLiteral("version")).toInt(1);
+    loaded.layout.shieldAmount = fileVersion >= 2 ? lay.value("shieldAmount").toInt(1) : 1;
+    loaded.layout.wireShieldAmount = lay.value("wireShieldAmount").toInt(2);
+    loaded.layout.shieldLegLength = lay.value("shieldLegLength").toDouble(20.0);
+    loaded.layout.leadLength = lay.value("leadLength").toDouble(0.0);
+    loaded.layout.pinPitch = lay.value("pinPitch").toDouble(15.0);
+    loaded.layout.twistType = lay.value("twistType").toString(QStringLiteral("jog"));
+    loaded.layout.shieldType = lay.value("shieldType").toString(QStringLiteral("ellipse"));
+    loaded.layout.wireColorMode =
+        lay.value("wireColorMode").toString(QStringLiteral("bylayer"));
+    loaded.layout.textGap = lay.value("textGap").toDouble(0.0);
+    loaded.layout.spliceSize = lay.value("spliceSize").toDouble(3.0);
+    loaded.layout.textHeight = lay.value("textHeight").toDouble(3.5);
+    // A file from before colour names had a long form was drawn with the short ones, so a file that does not say
+    // takes "short" - a builder opened afresh takes the long ones (HarnessLayout's own default).
+    loaded.layout.colorNameMode =
+        lay.value("colorNameMode").toString(QStringLiteral("short"));
+    loaded.layout.terminateUnconnectedWires =
+        lay.value("terminateUnconnectedWires").toBool(false);
+    loaded.layout.spliceAtJoins = lay.value("spliceAtJoins").toBool(true);
+    return loaded;
 }
 
 HarnessBuild buildHarness(const HarnessDef& def) {

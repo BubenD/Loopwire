@@ -51,6 +51,13 @@ public:
     // through the dialog's own controls, so the definition and the tables can never disagree.
     const HarnessDef& definition() const { return def_; }
 
+    // UNDO AND REDO inside the builder: every change to the harness is one step (typing in one field, a step for the
+    // burst). Ctrl+Z and Ctrl+Y here too. Whether there is one to take back, or to do again.
+    void undo();
+    void redo();
+    bool canUndo() const { return !undoStack_.isEmpty(); }
+    bool canRedo() const { return !redoStack_.isEmpty(); }
+
 signals:
     // "See it in the library": the host owns the library window, so it is asked to open it at the part.
     void openLibraryAt(const QString& libPartId);
@@ -161,6 +168,15 @@ private:
 
     Editor* editor_ = nullptr;
     HarnessDef def_;
+    // UNDO: the harness as it was before each change, as the file keeps it; and what was taken back. Not saved.
+    QList<QByteArray> undoStack_, redoStack_;
+    QByteArray lastSnapshot_;
+    qint64 lastChangeMs_ = 0;
+    QWidget* lastTypedIn_ = nullptr;   // the field the last change was typed into - only compared, never used
+    QPushButton* undoBtn_ = nullptr;
+    QPushButton* redoBtn_ = nullptr;
+    void noteChange();
+    void restoreSnapshot(const QByteArray& snapshot);
     int connSeq_ = 0;
     int wireSeq_ = 0;
 

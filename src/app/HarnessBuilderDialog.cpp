@@ -3,6 +3,7 @@
 #include "io/AppPaths.h"
 
 #include "app/Editor.h"
+#include "app/DrawingPreview.h"
 #include "app/UiBits.h"
 #include "app/PartViewDialog.h"
 #include "harness/CableSpec.h"
@@ -39,6 +40,10 @@
 #include <QScrollBar>
 #include <QScreen>
 #include <QSettings>
+#include <QAbstractSpinBox>
+#include <QKeySequence>
+#include <QDateTime>
+#include <QShortcut>
 #include <QSpinBox>
 #include <QSplitter>
 #include <QTableWidget>
@@ -574,274 +579,67 @@ private:
     int startH_ = 0;
 };
 
-// The whole harness drawn small: the left-hand connectors down the left, the right-hand ones
-// down the right STACKED IN PLACEMENT ORDER, and every wire drawn pin to pin in its own
-// colour. It sits beside the pin tables so the effect of a pin drag can be seen immediately —
-// the full wiring, not one connector at a time.
+// The whole harness, beside the pin tables, so the effect of a pin drag is seen at once - the full wiring, not one
+// connector at a time.
 class HarnessWiringPreview : public QWidget {
 public:
-    // Where one connector's slice of the height sits. At class scope because a type declared
-    // inside the function cannot be named in a lambda's trailing return type.
-    struct Slot {
-        const HarnessConnector* c = nullptr;
-        double top = 0.0;
-        double pitch = 0.0;
-        bool left = true;
-    };
-
+    // THE HARNESS AS GENERATE WILL DRAW IT: the real drawing - twists, coax, flying leads, branches, bridges and all -
+    // made by the same generator Generate uses, shown fitted to the picture. Not a sketch of it that could differ.
     HarnessWiringPreview(QWidget* parent = nullptr) : QWidget(parent) {
+        setObjectName(QStringLiteral("harnessBuilderPreview"));
         setMinimumWidth(320);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-        setToolTip(QStringLiteral("The whole harness as it will be drawn — click to enlarge"));
-        setCursor(Qt::PointingHandCursor);
+        auto* lay = new QVBoxLayout(this);
+        lay->setContentsMargins(0, 0, 0, 0);
+        lay->setSpacing(2);
+        picture_ = new DrawingPreview(QString(), this);
+        picture_->setObjectName(QStringLiteral("harnessBuilderPreviewPicture"));
+        picture_->setEmptyText(QStringLiteral("Add connectors and wires - the harness is drawn here as Generate will draw it"));
+        picture_->setToolTip(QStringLiteral("The harness exactly as Generate will draw it - wheel to zoom, drag to move; "
+                                            "Enlarge to see it big"));
+        lay->addWidget(picture_, 1);
+        enlarge_ = new QToolButton(this);
+        enlarge_->setObjectName(QStringLiteral("harnessBuilderPreviewEnlarge"));
+        enlarge_->setText(QStringLiteral("Enlarge"));
+        enlarge_->setToolTip(QStringLiteral("The harness drawing in a window of its own"));
+        enlarge_->setAutoRaise(true);
+        connect(enlarge_, &QToolButton::clicked, this, [this] { if (onActivate_) onActivate_(); });
+        lay->addWidget(enlarge_, 0, Qt::AlignRight);
     }
     void setDefinition(const HarnessDef& def) {
         def_ = def;
-        update();
+        rebuild();
     }
     void setShowShields(bool on) {
+        if (showShields_ == on) return;
         showShields_ = on;
-        update();
+        rebuild();
     }
     bool showShields() const { return showShields_; }
     const HarnessDef& definition() const { return def_; }
+    const std::vector<Entity>& entities() const { return picture_->entities(); }
     void setOnActivate(std::function<void()> cb) { onActivate_ = std::move(cb); }
 
-protected:
-    void mousePressEvent(QMouseEvent* e) override {
-        if (e->button() == Qt::LeftButton && onActivate_) onActivate_();
-        e->accept();
-    }
-    void paintEvent(QPaintEvent*) override {
-        QPainter p(this);
-        p.setRenderHint(QPainter::Antialiasing, true);
-        p.fillRect(rect(), QColor("#20242b"));
-        if (def_.connectors.empty()) return;
-        const double margin = 10.0;
-        const double bodyW = 22.0;
-        QFont f = p.font();
-        // Scaled off the widget width so the same drawing reads at thumbnail size and enlarged.
-        f.setPixelSize(std::max(7, static_cast<int>(7 * std::min(3.0, width() / 320.0))));
-        p.setFont(f);
-
-        // Lay each side out top-down in placement order, giving every connector a slice of the
-        // height in proportion to its pin count so the rows line up with the real drawing.
-        // NB: not named `slots` — Qt defines that as a macro for the signals/slots
-        // syntax, so it expands to nothing and silently eats the declaration.
-        std::vector<Slot> slotList;
-        for (bool left : {true, false}) {
-            std::vector<const HarnessConnector*> side;
-            for (const auto& c : def_.connectors)
-                if ((c.side == HarnessSide::Left) == left) side.push_back(&c);
-            std::sort(side.begin(), side.end(),
-                      [](const HarnessConnector* a, const HarnessConnector* b) {
-                          if (a->order != b->order) return a->order < b->order;
-                          return a->designator < b->designator;
-                      });
-            int totalPins = 0;
-            for (const HarnessConnector* c : side) totalPins += std::max(1, c->pinCount);
-            if (totalPins <= 0) continue;
-            // One gap-worth of space between stacked connectors.
-            const int gaps = std::max(0, static_cast<int>(side.size()) - 1);
-            const double usable = height() - 2.0 * margin - 10.0 * gaps;
-            const double perPin = usable / totalPins;
-            double y = margin;
-            for (const HarnessConnector* conn : side) {
-                Slot sl;
-                sl.c = conn;
-                sl.top = y;
-                sl.pitch = perPin;
-                sl.left = left;
-                slotList.push_back(sl);
-                y += perPin * std::max(1, conn->pinCount) + 10.0;
-            }
-        }
-        auto slotOf = [&slotList](const QString& id) -> const Slot* {
-            for (const Slot& s : slotList)
-                if (s.c->id == id) return &s;
-            return nullptr;
-        };
-        // Where a pin sits: its row within its connector's slice.
-        auto pinPoint = [&](const Slot& s, int pin, double& x, double& y) {
-            const std::vector<int> seq = harnessPinSequence(*s.c);
-            int row = 0;
-            for (int i = 0; i < static_cast<int>(seq.size()); ++i)
-                if (seq[i] == pin) row = i;
-            y = s.top + s.pitch * (row + 0.5);
-            x = s.left ? margin + bodyW : width() - margin - bodyW;
-        };
-
-        // Bodies + pin labels.
-        for (const Slot& s : slotList) {
-            const double h = s.pitch * std::max(1, s.c->pinCount);
-            const double x = s.left ? margin : width() - margin - bodyW;
-            p.setPen(QPen(QColor("#cfd8e6"), 1.1));
-            p.drawRect(QRectF(x, s.top, bodyW, h));
-            p.setPen(QColor("#9fb4c8"));
-            const std::vector<int> seq = harnessPinSequence(*s.c);
-            for (int row = 0; row < static_cast<int>(seq.size()); ++row)
-                p.drawText(QRectF(x, s.top + s.pitch * row, bodyW, s.pitch), Qt::AlignCenter,
-                           harnessPinLabel(*s.c, seq[row]));
-            // The designator, outboard of the body.
-            p.setPen(QColor("#cfe3ff"));
-            const QRectF tag = s.left ? QRectF(0, s.top - 10, margin + bodyW, 10)
-                                      : QRectF(width() - margin - bodyW, s.top - 10,
-                                               margin + bodyW, 10);
-            p.drawText(tag, Qt::AlignCenter,
-                       s.c->designator.isEmpty() ? s.c->id : s.c->designator);
-        }
-
-        // The screens, drawn across the wires they enclose: an overall one just inboard of its
-        // connector's pins, an internal one across its group mid-run. Sized to the band of rows
-        // it covers, which is what says at a glance whether a shield can enclose the group at
-        // all - a split band shows up here as an outline swallowing wires that are not in it.
-        auto drawScreens = [&](bool afterWires) {
-            if (!showShields_ || !afterWires) return;
-            p.setPen(QPen(QColor("#cfe3ff"), 1.2));
-            auto bandOf = [&](const std::vector<QString>& ids, double& lo, double& hi) {
-                bool any = false;
-                for (const auto& w : def_.wires) {
-                    if (std::find(ids.begin(), ids.end(), w.id) == ids.end()) continue;
-                    for (int end = 0; end < 2; ++end) {
-                        const Slot* sl = slotOf(end == 0 ? w.fromConn : w.toConn);
-                        if (!sl) continue;
-                        double x = 0.0, y = 0.0;
-                        pinPoint(*sl, end == 0 ? w.fromPin : w.toPin, x, y);
-                        if (!any) { lo = hi = y; any = true; }
-                        lo = std::min(lo, y);
-                        hi = std::max(hi, y);
-                    }
-                }
-                return any;
-            };
-            // Overall screens: one per connector end that asks for one. Several connectors on
-            // one side would otherwise draw their outlines at the same x, one on top of another
-            // and unreadable - so each is pushed along until it clears the ones already placed.
-            struct Oval { double x, cy, ry; bool left; };
-            std::vector<Oval> placedOvals;
-            auto placeOval = [&](double wantX, double cy, double ry, bool left) {
-                const double stepAside = 15.0;
-                double x = wantX;
-                for (int guard = 0; guard < 40; ++guard) {
-                    bool clash = false;
-                    for (const Oval& o : placedOvals)
-                        if (std::abs(o.x - x) < 12.0 &&
-                            std::abs(o.cy - cy) < (o.ry + ry)) { clash = true; break; }
-                    if (!clash) break;
-                    x += left ? stepAside : -stepAside;
-                }
-                placedOvals.push_back({x, cy, ry, left});
-                p.drawEllipse(QRectF(x - 5.0, cy - ry, 10.0, 2.0 * ry));
-            };
-            for (const Slot& sl : slotList) {
-                const bool wants = sl.left ? sl.c->shieldLeft : sl.c->shieldRight;
-                if (!wants) continue;
-                std::vector<QString> ids;
-                for (const auto& w : def_.wires)
-                    if (w.fromConn == sl.c->id || w.toConn == sl.c->id) ids.push_back(w.id);
-                double lo = 0.0, hi = 0.0;
-                if (!bandOf(ids, lo, hi)) continue;
-                const double ry = (hi - lo) / 2.0 + 5.0;
-                const int amount = std::max(1, def_.layout.shieldAmount);
-                for (int k = 0; k < amount; ++k) {
-                    const double step = 14.0 * k;
-                    const double x = sl.left ? margin + bodyW + 16.0 + step
-                                             : width() - margin - bodyW - 16.0 - step;
-                    placeOval(x, (lo + hi) / 2.0, ry, sl.left);
-                }
-            }
-            // Internal screens: one per shield group, across the middle of its run.
-            QStringList groups;
-            for (const auto& w : def_.wires)
-                if (!w.shieldGroup.isEmpty() && !groups.contains(w.shieldGroup))
-                    groups << w.shieldGroup;
-            for (const QString& g : groups) {
-                std::vector<QString> ids;
-                for (const auto& w : def_.wires)
-                    if (w.shieldGroup == g) ids.push_back(w.id);
-                double lo = 0.0, hi = 0.0;
-                if (!bandOf(ids, lo, hi)) continue;
-                const double ry = (hi - lo) / 2.0 + 4.0;
-                // As MANY as the Layout says will be drawn, spread along the corridor - so the
-                // preview shows the number of symbols the drawing will actually carry.
-                const int amount = std::max(1, def_.layout.wireShieldAmount);
-                const double laneLo = margin + bodyW + 20.0;
-                const double laneHi = width() - margin - bodyW - 20.0;
-                for (int k = 0; k < amount; ++k) {
-                    const double t = (k + 1.0) / (amount + 1.0);
-                    const double x = laneLo + (laneHi - laneLo) * t;
-                    placeOval(x, (lo + hi) / 2.0, ry, /*left=*/true);
-                }
-            }
-        };
-
-        // Wires, each in its own colour, routed out to a middle lane like the real drawing.
-        // Work the ends out first so the lanes can be ORDERED: a wire's vertical run cuts
-        // across another's horizontal whenever it turns inside that wire while reaching past
-        // its row, so a wire that reaches over others has to turn outside them. Ranking each
-        // wire by how many other wires' rows it spans gives that nesting — the same rule the
-        // generator uses, so the preview shows the routing that will actually be drawn instead
-        // of an arbitrary lane per wire.
-        struct Leg {
-            const HarnessWire* w = nullptr;
-            double ax = 0.0, ay = 0.0, bx = 0.0, by = 0.0;
-            bool knee = false;
-            int rank = 0;
-        };
-        std::vector<Leg> legs;
-        for (const auto& w : def_.wires) {
-            const Slot* a = slotOf(w.fromConn);
-            const Slot* b = slotOf(w.toConn);
-            if (!a || !b) continue;
-            Leg lg;
-            lg.w = &w;
-            pinPoint(*a, w.fromPin, lg.ax, lg.ay);
-            pinPoint(*b, w.toPin, lg.bx, lg.by);
-            lg.knee = std::abs(lg.ay - lg.by) >= 0.75;
-            legs.push_back(lg);
-        }
-        {
-            std::vector<Leg*> kneed;
-            std::vector<std::pair<double, double>> rows;
-            for (Leg& lg : legs)
-                if (lg.knee) {
-                    kneed.push_back(&lg);
-                    // Left row first, whichever end the wire was defined from - the same
-                    // orientation the generator scores its lanes in.
-                    rows.push_back(lg.ax < lg.bx ? std::make_pair(lg.ay, lg.by)
-                                                 : std::make_pair(lg.by, lg.ay));
-                }
-            const std::vector<int> lanes = harnessKneeLanes(rows);
-            for (size_t i = 0; i < kneed.size(); ++i) kneed[i]->rank = lanes[i];
-        }
-        // The turns form one regular fan: a single start line in the middle of the corridor and
-        // an even gap between neighbours, the way the generator lays them out.
-        const double laneLo = margin + bodyW + 14.0;
-        const double laneHi = width() - margin - bodyW - 14.0;
-        int kneeCount = 0;
-        for (const Leg& lg : legs)
-            if (lg.knee) ++kneeCount;
-        const double laneStep =
-            std::max(4.0, (laneHi - laneLo) / std::max(2, kneeCount + 1));
-        const double laneStart =
-            (laneLo + laneHi) / 2.0 - (kneeCount - 1) * laneStep / 2.0;
-        for (const Leg& lg : legs) {
-            QColor col(wireColorHex(lg.w->color));
-            if (!col.isValid()) col = QColor("#cfd8e6");
-            p.setPen(QPen(col, 1.3));
-            if (!lg.knee) {
-                p.drawLine(QPointF(lg.ax, lg.ay), QPointF(lg.bx, lg.by));
-                continue;
-            }
-            const double mx = laneStart + lg.rank * laneStep;
-            p.drawLine(QPointF(lg.ax, lg.ay), QPointF(mx, lg.ay));
-            p.drawLine(QPointF(mx, lg.ay), QPointF(mx, lg.by));
-            p.drawLine(QPointF(mx, lg.by), QPointF(lg.bx, lg.by));
-        }
-        drawScreens(/*afterWires=*/true);
-    }
-
 private:
+    void rebuild() {
+        std::vector<Entity> shown;
+        if (!def_.connectors.empty()) {
+            const HarnessBuild built = buildHarness(def_);
+            shown.reserve(built.entities.size());
+            for (const Entity& e : built.entities) {
+                // THE SCREENS LEFT OUT when asked: their outlines, and the drains bonding them back.
+                const bool screen = (e.meta.contains(QStringLiteral("overallShield")) || e.meta.contains(QStringLiteral("shieldGroup"))) &&
+                                    e.meta.contains(QStringLiteral("rx"));
+                if (!showShields_ && (screen || e.meta.contains(QStringLiteral("shieldBond")))) continue;
+                shown.push_back(e);
+            }
+        }
+        picture_->setEntities(shown);
+        picture_->fitToView();
+    }
+
+    DrawingPreview* picture_ = nullptr;
+    QToolButton* enlarge_ = nullptr;
     HarnessDef def_;
     bool showShields_ = true;
     std::function<void()> onActivate_;
@@ -983,6 +781,25 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
     connect(twistBtn, &QPushButton::clicked, this, [this] { runOptimizeBy(/*shield=*/false); });
     summaryLabel_ = new QLabel(this);
     summaryLabel_->setStyleSheet(QStringLiteral("color:#8fb0d6;"));
+    undoBtn_ = new QPushButton(QStringLiteral("Undo"), this);
+    undoBtn_->setObjectName(QStringLiteral("harnessBuilderUndo"));
+    undoBtn_->setToolTip(QStringLiteral("Take back the last change to this harness (Ctrl+Z)"));
+    undoBtn_->setEnabled(false);
+    connect(undoBtn_, &QPushButton::clicked, this, [this] { undo(); });
+    redoBtn_ = new QPushButton(QStringLiteral("Redo"), this);
+    redoBtn_->setObjectName(QStringLiteral("harnessBuilderRedo"));
+    redoBtn_->setToolTip(QStringLiteral("Do again what was taken back (Ctrl+Y)"));
+    redoBtn_->setEnabled(false);
+    connect(redoBtn_, &QPushButton::clicked, this, [this] { redo(); });
+    // The keys too - a field being typed in keeps its own (its text), as it should.
+    auto* undoKey = new QShortcut(QKeySequence::Undo, this);
+    connect(undoKey, &QShortcut::activated, this, [this] { undo(); });
+    auto* redoKey = new QShortcut(QKeySequence::Redo, this);
+    connect(redoKey, &QShortcut::activated, this, [this] { redo(); });
+    auto* redoKey2 = new QShortcut(QKeySequence(Qt::CTRL | Qt::Key_Y), this);
+    connect(redoKey2, &QShortcut::activated, this, [this] { redo(); });
+    footer->addWidget(undoBtn_);
+    footer->addWidget(redoBtn_);
     footer->addWidget(validateBtn);
     footer->addWidget(minBtn);
     footer->addWidget(shieldBtn);
@@ -1013,10 +830,11 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
         def_ = HarnessDef();
         connSeq_ = 0;
         wireSeq_ = 0;
-        grouping_ = WireGrouping::None;
+        // As a builder opened afresh starts: the rows grouped by the connectors they join.
+        grouping_ = WireGrouping::Connectors;
         collapsedGroups_.clear();
         syncing_ = true;
-        if (groupByBox_) groupByBox_->setCurrentIndex(0);
+        if (groupByBox_) groupByBox_->setCurrentIndex(groupByBox_->findData(static_cast<int>(grouping_)));
         syncing_ = false;
         // The same two connectors a freshly opened builder starts with, so the dialog is never
         // an empty form.
@@ -1528,7 +1346,55 @@ QWidget* HarnessBuilderDialog::buildPinMapSection() {
 // amounts, the pin pitch, the wire colours - changes what the preview shows without changing a
 // row, so those handlers call this rather than rebuilding the whole pin map: the picture keeps up
 // with every parameter, and typing in a spin box stays responsive.
+void HarnessBuilderDialog::noteChange() {
+    // THE HARNESS AS IT IS NOW against how it was at the last change: different, and the old one is a step to undo. Quick
+    // edits one after another - the letters typed into one field - are one step, not one a letter.
+    const QByteArray now = QJsonDocument(harnessDefToJson(def_)).toJson(QJsonDocument::Compact);
+    if (now == lastSnapshot_) return;
+    const qint64 at = QDateTime::currentMSecsSinceEpoch();
+    // STILL TYPING: the same text or number field as the last change, a moment after it - that change goes on.
+    QWidget* field = QApplication::focusWidget();
+    const bool typing = field && (qobject_cast<QLineEdit*>(field) || qobject_cast<QAbstractSpinBox*>(field) ||
+                                  qobject_cast<QLineEdit*>(field->parentWidget()));
+    const bool goesOn = typing && field == lastTypedIn_ && at - lastChangeMs_ < 1500 && !undoStack_.isEmpty();
+    lastTypedIn_ = typing ? field : nullptr;
+    if (!lastSnapshot_.isEmpty() && !goesOn) {
+        undoStack_.append(lastSnapshot_);
+        if (undoStack_.size() > 200) undoStack_.removeFirst();
+    }
+    if (!lastSnapshot_.isEmpty()) redoStack_.clear();
+    lastSnapshot_ = now;
+    lastChangeMs_ = at;
+    if (undoBtn_) undoBtn_->setEnabled(canUndo());
+    if (redoBtn_) redoBtn_->setEnabled(canRedo());
+}
+
+void HarnessBuilderDialog::restoreSnapshot(const QByteArray& snapshot) {
+    lastSnapshot_ = snapshot;
+    lastChangeMs_ = 0;
+    applyDefinitionJson(QJsonDocument::fromJson(snapshot).object());
+    if (undoBtn_) undoBtn_->setEnabled(canUndo());
+    if (redoBtn_) redoBtn_->setEnabled(canRedo());
+}
+
+void HarnessBuilderDialog::undo() {
+    if (undoStack_.isEmpty()) return;
+    noteChange();   // anything not yet noted is a step too
+    if (undoStack_.isEmpty()) return;
+    redoStack_.append(lastSnapshot_);
+    restoreSnapshot(undoStack_.takeLast());
+    summaryLabel_->setText(QStringLiteral("Undone"));
+}
+
+void HarnessBuilderDialog::redo() {
+    if (redoStack_.isEmpty()) return;
+    undoStack_.append(lastSnapshot_);
+    restoreSnapshot(redoStack_.takeLast());
+    summaryLabel_->setText(QStringLiteral("Done again"));
+}
+
 void HarnessBuilderDialog::refreshPreview() {
+    noteChange();
     if (!wiringPreview_) return;
     wiringPreview_->setDefinition(def_);
     if (shieldPreviewBox_) wiringPreview_->setShowShields(shieldPreviewBox_->isChecked());
@@ -3566,83 +3432,7 @@ void HarnessBuilderDialog::generate() {
     hide();
 }
 
-QJsonObject HarnessBuilderDialog::definitionToJson() const {
-    QJsonObject root;
-    QJsonArray conns;
-    for (const auto& c : def_.connectors) {
-        QJsonObject o;
-        o["id"] = c.id;
-        o["side"] = (c.side == HarnessSide::Right) ? QStringLiteral("right") : QStringLiteral("left");
-        o["designator"] = c.designator;
-        o["partNumber"] = c.partNumber;
-        o["libPart"] = c.libPart;
-        o["annotation"] = c.annotation;
-        o["pinCount"] = c.pinCount;
-        o["pitch"] = c.pitch;
-        o["pinLength"] = c.pinLength;
-        o["order"] = c.order;
-        o["leg"] = c.leg;
-        o["shieldLeft"] = c.shieldLeft;
-        o["shieldRight"] = c.shieldRight;
-        o["bodyBondLeft"] = c.bodyBondLeft;
-        o["bodyBondRight"] = c.bodyBondRight;
-        QJsonArray po;
-        for (int p : c.pinOrder) po.append(p);
-        o["pinOrder"] = po;
-        conns.append(o);
-    }
-    QJsonArray wires;
-    for (const auto& w : def_.wires) {
-        QJsonObject o;
-        o["id"] = w.id;
-        o["fromConn"] = w.fromConn;
-        o["fromPin"] = w.fromPin;
-        o["toConn"] = w.toConn;
-        o["toPin"] = w.toPin;
-        o["gauge"] = w.gauge;
-        o["color"] = w.color;
-        o["label"] = w.label;
-        o["showColor"] = w.showColor;
-        o["showGauge"] = w.showGauge;
-        o["showLabel"] = w.showLabel;
-        o["shieldGroup"] = w.shieldGroup;
-        o["twistGroup"] = w.twistGroup;
-        o["libPart"] = w.libPart;
-        wires.append(o);
-    }
-    QJsonObject lay;
-    lay["leftX"] = def_.layout.leftX;
-    lay["leftY"] = def_.layout.leftY;
-    lay["rightX"] = def_.layout.rightX;
-    lay["connectorGap"] = def_.layout.connectorGap;
-    lay["legGap"] = def_.layout.legGap;
-    lay["bridgeCrossings"] = def_.layout.bridgeCrossings;
-    lay["terminateUnconnected"] = def_.layout.terminateUnconnected;
-    lay["twistCount"] = def_.layout.twistCount;
-    lay["twistAmount"] = def_.layout.twistAmount;
-    lay["shieldAmount"] = def_.layout.shieldAmount;
-    lay["wireShieldAmount"] = def_.layout.wireShieldAmount;
-    lay["shieldLegLength"] = def_.layout.shieldLegLength;
-    lay["leadLength"] = def_.layout.leadLength;
-    lay["pinPitch"] = def_.layout.pinPitch;
-    lay["twistType"] = def_.layout.twistType;
-    lay["shieldType"] = def_.layout.shieldType;
-    lay["wireColorMode"] = def_.layout.wireColorMode;
-    lay["textGap"] = def_.layout.textGap;
-    lay["spliceSize"] = def_.layout.spliceSize;
-    lay["textHeight"] = def_.layout.textHeight;
-    lay["colorNameMode"] = def_.layout.colorNameMode;
-    lay["terminateUnconnectedWires"] = def_.layout.terminateUnconnectedWires;
-    lay["spliceAtJoins"] = def_.layout.spliceAtJoins;
-    root["format"] = QStringLiteral("edraw-harness-builder");
-    // Version 2: an overall shield is drawn ONCE per connector by default. A version-1 file was
-    // written before that was the default, so its stored 2 was nobody's choice - see the loader.
-    root["version"] = 2;
-    root["connectors"] = conns;
-    root["wires"] = wires;
-    root["layout"] = lay;
-    return root;
-}
+QJsonObject HarnessBuilderDialog::definitionToJson() const { return harnessDefToJson(def_); }
 
 // A builder pattern goes to a file of its own, so a harness definition can be kept, re-opened
 // and shared like any other document instead of living inside the application settings.
@@ -3809,80 +3599,7 @@ void HarnessBuilderDialog::loadDefinition() {
 }
 
 void HarnessBuilderDialog::applyDefinitionJson(const QJsonObject& root) {
-    HarnessDef loaded;
-    for (const auto& v : root.value("connectors").toArray()) {
-        const QJsonObject o = v.toObject();
-        HarnessConnector c;
-        c.id = o.value("id").toString();
-        c.side = o.value("side").toString() == QLatin1String("right") ? HarnessSide::Right
-                                                                     : HarnessSide::Left;
-        c.designator = o.value("designator").toString();
-        c.partNumber = o.value("partNumber").toString();
-        c.libPart = o.value("libPart").toString();
-        c.annotation = o.value("annotation").toString(QStringLiteral("numbers"));
-        c.pinCount = o.value("pinCount").toInt(4);
-        c.pitch = o.value("pitch").toDouble(15.0);
-        c.pinLength = o.value("pinLength").toDouble(40.0);
-        c.order = o.value("order").toInt(0);
-        c.leg = o.value("leg").toString();
-        c.shieldLeft = o.value("shieldLeft").toBool(false);
-        c.shieldRight = o.value("shieldRight").toBool(false);
-        c.bodyBondLeft = o.value("bodyBondLeft").toBool(false);
-        c.bodyBondRight = o.value("bodyBondRight").toBool(false);
-        for (const auto& p : o.value("pinOrder").toArray()) c.pinOrder.push_back(p.toInt());
-        if (!c.id.isEmpty()) loaded.connectors.push_back(c);
-    }
-    for (const auto& v : root.value("wires").toArray()) {
-        const QJsonObject o = v.toObject();
-        HarnessWire w;
-        w.id = o.value("id").toString();
-        w.fromConn = o.value("fromConn").toString();
-        w.fromPin = o.value("fromPin").toInt(1);
-        w.toConn = o.value("toConn").toString();
-        w.toPin = o.value("toPin").toInt(1);
-        w.gauge = o.value("gauge").toString(QStringLiteral("0.5"));
-        w.color = o.value("color").toString(QStringLiteral("WH"));
-        w.label = o.value("label").toString();
-        w.showColor = o.value("showColor").toBool(false);
-        w.showGauge = o.value("showGauge").toBool(false);
-        w.showLabel = o.value("showLabel").toBool(true);
-        w.shieldGroup = o.value("shieldGroup").toString();
-        w.twistGroup = o.value("twistGroup").toString();
-        w.libPart = o.value("libPart").toString();
-        if (!w.id.isEmpty()) loaded.wires.push_back(w);
-    }
-    const QJsonObject lay = root.value("layout").toObject();
-    loaded.layout.leftX = lay.value("leftX").toDouble(100.0);
-    loaded.layout.leftY = lay.value("leftY").toDouble(300.0);
-    loaded.layout.rightX = lay.value("rightX").toDouble(700.0);
-    loaded.layout.connectorGap = lay.value("connectorGap").toDouble(30.0);
-    loaded.layout.legGap = lay.value("legGap").toDouble(60.0);
-    loaded.layout.bridgeCrossings = lay.value("bridgeCrossings").toBool(true);
-    loaded.layout.terminateUnconnected = lay.value("terminateUnconnected").toBool(false);
-    loaded.layout.twistCount = lay.value("twistCount").toInt(2);
-    loaded.layout.twistAmount = lay.value("twistAmount").toInt(2);
-    // An overall screen is drawn once unless asked for more. A pattern written before that was
-    // the default stored the old 2 without anyone choosing it, so a version-1 file takes the new
-    // default instead; from version 2 on, whatever the file says is what the user set.
-    const int fileVersion = root.value(QStringLiteral("version")).toInt(1);
-    loaded.layout.shieldAmount = fileVersion >= 2 ? lay.value("shieldAmount").toInt(1) : 1;
-    loaded.layout.wireShieldAmount = lay.value("wireShieldAmount").toInt(2);
-    loaded.layout.shieldLegLength = lay.value("shieldLegLength").toDouble(20.0);
-    loaded.layout.leadLength = lay.value("leadLength").toDouble(0.0);
-    loaded.layout.pinPitch = lay.value("pinPitch").toDouble(15.0);
-    loaded.layout.twistType = lay.value("twistType").toString(QStringLiteral("jog"));
-    loaded.layout.shieldType = lay.value("shieldType").toString(QStringLiteral("ellipse"));
-    loaded.layout.wireColorMode =
-        lay.value("wireColorMode").toString(QStringLiteral("bylayer"));
-    loaded.layout.textGap = lay.value("textGap").toDouble(0.0);
-    loaded.layout.spliceSize = lay.value("spliceSize").toDouble(3.0);
-    loaded.layout.textHeight = lay.value("textHeight").toDouble(3.5);
-    loaded.layout.colorNameMode =
-        lay.value("colorNameMode").toString(QStringLiteral("short"));
-    loaded.layout.terminateUnconnectedWires =
-        lay.value("terminateUnconnectedWires").toBool(false);
-    loaded.layout.spliceAtJoins = lay.value("spliceAtJoins").toBool(true);
-    def_ = loaded;
+    def_ = harnessDefFromJson(root);
     // Keep the id sequences ahead of whatever was loaded so new rows never collide.
     connSeq_ = static_cast<int>(def_.connectors.size());
     wireSeq_ = static_cast<int>(def_.wires.size());

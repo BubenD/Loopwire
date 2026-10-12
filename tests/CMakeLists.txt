@@ -3,6 +3,7 @@ add_executable(edraw_tests
     test_editor.cpp
     test_io.cpp
     test_harness.cpp
+    test_harnessbuilder.cpp
     test_voltagedrop.cpp
     test_mechbuilder.cpp
     test_thermal.cpp
