@@ -90,6 +90,13 @@ bool dimStandOff(const Entity& e, Vec2& p1, Vec2& p2, Vec2& off) {
 }
 } // namespace
 
+bool connectionPinIsStub(const Entity& e) {
+    return e.type == EntityType::ConnectionPin &&
+           e.meta.value(QStringLiteral("pinStyle")).toString() == QLatin1String("stub");
+}
+
+Vec2 connectionPinPoint(const Entity& e) { return connectionPinIsStub(e) ? e.b : e.a; }
+
 bool dimensionAcrossX(const Entity& e) {
     // What it was PLACED measuring along, when the object says so. It has to be remembered rather than
     // read back out of the geometry every time, because the geometry moves: dragging one of the points a
@@ -645,6 +652,7 @@ Bounds Entity::bounds() const {
     case EntityType::NotConnected:
     case EntityType::ConnectionPin:
         bnds.expand(a);
+        if (connectionPinIsStub(*this)) bnds.expand(b);
         break;
     case EntityType::Connector: {
         const ConnectorSpec spec = connectorSpecFromMeta(meta);
@@ -871,6 +879,8 @@ QJsonObject Entity::toJson() const {
     case EntityType::Connector:
     case EntityType::ConnectionPin:
         obj["position"] = pointToJson(a);
+        // A STUB PIN'S FREE END, written only for one: a ring pin is the one point it always was.
+        if (connectionPinIsStub(*this)) obj["b"] = pointToJson(b);
         break;
     default: { // polyline / spline / wire / rect / polygon / hatch / wipeout
         // A circle-boundary hatch stores its geometry as center/radius (fromJson

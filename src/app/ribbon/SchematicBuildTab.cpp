@@ -25,7 +25,9 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
+#include <QSettings>
 #include <QSpinBox>
+#include <QStatusBar>
 #include <QTabWidget>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -182,8 +184,9 @@ void MainWindow::buildSchematicBuildTab() {
     alignBtn->setProperty("cadActionIcon",QStringLiteral("alignrouting"));
     alignBtn->setIcon(makeCadActionIcon(QStringLiteral("alignrouting")));
     alignBtn->setToolTip(QStringLiteral(
-        "Click a reference connector; connectors wired to it shift so their wires "
-        "become horizontal/vertical"));
+        "With wires selected: click where they turn - they are lined up there with square corners, in the "
+        "order that crosses the fewest. With none selected: click a reference connector; connectors wired to "
+        "it shift so their wires become horizontal/vertical"));
     connect(alignBtn, &QToolButton::clicked, this, [this] {
         editor_->beginAlignRouting();
         canvas_->setFocus(Qt::OtherFocusReason);
@@ -199,6 +202,29 @@ void MainWindow::buildSchematicBuildTab() {
         "Click a wire crossing to toggle it between a bridge (hop) and a plain cross"));
     modCrossBtn->setProperty("cadActionIcon",QStringLiteral("crossswitch"));
     modCrossBtn->setIcon(makeCadActionIcon(QStringLiteral("crossswitch")));
+    // AND AUTO CROSS, in its fall menu: every crossing gets its bridge as the wires are drawn, without being
+    // clicked one at a time. Remembered from one session to the next.
+    {
+        auto* crossMenu = new QMenu(modCrossBtn);
+        crossMenu->setObjectName(QStringLiteral("crossSwitchMenu"));
+        QAction* autoCross = crossMenu->addAction(QStringLiteral("Auto cross"));
+        autoCross->setObjectName(QStringLiteral("autoCrossAction"));
+        autoCross->setCheckable(true);
+        autoCross->setToolTip(QStringLiteral(
+            "Every place one wire crosses another gets a bridge (hop) as it is made, and loses it when the wires "
+            "no longer cross. A crossing set back to plain with the Cross switch stays plain."));
+        editor_->setAutoCross(QSettings().value(QStringLiteral("schematic/autoCross"), false).toBool());
+        autoCross->setChecked(editor_->autoCross());
+        connect(autoCross, &QAction::toggled, this, [this](bool on) {
+            editor_->setAutoCross(on);
+            QSettings().setValue(QStringLiteral("schematic/autoCross"), on);
+            statusBar()->showMessage(on ? QStringLiteral("Auto cross: every wire crossing gets a bridge")
+                                        : QStringLiteral("Auto cross off"),
+                                     2500);
+        });
+        modCrossBtn->setMenu(crossMenu);
+        modCrossBtn->setPopupMode(QToolButton::MenuButtonPopup);
+    }
     connect(modCrossBtn, &QToolButton::clicked, this, [this] {
         editor_->beginCrossSwitch();
         canvas_->setFocus(Qt::OtherFocusReason);

@@ -2902,6 +2902,23 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
     }
 
     case EntityType::ConnectionPin: {
+        // A PIN AS A CONNECTOR HAS ONE: the stub, its number written along it the way a connector's pins are
+        // numbered, and a small ring on its free end - the connection point a wire is joined at.
+        if (connectionPinIsStub(e)) {
+            const QPointF root = vt.toScreen(e.a), tip = vt.toScreen(e.b);
+            p.drawLine(root, tip);
+            const double worldRing = 1.2;
+            const double rr = std::max(2.5, worldRing * vt.scale());
+            p.drawEllipse(tip, rr, rr);
+            Vec2 along = e.b - e.a;
+            along = along.lengthSq() > 1e-18 ? along.normalized() : Vec2{1, 0};
+            Vec2 up = along.perp();
+            if (up.y < 0.0) up = up * -1.0;   // written above the stub, whichever way it points
+            const Vec2 mid = lerp(e.a, e.b, 0.5) + up * 1.0;
+            drawWorldText(p, vt.toScreen(mid), QString::number(e.meta.value("pinNumber").toInt()), 4.0,
+                          vt.scale(), color, Qt::AlignHCenter | Qt::AlignBottom);
+            break;
+        }
         // A small ring with its number in the middle - world-sized like the not-connected X
         // beside it, so it scales with the drawing rather than staying a fixed screen size.
         const QPointF c = vt.toScreen(e.a);

@@ -309,6 +309,10 @@ public:
     RunLay twistLay() const { return twistLay_; }
     void setTwistLay(RunLay lay);
     // A laid-up bundle seen from the side (its near strands, all lying one way) rather than woven.
+    // The Connection pin tool places a pin drawn as a connector's (a stub with a connection point) rather than the
+    // numbered ring.
+    bool connectionPinStub() const { return connectionPinStub_; }
+    void setConnectionPinStub(bool stub);
     bool twistSideView() const { return twistSideView_; }
     void setTwistSideView(bool on);
     void setTwistBodyTransition(bool on);
@@ -622,6 +626,8 @@ public:
     // vertical) and the wires are straightened. alignRoutingFrom runs it directly.
     void beginAlignRouting();
     void alignRoutingFrom(const QString& refConnectorId);
+    // The wires selected when Align routing began, lined up at `dest` with square corners, fewest crossings.
+    void alignWiresTo(const Vec2& dest);
     bool awaitingAlignRef() const { return awaitAlignRef_; }
 
     // For a wire endpoint: the connector pin it lands on, as "Des/pinLabel" (e.g.
@@ -1276,6 +1282,11 @@ public:
     // Cross-switch tool: click a wire-over-wire crossing to toggle it between a hop
     // (bridge) and a plain cross. Armed until Esc.
     void beginCrossSwitch();
+    // AUTO CROSS: every wire crossing gets its bridge as it is made, and loses it when the wires no longer cross;
+    // a crossing set back to plain with the Cross switch stays plain.
+    bool autoCross() const { return autoCross_; }
+    void setAutoCross(bool on);
+    void applyAutoCross();
     bool awaitingCrossSwitch() const { return awaitCrossSwitch_; }
     void toggleWireCrossAt(const Vec2& p); // toggle the hop at the crossing nearest p
 
@@ -1631,6 +1642,7 @@ signals:
 
 private:
     double worldTolerance() const;
+    bool linearDimAcross(const Vec2& at) const;
     QString uid() const;
     void pushUndo();
     QJsonObject drawingContext() const;
@@ -1845,6 +1857,8 @@ private:
     // to catch that feature on click.
     std::optional<Vec2> frozenGrabFeature(const Vec2& p) const;
     bool awaitAlignRef_ = false; // next click picks the align-routing reference connector
+    bool awaitAlignDest_ = false;          // next click is where the selected wires are lined up
+    std::vector<QString> alignWireIds_;    // ...and which wires they are. Not saved.
 
     QSet<QString> bypassed_;        // validation discrepancy keys the user accepted
     QSet<QString> drcBypassed_;     // the harness DRC's, likewise
@@ -1992,6 +2006,7 @@ private:
     RunEnds twistTransitionEnds_ = RunEnds::Both;  // which ends of a cable wear the boot
     RunLay twistLay_ = RunLay::Straight;           // and how the gathered wires run
     bool twistSideView_ = false;                    // a laid-up bundle drawn seen from the side
+    bool connectionPinStub_ = false;                // the Connection pin tool places a stub pin
     bool twistBodyOverCable_ = false;              // tubing along the run, or over a cable
     double twistBodyFace_ = 0.0;                   // the end face across; 0 = the drawing's own
     double twistBodyShrink_ = -1.0;                // and over what length; <0 = the drawing's own
@@ -2396,7 +2411,10 @@ private:
     QString wireColorNameMode_ = QStringLiteral("code"); // "code" (WH) | "full" (White)
     int wireAnnotCount_ = 1;         // how many times the marking repeats along the wire
     double wireAnnotSize_ = 3.5;     // marking text height (world units)
-    bool wireOrtho_ = false;      // wire drawing constrained to 90° segments
+    bool wireOrtho_ = true;       // wire drawing constrained to 90° segments (Ctrl on a click: a free corner)
+    bool autoCross_ = false;        // see setAutoCross
+    bool autoCrossBusy_ = false;    // applying it: its own change does not set it off again. Not saved.
+    bool autoCrossQueued_ = false;  // a pass already waiting. Not saved.
     // Wiring from a connector pin: the same route can fan out to several pins at once.
     // Shift at the first click fans to the last pin; pressing a number key sets the count.
     // wireArrayOffsets_ holds each fanned wire's offset from the anchor pin (anchor=={0,0});
@@ -2460,6 +2478,10 @@ private:
     QString currentColor_;   // color for new entities (empty => ByLayer)
     double currentWeight_ = 0.0; // lineweight for new entities (0 => ByLayer)
     DimMode dimMode_ = DimMode::Linear;
+    // Which way the linear dimension being placed measures, once the cursor has set off: -1 not yet, 1 its
+    // length, 0 its height. See linearDimAcross. Not saved.
+    mutable int dimAcrossLock_ = -1;
+    mutable Vec2 dimLockFrom_{1e300, 1e300};   // the second point that answer was decided from
     // For radius/diameter/arc-length/jogged: the circle/arc being measured, captured
     // on the first pick so the second click only places the text/dimension line.
     bool dimHasRef_ = false;

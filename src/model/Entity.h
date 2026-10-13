@@ -214,6 +214,14 @@ inline constexpr char kPreviewSelectedKey[] = "previewSelected";
 // the geometry each time meant a dimension turned itself round when the geometry moved; only a drawing
 // saved before that was written has to have it worked out, and reading one stamps it on.
 bool dimensionAcrossX(const Entity& e);
+// A CONNECTION PIN DRAWN AS A CONNECTOR'S PIN (meta pinStyle "stub"): a short line from `a`, where it stands on
+// what it belongs to, to `b`, its free end - the connection point a wire is joined at. The numbered ring is the
+// other kind and has only its one point.
+bool connectionPinIsStub(const Entity& e);
+// Where a wire joins a connection pin: the free end of a stub, the ring's own point otherwise.
+Vec2 connectionPinPoint(const Entity& e);
+// How long a stub pin is put down, before anybody drags its end.
+inline constexpr double kConnectionPinStubLength = 20.0;
 
 // ---- Merged table cells --------------------------------------------------------------------------
 // A block of a table's cells joined into one: where it starts, and how many rows and columns it covers.

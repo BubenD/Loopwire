@@ -54,6 +54,9 @@ void entitySegments(const Entity& e, std::vector<std::pair<Vec2, Vec2>>& out) {
     case EntityType::Line:
         out.emplace_back(e.a, e.b);
         break;
+    case EntityType::ConnectionPin:
+        if (connectionPinIsStub(e)) out.emplace_back(e.a, e.b);   // the stub is a line
+        break;
     case EntityType::TwistedPair: {
         // EVERY LINE THE HARNESS IS DRAWN AS: each wire's two edges, curve and all, the cut ends, the
         // body and its boots, a laid-up bundle's outline, the heatshrink on a wire's end. A dimension
@@ -304,6 +307,11 @@ void entityEndpoints(const Entity& e, std::vector<Vec2>& out) {
     case EntityType::NetLabel:
     case EntityType::NotConnected:
         out.push_back(e.a);
+        break;
+    case EntityType::ConnectionPin:
+        // Where it stands, and - on a pin drawn as a connector's - its free end, the connection point.
+        out.push_back(e.a);
+        if (connectionPinIsStub(e)) out.push_back(e.b);
         break;
     case EntityType::Screen:
         // The drain-leg termination point (last point, after the caught-wire joints)
@@ -565,6 +573,8 @@ SnapResult resolveSnap(const Document& doc, const Vec2& raw,
                  e.type == EntityType::NetLabel || e.type == EntityType::Text)) {
                 consider(e.a, SnapKind::Node);
             }
+            // A CONNECTION PIN'S CONNECTION POINT is a node: what a wire is drawn to.
+            if (s.snapNode && e.type == EntityType::ConnectionPin) consider(connectionPinPoint(e), SnapKind::Node);
             // Insertion: the insertion point of text / connectors / balloons.
             if (s.snapInsertion &&
                 (e.type == EntityType::Text || e.type == EntityType::Connector ||

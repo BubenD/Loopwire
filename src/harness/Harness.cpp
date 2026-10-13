@@ -1308,8 +1308,10 @@ void frameAt(const TwistFrames& f, double u, Vec2& pos, Vec2& n) {
 // behind are not drawn at all. Laid out across the run (u along it, v across), then put on the route.
 //
 // One strand crosses the bundle from edge to edge in half a lay; with N wires laid up, the next one along is a
-// lay over N further on. Each takes most of the room between it and the next, with a thin gap left, so they
-// read as wires lying close side by side and never run into one another.
+// lay over N further on. THE STRANDS TOUCH, as the wires of a laid-up bundle do: each is a wire thick, and the
+// lay is the one that puts a wire's thickness between one strand and the next - so nothing of the strands
+// behind is seen between them. A lay asked for that is already tighter than that keeps its own figure, and its
+// strands share the room between them exactly instead.
 std::vector<std::vector<Vec2>> sideViewStrands(const TwistFrames& f) {
     std::vector<std::vector<Vec2>> out;
     const double from = f.lead, till = f.len - f.leadB;
@@ -1323,11 +1325,27 @@ std::vector<std::vector<Vec2>> sideViewStrands(const TwistFrames& f) {
     }
     if (half <= 1e-9) half = f.reach + f.thick;
     if (half <= 1e-9) return out;
-    const double along = f.turn / 2.0;                 // how far along one strand gets crossing the bundle
-    const double step = f.turn / f.wires;              // and how far on the next one is
+    const double wire = 2.0 * f.thick;
+    double lay = f.turn;
+    // Between two neighbours, square to them, for a given lay: a lay over N along, of which the strand climbs
+    // the whole width in half.
+    auto roomFor = [&](double l) {
+        const double a = l / 2.0;
+        return (l / f.wires) * (2.0 * half) / std::sqrt(a * a + 4.0 * half * half);
+    };
+    double hw = roomFor(lay) / 2.0;
+    if (wire > 1e-9 && roomFor(lay) > wire) {
+        // The lay that leaves exactly a wire between neighbours: (2H/N)^2 l^2 = d^2 (l^2/4 + 4H^2).
+        const double k = 4.0 * half * half / (f.wires * f.wires) - wire * wire / 4.0;
+        if (k > 1e-12) {
+            lay = 2.0 * half * wire / std::sqrt(k);
+            hw = wire / 2.0;
+        }
+    }
+    hw = std::max(0.05, std::min(hw, half * 0.95));
+    const double along = lay / 2.0;                    // how far along one strand gets crossing the bundle
+    const double step = lay / f.wires;                 // and how far on the next one is
     const double slope = std::sqrt(along * along + 4.0 * half * half);
-    const double room = step * (2.0 * half) / slope;   // between two neighbours, square to them
-    const double hw = std::max(0.05, std::min(0.4 * room, half * 0.45));
     const Vec2 dir{along / slope, 2.0 * half / slope};  // up the strand, in (u, v)
     const Vec2 side{-dir.y, dir.x};
     const double reachV = half - hw;                    // where the middle of a rounded end sits

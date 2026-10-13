@@ -3609,7 +3609,9 @@ int run_harness_tests() {
             int wires2 = 0;
             for (const auto& e : d.entities())
                 if (e.type == EntityType::Wire) ++wires2;
-            check(wires2 == 1 && d.entities().front().points.size() == 3,
+            // The leg drawn on to the end runs at an angle, and wires are drawn with square corners: it gets a knee
+            // before it lands, so the one wire has four points where it had three.
+            check(wires2 == 1 && d.entities().front().points.size() == 4,
                   "wire extend: drawing toward the end joins it too");
             const Entity& w = d.entities().front();
             check(near(w.points.front().x, 0.0) && near(w.points.back().x, 160.0),

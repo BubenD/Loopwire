@@ -3921,6 +3921,22 @@ QWidget* MainWindow::toolRow(const QList<ToolId>& tools, const QList<QWidget*>& 
             act->setIcon(makeCircleMethodIcon(0)); // default = first fall-menu method
             b->setMenu(menu);
             b->setPopupMode(QToolButton::MenuButtonPopup);
+        } else if (id == ToolId::ConnectionPin) {
+            // THE TWO PINS: the numbered ring, or a pin as a connector has one - a stub with its number on it
+            // and a connection point on its free end that a wire snaps to and is joined at. The one chosen is
+            // what the button places from then on.
+            auto* menu = new QMenu(b);
+            menu->setObjectName(QStringLiteral("connectionPinMenu"));
+            menu->addAction(QStringLiteral("Numbered pin"), this, [this] {
+                editor_->setConnectionPinStub(false);
+                editor_->setTool(ToolId::ConnectionPin);
+            });
+            menu->addAction(QStringLiteral("Pin, as a connector's (with a connection point)"), this, [this] {
+                editor_->setConnectionPinStub(true);
+                editor_->setTool(ToolId::ConnectionPin);
+            });
+            b->setMenu(menu);
+            b->setPopupMode(QToolButton::MenuButtonPopup);
         } else if (id == ToolId::Arc) {
             auto* menu = new QMenu(b);
             auto add = [&](const QString& label, Editor::ArcMode m) {
@@ -13291,7 +13307,8 @@ void MainWindow::buildWireRibbonTab() {
             [this, gapVal] { editor_->wireGapCustom() = gapVal->value(); });
     auto* ortho90 = new QCheckBox(QStringLiteral("90° only"), routeW);
     ortho90->setChecked(editor_->wireOrtho());
-    ortho90->setToolTip(QStringLiteral("Constrain wire drawing to horizontal / vertical segments"));
+    ortho90->setToolTip(QStringLiteral("Wires are drawn with square corners only - horizontal and vertical legs. Hold Ctrl "
+                                       "on a click for one corner at any angle."));
     connect(ortho90, &QCheckBox::toggled, this, [this](bool on) { editor_->wireOrtho() = on; });
     // The pitch rule ALSO governs live routing: the wire being drawn is held one pitch
     // clear of the runs already on the drawing, so parallel runs can never end up on top

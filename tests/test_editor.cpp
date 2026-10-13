@@ -14442,6 +14442,208 @@ int run_editor_tests() {
         }
     }
 
+    // ---- A LINEAR DIMENSION GOES THE WAY THE CURSOR SETS OFF ------------------------------------------------
+    // Up from the second point is the length, and it stays the length when the dimension line is then taken
+    // along past the end - where the old rule, read against the middle of the two points, turned it round.
+    {
+        Document d;
+        Editor ed;
+        ed.setDocument(&d);
+        ed.snapSettings().objectSnap = false;
+        ed.snapSettings().gridSnap = false;
+        ed.setTool(ToolId::Dimension);
+        auto click = [&](const Vec2& p) {
+            ed.onPointerMove(p);
+            ed.onPointerPress(p, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerRelease(p, Qt::LeftButton);
+        };
+        click({0, 0});
+        click({100, 0});
+        ed.onPointerMove({100, 4});
+        ed.onPointerMove({100, 15});    // set off upwards
+        ed.onPointerMove({160, 20});    // then along, well past the end
+        click({160, 20});
+        const Entity* dim = nullptr;
+        for (const Entity& e : d.entities())
+            if (e.type == EntityType::Dimension) dim = &e;
+        std::printf("  dimension way: placed %d, measuring %s\n", dim ? 1 : 0,
+                    dim ? (dimensionAcrossX(*dim) ? "the length" : "the height") : "-");
+        check(dim && dimensionAcrossX(*dim), "dimension way: set off upwards, it measures the length and keeps to it");
+        // And set off sideways from the second point: the height.
+        ed.setTool(ToolId::Dimension);
+        click({0, 0});
+        click({100, 40});
+        ed.onPointerMove({104, 40});
+        ed.onPointerMove({120, 42});    // sideways
+        click({125, 60});
+        const Entity* second = nullptr;
+        for (const Entity& e : d.entities())
+            if (e.type == EntityType::Dimension && e.id != (dim ? dim->id : QString())) second = &e;
+        check(second && !dimensionAcrossX(*second), "dimension way: set off sideways, it measures the height");
+    }
+
+    // ---- A PIN AS A CONNECTOR HAS ONE ---------------------------------------------------------------------
+    // A stub with its number, and a connection point on its free end that a wire snaps to; kept when saved.
+    {
+        Document d;
+        Editor ed;
+        ed.setDocument(&d);
+        ed.snapSettings().gridSnap = false;
+        ed.setConnectionPinStub(true);
+        ed.setTool(ToolId::ConnectionPin);
+        ed.onPointerMove({10, 10});
+        ed.onPointerPress({10, 10}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerRelease({10, 10}, Qt::LeftButton);
+        const Entity* pin = nullptr;
+        for (const Entity& e : d.entities())
+            if (e.type == EntityType::ConnectionPin) pin = &e;
+        check(pin && connectionPinIsStub(*pin) && distance(pin->b, {10 + kConnectionPinStubLength, 10}) < 1e-9,
+              "stub pin: placed as a stub out from where it was put");
+        if (pin) {
+            const Vec2 end = connectionPinPoint(*pin);
+            SnapSettings sn;
+            sn.objectSnap = true;
+            const SnapResult r = resolveSnap(d, end + Vec2{0.6, 0.4}, std::nullopt, 2.0, sn, {});
+            check(r.snapped && distance(r.point, end) < 1e-9, "stub pin: the cursor snaps to its connection point");
+            const Entity back = Entity::fromJson(pin->toJson());
+            check(connectionPinIsStub(back) && distance(back.b, pin->b) < 1e-9,
+                  "stub pin: saved and read back with its free end");
+            Entity ring;
+            ring.type = EntityType::ConnectionPin;
+            ring.a = {5, 5};
+            ring.b = {50, 50};
+            check(!ring.toJson().contains(QStringLiteral("b")), "stub pin: a numbered ring is saved as it always was");
+        }
+    }
+
+    // ---- AUTO CROSS ---------------------------------------------------------------------------------------
+    // Every crossing gets its bridge without being clicked; one set back to plain stays plain; a bridge left
+    // where the wires no longer cross goes.
+    {
+        Document d;
+        Editor ed;
+        ed.setDocument(&d);
+        auto wire = [&](const char* id, std::vector<Vec2> pts) {
+            Entity w;
+            w.id = QString::fromLatin1(id);
+            w.type = EntityType::Wire;
+            w.points = std::move(pts);
+            d.entities().push_back(w);
+        };
+        wire("h", {{0, 50}, {100, 50}});
+        wire("v", {{50, 0}, {50, 100}});
+        auto hopsOn = [&](const char* id) {
+            for (const Entity& e : d.entities())
+                if (e.id == QLatin1String(id)) return static_cast<int>(e.meta.value(QStringLiteral("hops")).toArray().size());
+            return -1;
+        };
+        ed.setAutoCross(true);
+        check(hopsOn("h") == 1 && hopsOn("v") == 0, "auto cross: the crossing gets its bridge, on the level wire");
+        ed.toggleWireCrossAt({50, 50});   // set back to plain
+        ed.applyAutoCross();
+        check(hopsOn("h") == 0 && hopsOn("v") == 0, "auto cross: a crossing set to plain stays plain");
+        ed.toggleWireCrossAt({50, 50});   // and back to a bridge
+        check(hopsOn("h") == 1, "auto cross: and can have its bridge back");
+        for (Entity& e : d.entities())
+            if (e.id == QLatin1String("v")) e.points = {{150, 0}, {150, 100}};   // no longer crossing
+        ed.applyAutoCross();
+        check(hopsOn("h") == 0, "auto cross: a bridge where the wires no longer cross is taken off");
+    }
+
+    // ---- ALIGN ROUTING OF THE SELECTED WIRES ------------------------------------------------------------
+    // Picked, then a place clicked: every wire turns there on a lane of its own, square corners only, and in
+    // the order that crosses none of them where none need cross.
+    {
+        Document d;
+        Editor ed;
+        ed.setDocument(&d);
+        // Three wires from the left to the right, drawn so that as they stand two of them cross.
+        const std::vector<std::pair<Vec2, Vec2>> ends = {{{0, 0}, {200, 10}}, {{0, 20}, {200, 50}}, {{0, 40}, {200, 30}}};
+        int n = 0;
+        for (const auto& e : ends) {
+            Entity w;
+            w.id = QStringLiteral("w%1").arg(++n);
+            w.type = EntityType::Wire;
+            w.points = {e.first, e.second};
+            d.entities().push_back(w);
+        }
+        for (const Entity& e : d.entities()) ed.selectById(e.id, true);
+        ed.beginAlignRouting();
+        ed.onPointerMove({100, 20});
+        ed.onPointerPress({100, 20}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerRelease({100, 20}, Qt::LeftButton);
+        bool square = true, endsKept = true;
+        size_t i = 0;
+        for (const Entity& w : d.entities()) {
+            for (size_t k = 1; k < w.points.size(); ++k) {
+                const Vec2 s = w.points[k] - w.points[k - 1];
+                square = square && (std::abs(s.x) < 1e-9 || std::abs(s.y) < 1e-9);
+            }
+            endsKept = endsKept && distance(w.points.front(), ends[i].first) < 1e-9 &&
+                       distance(w.points.back(), ends[i].second) < 1e-9;
+            ++i;
+        }
+        // The wires end in a different order from the one they start in: the second and third change places, so
+        // they have to cross once, and once is the fewest there can be. And no two legs may lie along each other.
+        int crossings = 0, overlaps = 0;
+        const auto& ws = d.entities();
+        for (size_t a = 0; a < ws.size(); ++a)
+            for (size_t b = a + 1; b < ws.size(); ++b)
+                for (size_t p = 1; p < ws[a].points.size(); ++p)
+                    for (size_t q = 1; q < ws[b].points.size(); ++q) {
+                        const Vec2 a1 = ws[a].points[p - 1], a2 = ws[a].points[p];
+                        const Vec2 b1 = ws[b].points[q - 1], b2 = ws[b].points[q];
+                        const bool level = std::abs(a1.y - a2.y) < 1e-9 && std::abs(b1.y - b2.y) < 1e-9 &&
+                                           std::abs(a1.y - b1.y) < 1e-9;
+                        const bool upright = std::abs(a1.x - a2.x) < 1e-9 && std::abs(b1.x - b2.x) < 1e-9 &&
+                                             std::abs(a1.x - b1.x) < 1e-9;
+                        if (level && std::min(std::max(a1.x, a2.x), std::max(b1.x, b2.x)) -
+                                             std::max(std::min(a1.x, a2.x), std::min(b1.x, b2.x)) > 1e-6)
+                            ++overlaps;
+                        else if (upright && std::min(std::max(a1.y, a2.y), std::max(b1.y, b2.y)) -
+                                                std::max(std::min(a1.y, a2.y), std::min(b1.y, b2.y)) > 1e-6)
+                            ++overlaps;
+                        else if (segmentSegmentIntersection(a1, a2, b1, b2))
+                            ++crossings;
+                    }
+        std::printf("  align wires: square %d, ends kept %d, %d crossing(s), %d overlap(s)\n", int(square),
+                    int(endsKept), crossings, overlaps);
+        check(square, "align wires: every corner is square");
+        check(endsKept, "align wires: every wire still runs between its own two ends");
+        check(overlaps == 0, "align wires: no two wires lie along each other");
+        check(crossings <= 1, "align wires: lined up in the order with the fewest crossings there can be");
+    }
+
+    // ---- WIRES ARE DRAWN WITH SQUARE CORNERS; CTRL ON A CLICK FOR ONE THAT IS NOT ---------------------------
+    {
+        Document d;
+        Editor ed;
+        ed.setDocument(&d);
+        ed.snapSettings().objectSnap = false;
+        ed.snapSettings().gridSnap = false;
+        check(ed.wireOrtho(), "wire corners: square corners are what a wire is drawn with");
+        ed.setTool(ToolId::Wire);
+        auto click = [&](const Vec2& p, Qt::KeyboardModifiers mods) {
+            ed.onPointerMove(p);
+            ed.onPointerPress(p, Qt::LeftButton, mods);
+            ed.onPointerRelease(p, Qt::LeftButton);
+        };
+        click({0, 0}, Qt::NoModifier);
+        click({60, 8}, Qt::NoModifier);             // nearly level: drawn level
+        click({100, 50}, Qt::ControlModifier);      // Ctrl: this leg at its own angle
+        ed.onKey(Qt::Key_Escape, Qt::NoModifier);
+        const Entity* w = nullptr;
+        for (const Entity& e : d.entities())
+            if (e.type == EntityType::Wire) w = &e;
+        if (w && w->points.size() >= 3)
+            std::printf("  wire corners: (%.1f,%.1f) (%.1f,%.1f) (%.1f,%.1f)\n", w->points[0].x, w->points[0].y,
+                        w->points[1].x, w->points[1].y, w->points[2].x, w->points[2].y);
+        check(w && w->points.size() >= 3 && std::abs(w->points[1].y - w->points[0].y) < 1e-9,
+              "wire corners: a leg taken nearly level is drawn level");
+        check(w && w->points.size() >= 3 && distance(w->points.back(), {100, 50}) < 1e-9,
+              "wire corners: with Ctrl held the leg goes at its own angle, to where it was clicked");
+    }
+
     // ---- A CHAMFERED CORNER IS HELD BY THE ENDS OF ITS CHAMFER ---------------------------------------------
     // The corner itself is not drawn - it is where the two lines would have met - so its handle sat out in the
     // air. The handles are on the two ends of the chamfer, and dragging one moves the corner: both lines that

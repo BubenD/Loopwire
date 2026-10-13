@@ -653,6 +653,11 @@ std::vector<Vec2> collectPinEnds(const Document* doc) {
     std::vector<Vec2> out;
     if (!doc) return out;
     for (const auto& e : doc->entities()) {
+        // A pin drawn as a connector's is joined at its free end, as a connector's pin is.
+        if (connectionPinIsStub(e)) {
+            out.push_back(e.b);
+            continue;
+        }
         if (e.type != EntityType::Connector) continue;
         const ConnectorGeometry g = connectorGeometry(e.a, connectorSpecFromMeta(e.meta));
         for (const Vec2& pe : g.pinEnd) out.push_back(pe);
@@ -1447,6 +1452,8 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
     }
     default: // splice / netlabel / notconnected
         g.push_back({e.a, GripRole::Move, 0});
+        // A PIN DRAWN AS A CONNECTOR'S: its free end too, which turns it or makes it longer.
+        if (connectionPinIsStub(e)) g.push_back({e.b, GripRole::LineB, 0});
         break;
     }
     return g;
@@ -1457,6 +1464,15 @@ Editor::Editor(QObject* parent) : QObject(parent) {
     hookSelectionCompanions();
     connect(this,&Editor::changed,this,[this]{
         if(document() && document()==drawingOwner())document()->invalidateValidation();
+    });
+    // AUTO CROSS, after whatever changed has finished changing it: one pass, however many changes came at once.
+    connect(this, &Editor::changed, this, [this] {
+        if (!autoCross_ || autoCrossBusy_ || autoCrossQueued_) return;
+        autoCrossQueued_ = true;
+        QTimer::singleShot(0, this, [this] {
+            autoCrossQueued_ = false;
+            applyAutoCross();
+        });
     });
     hatchPreviewTimer_ = new QTimer(this);
     hatchPreviewTimer_->setSingleShot(true);
@@ -1661,6 +1677,7 @@ void Editor::setTool(ToolId t) {
     clearCellSelection();
     mirrorPending_ = false;
     awaitAlignRef_ = false;   // leaving/entering a tool cancels align-routing pick mode
+    awaitAlignDest_ = false;
     awaitTwistAlign_ = false; // ...and twist-align pick mode
     awaitTwistRemove_ = false; // ...and remove-twist mode
     awaitCrossSwitch_ = false; // ...and the cross-switch mode (Esc → Select disarms it)
@@ -2225,7 +2242,8 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
     case EntityType::NetLabel:
     case EntityType::NotConnected:
     case EntityType::ConnectionPin:
-        best = distance(e.a, p);
+        // A stub pin is picked anywhere along it, the way a line is.
+        best = connectionPinIsStub(e) ? closestPointOnSegment(p, e.a, e.b).distance : distance(e.a, p);
         break;
     case EntityType::LengthBreak:
         // A click on either STROKE picks it, the way a click on a line picks the line. Measured to the
@@ -3426,6 +3444,45 @@ QString Editor::nextDetailTag() const {
 // The next free connection-pin number - the same lowest-not-in-use rule as a detail's letter
 // (nextDetailTag(), just above), so deleting pin 2 and placing another gives 2 back rather than
 // leaving a hole and jumping to a new highest number.
+// WHICH WAY A LINEAR DIMENSION MEASURES, decided by the way the cursor first sets off from the second point -
+// not by where it is against the middle of the two. Up or down (within 45 degrees of it) is a horizontal
+// dimension, the length; left or right is a vertical one, the height. Once it has set off the answer is held,
+// so taking the dimension line along past the ends does not turn it into the other one; brought back to the
+// point it set off from, it is free to decide again.
+bool Editor::linearDimAcross(const Vec2& at) const {
+    if (draftPts_.size() < 2) return true;
+    // Held for THIS dimension only: one cancelled half way does not hand its answer on to the next.
+    if (distance(dimLockFrom_, draftPts_[1]) > 1e-9) {
+        dimAcrossLock_ = -1;
+        dimLockFrom_ = draftPts_[1];
+    }
+    const Vec2 d = at - draftPts_[1];
+    const double settle = worldTolerance() * 1.5;
+    if (d.length() < settle) {
+        dimAcrossLock_ = -1;
+        // Not set off yet: the length if the two points lie more along than across, else the height.
+        const Vec2 span = draftPts_[1] - draftPts_[0];
+        return std::abs(span.x) >= std::abs(span.y);
+    }
+    if (dimAcrossLock_ < 0) {
+        // Exactly on the 45 degree line is no answer at all: then it measures the way the two points lie.
+        const double ay = std::abs(d.y), ax = std::abs(d.x);
+        if (std::abs(ay - ax) <= 1e-9 * std::max(1.0, ay + ax)) {
+            const Vec2 span = draftPts_[1] - draftPts_[0];
+            dimAcrossLock_ = std::abs(span.x) >= std::abs(span.y) ? 1 : 0;
+        } else {
+            dimAcrossLock_ = ay > ax ? 1 : 0;
+        }
+    }
+    return dimAcrossLock_ == 1;
+}
+
+void Editor::setConnectionPinStub(bool stub) {
+    if (connectionPinStub_ == stub) return;
+    connectionPinStub_ = stub;
+    emit overlayChanged();
+}
+
 int Editor::nextConnectionPinNumber() const {
     if (!doc_) return 1;
     QSet<int> taken;
@@ -4674,6 +4731,9 @@ void Editor::onPointerMove(const Vec2& raw) {
     // the window - so the knee lands on what the cursor landed on.
     if (tool_ == ToolId::AutoRoute && autoRouteDragKnee_ >= 0) autoRouteDragTo(cursor_);
     if (tool_ == ToolId::AutoRoute && autoRouteDragEnd_) autoRouteDragEndTo(cursor_);
+    // A LINEAR DIMENSION DECIDES ITS WAY as the cursor sets off from the second point - followed here, move by
+    // move, so the answer is the hand's and not whatever the screen happened to paint.
+    if (tool_ == ToolId::Dimension && dimMode_ == DimMode::Linear && draftPts_.size() == 2) linearDimAcross(cursor_);
 
     // A LOOM THAT CANNOT GO THERE STOPS WHERE IT CAN.
     //
@@ -5232,6 +5292,11 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
         return;
     }
 
+    // Align routing of the wires picked first: this click is where they are lined up.
+    if (awaitAlignDest_) {
+        alignWiresTo(raw);
+        return;
+    }
     // Align routing: this click picks the reference connector, then aligns the rest.
     if (awaitAlignRef_) {
         if (auto hit = hitTest(p)) alignRoutingFrom(*hit);
@@ -7395,8 +7460,10 @@ std::optional<Vec2> Editor::connectorFeatureSnap(const Vec2& rawAnchor, Vec2* ca
         case EntityType::Splice:
         case EntityType::NotConnected:
         case EntityType::NetLabel:
-        case EntityType::ConnectionPin:
             targets.push_back(e.a);
+            break;
+        case EntityType::ConnectionPin:
+            targets.push_back(connectionPinPoint(e));
             break;
         default:
             for (const Vec2& pt : e.points) targets.push_back(pt);
@@ -7861,9 +7928,166 @@ void Editor::flashHighlight(const Vec2& at) {
 
 void Editor::beginAlignRouting() {
     if (!doc_) return;
+    // WIRES PICKED FIRST: those, and only those, are lined up - the next click is where.
+    std::vector<QString> wires;
+    for (const QString& id : selected_)
+        if (const Entity* e = entityById(id); e && e->type == EntityType::Wire && e->points.size() >= 2)
+            wires.push_back(id);
     setTool(ToolId::Select);
+    if (!wires.empty()) {
+        alignWireIds_ = wires;
+        awaitAlignDest_ = true;
+        selected_ = wires;   // kept picked out while the place is chosen
+        emit selectionChanged();
+        emit message(QStringLiteral("Align routing: click where the %1 wire(s) turn - they are lined up there "
+                                    "with square corners")
+                         .arg(wires.size()));
+        return;
+    }
     awaitAlignRef_ = true;
     emit message(QStringLiteral("Align routing: click the reference connector (it stays put)"));
+}
+
+// THE SELECTED WIRES LINED UP AT A PLACE: each keeps its two ends and is re-routed with square corners only -
+// out along the way it mostly runs, across on a lane of its own at the place clicked, and on to its end. The
+// lanes sit side by side a pitch apart, centred on the click, in whichever order crosses the fewest of them.
+void Editor::alignWiresTo(const Vec2& dest) {
+    awaitAlignDest_ = false;
+    std::vector<Entity*> wires;
+    for (const QString& id : alignWireIds_)
+        if (Entity* e = entityById(id); e && e->type == EntityType::Wire && e->points.size() >= 2)
+            wires.push_back(e);
+    alignWireIds_.clear();
+    if (wires.empty()) {
+        emit message(QStringLiteral("Align routing: no wires to line up"));
+        return;
+    }
+    // Which way they mostly run, end to end: along x (the lanes are upright) or along y.
+    int alongX = 0;
+    for (const Entity* w : wires) {
+        const Vec2 d = w->points.back() - w->points.front();
+        if (std::abs(d.x) >= std::abs(d.y)) ++alongX;
+    }
+    const bool lanesUpright = alongX * 2 >= static_cast<int>(wires.size());
+    // A PITCH APART: the one asked for on the Wire ribbon, else the pitch of the connector a wire starts on.
+    double pitch = 0.0;
+    if (wireGapRule_ == QLatin1String("custom")) pitch = std::max(1.0, wireGapCustom_);
+    if (pitch <= 0.0)
+        for (const Entity& c : doc_->entities()) {
+            if (c.type != EntityType::Connector) continue;
+            const ConnectorSpec spec = connectorSpecFromMeta(c.meta);
+            const ConnectorGeometry g = connectorGeometry(c.a, spec);
+            for (const Entity* w : wires)
+                for (const Vec2& pe : g.pinEnd)
+                    if (distance(pe, w->points.front()) < 1e-6 || distance(pe, w->points.back()) < 1e-6)
+                        pitch = std::max(pitch, spec.pitch);
+        }
+    if (pitch <= 0.0) pitch = 10.0;
+    const int k = static_cast<int>(wires.size());
+    const double first = (lanesUpright ? dest.x : dest.y) - pitch * (k - 1) / 2.0;
+    auto routeFor = [&](const Entity* w, int lane) {
+        const Vec2 a = w->points.front(), b = w->points.back();
+        const double at = first + lane * pitch;
+        std::vector<Vec2> r;
+        if (lanesUpright) r = {a, {at, a.y}, {at, b.y}, b};
+        else r = {a, {a.x, at}, {b.x, at}, b};
+        // No leg of no length: a wire already level with its end needs no corner there.
+        std::vector<Vec2> out;
+        for (const Vec2& p : r)
+            if (out.empty() || distance(out.back(), p) > 1e-9) out.push_back(p);
+        return out;
+    };
+    // TWO LEGS LYING ALONG EACH OTHER - level at the same height, or upright at the same place, and overlapping -
+    // are one line on the sheet where two wires should be. Far worse than a crossing, so it is counted as many.
+    auto overlapping = [](const Vec2& a1, const Vec2& a2, const Vec2& b1, const Vec2& b2) {
+        auto along = [](double p1, double p2, double q1, double q2) {
+            return std::min(std::max(p1, p2), std::max(q1, q2)) - std::max(std::min(p1, p2), std::min(q1, q2)) > 1e-6;
+        };
+        const bool aLevel = std::abs(a1.y - a2.y) < 1e-9, bLevel = std::abs(b1.y - b2.y) < 1e-9;
+        const bool aUp = std::abs(a1.x - a2.x) < 1e-9, bUp = std::abs(b1.x - b2.x) < 1e-9;
+        if (aLevel && bLevel && std::abs(a1.y - b1.y) < 1e-9) return along(a1.x, a2.x, b1.x, b2.x);
+        if (aUp && bUp && std::abs(a1.x - b1.x) < 1e-9) return along(a1.y, a2.y, b1.y, b2.y);
+        return false;
+    };
+    constexpr int kOverlap = 1000;
+    int lastCrossings = 0;
+    auto crossingsOf = [&](const std::vector<int>& lanes) {
+        std::vector<std::vector<Vec2>> rs;
+        for (int i = 0; i < k; ++i) rs.push_back(routeFor(wires[static_cast<size_t>(i)], lanes[static_cast<size_t>(i)]));
+        int cost = 0, crossed = 0;
+        for (int a = 0; a < k; ++a)
+            for (int b = a + 1; b < k; ++b)
+                for (size_t i = 1; i < rs[a].size(); ++i)
+                    for (size_t j = 1; j < rs[b].size(); ++j) {
+                        if (overlapping(rs[a][i - 1], rs[a][i], rs[b][j - 1], rs[b][j])) {
+                            cost += kOverlap;
+                            continue;
+                        }
+                        if (auto x = segmentSegmentIntersection(rs[a][i - 1], rs[a][i], rs[b][j - 1], rs[b][j])) {
+                            // Two wires that share an end meet there; that is not a crossing.
+                            const bool atEnd = distance(*x, rs[a].front()) < 1e-6 || distance(*x, rs[a].back()) < 1e-6 ||
+                                               distance(*x, rs[b].front()) < 1e-6 || distance(*x, rs[b].back()) < 1e-6;
+                            if (!atEnd) {
+                                ++cost;
+                                ++crossed;
+                            }
+                        }
+                    }
+        lastCrossings = crossed;
+        return cost;
+    };
+    // The lane each wire takes: every order there is for a few wires, the likely ones for more.
+    std::vector<int> wireOrder(static_cast<size_t>(k));
+    for (int i = 0; i < k; ++i) wireOrder[static_cast<size_t>(i)] = i;
+    auto lanesFromOrder = [&](const std::vector<int>& order) {
+        std::vector<int> lanes(static_cast<size_t>(k));
+        for (int lane = 0; lane < k; ++lane) lanes[static_cast<size_t>(order[static_cast<size_t>(lane)])] = lane;
+        return lanes;
+    };
+    std::vector<int> bestLanes = lanesFromOrder(wireOrder);
+    int bestCount = crossingsOf(bestLanes);
+    int bestCrossings = lastCrossings;
+    auto consider = [&](const std::vector<int>& order) {
+        const std::vector<int> lanes = lanesFromOrder(order);
+        const int c = crossingsOf(lanes);
+        if (c < bestCount) {
+            bestCount = c;
+            bestCrossings = lastCrossings;
+            bestLanes = lanes;
+        }
+    };
+    if (k <= 7) {
+        std::vector<int> order = wireOrder;
+        do consider(order);
+        while (bestCount > 0 && std::next_permutation(order.begin(), order.end()));
+    } else {
+        auto key = [&](int i, bool start) {
+            const Entity* w = wires[static_cast<size_t>(i)];
+            const Vec2 p = start ? w->points.front() : w->points.back();
+            return lanesUpright ? p.y : p.x;
+        };
+        for (bool start : {true, false})
+            for (bool asc : {true, false}) {
+                std::vector<int> order = wireOrder;
+                std::sort(order.begin(), order.end(), [&](int a, int b) {
+                    return asc ? key(a, start) < key(b, start) : key(a, start) > key(b, start);
+                });
+                consider(order);
+            }
+    }
+    pushUndo();
+    for (int i = 0; i < k; ++i) {
+        Entity* w = wires[static_cast<size_t>(i)];
+        w->points = routeFor(w, bestLanes[static_cast<size_t>(i)]);
+        w->a = w->points.front();
+        w->b = w->points.back();
+        // The old knees' corners and bridges belonged to the old route.
+        for (const char* key : {"cornerRadii", "bulges", "hops", "plainCrossings"})
+            w->meta.remove(QLatin1String(key));
+    }
+    doc_->setDirty(true);
+    emit message(QStringLiteral("Align routing: %1 wire(s) lined up, %2 crossing(s)").arg(k).arg(bestCrossings));
+    emit changed();
 }
 
 void Editor::beginCrossSwitch() {
@@ -7874,13 +8098,15 @@ void Editor::beginCrossSwitch() {
                                 "Esc to finish"));
 }
 
-void Editor::toggleWireCrossAt(const Vec2& p) {
-    if (!doc_) return;
-    // Gather every wire-over-wire crossing (segments that actually cross, not shared
-    // endpoints), remembering the two wires and their segment directions.
-    struct Cross { Vec2 pt; QString idA, idB; bool aHoriz; };
-    std::vector<Cross> crosses;
-    auto& ents = doc_->entities();
+namespace {
+// A WIRE CROSSING ANOTHER: where, the two wires, and whether the first runs the more horizontal there.
+struct WireCross { Vec2 pt; QString idA, idB; bool aHoriz; };
+
+// Every wire-over-wire crossing on the drawing: segments that actually cross, not shared ends - a shared end
+// is a junction, not a crossing.
+std::vector<WireCross> wireCrossings(const Document& doc) {
+    std::vector<WireCross> crosses;
+    const auto& ents = doc.entities();
     for (size_t i = 0; i < ents.size(); ++i) {
         if (ents[i].type != EntityType::Wire || ents[i].points.size() < 2) continue;
         for (size_t j = i + 1; j < ents.size(); ++j) {
@@ -7891,7 +8117,6 @@ void Editor::toggleWireCrossAt(const Vec2& p) {
                 for (size_t b = 1; b < B.size(); ++b) {
                     auto x = segmentSegmentIntersection(A[a - 1], A[a], B[b - 1], B[b]);
                     if (!x) continue;
-                    // Skip shared endpoints (a real junction, not a crossing).
                     if (distance(*x, A[a - 1]) < 1e-6 || distance(*x, A[a]) < 1e-6 ||
                         distance(*x, B[b - 1]) < 1e-6 || distance(*x, B[b]) < 1e-6)
                         continue;
@@ -7901,6 +8126,79 @@ void Editor::toggleWireCrossAt(const Vec2& p) {
                 }
         }
     }
+    return crosses;
+}
+
+// Which of a wire's listed places (meta "hops" or "plainCrossings") is at `pt`, or -1.
+int listedAt(const Entity* w, const char* key, const Vec2& pt) {
+    if (!w) return -1;
+    const QJsonArray list = w->meta.value(QLatin1String(key)).toArray();
+    for (int k = 0; k < list.size(); ++k) {
+        const QJsonArray at = list[k].toArray();
+        if (at.size() == 2 && distance({at[0].toDouble(), at[1].toDouble()}, pt) < 1e-6) return k;
+    }
+    return -1;
+}
+} // namespace
+
+void Editor::setAutoCross(bool on) {
+    if (autoCross_ == on) return;
+    autoCross_ = on;
+    if (on) applyAutoCross();
+}
+
+// AUTO CROSS: every place one wire crosses another gets the bridge, on the wire running the more horizontal
+// there, as the Cross switch would put it - and a bridge left where the wires no longer cross is taken off. A
+// crossing somebody has set back to plain with the switch is remembered on the wires and left plain.
+void Editor::applyAutoCross() {
+    if (!doc_ || !autoCross_ || autoCrossBusy_) return;
+    const std::vector<WireCross> crosses = wireCrossings(*doc_);
+    bool changedAny = false;
+    // Bridges and plain marks that are no longer on a crossing.
+    for (Entity& w : doc_->entities()) {
+        if (w.type != EntityType::Wire) continue;
+        for (const char* key : {"hops", "plainCrossings"}) {
+            if (!w.meta.contains(QLatin1String(key))) continue;
+            const QJsonArray list = w.meta.value(QLatin1String(key)).toArray();
+            QJsonArray kept;
+            for (const QJsonValue& v : list) {
+                const QJsonArray at = v.toArray();
+                const Vec2 pt = at.size() == 2 ? Vec2{at[0].toDouble(), at[1].toDouble()} : Vec2{1e300, 1e300};
+                bool still = false;
+                for (const WireCross& c : crosses)
+                    if ((c.idA == w.id || c.idB == w.id) && distance(c.pt, pt) < 1e-6) still = true;
+                if (still) kept.append(v);
+            }
+            if (kept.size() != list.size()) {
+                if (kept.isEmpty()) w.meta.remove(QLatin1String(key));
+                else w.meta.insert(QLatin1String(key), kept);
+                changedAny = true;
+            }
+        }
+    }
+    for (const WireCross& c : crosses) {
+        Entity* wa = entityById(c.idA);
+        Entity* wb = entityById(c.idB);
+        if (listedAt(wa, "hops", c.pt) >= 0 || listedAt(wb, "hops", c.pt) >= 0) continue;
+        if (listedAt(wa, "plainCrossings", c.pt) >= 0 || listedAt(wb, "plainCrossings", c.pt) >= 0) continue;
+        Entity* hop = c.aHoriz ? wa : wb;
+        if (!hop) continue;
+        QJsonArray hops = hop->meta.value(QStringLiteral("hops")).toArray();
+        hops.append(QJsonArray{c.pt.x, c.pt.y});
+        hop->meta.insert(QStringLiteral("hops"), hops);
+        changedAny = true;
+    }
+    if (!changedAny) return;
+    doc_->setDirty(true);
+    autoCrossBusy_ = true;
+    emit changed();
+    autoCrossBusy_ = false;
+}
+
+void Editor::toggleWireCrossAt(const Vec2& p) {
+    if (!doc_) return;
+    using Cross = WireCross;
+    const std::vector<Cross> crosses = wireCrossings(*doc_);
     // Nearest crossing to the click.
     double best = worldTolerance() * 2.5;
     const Cross* hit = nullptr;
@@ -7935,8 +8233,23 @@ void Editor::toggleWireCrossAt(const Vec2& p) {
             hops.removeAt(k);
             w->meta["hops"] = hops;
         }
+        // REMEMBERED AS PLAIN, so Auto cross does not put the bridge straight back.
+        if (autoCross_ && wa && listedAt(wa, "plainCrossings", hit->pt) < 0) {
+            QJsonArray plain = wa->meta.value(QStringLiteral("plainCrossings")).toArray();
+            plain.append(QJsonArray{hit->pt.x, hit->pt.y});
+            wa->meta.insert(QStringLiteral("plainCrossings"), plain);
+        }
         emit message(QStringLiteral("Crossing set to plain"));
     } else {
+        // A bridge asked for again: no longer kept plain.
+        for (Entity* w : {wa, wb}) {
+            const int k = listedAt(w, "plainCrossings", hit->pt);
+            if (k < 0) continue;
+            QJsonArray plain = w->meta.value(QStringLiteral("plainCrossings")).toArray();
+            plain.removeAt(k);
+            if (plain.isEmpty()) w->meta.remove(QStringLiteral("plainCrossings"));
+            else w->meta.insert(QStringLiteral("plainCrossings"), plain);
+        }
         Entity* hop = hit->aHoriz ? wa : wb;
         if (hop) {
             QJsonArray hops = hop->meta.value("hops").toArray();
@@ -8079,8 +8392,10 @@ Vec2 Editor::applyWireClearance(const Vec2& prev, const Vec2& p) const {
             case EntityType::Splice:
             case EntityType::NotConnected:
             case EntityType::NetLabel:
-            case EntityType::ConnectionPin:
                 if (distance(p, e.a) <= snapTol) return p;
+                break;
+            case EntityType::ConnectionPin:
+                if (distance(p, connectionPinPoint(e)) <= snapTol) return p;
                 break;
             default:
                 break;
@@ -8381,8 +8696,10 @@ bool Editor::isConnectablePoint(const Vec2& q) const {
         case EntityType::Splice:
         case EntityType::NotConnected:
         case EntityType::NetLabel:
-        case EntityType::ConnectionPin:
             if (distance(q, e.a) <= tol) return true;
+            break;
+        case EntityType::ConnectionPin:
+            if (distance(q, connectionPinPoint(e)) <= tol) return true;
             break;
         default:
             break;
@@ -10508,7 +10825,10 @@ void Editor::handleDrawPress(const Vec2& p) {
         Vec2 wp = p;
         const bool landing = (tool_ == ToolId::Wire && !draftPts_.empty() &&
                               isConnectablePoint(p));
-        if (tool_ == ToolId::Wire && wireOrtho_ && !draftPts_.empty()) {
+        // CTRL HELD ON THE CLICK makes THIS corner a free one: the one leg that has to run at an angle, without
+        // turning "90° only" off for the rest of the wire.
+        const bool freeCorner = (pressMods_ & Qt::ControlModifier) != 0;
+        if (tool_ == ToolId::Wire && wireOrtho_ && !freeCorner && !draftPts_.empty()) {
             const Vec2 square = orthoWirePoint(draftPts_.back(), p);
             if (!landing) {
                 wp = square;
@@ -11337,8 +11657,8 @@ void Editor::finishDraw() {
             // Which axis a linear one was placed measuring along is written down here, once, from where
             // the stand-off point was put. Everything afterwards reads it rather than working it out
             // again, so the dimension cannot turn from a height into a length while it is being moved.
-            if (dimMode_ == DimMode::Linear)
-                e.meta.insert("dimAcross", dimensionAcrossX(e));
+            if (dimMode_ == DimMode::Linear) e.meta.insert("dimAcross", linearDimAcross(draftPts_[2]));
+            dimAcrossLock_ = -1;   // the next dimension decides for itself
             break;
         case DimMode::Angular:
             if (draftPts_.size() < 3) { cancelDraw(); return; }
@@ -16999,6 +17319,12 @@ void Editor::handlePlacementPress(const Vec2& p) {
         e.type = EntityType::ConnectionPin;
         e.a = p;
         e.meta.insert("pinNumber", nextConnectionPinNumber());
+        // OR A PIN AS A CONNECTOR HAS ONE: a short stub out to the right of where it is put, its number on it,
+        // and a connection point on its free end that a wire snaps to and is joined at.
+        if (connectionPinStub_) {
+            e.meta.insert("pinStyle", QStringLiteral("stub"));
+            e.b = p + Vec2{kConnectionPinStubLength, 0.0};
+        }
         break;
     case ToolId::Table: {
         // Insert Table at the picked insertion point (top-left). Built from the spec
@@ -20891,7 +21217,9 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         std::vector<Vec2> pts = draftPts_;
         // Wire "90° only": the previewed segment snaps to a horizontal/vertical run even
         // though the crosshair (cursor_) tracks the mouse freely.
-        if (tool_ == ToolId::Wire && wireOrtho_ && !draftPts_.empty())
+        // Ctrl held: the leg goes where the cursor is, at any angle (see the click, which does the same).
+        if (tool_ == ToolId::Wire && wireOrtho_ && !draftPts_.empty() &&
+            !(QApplication::keyboardModifiers() & Qt::ControlModifier))
             pts.push_back(orthoWirePoint(draftPts_.back(), cursor_));
         else
             pts.push_back(draftAim());
@@ -21015,6 +21343,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                     temp.a = draftPts_[0];
                     temp.b = draftPts_[1];
                     temp.points = {draftPts_[0], draftPts_[1], cursor_};
+                    if (dimMode_ == DimMode::Linear) temp.meta.insert("dimAcross", linearDimAcross(cursor_));
                     ok = true;
                 } else {
                     p.drawLine(vt.toScreen(draftPts_[0]), vt.toScreen(cursor_));
