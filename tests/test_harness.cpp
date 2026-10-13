@@ -12,6 +12,7 @@
 #include "tools/EntityTransforms.h"
 
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QJsonArray>
 #include <QSet>
@@ -7728,6 +7729,70 @@ int run_harness_tests() {
         for (const auto& s : twistedPairWeave(run))
             if (s.laid) ++laidShown;
         check(laidShown > 0, "side view: the weave says which of its stretches the side view replaces");
+    }
+
+    // ---- A TWISTED PAIR IS ITS BANDS; A BUNDLE IS A ROPE OF TWO STRANDS -----------------------------------
+    {
+        auto runOf = [](int wires) {
+            Entity run;
+            run.type = EntityType::TwistedPair;
+            run.id = QStringLiteral("look-%1").arg(wires);
+            run.points = {{0.0, 0.0}, {160.0, 0.0}};
+            run.a = run.points.front();
+            run.b = run.points.back();
+            run.meta.insert(QStringLiteral("twistWires"), wires);
+            return run;
+        };
+        // The pair: each strand one closed band, drawn whole - its outline is its fill.
+        bool bands = true;
+        const auto pair = twistedPairSideView(runOf(2));
+        for (const SideStrand& piece : pair)
+            bands = bands && piece.lines.size() == 1 && piece.lines.front() == piece.fill;
+        check(!pair.empty() && bands, "pair look: a twisted pair is drawn as its bands");
+        // The bundle: the rope, in halves - and the same rope whatever number of wires it carries.
+        const auto four = twistedPairSideView(runOf(4));
+        const auto eight = twistedPairSideView(runOf(8));
+        // A half lies on one side of the middle of the bundle; a pair's band reaches right across it.
+        auto oneSide = [](const SideStrand& piece) {
+            double sum = 0.0;
+            for (const Vec2& p : piece.fill) sum += p.y;
+            return !piece.fill.empty() && std::abs(sum / piece.fill.size()) > 0.5;
+        };
+        // Judged on nearly all of them: the pieces cut short where the run's laid-up stretch ends are neither.
+        int sided = 0, spanning = 0;
+        for (const SideStrand& piece : four) sided += oneSide(piece) ? 1 : 0;
+        for (const SideStrand& piece : pair) spanning += oneSide(piece) ? 0 : 1;
+        const bool halves = !four.empty() && sided >= 0.8 * four.size();
+        const bool across = !pair.empty() && spanning >= 0.8 * pair.size();
+        check(across, "pair look: each band reaches right across the pair");
+        std::printf("  bundle look: %d piece(s) for four wires, %d for eight\n", int(four.size()), int(eight.size()));
+        check(halves, "bundle look: a bundle is drawn as the rope, half a strand at a time");
+        check(four.size() == eight.size(), "bundle look: drawn with a pair's proportions, however many wires it has");
+    }
+
+    // ---- A SHEET OF BUNDLES DOES NOT SLOW THE CURSOR -------------------------------------------------------
+    // More runs than the measurement cache once held, and a reach wide enough to take in thousands of the short
+    // pieces bundles are drawn with: snapping stays a matter of milliseconds.
+    {
+        Document d;
+        for (int i = 0; i < 150; ++i) {
+            Entity t;
+            t.id = QStringLiteral("many-%1").arg(i);
+            t.type = EntityType::TwistedPair;
+            t.points = {{0.0, i * 12.0}, {200.0, i * 12.0}};
+            t.a = t.points.front();
+            t.b = t.points.back();
+            t.meta.insert(QStringLiteral("twistWires"), (i % 2) ? 2 : 4);
+            d.entities().push_back(t);
+        }
+        SnapSettings sn;
+        resolveSnap(d, {100.0, 100.0}, std::nullopt, 25.0, sn, {});   // every run measured once
+        QElapsedTimer clock;
+        clock.start();
+        for (int k = 0; k < 10; ++k) resolveSnap(d, {100.0 + k, 100.0 + k}, std::nullopt, 25.0, sn, {});
+        const double each = clock.elapsed() / 10.0;
+        std::printf("  many bundles: %.1f ms a snap\n", each);
+        check(each < 60.0, "many bundles: snapping over a sheet of them stays quick");
     }
 
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);

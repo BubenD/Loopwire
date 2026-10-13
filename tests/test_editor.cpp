@@ -15017,25 +15017,90 @@ int run_editor_tests() {
                     int(grips.size()), int(has({100, 50})), int(has({90, 60})), int(has({100, 60})));
         check(has({100, 50}) && has({90, 60}), "chamfer grips: a handle on each end of the chamfer");
         check(!has({100, 60}), "chamfer grips: none out in the air at the corner it cut off");
-        // Drag the handle on the chamfer's lower end up and to the right.
+        // PULLED, THE HANDLE MOVES ONLY ITSELF: the chamfer's lower end slides down its side, and the corner, the
+        // other end of the chamfer and the rest of the box stay where they are. (It used to move the corner, and
+        // both lines with it.)
         ed.onPointerMove({100, 50});
         ed.onPointerPress({100, 50}, Qt::LeftButton, Qt::NoModifier);
-        ed.onPointerMove({110, 55});
-        ed.onPointerMove({120, 60});
-        ed.onPointerRelease({120, 60}, Qt::LeftButton);
+        ed.onPointerMove({101, 45});
+        ed.onPointerMove({103, 40});   // off the side a little: it is the point along the side that counts
+        ed.onPointerRelease({103, 40}, Qt::LeftButton);
         const Entity* after = nullptr;
         for (const Entity& e : d.entities())
             if (e.id == box.id) after = &e;
-        if (after && after->points.size() == 4)
-            std::printf("  chamfer drag: corners (%.1f,%.1f) (%.1f,%.1f) (%.1f,%.1f) (%.1f,%.1f), chamfer %.1f\n",
-                        after->points[0].x, after->points[0].y, after->points[1].x, after->points[1].y,
-                        after->points[2].x, after->points[2].y, after->points[3].x, after->points[3].y,
-                        after->meta.value(QStringLiteral("cornerChamfers")).toArray().at(2).toDouble());
-        check(after && after->points.size() == 4 && distance(after->points[2], {120, 70}) < 1e-6 &&
-                  distance(after->points[0], {0, 0}) < 1e-6,
-              "chamfer drag: the corner moves by as much as the handle did - it does not jump to the cursor");
-        check(after && std::abs(after->meta.value(QStringLiteral("cornerChamfers")).toArray().at(2).toDouble() - 10.0) < 1e-9,
-              "chamfer drag: and the chamfer goes with it");
+        const double chIn = after ? after->meta.value(QStringLiteral("cornerChamfers")).toArray().at(2).toDouble() : -1;
+        const double chOut = after ? after->meta.value(QStringLiteral("cornerChamfers2")).toArray().at(2).toDouble() : -1;
+        std::printf("  chamfer drag: corner (%.1f,%.1f), chamfer %.1f up its side and %.1f along the top\n",
+                    after ? after->points[2].x : 0.0, after ? after->points[2].y : 0.0, chIn, chOut);
+        check(after && distance(after->points[2], {100, 60}) < 1e-9 && distance(after->points[0], {0, 0}) < 1e-9,
+              "chamfer drag: the corner and the box stay where they are");
+        check(std::abs(chIn - 20.0) < 1e-6, "chamfer drag: the end pulled is where it was pulled to, along its side");
+        check(std::abs(chOut - 10.0) < 1e-9, "chamfer drag: and the other end of the chamfer has not moved");
+        // A FILLET'S END, pulled, makes the fillet larger: it stays tangent to both sides.
+        Document fd;
+        Editor fe;
+        fe.setDocument(&fd);
+        Entity rounded = box;
+        rounded.meta.remove(QStringLiteral("cornerChamfers"));
+        rounded.meta.insert(QStringLiteral("cornerRadii"), QJsonArray{0.0, 0.0, 10.0, 0.0});
+        fd.entities().push_back(rounded);
+        fe.selectById(rounded.id);
+        fe.onPointerMove({100, 50});
+        fe.onPointerPress({100, 50}, Qt::LeftButton, Qt::NoModifier);
+        fe.onPointerMove({100, 40});
+        fe.onPointerMove({100, 35});
+        fe.onPointerRelease({100, 35}, Qt::LeftButton);
+        const double radius = fd.entities().front().meta.value(QStringLiteral("cornerRadii")).toArray().at(2).toDouble();
+        std::printf("  fillet drag: radius %.1f\n", radius);
+        check(std::abs(radius - 25.0) < 1e-6 && distance(fd.entities().front().points[2], {100, 60}) < 1e-9,
+              "fillet drag: pulling a fillet's end makes the fillet that starts there, the corner left alone");
+    }
+
+    // ---- A CONNECTION PIN: CAUGHT BY ANY OF ITS LINES OR ITS NUMBER; ITS NUMBER MOVED OFF IT -----------------
+    {
+        Document d;
+        Editor ed;
+        ed.setDocument(&d);
+        Entity pin;
+        pin.id = QStringLiteral("cp");
+        pin.type = EntityType::ConnectionPin;
+        pin.a = {50, 50};
+        pin.b = {70, 50};
+        pin.meta.insert(QStringLiteral("pinStyle"), QStringLiteral("stub"));
+        pin.meta.insert(QStringLiteral("pinNumber"), 3);
+        d.entities().push_back(pin);
+        const ConnectionPinShape s = connectionPinShape(pin);
+        // A green zone over the number alone, nothing else of the pin in it.
+        // Right to left is a crossing zone - two clicks, the way the tests elsewhere draw one.
+        auto crossingZone = [&](const Vec2& lo, const Vec2& hi) {
+            ed.onPointerMove({hi.x, hi.y});
+            ed.onPointerPress({hi.x, hi.y}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerRelease({hi.x, hi.y}, Qt::LeftButton);
+            ed.onPointerMove({lo.x, lo.y});
+            ed.onPointerPress({lo.x, lo.y}, Qt::LeftButton, Qt::NoModifier);
+            ed.onPointerRelease({lo.x, lo.y}, Qt::LeftButton);
+        };
+        ed.setPixelTolerance(1);
+        crossingZone(s.label - Vec2{0.8, 0.8}, s.label + Vec2{0.8, 0.8});
+        check(ed.selection().size() == 1, "pin select: a crossing zone touching only its number takes the pin");
+        ed.clearSelection();
+        // And one over the Y's arm alone.
+        const Vec2 arm = lerp(s.armA, s.tip, 0.5);
+        crossingZone(arm - Vec2{0.4, 0.4}, arm + Vec2{0.4, 0.4});
+        check(ed.selection().size() == 1, "pin select: and one touching only an arm of the Y");
+        // Its number, pulled further back from the Y.
+        const double gapBefore = distance(lerp(s.armA, s.armB, 0.5), s.label);
+        ed.clearSelection();
+        ed.selectById(pin.id);
+        ed.onPointerMove(s.label);
+        ed.onPointerPress(s.label, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove(s.label - Vec2{3, 0});
+        ed.onPointerMove(s.label - Vec2{6, 0});
+        ed.onPointerRelease(s.label - Vec2{6, 0}, Qt::LeftButton);
+        const ConnectionPinShape moved = connectionPinShape(d.entities().front());
+        const double gapAfter = distance(lerp(moved.armA, moved.armB, 0.5), moved.label);
+        std::printf("  pin number: %.2f from the Y, pulled to %.2f\n", gapBefore, gapAfter);
+        check(std::abs(gapAfter - (gapBefore + 6.0)) < 1e-6, "pin number: pulled back, it sits that much further from the Y");
     }
 
     // ---- A COMMAND'S DEMONSTRATION DOES WHAT IT SAYS ------------------------------------------------------

@@ -307,7 +307,14 @@ enum class GripRole { Move, LineA, LineB, LineMid, Vertex, RectCorner, RectEdge,
                       AxisFromText, AxisToText,
                       // An end of the axis itself: how long the centre lines are, which is a length of
                       // its own so that pulling it never moves the arc.
-                      AxisArm };
+                      AxisArm,
+                      // AN END OF A CHAMFER OR A FILLET on a shape's corner: pulled along its own side, it
+                      // moves that end alone - the chamfer gets longer or shorter on that side, the fillet
+                      // larger or smaller. Index: the corner times two, plus one for the end on the side
+                      // going out of it.
+                      CutEnd,
+                      // A CONNECTION PIN'S NUMBER: pulled along the pin, how far it sits from the Y.
+                      PinLabel };
 
 // A balloon's leader arrow tips (world points). New balloons store meta["leaders"]
 // (array of [x,y]); older ones a single leaderX/leaderY — both are read here.
@@ -858,8 +865,9 @@ bool cutCornerEnds(const Entity& e, int v, Vec2& before, Vec2& after) {
 void addCornerGrips(const Entity& e, int v, GripRole role, std::vector<Grip>& g) {
     Vec2 before, after;
     if (cutCornerEnds(e, v, before, after)) {
-        g.push_back({before, role, v, before - e.points[v]});
-        g.push_back({after, role, v, after - e.points[v]});
+        // Each end of the cut is a handle of its own, and moves only itself - see GripRole::CutEnd.
+        g.push_back({before, GripRole::CutEnd, v * 2});
+        g.push_back({after, GripRole::CutEnd, v * 2 + 1});
     } else {
         g.push_back({e.points[v], role, v});
     }
@@ -1453,7 +1461,10 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
     default: // splice / netlabel / notconnected
         g.push_back({e.a, GripRole::Move, 0});
         // A PIN DRAWN AS A CONNECTOR'S: its free end too, which turns it or makes it longer.
-        if (connectionPinIsStub(e)) g.push_back({e.b, GripRole::LineB, 0});
+        if (connectionPinIsStub(e)) {
+            g.push_back({e.b, GripRole::LineB, 0});
+            g.push_back({connectionPinShape(e).label, GripRole::PinLabel, 0});   // its number
+        }
         break;
     }
     return g;
@@ -5877,6 +5888,31 @@ std::vector<std::vector<Vec2>> axisAngleRuns(const Entity& e) {
     return out;
 }
 
+// WHAT A CONNECTION PIN DRAWS, as runs of points: the Y's two arms, its leg, and the box its number stands in -
+// or the ring of a ring pin. A green zone touching any of them has touched the pin.
+std::vector<std::vector<Vec2>> pinDrawnRuns(const Entity& e) {
+    const ConnectionPinShape s = connectionPinShape(e);
+    std::vector<std::vector<Vec2>> runs;
+    if (s.circle) {
+        std::vector<Vec2> ring;
+        for (int k = 0; k <= 24; ++k) {
+            const double a = 2.0 * M_PI * k / 24.0;
+            ring.push_back(s.end + Vec2{std::cos(a), std::sin(a)} * s.radius);
+        }
+        runs.push_back(ring);
+        return runs;
+    }
+    runs.push_back({s.armA, s.tip});
+    runs.push_back({s.armB, s.tip});
+    runs.push_back({s.tip, s.end});
+    const double h = s.textSize * 0.7;
+    const int digits = std::max(1, static_cast<int>(QString::number(e.meta.value(QStringLiteral("pinNumber")).toInt()).size()));
+    const double hw = digits * 0.62 * h / 2.0, hh = h / 2.0;
+    runs.push_back({s.label + Vec2{-hw, -hh}, s.label + Vec2{hw, -hh}, s.label + Vec2{hw, hh}, s.label + Vec2{-hw, hh},
+                    s.label + Vec2{-hw, -hh}});
+    return runs;
+}
+
 std::vector<Vec2> entitySelectPoints(const Entity& e) {
     // A HEATSHRINK SLEEVE ANSWERS FROM ITS OUTLINE, whatever it is filed as - see
     // shrunkSleeveOutlineOf. It is a double polyline by TYPE, so without this it answers from the
@@ -6025,6 +6061,10 @@ std::vector<Vec2> entitySelectPoints(const Entity& e) {
         if (static_cast<int>(e.points.size()) > k) pts.push_back(e.points.back()); // drain
         break;
     }
+    case EntityType::ConnectionPin:
+        // Every point of what it draws, so a window has to take in the whole of it, number included.
+        for (const auto& run : pinDrawnRuns(e)) pts.insert(pts.end(), run.begin(), run.end());
+        break;
     default: {
         const Bounds b = e.bounds();
         if (b.valid) pts = {b.min, b.max, b.center()};
@@ -6260,6 +6300,11 @@ std::vector<std::pair<Vec2, Vec2>> entitySelectSegments(const Entity& e) {
             segs.emplace_back(pts[i], pts[(i + 1) % pts.size()]);
         break;
     }
+    case EntityType::ConnectionPin:
+        // Its arms, its leg and its number - or its ring: a zone touching any of them takes the pin.
+        for (const auto& run : pinDrawnRuns(e))
+            for (size_t i = 1; i < run.size(); ++i) segs.emplace_back(run[i - 1], run[i]);
+        break;
     case EntityType::LengthBreak:
         // The two strokes THEMSELVES, so a zone that touches either one takes the mark and a window
         // round the pair encloses it. Without them the mark fell back to its bounding-box corners,
@@ -9632,6 +9677,53 @@ void Editor::applyEditDrag(const Vec2& target) {
             // The middle joint moves the whole line (stays straight, no knee).
             translateEntity(*e, delta);
             break;
+        case GripRole::CutEnd: {
+            // ONE END OF A CUT CORNER, slid along its own side: where the cursor falls on that side, from the
+            // corner, is how far back the cut starts there. A chamfer takes that on this side alone; a fillet,
+            // which has to stay tangent to both sides, takes the radius that starts there.
+            const int n = static_cast<int>(e->points.size());
+            const int v = index / 2;
+            const bool out = (index % 2) == 1;
+            if (n < 3 || v < 0 || v >= n) break;
+            const Vec2 corner = e->points[v];
+            const Vec2 other = out ? e->points[(v + 1) % n] : e->points[(v - 1 + n) % n];
+            const double side = distance(corner, other);
+            if (side < 1e-9) break;
+            const Vec2 along = (other - corner) / side;
+            const double back = std::clamp(dot(target - corner, along), 1e-3, side * 0.98);
+            auto padded = [&](const char* key) {
+                QJsonArray arr = e->meta.value(QLatin1String(key)).toArray();
+                while (arr.size() < n) arr.append(0.0);
+                return arr;
+            };
+            QJsonArray chIn = padded("cornerChamfers");
+            QJsonArray chOut = e->meta.contains(QStringLiteral("cornerChamfers2")) ? padded("cornerChamfers2") : chIn;
+            const bool chamfer = chIn[v].toDouble() > 0.0 || chOut[v].toDouble() > 0.0;
+            if (chamfer) {
+                (out ? chOut : chIn)[v] = back;
+                e->meta.insert(QStringLiteral("cornerChamfers"), chIn);
+                e->meta.insert(QStringLiteral("cornerChamfers2"), chOut);
+            } else {
+                const Vec2 p0 = e->points[(v - 1 + n) % n], p2 = e->points[(v + 1) % n];
+                const double cosT = std::clamp(dot((p0 - corner).normalized(), (p2 - corner).normalized()), -1.0, 1.0);
+                const double theta = std::acos(cosT);
+                if (theta < 1e-3 || theta > M_PI - 1e-3) break;
+                QJsonArray radii = padded("cornerRadii");
+                radii[v] = back * std::tan(theta / 2.0);
+                e->meta.insert(QStringLiteral("cornerRadii"), radii);
+            }
+            break;
+        }
+        case GripRole::PinLabel: {
+            // A PIN'S NUMBER, slid along the pin: how far back from the Y it sits.
+            const ConnectionPinShape s = connectionPinShape(*e);
+            Vec2 d = e->b - e->a;
+            if (d.lengthSq() < 1e-18) break;
+            d = d.normalized();
+            const Vec2 root = lerp(s.armA, s.armB, 0.5);
+            e->meta.insert(QStringLiteral("pinNumberGap"), std::max(0.0, dot(root - target, d)));
+            break;
+        }
         case GripRole::AxisArm:
             // How far the centre lines reach. The arc is left exactly where it is - that is the point
             // of the two being separate - and the point is the snapped one, so an axis can be pulled

@@ -623,9 +623,21 @@ SnapResult resolveSnap(const Document& doc, const Vec2& raw,
         if (s.snapIntersection) {
             std::vector<std::pair<Vec2, Vec2>> near;
             near.reserve(allSegs.size());
-            for (const auto& seg : allSegs)
-                if (closestPointOnSegment(raw, seg.first, seg.second).distance <= tolWorld)
-                    near.push_back(seg);
+            std::vector<std::pair<double, size_t>> howNear;
+            for (size_t i = 0; i < allSegs.size(); ++i) {
+                const double dd = closestPointOnSegment(raw, allSegs[i].first, allSegs[i].second).distance;
+                if (dd <= tolWorld) howNear.emplace_back(dd, i);
+            }
+            // ONLY THE NEAREST FEW HUNDRED. Every pair of them is tried, so the work goes as the square of how
+            // many there are - and zoomed out over a sheet of twisted bundles, each drawn as hundreds of short
+            // pieces, the cursor's reach takes in thousands: millions of tests a mouse movement, and the cursor
+            // fell seconds behind the hand. The crossing being aimed at is among the pieces nearest the cursor.
+            constexpr size_t kMostNear = 300;
+            if (howNear.size() > kMostNear) {
+                std::nth_element(howNear.begin(), howNear.begin() + kMostNear, howNear.end());
+                howNear.resize(kMostNear);
+            }
+            for (const auto& h : howNear) near.push_back(allSegs[h.second]);
             for (size_t i = 0; i < near.size(); ++i)
                 for (size_t j = i + 1; j < near.size(); ++j)
                     if (auto x = segmentSegmentIntersection(near[i].first, near[i].second,

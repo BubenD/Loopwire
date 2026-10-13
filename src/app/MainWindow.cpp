@@ -11043,6 +11043,12 @@ void MainWindow::refreshProperties() {
             addNum(QStringLiteral("Size"), mv(QStringLiteral("pinScale")).toDouble(1.0), [this](double v) {
                 editor_->setSelectionMetaNumber(QStringLiteral("pinScale"), std::max(0.05, v));
             });
+            // HOW FAR THE NUMBER SITS FROM THE Y, as it is drawn now (its own figure, or the one it takes by itself).
+            const ConnectionPinShape shape = connectionPinShape(*e);
+            const double gapNow = distance(lerp(shape.armA, shape.armB, 0.5), shape.label);
+            addNum(QStringLiteral("Number distance"), mv(QStringLiteral("pinNumberGap")).toDouble(gapNow), [this](double v) {
+                editor_->setSelectionMetaNumber(QStringLiteral("pinNumberGap"), std::max(0.0, v));
+            });
         }
         addInt(QStringLiteral("Pin number"), mv(QStringLiteral("pinNumber")).toInt(1), [this](int v) {
             editor_->setSelectionMetaNumber(QStringLiteral("pinNumber"), v);
