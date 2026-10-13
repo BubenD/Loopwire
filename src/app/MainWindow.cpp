@@ -3927,11 +3927,11 @@ QWidget* MainWindow::toolRow(const QList<ToolId>& tools, const QList<QWidget*>& 
             // what the button places from then on.
             auto* menu = new QMenu(b);
             menu->setObjectName(QStringLiteral("connectionPinMenu"));
-            menu->addAction(QStringLiteral("Numbered pin"), this, [this] {
+            menu->addAction(QStringLiteral("Numbered ring pin"), this, [this] {
                 editor_->setConnectionPinStub(false);
                 editor_->setTool(ToolId::ConnectionPin);
             });
-            menu->addAction(QStringLiteral("Pin, as a connector's (with a connection point)"), this, [this] {
+            menu->addAction(QStringLiteral("Pin, as a connector's (Y)"), this, [this] {
                 editor_->setConnectionPinStub(true);
                 editor_->setTool(ToolId::ConnectionPin);
             });
@@ -11022,6 +11022,32 @@ void MainWindow::refreshProperties() {
                    editor_->setSelectionMetaNumber(QStringLiteral("size"), std::max(0.5, v));
                });
     }
+    // A CONNECTION PIN: its style (the Y a connector's pins have, or the ring), which way its leg points,
+    // its number and its size.
+    if (e && e->type == EntityType::ConnectionPin) {
+        addHeader(QStringLiteral("Connection pin"));
+        const bool ring = !connectionPinIsStub(*e);
+        addCombo(QStringLiteral("Style"), {QStringLiteral("Y"), QStringLiteral("Circle")},
+                 ring ? QStringLiteral("Circle") : QStringLiteral("Y"), false, [this](const QString& t) {
+                     editor_->setSelectionPinStub(t != QLatin1String("Circle"));
+                 });
+        if (!ring) {
+            const double deg = std::atan2(e->b.y - e->a.y, e->b.x - e->a.x) * 180.0 / M_PI;
+            const QString dir = std::abs(deg - 180.0) < 45.0 || std::abs(deg + 180.0) < 45.0 ? QStringLiteral("Left")
+                                : std::abs(deg - 90.0) < 45.0                                 ? QStringLiteral("Up")
+                                : std::abs(deg + 90.0) < 45.0                                 ? QStringLiteral("Down")
+                                                                                             : QStringLiteral("Right");
+            addCombo(QStringLiteral("Leg points"),
+                     {QStringLiteral("Right"), QStringLiteral("Left"), QStringLiteral("Up"), QStringLiteral("Down")}, dir,
+                     false, [this](const QString& t) { editor_->setSelectionPinDirection(t.toLower()); });
+            addNum(QStringLiteral("Size"), mv(QStringLiteral("pinScale")).toDouble(1.0), [this](double v) {
+                editor_->setSelectionMetaNumber(QStringLiteral("pinScale"), std::max(0.05, v));
+            });
+        }
+        addInt(QStringLiteral("Pin number"), mv(QStringLiteral("pinNumber")).toInt(1), [this](int v) {
+            editor_->setSelectionMetaNumber(QStringLiteral("pinNumber"), v);
+        });
+    }
     if (e && e->type == EntityType::NotConnected) {
         addHeader(QStringLiteral("Termination"));
         addNum(QStringLiteral("Size"), mv(QStringLiteral("ncSize")).toDouble(6.0),
@@ -11256,6 +11282,17 @@ void MainWindow::refreshProperties() {
         }
         // Balloon callout: arrowhead type/size, leader landing length + the number.
         if (mv(QStringLiteral("balloon")).toBool()) {
+            // Its shape: the round balloon, or a note mark's triangle, square, hexagon or diamond.
+            {
+                static const QStringList shapes = {QStringLiteral("Circle"), QStringLiteral("Triangle"),
+                                                   QStringLiteral("Square"), QStringLiteral("Hexagon"),
+                                                   QStringLiteral("Diamond")};
+                QString cur = mv(QStringLiteral("balloonShape")).toString(QStringLiteral("circle"));
+                if (!cur.isEmpty()) cur[0] = cur[0].toUpper();
+                addCombo(QStringLiteral("Shape"), shapes, cur, false, [this](const QString& t) {
+                    editor_->setSelectionMeta(QStringLiteral("balloonShape"), t.toLower());
+                });
+            }
             // Arrowhead type (fall menu). Canonical values map to friendly labels.
             static const QVector<QPair<QString, QString>> arrowTypes = {
                 {"Closed filled", "closed"}, {"Closed blank", "blank"}, {"Dot", "dot"},
@@ -11898,6 +11935,7 @@ void MainWindow::buildCommands() {
         {{"dim", "dimlinear"}, "Draw", "Linear dimension", tool(ToolId::Dimension)},
         {{"balloon", "bl"}, "Annotation", "Numbered callout balloon", tool(ToolId::Balloon)},
         {{"leader", "ld", "mleader"}, "Annotation", "Text leader", tool(ToolId::TextLeader)},
+        {{"arrow"}, "Annotation", "Plain arrow", tool(ToolId::Arrow)},
         {{"note", "nt"}, "Annotation", "Note box", tool(ToolId::Note)},
         {{"revision", "rev"}, "Annotation", "Revision box", tool(ToolId::Revision)},
         {{"table", "tb"}, "Annotation", "Insert an editable table", [this] { insertTableCommand(); }},
@@ -14005,8 +14043,25 @@ void MainWindow::showValidationRules() {
     auto* lay = new QVBoxLayout(dlg);
     auto* explanation=new QLabel(QStringLiteral("Click a traffic light to cycle error, warning and not checked. Hover over a rule for its animated fault and fix."),dlg);
     explanation->setWordWrap(true); lay->addWidget(explanation);
-    RuleExplainer::addSeverityLegend(lay,dlg);
+    // THE LEGEND IN A BOX OF ITS OWN, a line under it, then the rules in theirs - as the system design rules are laid
+    // out. Run together, the legend's three lights read as three more rules.
+    auto* legendBox = new QGroupBox(QStringLiteral("Legend"), dlg);
+    legendBox->setObjectName(QStringLiteral("schematicDrcLegend"));
+    auto* legendLayout = new QVBoxLayout(legendBox);
+    legendLayout->setContentsMargins(10, 6, 10, 6);
+    RuleExplainer::addSeverityLegend(legendLayout, legendBox);
+    lay->addWidget(legendBox);
     RuleExplainer::addHelpToggle(lay,dlg);
+    auto* divider = new QFrame(dlg);
+    divider->setFrameShape(QFrame::HLine);
+    divider->setFrameShadow(QFrame::Sunken);
+    lay->addWidget(divider);
+    auto* rulesBox = new QGroupBox(QStringLiteral("Rules"), dlg);
+    rulesBox->setObjectName(QStringLiteral("schematicDrcRulesBox"));
+    auto* rulesLayout = new QVBoxLayout(rulesBox);
+    rulesLayout->setContentsMargins(10, 8, 10, 8);
+    rulesLayout->setSpacing(4);
+    lay->addWidget(rulesBox);
 
     // HOVERED, each rule shows the fault and the fix, animated, with what it means.
     static const QHash<QString, QString> meaning = {
@@ -14030,7 +14085,7 @@ void MainWindow::showValidationRules() {
                                                        "a drain left free screens nothing.")},
     };
     for (const auto& [id, label] : validationRuleDefs()) {
-        auto* row=new QWidget(dlg); auto* rl=new QHBoxLayout(row); rl->setContentsMargins(0,2,0,2);
+        auto* row=new QWidget(rulesBox); auto* rl=new QHBoxLayout(row); rl->setContentsMargins(0,2,0,2);
         auto* square=new QToolButton(row); square->setFixedSize(14,14); square->setCursor(Qt::PointingHandCursor);
         square->setObjectName(QStringLiteral("schematicDrcRule_")+id);
         RuleExplainer::paintSeverity(square,editor_->schematicRuleSeverity(id));
@@ -14042,7 +14097,7 @@ void MainWindow::showValidationRules() {
             editor_->setSchematicRuleSeverity(rid,next); RuleExplainer::paintSeverity(square,next);
             if(validationDlg_)showValidation(false);
         });
-        rl->addWidget(square); rl->addWidget(title,1); lay->addWidget(row);
+        rl->addWidget(square); rl->addWidget(title,1); rulesLayout->addWidget(row);
     }
     lay->addStretch(1);
     auto* box = new QDialogButtonBox(QDialogButtonBox::Close, dlg);

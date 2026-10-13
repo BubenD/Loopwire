@@ -132,6 +132,15 @@ QIcon makeCadActionIcon(const QString& key, const QColor& ink) {
     }else if(key=="leader"||key=="balloon"){
         stroke(accent);arrow({12,12},{3,21});line(12,12,19,12);stroke(ink);
         if(key=="leader"){line(12,4,21,4);line(12,8,18,8);}else{p.drawEllipse(QPointF(16,6),4.5,4.5);line(15,5,16,4);line(16,4,16,8);}
+    }else if(key=="arrowonly"){
+        stroke(accent,1.8);arrow({20,19},{4,5},3.4);
+    }else if(key.startsWith("notemark")){
+        stroke(accent);p.setBrush(wash);const QString shape=key.mid(9);
+        if(shape=="square")p.drawRect(QRectF(5,5,14,14));
+        else if(shape=="hexagon")p.drawPolygon(QPolygonF{{3,12},{7.5,4.5},{16.5,4.5},{21,12},{16.5,19.5},{7.5,19.5}});
+        else if(shape=="diamond")p.drawPolygon(QPolygonF{{12,2},{22,12},{12,22},{2,12}});
+        else p.drawPolygon(QPolygonF{{12,3},{22,20},{2,20}});
+        stroke(ink,1.4);const double top=shape.isEmpty()||shape=="triangle"?11:9;line(11,top+1,12.5,top);line(12.5,top,12.5,top+7);
     }else if(key=="note"||key=="drawingdetails"){
         box(3,3,18,18);stroke(accent);line(3,8,21,8);stroke(ink,1.3);line(6,12,18,12);line(6,16,15,16);
         if(key=="drawingdetails"){stroke(accent,1.2);line(10,9,10,20);}
@@ -159,7 +168,7 @@ QIcon makeCadActionIcon(const QString& key, const QColor& ink) {
     }else if(key=="termination"){
         line(2,12,13,12);stroke(accent,2);line(12,7,22,17);line(12,17,22,7);
     }else if(key=="contact"){
-        line(2,12,10,12);stroke(accent);p.drawEllipse(QPointF(15,12),5,5);
+        stroke(ink,1.3);line(4,8,6,8);line(5.5,7,5.5,16);stroke(accent);line(8,6,13,12);line(8,18,13,12);line(13,12,22,12);
     }else if(key=="shield"){
         line(2,8,22,8);line(2,17,22,17);stroke(accent,1.1);p.save();p.setClipRect(QRectF(6,8,12,9));
         for(int x=-4;x<24;x+=4){line(x,8,x+9,17);line(x,17,x+9,8);}p.restore();stroke(ink,1.5);line(6,7,6,18);line(18,7,18,18);
@@ -215,6 +224,7 @@ QIcon makeToolIcon(ToolId id, const QColor& ink, int variant) {
     case ToolId::DetailView:action=QStringLiteral("detailview");break;
     case ToolId::TextLeader:action=QStringLiteral("leader");break;
     case ToolId::Balloon:action=QStringLiteral("balloon");break;
+    case ToolId::Arrow:action=QStringLiteral("arrowonly");break;
     case ToolId::Note:action=QStringLiteral("note");break;
     case ToolId::Revision:action=QStringLiteral("revision");break;
     case ToolId::Table:action=QStringLiteral("table");break;

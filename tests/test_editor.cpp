@@ -5,6 +5,7 @@
 #include "io/Dxf.h"
 #include "io/Dwx.h"
 #include "geometry/Snap.h"
+#include "harness/Harness.h"
 #include "harness/PartsLibrary.h"
 #include "model/Block.h"
 #include "model/Document.h"
@@ -9729,6 +9730,117 @@ int run_editor_tests() {
         nums = pinNumbers();
         check(nums.size() == 3 && nums[0] == 1 && nums[1] == 2 && nums[2] == 3,
               "pin: deleting 2 and placing another gives 2 back rather than jumping to 4");
+    }
+
+    // --- A connection pin is placed as a Y; a wire landing on a Y pin's leg, or on a circle pin's ring, is connected.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setTool(ToolId::ConnectionPin);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* placed = nullptr;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::ConnectionPin) placed = &e;
+        const ConnectionPinShape shape = placed ? connectionPinShape(*placed) : ConnectionPinShape{};
+        check(placed && connectionPinIsStub(*placed) && !shape.circle && distance(shape.tip, {0, 0}) < 1e-9 &&
+                  distance(shape.end, {kConnectionPinStubLength, 0}) < 1e-9 && shape.armA.x < 0.0 &&
+                  placed->bounds().min.x < shape.armA.x,
+              "pin: placed as a connector's pin - the number and the Y at the click, the leg out to its free end");
+
+        Document v; v.entities().clear();
+        Entity ring; ring.id = QStringLiteral("ring"); ring.type = EntityType::ConnectionPin; ring.a = {0, 0};
+        ring.meta.insert("pinNumber", 1);   // no style: a pin saved before the Y keeps its ring
+        Entity yPin; yPin.id = QStringLiteral("ypin"); yPin.type = EntityType::ConnectionPin; yPin.a = {100, 0};
+        yPin.b = {80, 0}; yPin.meta.insert("pinNumber", 2); yPin.meta.insert("pinStyle", QStringLiteral("stub"));
+        Entity onRing; onRing.id = QStringLiteral("onRing"); onRing.type = EntityType::Wire;
+        onRing.points = {{2, 0}, {80, 0}};   // from the ring's edge to the Y's leg end
+        Entity toCentre; toCentre.id = QStringLiteral("toCentre"); toCentre.type = EntityType::Wire;
+        toCentre.points = {{0, 0}, {0, -40}};
+        for (const Entity& x : {ring, yPin, onRing, toCentre}) v.entities().push_back(x);
+        Editor ve; ve.setDocument(&v);
+        bool ringOpen = false, centreOpen = false;
+        for (const ValidationIssue& is : ve.validateSchematic()) {
+            ringOpen = ringOpen || is.key.startsWith(QStringLiteral("openwire:onRing:"));
+            centreOpen = centreOpen || is.key == QLatin1String("openwire:toCentre:0");
+        }
+        check(!ringOpen, "pin: a wire from a circle pin's ring to a Y pin's leg end is connected at both ends");
+        check(centreOpen, "pin: a wire into the middle of a circle pin is not - the ring is where it connects");
+        check(connectionPinTouches(ring, {0, -2}, 1e-6) && !connectionPinTouches(ring, {0, 0}, 1e-6),
+              "pin: anywhere on the ring counts, the centre does not");
+    }
+
+    // --- Shift held first, then one of several selected wires caught: all of them are pulled.
+    {
+        Document d; d.entities().clear();
+        Entity w1; w1.id = QStringLiteral("w1"); w1.type = EntityType::Wire;
+        w1.points = {{0, 0}, {10, 0}, {10, -50}, {100, -50}};
+        Entity w2; w2.id = QStringLiteral("w2"); w2.type = EntityType::Wire;   // a knee more: its run is index 2
+        w2.points = {{0, -10}, {4, -10}, {8, -10}, {8, -60}, {100, -60}};
+        Entity w3; w3.id = QStringLiteral("w3"); w3.type = EntityType::Wire;
+        w3.points = {{0, -20}, {6, -20}, {6, -70}, {100, -70}};
+        for (const Entity& x : {w1, w2, w3}) d.entities().push_back(x);
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.selectById(QStringLiteral("w1"));
+        ed.selectById(QStringLiteral("w2"), true);
+        ed.selectById(QStringLiteral("w3"), true);
+        ed.onPointerPress({10, -25}, Qt::LeftButton, Qt::ShiftModifier);   // w1's upright run, Shift held
+        ed.onPointerMove({30, -25});
+        ed.onPointerPress({30, -25}, Qt::LeftButton, Qt::NoModifier);        // put down, Shift let go
+        auto at = [&](const char* id, int i) {
+            for (const auto& e : d.entities())
+                if (e.id == QLatin1String(id) && i < static_cast<int>(e.points.size())) return e.points[i];
+            return Vec2{-999, -999};
+        };
+        std::printf("  shift pull: w1 x %.1f, w2 x %.1f, w3 x %.1f\n", at("w1", 1).x, at("w2", 2).x, at("w3", 1).x);
+        check(std::abs(at("w1", 1).x - 30.0) < 1e-6 && std::abs(at("w1", 2).x - 30.0) < 1e-6,
+              "shift pull: the wire caught moves");
+        check(std::abs(at("w2", 2).x - 28.0) < 1e-6 && std::abs(at("w2", 3).x - 28.0) < 1e-6 &&
+                  std::abs(at("w2", 1).x - 4.0) < 1e-6,
+              "shift pull: a selected wire with a knee more moves its upright run alongside, not its level one");
+        check(std::abs(at("w3", 1).x - 26.0) < 1e-6 && std::abs(at("w3", 2).x - 26.0) < 1e-6,
+              "shift pull: and the third goes with them, held to the end though Shift was let go");
+        check(ed.selection().size() == 3, "shift pull: Shift on the caught wire did not take it out of the selection");
+    }
+
+    // --- A plain arrow, and note marks: a number in a triangle (or another shape), counted on their own.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setTool(ToolId::Arrow);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({30, 10}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* arrow = nullptr;
+        for (const auto& e : d.entities())
+            if (e.type == EntityType::Leader) arrow = &e;
+        check(arrow && arrow->points.size() == 2 && arrow->meta.value("text").toString().isEmpty() &&
+                  arrow->meta.value("landing").toDouble(1.0) == 0.0,
+              "arrow: a straight leader with no words and no landing");
+
+        ed.setTool(ToolId::Balloon);
+        ed.onPointerPress({0, 50}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({20, 60}, Qt::LeftButton, Qt::NoModifier);
+        ed.beginBalloonShape(QStringLiteral("triangle"));
+        ed.onPointerPress({0, 100}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({20, 110}, Qt::LeftButton, Qt::NoModifier);
+        ed.beginBalloonShape(QStringLiteral("triangle"));
+        ed.onPointerPress({0, 150}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({20, 160}, Qt::LeftButton, Qt::NoModifier);
+        QStringList triangles, circles;
+        bool threeCorners = true;
+        for (const auto& e : d.entities()) {
+            if (!e.meta.value("balloon").toBool()) continue;
+            if (e.meta.value("balloonShape").toString() == QLatin1String("triangle")) {
+                triangles << e.meta.value("text").toString();
+                threeCorners = threeCorners && balloonOutline(e).size() == 3;
+            } else {
+                circles << e.meta.value("text").toString();
+            }
+        }
+        triangles.sort();
+        check(circles == QStringList{QStringLiteral("1")} &&
+                  triangles == QStringList({QStringLiteral("1"), QStringLiteral("2")}) && threeCorners,
+              "note mark: triangles numbered 1, 2 on their own, beside balloon 1, each drawn as a triangle");
+        check(ed.balloonShape() == QLatin1String("circle"), "note mark: placed, the next balloon is round again");
     }
 
 

@@ -725,6 +725,14 @@ public:
     // Which side of a screen its drain leaves from. Not setSelectionMeta: the leg is GEOMETRY - the
     // last point of the entity - so the side has to move it, or the drawing keeps the old leg.
     void setSelectionScreenLegDir(const QString& dir); // linetype, plot style, ...
+    // The Balloon tool, placing a note mark of this shape ("triangle", "square", "hexagon", "diamond") or
+    // the round balloon ("circle").
+    void beginBalloonShape(const QString& shape);
+    QString balloonShape() const { return balloonShape_; }
+    // Which way the selected connection pins' legs point: "right", "left", "up" or "down".
+    void setSelectionPinDirection(const QString& dir);
+    // The selected connection pins drawn as a connector's pin (true) or as the numbered ring (false).
+    void setSelectionPinStub(bool stub);
     void setSelectionMetaNumber(const QString& key, double value);
     // How far apart the two sides of a selected heatshrink sleeve run. Not setSelectionMetaNumber,
     // because a sleeve keeps its width under TWO keys - `gap`, which is how it gets joints on both
@@ -2011,7 +2019,7 @@ private:
     RunEnds twistTransitionEnds_ = RunEnds::Both;  // which ends of a cable wear the boot
     RunLay twistLay_ = RunLay::Straight;           // and how the gathered wires run
     bool twistSideView_ = false;                    // a laid-up bundle drawn seen from the side
-    bool connectionPinStub_ = false;                // the Connection pin tool places a stub pin
+    bool connectionPinStub_ = true;                 // the Connection pin tool places a connector's pin (the Y)
     bool twistBodyOverCable_ = false;              // tubing along the run, or over a cable
     double twistBodyFace_ = 0.0;                   // the end face across; 0 = the drawing's own
     double twistBodyShrink_ = -1.0;                // and over what length; <0 = the drawing's own
@@ -2315,6 +2323,9 @@ private:
     // Direct-edit drag state (move whole entity, or move a grip/joint).
     bool editing_ = false;
     bool gripGrab_ = false;   // a joint is grabbed (follows cursor until clicked to place / Esc)
+    // The wire whose run was taken hold of WITH SHIFT while other wires were selected: every selected wire
+    // goes with it until it is put down, Shift held or not. Not saved.
+    QString bundleGrabId_;
     int editMode_ = 0;        // 0 = move selection, 1 = grip edit
     QString editEntityId_;    // primary entity whose grip is being dragged
     int editRole_ = 0;        // GripRole (see Editor.cpp)
@@ -2522,6 +2533,9 @@ private:
     // A balloon started from somewhere that already knows its number (a BOM line): the text the
     // next balloon takes, instead of counting up from the ones in the drawing.
     QString balloonTextNext_;
+    // The shape the Balloon tool places: "circle", or a note mark's "triangle", "square", "hexagon" or
+    // "diamond". Back to the circle whenever another tool is picked up. Not saved.
+    QString balloonShape_ = QStringLiteral("circle");
     bool rectAwaitY_ = false;     // rectangle: awaiting the Y length after the X length
     double rectX_ = 0;            // rectangle: signed X length already entered
 

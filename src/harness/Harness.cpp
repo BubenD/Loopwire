@@ -2588,6 +2588,46 @@ void writeConnectorSpec(QJsonObject& meta, const ConnectorSpec& spec) {
     meta["pinAmp"] = amp;
 }
 
+ConnectionPinShape connectionPinShape(const Entity& e) {
+    ConnectionPinShape s;
+    s.circle = !connectionPinIsStub(e);
+    if (s.circle) {
+        s.end = s.tip = s.armA = s.armB = s.label = e.a;
+        s.radius = 2.0;
+        s.textSize = s.radius * 1.3;
+        return s;
+    }
+    // A connector's pin in small: the cup about a third of the leg, the number as tall as the cup is wide.
+    const double k = std::max(0.05, e.meta.value(QStringLiteral("pinScale")).toDouble(1.0));
+    const double fork = 6.5 * k, forkY = 4.4 * k;
+    Vec2 d = e.b - e.a;
+    d = d.lengthSq() > 1e-18 ? d.normalized() : Vec2{1.0, 0.0};
+    const Vec2 n{-d.y, d.x};
+    s.tip = e.a;
+    s.end = e.b;
+    const Vec2 root = s.tip - d * fork;
+    s.armA = root + n * forkY;
+    s.armB = root - n * forkY;
+    s.textSize = 8.5 * k;
+    s.label = root - d * (s.textSize * 0.75);
+    return s;
+}
+
+bool connectionPinTouches(const Entity& e, const Vec2& q, double tol) {
+    const ConnectionPinShape s = connectionPinShape(e);
+    if (s.circle) return std::abs(distance(q, s.end) - s.radius) <= tol;
+    return distance(q, s.end) <= tol;
+}
+
+Vec2 connectionPinLanding(const Entity& e, const Vec2& q) {
+    const ConnectionPinShape s = connectionPinShape(e);
+    if (!s.circle) return s.end;
+    const Vec2 v = q - s.end;
+    const double len = std::sqrt(v.x * v.x + v.y * v.y);
+    if (len < 1e-9) return {s.end.x + s.radius, s.end.y};
+    return s.end + v * (s.radius / len);
+}
+
 ConnectorGeometry connectorGeometry(const Vec2& origin, const ConnectorSpec& spec) {
     ConnectorGeometry g;
     // Dynamic body: auto-fits the pins + text. To keep the primitives in proportion as

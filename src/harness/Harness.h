@@ -404,4 +404,26 @@ struct ConnectorGeometry {
 
 ConnectorGeometry connectorGeometry(const Vec2& origin, const ConnectorSpec& spec);
 
+// A CONNECTION PIN'S SHAPE, worked out from the pin: what is drawn, what a click picks and what a wire
+// lands on all come from here, so they cannot disagree.
+//
+// Two kinds. A pin as a connector has one (pinStyle "stub") is drawn as a connector draws its own - the
+// number, the Y (a ">" cup) standing at `a`, and the leg out to `b`, its free end, where a wire lands. The
+// numbered ring is the other: a wire lands anywhere on the ring. meta "pinScale" sizes the Y.
+struct ConnectionPinShape {
+    bool circle = false;
+    Vec2 end;          // where a wire lands on a connector's pin: the leg's free end
+    Vec2 tip;          // the point of the Y, where the leg starts
+    Vec2 armA, armB;   // the open ends of the Y's two arms
+    Vec2 label;        // the middle of the number
+    double radius = 0.0;    // the ring of a numbered ring pin
+    double textSize = 0.0;
+};
+ConnectionPinShape connectionPinShape(const Entity& e);
+// Whether a wire end at `q` is connected to this pin: on the end of a connector pin's leg, or anywhere on the
+// ring of a ring pin - the ring is the pin's edge, and a wire is drawn to the edge, not into the middle.
+bool connectionPinTouches(const Entity& e, const Vec2& q, double tol);
+// The point on the pin a wire end near `q` lands on: the leg's end, or the nearest point of the ring.
+Vec2 connectionPinLanding(const Entity& e, const Vec2& q);
+
 } // namespace Loopwire

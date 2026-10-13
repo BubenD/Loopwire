@@ -1649,6 +1649,7 @@ void Editor::setDocument(Document* doc) {
 
 void Editor::setTool(ToolId t) {
     drawingFieldPending_.clear();
+    balloonShape_ = QStringLiteral("circle");   // a note mark's shape is picked with its own button
     hatchPreview_ = {};
     if (hatchPreviewTimer_) hatchPreviewTimer_->stop();
     hoverBlockId_.clear();
@@ -2242,10 +2243,19 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
         break;
     case EntityType::NetLabel:
     case EntityType::NotConnected:
-    case EntityType::ConnectionPin:
-        // A stub pin is picked anywhere along it, the way a line is.
-        best = connectionPinIsStub(e) ? closestPointOnSegment(p, e.a, e.b).distance : distance(e.a, p);
+        best = distance(e.a, p);
         break;
+    case EntityType::ConnectionPin: {
+        // A Y pin is picked anywhere on its strokes or its number; a circle pin on its ring or in it.
+        const ConnectionPinShape s = connectionPinShape(e);
+        if (s.circle) {
+            best = std::min(distance(e.a, p), std::abs(distance(e.a, p) - s.radius));
+            break;
+        }
+        best = std::min({segDist(s.tip, s.end), segDist(s.armA, s.tip), segDist(s.armB, s.tip),
+                         std::max(0.0, distance(s.label, p) - s.textSize * 0.45)});
+        break;
+    }
     case EntityType::LengthBreak:
         // A click on either STROKE picks it, the way a click on a line picks the line. Measured to the
         // centre instead, the mark could only be picked by clicking the empty middle between its two
@@ -6826,7 +6836,19 @@ bool Editor::beginGripGrab(const Vec2& at, bool shift) {
     // meaning on a grip below - leave it to the selection - because an END is the one place on a run
     // where carrying it on is what taking hold of it with Shift can mean.
     if (shift && beginContinueRun(at)) return true;
-    if (found && shift && !balloonCenter) return false;
+    // SHIFT ON A RUN OR KNEE OF ONE OF SEVERAL SELECTED WIRES takes hold of that wire and pulls all the
+    // selected ones with it - Shift held first, then the wire caught. Elsewhere Shift on a grip is left to
+    // the selection.
+    bool bundleGrab = false;
+    if (found && shift && (bestGrip.role == GripRole::WireSegMove || bestGrip.role == GripRole::Vertex)) {
+        const Entity* held = entityById(bestId);
+        int wires = 0;
+        for (const QString& sid : selected_)
+            if (const Entity* se = entityById(sid); se && se->type == EntityType::Wire) ++wires;
+        bundleGrab = held && held->type == EntityType::Wire && wires >= 2;
+    }
+    bundleGrabId_ = bundleGrab ? bestId : QString();
+    if (found && shift && !balloonCenter && !bundleGrab) return false;
     if (found) {
         const QString& id = bestId;
         Entity* e = entityById(id);
@@ -6961,7 +6983,11 @@ bool Editor::beginGripGrab(const Vec2& at, bool shift) {
             const bool bundlePull =
                 e->type == EntityType::Wire && selected_.size() > 1 &&
                 (gr.role == GripRole::WireSegMove || gr.role == GripRole::Vertex);
-            if (bundlePull)
+            if (bundlePull && !bundleGrabId_.isEmpty())
+                emit message(QStringLiteral("Pulling all %1 selected wires with this one — click to put "
+                                            "them down, Esc to cancel")
+                                 .arg(selected_.size()));
+            else if (bundlePull)
                 emit message(QStringLiteral("Joint grabbed — hold Shift to pull all %1 selected "
                                             "wires as a batch; release and the others return "
                                             "to where they were")
@@ -7853,8 +7879,16 @@ std::vector<ValidationIssue> Editor::validateSchematic() const {
             const Vec2 p = end == 0 ? w.points.front() : w.points.back();
             int shares = 0; // how many wire endpoints sit here (this one + any others)
             for (const Vec2& q : wireEnds) if (distance(p, q) < tol) ++shares;
+            // A CONNECTION PIN connects a wire that lands on it: on the end of a Y pin's leg, anywhere on
+            // the ring of a circle pin - the ring is its edge, which is where a wire is drawn to.
+            bool onPin = false;
+            for (const auto& cp : validationDoc->entities())
+                if (cp.type == EntityType::ConnectionPin && connectionPinTouches(cp, p, 0.05)) {
+                    onPin = true;
+                    break;
+                }
             const bool connected = nearAny(p, pinEnds) || nearAny(p, splices) ||
-                                   nearAny(p, shieldDrains) || shares > 1;
+                                   nearAny(p, shieldDrains) || shares > 1 || onPin;
             const bool terminated = nearAny(p, ncMarks); // an X = deliberately open
             if (!connected && !terminated)
                 issues.push_back({QStringLiteral("openwire:%1:%2").arg(w.id).arg(end),
@@ -8420,7 +8454,7 @@ Vec2 Editor::applyWireClearance(const Vec2& prev, const Vec2& p) const {
                 if (distance(p, e.a) <= snapTol) return p;
                 break;
             case EntityType::ConnectionPin:
-                if (distance(p, connectionPinPoint(e)) <= snapTol) return p;
+                if (connectionPinTouches(e, p, snapTol)) return p;
                 break;
             default:
                 break;
@@ -8724,7 +8758,8 @@ bool Editor::isConnectablePoint(const Vec2& q) const {
             if (distance(q, e.a) <= tol) return true;
             break;
         case EntityType::ConnectionPin:
-            if (distance(q, connectionPinPoint(e)) <= tol) return true;
+            // On the leg's end of a Y pin; anywhere on the ring of a circle pin.
+            if (connectionPinTouches(e, q, tol)) return true;
             break;
         default:
             break;
@@ -10285,7 +10320,9 @@ void Editor::applyEditDrag(const Vec2& target) {
         // With Shift held the rest of the selected wires travel with this one; the moment
         // it is released they all go back where they started. Read live, so pressing and
         // releasing Shift part-way through the drag works either way.
-        pullSelectedWireBundle((QApplication::keyboardModifiers() & Qt::ShiftModifier) != 0);
+        // Taken hold of with Shift: the bundle goes with it until it is put down.
+        const bool latched = gripGrab_ && !bundleGrabId_.isEmpty() && bundleGrabId_ == editEntityId_;
+        pullSelectedWireBundle(latched || (QApplication::keyboardModifiers() & Qt::ShiftModifier) != 0);
     }
     editLast_ = target;
     doc_->setDirty(true);
@@ -10335,10 +10372,35 @@ void Editor::pullSelectedWireBundle(bool shiftHeld) {
         if (role == GripRole::Vertex) {
             if (editIndex_ >= 0 && editIndex_ < n)
                 w->points[editIndex_] = start->points[editIndex_] + travel;
-        } else if (editIndex_ >= 0 && editIndex_ + 1 < n) {
-            w->points[editIndex_] = start->points[editIndex_] + travel;
-            w->points[editIndex_ + 1] = start->points[editIndex_ + 1] + travel;
+            continue;
         }
+        // A RUN: the one at the same index when it lies the same way as the held run; otherwise the run of
+        // this wire that does - vertical with vertical, level with level - nearest to it. Wires that start
+        // from different pins have a different number of knees, and the run that has to go with the held
+        // one is the one alongside it, whatever its number. Only a run between two knees is moved (or the
+        // whole of a straight wire with both ends free), as on the held wire, so no end leaves its pin.
+        const Vec2 h0 = heldStart->points[editIndex_], h1 = heldStart->points[editIndex_ + 1];
+        const bool heldLevel = std::abs(h1.x - h0.x) >= std::abs(h1.y - h0.y);
+        const Vec2 heldMid = lerp(h0, h1, 0.5);
+        auto movable = [&](int j) { return n == 2 ? j == 0 : (j >= 1 && j <= n - 3); };
+        auto sameWay = [&](int j) {
+            const Vec2 a = start->points[j], b = start->points[j + 1];
+            return (std::abs(b.x - a.x) >= std::abs(b.y - a.y)) == heldLevel && distance(a, b) > 1e-9;
+        };
+        int run = -1;
+        if (editIndex_ + 1 < n && movable(editIndex_) && sameWay(editIndex_)) {
+            run = editIndex_;
+        } else {
+            double bestGap = std::numeric_limits<double>::max();
+            for (int j = 0; j + 1 < n; ++j) {
+                if (!movable(j) || !sameWay(j)) continue;
+                const double gap = distance(lerp(start->points[j], start->points[j + 1], 0.5), heldMid);
+                if (gap < bestGap) { bestGap = gap; run = j; }
+            }
+        }
+        if (run < 0) continue;
+        w->points[run] = start->points[run] + travel;
+        w->points[run + 1] = start->points[run + 1] + travel;
     }
 }
 
@@ -10784,6 +10846,7 @@ void Editor::handleDrawPress(const Vec2& p) {
         break;
     case ToolId::Balloon:
     case ToolId::TextLeader:
+    case ToolId::Arrow:
         // First click = the arrow tip (what it points at); second = the content spot.
         draftPts_.push_back(p);
         drafting_ = true;
@@ -11742,6 +11805,17 @@ void Editor::finishDraw() {
         }
         break;
     }
+    case ToolId::Arrow:
+        // A PLAIN ARROW is a leader with nothing to say: the same object, so it is picked, moved and turned
+        // the way a leader is, and words can be given to it later in Properties.
+        if (draftPts_.size() < 2) return;
+        e.type = EntityType::Leader;
+        e.points = {draftPts_[0], draftPts_[1]};
+        e.meta.insert("text", QString());
+        e.meta.insert("size", 10.0);
+        e.meta.insert("arrowSize", 3.3);
+        e.meta.insert("landing", 0.0);
+        break;
     case ToolId::Balloon:
     case ToolId::TextLeader: {
         // A leader callout: first point = arrow tip, second = the label location. WITH a balloon it is a
@@ -11771,6 +11845,9 @@ void Editor::finishDraw() {
         e.a = c;
         e.radius = 6.0;
         e.meta.insert("balloon", true);
+        // A NOTE MARK is a balloon of another shape. Each shape counts on its own, so the triangles that
+        // point at the notes run 1, 2, 3 whatever the item balloons have reached.
+        if (balloonShape_ != QLatin1String("circle")) e.meta.insert("balloonShape", balloonShape_);
         {
             if (!balloonTextNext_.isEmpty()) {
                 // Started from a bill of materials line: it already knows its number.
@@ -11779,7 +11856,8 @@ void Editor::finishDraw() {
             } else {
                 int next = 0;
                 for (const auto& x : doc_->entities())
-                    if (x.meta.value("balloon").toBool())
+                    if (x.meta.value("balloon").toBool() &&
+                        x.meta.value("balloonShape").toString(QStringLiteral("circle")) == balloonShape_)
                         next = std::max(next, x.meta.value("text").toString().toInt());
                 e.meta.insert("text", QString::number(next + 1));
             }
@@ -17014,6 +17092,15 @@ bool Editor::selectCellsInRegion(const QString& tableId, const std::vector<Vec2>
     return true;
 }
 
+void Editor::beginBalloonShape(const QString& shape) {
+    setTool(ToolId::Balloon);
+    balloonShape_ = shape.isEmpty() ? QStringLiteral("circle") : shape;
+    emit message(balloonShape_ == QLatin1String("circle")
+                     ? QStringLiteral("Balloon: click what it points at, then where the balloon sits")
+                     : QStringLiteral("Note mark (%1): click what it points at, then where the mark sits")
+                           .arg(balloonShape_));
+}
+
 void Editor::beginBalloonWithText(const QString& text) {
     balloonTextNext_ = text;
     setTool(ToolId::Balloon);
@@ -17054,6 +17141,7 @@ void Editor::addCoupledCircle(const QString& id) {
         if (x.meta.value("balloon").toBool())
             next = std::max(next, x.meta.value("text").toString().toInt());
     nb.meta.insert("balloon", true);
+    if (e->meta.contains("balloonShape")) nb.meta.insert("balloonShape", e->meta.value("balloonShape"));
     nb.meta.insert("text", QString::number(next + 1));
     nb.meta.insert("chain", chain); // coupled — no leader of its own
     const QString newId = nb.id;
@@ -17344,8 +17432,8 @@ void Editor::handlePlacementPress(const Vec2& p) {
         e.type = EntityType::ConnectionPin;
         e.a = p;
         e.meta.insert("pinNumber", nextConnectionPinNumber());
-        // OR A PIN AS A CONNECTOR HAS ONE: a short stub out to the right of where it is put, its number on it,
-        // and a connection point on its free end that a wire snaps to and is joined at.
+        // OR A PIN AS A CONNECTOR HAS ONE: the number and the Y where it is put, and a leg out to the right whose
+        // free end is the connection point a wire snaps to and is joined at.
         if (connectionPinStub_) {
             e.meta.insert("pinStyle", QStringLiteral("stub"));
             e.b = p + Vec2{kConnectionPinStubLength, 0.0};
@@ -18836,6 +18924,41 @@ void Editor::setSelectionScreenLegDir(const QString& dir) {
     emit changed();
     if (moved > 0)
         emit message(QStringLiteral("Drain leg moved to the %1").arg(dir));
+}
+
+void Editor::setSelectionPinDirection(const QString& dir) {
+    auto sel = selectedEntities();
+    if (sel.empty()) return;
+    pushUndo();
+    const Vec2 d = dir == QLatin1String("left")   ? Vec2{-1.0, 0.0}
+                   : dir == QLatin1String("up")   ? Vec2{0.0, 1.0}
+                   : dir == QLatin1String("down") ? Vec2{0.0, -1.0}
+                                                  : Vec2{1.0, 0.0};
+    // The leg keeps its length and turns about the Y, which stays where it stands.
+    for (Entity* e : sel)
+        if (connectionPinIsStub(*e)) {
+            const double len = distance(e->a, e->b) > 1e-9 ? distance(e->a, e->b) : kConnectionPinStubLength;
+            e->b = e->a + d * len;
+        }
+    doc_->setDirty(true);
+    emit changed();
+}
+
+void Editor::setSelectionPinStub(bool stub) {
+    auto sel = selectedEntities();
+    if (sel.empty()) return;
+    pushUndo();
+    for (Entity* e : sel) {
+        if (e->type != EntityType::ConnectionPin || connectionPinIsStub(*e) == stub) continue;
+        if (stub) {
+            e->meta.insert(QStringLiteral("pinStyle"), QStringLiteral("stub"));
+            e->b = e->a + Vec2{kConnectionPinStubLength, 0.0};
+        } else {
+            e->meta.remove(QStringLiteral("pinStyle"));
+        }
+    }
+    doc_->setDirty(true);
+    emit changed();
 }
 
 void Editor::setSelectionMetaNumber(const QString& key, double value) {
@@ -21360,14 +21483,26 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             for (const Vec2& v : regularPolygonPoints(pts[0], pts[1], polygonSides_))
                 poly << vt.toScreen(v);
             p.drawPolygon(poly);
-        } else if ((tool_ == ToolId::Balloon || tool_ == ToolId::TextLeader) && pts.size() >= 2) {
+        } else if ((tool_ == ToolId::Balloon || tool_ == ToolId::TextLeader || tool_ == ToolId::Arrow) &&
+                   pts.size() >= 2) {
             // Preview the leader from the arrow tip to the cursor; a Balloon also shows
-            // its circle (a text leader shows just the leader).
+            // its circle, or a note mark its outline (a text leader or an arrow shows just the line).
             p.drawLine(vt.toScreen(pts[0]), vt.toScreen(pts[1]));
             if (tool_ == ToolId::Balloon) {
-                const QPointF cc = vt.toScreen(pts[1]);
-                const double rr = 6.0 * vt.scale();
-                p.drawEllipse(cc, rr, rr);
+                Entity mark;
+                mark.center = pts[1];
+                mark.radius = 6.0;
+                if (balloonShape_ != QLatin1String("circle")) mark.meta.insert("balloonShape", balloonShape_);
+                const std::vector<Vec2> outline = balloonOutline(mark);
+                if (!outline.empty()) {
+                    QPolygonF poly;
+                    for (const Vec2& v : outline) poly << vt.toScreen(v);
+                    p.drawPolygon(poly);
+                } else {
+                    const QPointF cc = vt.toScreen(pts[1]);
+                    const double rr = 6.0 * vt.scale();
+                    p.drawEllipse(cc, rr, rr);
+                }
             }
         } else if (tool_ == ToolId::Hatch || tool_ == ToolId::Wipeout) {
             // Closed boundary rubber-band with a faint fill preview.

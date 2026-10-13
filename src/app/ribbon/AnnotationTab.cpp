@@ -43,7 +43,7 @@ void MainWindow::buildAnnotationTab() {
     // break mark and not for a piece of writing.
     addGroup(lay, QStringLiteral("Annotate"),
              toolRow({ToolId::Dimension, ToolId::Text, ToolId::MText, ToolId::NetLabel,
-                      ToolId::VolumeArrow}));
+                      ToolId::VolumeArrow, ToolId::Arrow}));
     // Where the middle of something is. Both are PICKED rather than drawn: the geometry already says where
     // the middle is, and making a drawing office find it with a cursor is asking them to do arithmetic the
     // program can do exactly.
@@ -73,7 +73,9 @@ void MainWindow::buildAnnotationTab() {
                                        QStringLiteral("Leader (text only)"));
             connect(a, &QAction::triggered, this, [this] { editor_->setTool(ToolId::TextLeader); });
             a = lm->addAction(makeToolIcon(ToolId::Balloon), QStringLiteral("Balloon"));
-            connect(a, &QAction::triggered, this, [this] { editor_->setTool(ToolId::Balloon); });
+            connect(a, &QAction::triggered, this, [this] { editor_->beginBalloonShape(QStringLiteral("circle")); });
+            a = lm->addAction(makeToolIcon(ToolId::Arrow), QStringLiteral("Arrow (no text)"));
+            connect(a, &QAction::triggered, this, [this] { editor_->setTool(ToolId::Arrow); });
             lm->addSeparator();
             a = lm->addAction(QStringLiteral("Add Leader"));
             connect(a, &QAction::triggered, this, [this] { editor_->addLeaderToSelection(); });
@@ -96,9 +98,35 @@ void MainWindow::buildAnnotationTab() {
         tableBtn->setFocusPolicy(Qt::NoFocus);
         tableBtn->setToolTip(QStringLiteral("Table — set rows/columns, then drag its size"));
         connect(tableBtn, &QToolButton::clicked, this, [this] { insertTableCommand(); });
-        // Leader, Note, Revision and Table in the SAME two rows: two by two.
+        // NOTE MARKS: the number in a triangle that ties a place on the drawing to a note, and the same in
+        // a square, a hexagon or a diamond. A click places the triangle; the fall menu has the others.
+        auto* markBtn = new QToolButton(page);
+        markBtn->setObjectName(QStringLiteral("annotationNoteMark"));
+        markBtn->setProperty("cadActionIcon", QStringLiteral("notemark_triangle"));
+        markBtn->setIcon(makeCadActionIcon(QStringLiteral("notemark_triangle")));
+        markBtn->setIconSize(QSize(28, 28));
+        markBtn->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        markBtn->setAutoRaise(true);
+        markBtn->setFocusPolicy(Qt::NoFocus);
+        markBtn->setToolTip(QStringLiteral("Note mark — a number in a triangle, with a leader; the menu has "
+                                           "the other shapes"));
+        markBtn->setPopupMode(QToolButton::MenuButtonPopup);
+        connect(markBtn, &QToolButton::clicked, this,
+                [this] { editor_->beginBalloonShape(QStringLiteral("triangle")); });
+        auto* mm = new QMenu(markBtn);
+        for (const auto& [shape, name] : {std::pair{QStringLiteral("triangle"), QStringLiteral("Triangle")},
+                                          std::pair{QStringLiteral("square"), QStringLiteral("Square")},
+                                          std::pair{QStringLiteral("hexagon"), QStringLiteral("Hexagon")},
+                                          std::pair{QStringLiteral("diamond"), QStringLiteral("Diamond")},
+                                          std::pair{QStringLiteral("circle"), QStringLiteral("Circle")}}) {
+            QAction* a = mm->addAction(makeCadActionIcon(QStringLiteral("notemark_") + shape), name);
+            const QString chosen = shape;
+            connect(a, &QAction::triggered, this, [this, chosen] { editor_->beginBalloonShape(chosen); });
+        }
+        markBtn->setMenu(mm);
+        // Leader, Note, Revision and Table in the SAME two rows: two by two, the note mark beside them.
         addGroup(lay, QStringLiteral("Callouts"),
-                 toolRow({ToolId::Note, ToolId::Revision}, {balloonBtn, tableBtn}));
+                 toolRow({ToolId::Note, ToolId::Revision}, {balloonBtn, tableBtn, markBtn}));
     }
     addGroup(lay,QStringLiteral("Drawing"),makeDrawingDetailsButton(page));
     lay->addStretch(1);

@@ -2155,6 +2155,24 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         // Balloon callout: a leader with an arrow at the tip, a horizontal landing
         // into the balloon, then the numbered circle.
         if (e.meta.value("balloon").toBool()) {
+            // A NOTE MARK (a shaped balloon) is drawn as its outline, and its leader leaves from that
+            // outline: where a ray from the middle crosses it.
+            const std::vector<Vec2> outline = balloonOutline(e);
+            auto edgeToward = [&](const Vec2& dir) {
+                if (outline.empty()) return Vec2{e.center.x + dir.x * e.radius, e.center.y + dir.y * e.radius};
+                double best = e.radius;
+                bool hit = false;
+                for (size_t i = 0; i < outline.size(); ++i) {
+                    const Vec2 a = outline[i], b = outline[(i + 1) % outline.size()];
+                    const Vec2 ab = b - a, ca = a - e.center;
+                    const double den = dir.x * ab.y - dir.y * ab.x;
+                    if (std::abs(den) < 1e-12) continue;
+                    const double t = (ca.x * ab.y - ca.y * ab.x) / den;
+                    const double u = (ca.x * dir.y - ca.y * dir.x) / den;
+                    if (t > 0.0 && u >= -1e-9 && u <= 1.0 + 1e-9 && (!hit || t < best)) { best = t; hit = true; }
+                }
+                return Vec2{e.center.x + dir.x * best, e.center.y + dir.y * best};
+            };
             // Collect every leader tip (array form, or the legacy single leaderX/Y).
             std::vector<Vec2> tips;
             if (e.meta.contains("leaders")) {
@@ -2179,8 +2197,8 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                         for (const auto& t : tips) sx += t.x;
                         side = (sx / tips.size() >= e.center.x) ? 1 : -1;
                     }
-                    attach = {e.center.x + side * e.radius, e.center.y};
-                    knee = {e.center.x + side * (e.radius + landing), e.center.y};
+                    attach = edgeToward({static_cast<double>(side), 0.0});
+                    knee = {attach.x + side * landing, e.center.y};
                     p.drawLine(vt.toScreen(attach), vt.toScreen(knee)); // shelf
                 } else {
                     // No shelf: the leader attaches at a free ANGLE around the ring.
@@ -2192,7 +2210,7 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                         for (const auto& t : tips) { sx += t.x; sy += t.y; }
                         a = std::atan2(sy / tips.size() - e.center.y, sx / tips.size() - e.center.x);
                     }
-                    attach = {e.center.x + std::cos(a) * e.radius, e.center.y + std::sin(a) * e.radius};
+                    attach = edgeToward({std::cos(a), std::sin(a)});
                     knee = attach;
                 }
                 const QString ah = e.meta.value("arrowhead").toString(QStringLiteral("closed"));
@@ -2208,10 +2226,11 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 }
             }
             const bool textLeader = e.meta.value("textLeader").toBool();
-            if (!textLeader) p.drawEllipse(c, r, r); // a text leader has no circle
+            if (!outline.empty()) p.drawPolygon(toScreenPoly(outline, vt));
+            else if (!textLeader) p.drawEllipse(c, r, r); // a text leader has no circle
             const QString label = e.meta.value("text").toString();
-            drawWorldText(p, c, label, e.radius * (textLeader ? 1.4 : 1.1), vt.scale(), color,
-                          Qt::AlignHCenter | Qt::AlignVCenter);
+            drawWorldText(p, c, label, e.radius * (textLeader ? 1.4 : outline.empty() ? 1.1 : 0.95), vt.scale(),
+                          color, Qt::AlignHCenter | Qt::AlignVCenter);
         } else {
             p.drawEllipse(c, r, r);
         }
@@ -2902,31 +2921,23 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
     }
 
     case EntityType::ConnectionPin: {
-        // A PIN AS A CONNECTOR HAS ONE: the stub, its number written along it the way a connector's pins are
-        // numbered, and a small ring on its free end - the connection point a wire is joined at.
-        if (connectionPinIsStub(e)) {
-            const QPointF root = vt.toScreen(e.a), tip = vt.toScreen(e.b);
-            p.drawLine(root, tip);
-            const double worldRing = 1.2;
-            const double rr = std::max(2.5, worldRing * vt.scale());
-            p.drawEllipse(tip, rr, rr);
-            Vec2 along = e.b - e.a;
-            along = along.lengthSq() > 1e-18 ? along.normalized() : Vec2{1, 0};
-            Vec2 up = along.perp();
-            if (up.y < 0.0) up = up * -1.0;   // written above the stub, whichever way it points
-            const Vec2 mid = lerp(e.a, e.b, 0.5) + up * 1.0;
-            drawWorldText(p, vt.toScreen(mid), QString::number(e.meta.value("pinNumber").toInt()), 4.0,
-                          vt.scale(), color, Qt::AlignHCenter | Qt::AlignBottom);
+        // A Y pin is drawn as a connector draws its own: the number, the cup, and the leg a wire lands on.
+        // A circle pin is the ring with its number in the middle. Both world-sized, so they scale with
+        // the drawing.
+        const ConnectionPinShape s = connectionPinShape(e);
+        const QString number = QString::number(e.meta.value("pinNumber").toInt());
+        if (s.circle) {
+            const QPointF c = vt.toScreen(e.a);
+            const double r = std::max(3.0, s.radius * vt.scale());
+            p.drawEllipse(c, r, r);
+            drawWorldText(p, c, number, s.textSize, vt.scale(), color, Qt::AlignHCenter | Qt::AlignVCenter);
             break;
         }
-        // A small ring with its number in the middle - world-sized like the not-connected X
-        // beside it, so it scales with the drawing rather than staying a fixed screen size.
-        const QPointF c = vt.toScreen(e.a);
-        const double worldRadius = 2.0;
-        const double r = std::max(3.0, worldRadius * vt.scale());
-        p.drawEllipse(c, r, r);
-        drawWorldText(p, c, QString::number(e.meta.value("pinNumber").toInt()), worldRadius * 1.3,
-                      vt.scale(), color, Qt::AlignHCenter | Qt::AlignVCenter);
+        p.drawLine(vt.toScreen(s.armA), vt.toScreen(s.tip));
+        p.drawLine(vt.toScreen(s.armB), vt.toScreen(s.tip));
+        p.drawLine(vt.toScreen(s.tip), vt.toScreen(s.end));
+        drawWorldText(p, vt.toScreen(s.label), number, s.textSize * 0.7, vt.scale(), color,
+                      Qt::AlignHCenter | Qt::AlignVCenter);
         break;
     }
 

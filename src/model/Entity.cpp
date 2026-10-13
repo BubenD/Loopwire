@@ -55,6 +55,26 @@ EntityType entityTypeFromString(const QString& s) {
     return EntityType::Unknown;
 }
 
+std::vector<Vec2> balloonOutline(const Entity& e) {
+    const QString shape = e.meta.value(QStringLiteral("balloonShape")).toString();
+    const double r = e.radius;
+    const Vec2 c = e.center;
+    auto ring = [&](int sides, double radius, double startDeg) {
+        std::vector<Vec2> pts;
+        for (int i = 0; i < sides; ++i) {
+            const double a = (startDeg + 360.0 * i / sides) * M_PI / 180.0;
+            pts.push_back({c.x + radius * std::cos(a), c.y + radius * std::sin(a)});
+        }
+        return pts;
+    };
+    // The triangle stands on its base with the number in its middle: its inner circle is the balloon's.
+    if (shape == QLatin1String("triangle")) return ring(3, 2.0 * r, 90.0);
+    if (shape == QLatin1String("square")) return ring(4, r * std::sqrt(2.0), 45.0);
+    if (shape == QLatin1String("hexagon")) return ring(6, r * 1.12, 0.0);
+    if (shape == QLatin1String("diamond")) return ring(4, r * 1.45, 0.0);
+    return {};
+}
+
 QString entityTypeDisplayName(EntityType t) {
     // Only where the stored name would mislead; everything else is called what it has always been
     // called, so this cannot quietly rename half the application.
@@ -650,10 +670,17 @@ Bounds Entity::bounds() const {
     }
     case EntityType::NetLabel:
     case EntityType::NotConnected:
-    case EntityType::ConnectionPin:
         bnds.expand(a);
         if (connectionPinIsStub(*this)) bnds.expand(b);
         break;
+    case EntityType::ConnectionPin: {
+        const ConnectionPinShape s = connectionPinShape(*this);
+        const double r = s.circle ? s.radius : s.textSize * 0.45;
+        for (const Vec2& q : {s.end, s.tip, s.armA, s.armB}) bnds.expand(q);
+        bnds.expand({s.label.x - r, s.label.y - r});
+        bnds.expand({s.label.x + r, s.label.y + r});
+        break;
+    }
     case EntityType::Connector: {
         const ConnectorSpec spec = connectorSpecFromMeta(meta);
         const ConnectorGeometry g = connectorGeometry(a, spec);

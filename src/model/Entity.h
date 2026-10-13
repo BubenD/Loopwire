@@ -128,6 +128,11 @@ struct Entity {
     static Entity fromJson(const QJsonObject& obj);
 };
 
+// THE OUTLINE OF A SHAPED BALLOON - a note mark. A balloon is a circle with a number in it; a note mark is the
+// same thing in a triangle, a square, a hexagon or a diamond (meta "balloonShape"), sized so the number fits as
+// it does in the circle. Empty for a round balloon, which is drawn as its circle.
+std::vector<Vec2> balloonOutline(const Entity& e);
+
 // THE SHAPE AN OBJECT ACTUALLY HAS, for the objects that work theirs out rather than storing it.
 //
 // A volume arrow keeps its two ends and nothing else: the outline is laid out from them when it is

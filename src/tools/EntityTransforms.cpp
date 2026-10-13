@@ -203,7 +203,7 @@ void scaleEntity(Entity& e, const Vec2& base, double factor) {
                           "twistWidth", "twistPitch", "twistEnds", "shrinkWidth",
                           "shrinkFaceStart", "shrinkFaceEnd", "shrinkTaperStart",
                           "shrinkTaperEnd", "shrinkCoverStart", "shrinkCoverEnd",
-                          "shrinkCableWidth"})
+                          "shrinkCableWidth", "pinScale"})
         if (e.meta.contains(QLatin1String(k)))
             e.meta.insert(QLatin1String(k), e.meta.value(QLatin1String(k)).toDouble() * s);
     // Per-corner fillet radii / chamfer setbacks are lengths too — scale each entry.

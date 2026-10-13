@@ -111,6 +111,7 @@ enum class ToolId {
     CenterMark,
     CenterLine,
     LacingTie, // appended so existing tool values remain unchanged
+    Arrow,     // a plain arrow: drawn as a leader is, tip then tail, with no words
 };
 
 inline bool isPickModifyTool(ToolId t) {
@@ -138,6 +139,7 @@ inline bool isDrawTool(ToolId t) {
     case ToolId::Wire:
     case ToolId::Balloon:    // two clicks: arrow tip, then balloon centre
     case ToolId::TextLeader: // two clicks: arrow tip, then text location
+    case ToolId::Arrow:      // two clicks: arrow tip, then its tail
     case ToolId::Note:      // rubber-band a rectangle, like Rect
     case ToolId::Revision:
     case ToolId::TwistedPair: // two clicks: the two ends the pair runs between
@@ -183,6 +185,7 @@ inline QString toolLabel(ToolId t) {
     case ToolId::Wipeout: return QStringLiteral("Wipeout");
     case ToolId::Balloon: return QStringLiteral("Balloon");
     case ToolId::TextLeader: return QStringLiteral("Leader");
+    case ToolId::Arrow: return QStringLiteral("Arrow");
     case ToolId::Note: return QStringLiteral("Note");
     case ToolId::Revision: return QStringLiteral("Revision");
     case ToolId::Table: return QStringLiteral("Table");

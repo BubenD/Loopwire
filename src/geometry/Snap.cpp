@@ -573,8 +573,10 @@ SnapResult resolveSnap(const Document& doc, const Vec2& raw,
                  e.type == EntityType::NetLabel || e.type == EntityType::Text)) {
                 consider(e.a, SnapKind::Node);
             }
-            // A CONNECTION PIN'S CONNECTION POINT is a node: what a wire is drawn to.
-            if (s.snapNode && e.type == EntityType::ConnectionPin) consider(connectionPinPoint(e), SnapKind::Node);
+            // A connection pin is caught where a wire lands on it: the end of a Y pin's leg, or the point
+            // of a circle pin's ring nearest the cursor - its edge, not its middle.
+            if (s.snapNode && e.type == EntityType::ConnectionPin)
+                consider(connectionPinLanding(e, raw), SnapKind::Node);
             // Insertion: the insertion point of text / connectors / balloons.
             if (s.snapInsertion &&
                 (e.type == EntityType::Text || e.type == EntityType::Connector ||
