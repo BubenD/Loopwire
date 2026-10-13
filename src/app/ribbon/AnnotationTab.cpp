@@ -112,7 +112,7 @@ void MainWindow::buildAnnotationTab() {
                                            "the other shapes"));
         markBtn->setPopupMode(QToolButton::MenuButtonPopup);
         connect(markBtn, &QToolButton::clicked, this,
-                [this] { editor_->beginBalloonShape(QStringLiteral("triangle")); });
+                [this] { editor_->beginNoteMark(QStringLiteral("triangle")); });
         auto* mm = new QMenu(markBtn);
         for (const auto& [shape, name] : {std::pair{QStringLiteral("triangle"), QStringLiteral("Triangle")},
                                           std::pair{QStringLiteral("square"), QStringLiteral("Square")},
@@ -121,8 +121,15 @@ void MainWindow::buildAnnotationTab() {
                                           std::pair{QStringLiteral("circle"), QStringLiteral("Circle")}}) {
             QAction* a = mm->addAction(makeCadActionIcon(QStringLiteral("notemark_") + shape), name);
             const QString chosen = shape;
-            connect(a, &QAction::triggered, this, [this, chosen] { editor_->beginBalloonShape(chosen); });
+            connect(a, &QAction::triggered, this, [this, chosen] { editor_->beginNoteMark(chosen); });
         }
+        // WITH LEADER: off, a note mark is put down by one click with no leader to it.
+        mm->addSeparator();
+        QAction* withLeader = mm->addAction(QStringLiteral("With leader"));
+        withLeader->setObjectName(QStringLiteral("annotationNoteMarkLeader"));
+        withLeader->setCheckable(true);
+        withLeader->setChecked(editor_->noteMarkLeader());
+        connect(withLeader, &QAction::toggled, this, [this](bool on) { editor_->setNoteMarkLeader(on); });
         markBtn->setMenu(mm);
         // Leader, Note, Revision and Table in the SAME two rows: two by two, the note mark beside them.
         addGroup(lay, QStringLiteral("Callouts"),

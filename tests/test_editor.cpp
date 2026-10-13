@@ -9841,6 +9841,26 @@ int run_editor_tests() {
                   triangles == QStringList({QStringLiteral("1"), QStringLiteral("2")}) && threeCorners,
               "note mark: triangles numbered 1, 2 on their own, beside balloon 1, each drawn as a triangle");
         check(ed.balloonShape() == QLatin1String("circle"), "note mark: placed, the next balloon is round again");
+
+        // With the leader switched off, one click puts the mark down where it sits, with no leader.
+        ed.setNoteMarkLeader(false);
+        ed.beginNoteMark(QStringLiteral("square"));
+        ed.onPointerPress({50, 200}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* bare = nullptr;
+        for (const auto& e : d.entities())
+            if (e.meta.value("balloonShape").toString() == QLatin1String("square")) bare = &e;
+        check(bare && bare->center.x == 50.0 && bare->center.y == 200.0 && bare->meta.value("leaders").toArray().isEmpty() &&
+                  bare->meta.value("text").toString() == QLatin1String("1"),
+              "note mark: no leader - one click places square 1 where clicked, with no leader");
+        // A balloon from the Balloon tool still has its leader.
+        ed.setTool(ToolId::Balloon);
+        ed.onPointerPress({0, 250}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({20, 260}, Qt::LeftButton, Qt::NoModifier);
+        const Entity* round = nullptr;
+        for (const auto& e : d.entities())
+            if (e.meta.value("balloon").toBool() && e.center.y == 260.0) round = &e;
+        check(round && round->meta.value("leaders").toArray().size() == 1, "note mark: the switch leaves the plain balloon its leader");
+        ed.setNoteMarkLeader(true);
     }
 
 
@@ -14592,6 +14612,21 @@ int run_editor_tests() {
         for (const Entity& e : d.entities())
             if (e.type == EntityType::Dimension && e.id != (dim ? dim->id : QString())) second = &e;
         check(second && !dimensionAcrossX(*second), "dimension way: set off sideways, it measures the height");
+        // Set off upwards, then brought down level with the second point well off to the side: it turns to
+        // the height there, without going back to the point.
+        ed.setTool(ToolId::Dimension);
+        click({0, 0});
+        click({100, 0});
+        ed.onPointerMove({100, 15});    // upwards: the length
+        ed.onPointerMove({130, 15});
+        ed.onPointerMove({130, 0.5});   // level with the point, 30 off to the side
+        ed.onPointerMove({140, -10});
+        click({140, -10});
+        const Entity* third = nullptr;   // the last one placed
+        for (const Entity& e : d.entities())
+            if (e.type == EntityType::Dimension) third = &e;
+        check(third && !dimensionAcrossX(*third),
+              "dimension way: brought level with the point it set off from, it turns to the height");
     }
 
     // ---- A PIN AS A CONNECTOR HAS ONE ---------------------------------------------------------------------

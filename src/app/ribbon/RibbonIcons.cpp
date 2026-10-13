@@ -139,6 +139,7 @@ QIcon makeCadActionIcon(const QString& key, const QColor& ink) {
         if(shape=="square")p.drawRect(QRectF(5,5,14,14));
         else if(shape=="hexagon")p.drawPolygon(QPolygonF{{3,12},{7.5,4.5},{16.5,4.5},{21,12},{16.5,19.5},{7.5,19.5}});
         else if(shape=="diamond")p.drawPolygon(QPolygonF{{12,2},{22,12},{12,22},{2,12}});
+        else if(shape=="circle")p.drawEllipse(QPointF(12,12),9,9);
         else p.drawPolygon(QPolygonF{{12,3},{22,20},{2,20}});
         stroke(ink,1.4);const double top=shape.isEmpty()||shape=="triangle"?11:9;line(11,top+1,12.5,top);line(12.5,top,12.5,top+7);
     }else if(key=="note"||key=="drawingdetails"){

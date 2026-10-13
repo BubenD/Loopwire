@@ -1650,6 +1650,7 @@ void Editor::setDocument(Document* doc) {
 void Editor::setTool(ToolId t) {
     drawingFieldPending_.clear();
     balloonShape_ = QStringLiteral("circle");   // a note mark's shape is picked with its own button
+    noteMark_ = false;
     hatchPreview_ = {};
     if (hatchPreviewTimer_) hatchPreviewTimer_->stop();
     hoverBlockId_.clear();
@@ -3458,8 +3459,9 @@ QString Editor::nextDetailTag() const {
 // WHICH WAY A LINEAR DIMENSION MEASURES, decided by the way the cursor first sets off from the second point -
 // not by where it is against the middle of the two. Up or down (within 45 degrees of it) is a horizontal
 // dimension, the length; left or right is a vertical one, the height. Once it has set off the answer is held,
-// so taking the dimension line along past the ends does not turn it into the other one; brought back to the
-// point it set off from, it is free to decide again.
+// so taking the dimension line along past the ends does not turn it into the other one. Brought back level
+// with the point it set off from - in line with it across the way it measures, however far along - it is free
+// to decide again, so turning it to the other way needs no trip back to the point itself.
 bool Editor::linearDimAcross(const Vec2& at) const {
     if (draftPts_.size() < 2) return true;
     // Held for THIS dimension only: one cancelled half way does not hand its answer on to the next.
@@ -3469,6 +3471,8 @@ bool Editor::linearDimAcross(const Vec2& at) const {
     }
     const Vec2 d = at - draftPts_[1];
     const double settle = worldTolerance() * 1.5;
+    if ((dimAcrossLock_ == 1 && std::abs(d.y) < settle) || (dimAcrossLock_ == 0 && std::abs(d.x) < settle))
+        dimAcrossLock_ = -1;
     if (d.length() < settle) {
         dimAcrossLock_ = -1;
         // Not set off yet: the length if the two points lie more along than across, else the height.
@@ -10847,6 +10851,13 @@ void Editor::handleDrawPress(const Vec2& p) {
     case ToolId::Balloon:
     case ToolId::TextLeader:
     case ToolId::Arrow:
+        // A NOTE MARK WITH NO LEADER is put down by the one click, where it sits.
+        if (tool_ == ToolId::Balloon && noteMark_ && !noteMarkLeader_) {
+            draftPts_ = {p, p};
+            drafting_ = true;
+            finishDraw();
+            break;
+        }
         // First click = the arrow tip (what it points at); second = the content spot.
         draftPts_.push_back(p);
         drafting_ = true;
@@ -11863,6 +11874,10 @@ void Editor::finishDraw() {
             }
         }
         e.meta.insert("landing", 8.0); // horizontal landing length (editable in Properties)
+        if (noteMark_ && !noteMarkLeader_) {
+            setBalloonLeaders(e, {});   // no leader; Add Leader gives it one later
+            break;
+        }
         e.meta.insert("landingSide", (tip.x >= c.x) ? 1.0 : -1.0); // exits toward the tip's side
         setBalloonLeaders(e, {tip});   // one leader to start; Add Leader adds more
         break;
@@ -17101,6 +17116,13 @@ void Editor::beginBalloonShape(const QString& shape) {
                            .arg(balloonShape_));
 }
 
+void Editor::beginNoteMark(const QString& shape) {
+    beginBalloonShape(shape);
+    noteMark_ = true;
+    if (!noteMarkLeader_)
+        emit message(QStringLiteral("Note mark (%1), no leader: click where the mark sits").arg(balloonShape_));
+}
+
 void Editor::beginBalloonWithText(const QString& text) {
     balloonTextNext_ = text;
     setTool(ToolId::Balloon);
@@ -21378,6 +21400,30 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         ghost.layer = doc_->activeLayer();
         writeConnectorSpec(ghost.meta, connectorSpec_);
         EntityRenderer::draw(p, ghost, *doc_, vt, paperInk(QColor(120, 200, 255, 170)));
+    }
+
+    // A NOTE MARK WITH NO LEADER shows where it will sit before the click that puts it down.
+    if (tool_ == ToolId::Balloon && noteMark_ && !noteMarkLeader_ && !drafting_) {
+        QPen prev(paperInk(QColor("#ffffff")));
+        prev.setCosmetic(true);
+        prev.setWidthF(1.4);
+        prev.setStyle(Qt::DashLine);
+        p.save();
+        p.setPen(prev);
+        p.setBrush(Qt::NoBrush);
+        Entity mark;
+        mark.center = cursor_;
+        mark.radius = 6.0;
+        if (balloonShape_ != QLatin1String("circle")) mark.meta.insert("balloonShape", balloonShape_);
+        const std::vector<Vec2> outline = balloonOutline(mark);
+        if (!outline.empty()) {
+            QPolygonF poly;
+            for (const Vec2& v : outline) poly << vt.toScreen(v);
+            p.drawPolygon(poly);
+        } else {
+            p.drawEllipse(vt.toScreen(cursor_), 6.0 * vt.scale(), 6.0 * vt.scale());
+        }
+        p.restore();
     }
 
     // In-progress draft preview (white, matching the line being drawn).

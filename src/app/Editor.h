@@ -729,6 +729,11 @@ public:
     // the round balloon ("circle").
     void beginBalloonShape(const QString& shape);
     QString balloonShape() const { return balloonShape_; }
+    // The same, started from the Note mark button or its menu: with the leader switched off it is put
+    // down by one click, where it sits, with no leader.
+    void beginNoteMark(const QString& shape);
+    void setNoteMarkLeader(bool on) { noteMarkLeader_ = on; }
+    bool noteMarkLeader() const { return noteMarkLeader_; }
     // Which way the selected connection pins' legs point: "right", "left", "up" or "down".
     void setSelectionPinDirection(const QString& dir);
     // The selected connection pins drawn as a connector's pin (true) or as the numbered ring (false).
@@ -2536,6 +2541,10 @@ private:
     // The shape the Balloon tool places: "circle", or a note mark's "triangle", "square", "hexagon" or
     // "diamond". Back to the circle whenever another tool is picked up. Not saved.
     QString balloonShape_ = QStringLiteral("circle");
+    // The Balloon tool was started as a note mark (back to false with any other tool), and whether a
+    // note mark gets a leader - the switch in the Note mark menu, kept while the program runs. Not saved.
+    bool noteMark_ = false;
+    bool noteMarkLeader_ = true;
     bool rectAwaitY_ = false;     // rectangle: awaiting the Y length after the X length
     double rectX_ = 0;            // rectangle: signed X length already entered
 
