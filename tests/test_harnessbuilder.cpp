@@ -8,6 +8,7 @@
 
 #include <QApplication>
 #include <QJsonArray>
+#include <QSet>
 #include <QJsonDocument>
 #include <QPushButton>
 #include <QListWidgetItem>
@@ -505,6 +506,28 @@ void testShieldConnectAndPinLight() {
 }
 } // namespace
 
+// THE PREVIEW'S TWISTS FIND THEIR WIRES. A twist names its wires; in the preview no wire carried the name, so each
+// was drawn straight through its twist - a line along the middle of every cross that the placed drawing has not.
+void testPreviewTwistsFindTheirWires() {
+    const std::vector<Entity> shown = harnessPreviewEntities(sampleHarness(), true);
+    QSet<QString> wireIds;
+    for (const Entity& e : shown)
+        if (e.type == EntityType::Wire) wireIds.insert(e.id);
+    int twists = 0, named = 0, found = 0;
+    for (const Entity& e : shown) {
+        if (e.type != EntityType::Twist) continue;
+        ++twists;
+        for (const QJsonValue& v : e.meta.value(QStringLiteral("wires")).toArray()) {
+            ++named;
+            if (wireIds.contains(v.toString())) ++found;
+        }
+    }
+    std::printf("  preview twists: %d twist(s) naming %d wire(s), %d of them in the preview\n", twists, named, found);
+    check(twists > 0 && named > 0 && found == named,
+          "preview twists: every wire a twist names is a wire in the preview, so it leaves the twist's gap");
+    check(!wireIds.contains(QString()), "preview twists: no wire is left without a name");
+}
+
 int run_harnessbuilder_tests() {
     g_fail = 0;
     std::printf("harness builder tests:\n");
@@ -512,6 +535,7 @@ int run_harnessbuilder_tests() {
     testPhaseOne();
     testStepsRefined();
     testShieldConnectAndPinLight();
+    testPreviewTwistsFindTheirWires();
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

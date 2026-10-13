@@ -545,6 +545,36 @@ private:
 
 
 
+std::vector<Entity> harnessPreviewEntities(const HarnessDef& def, bool showShields) {
+    std::vector<Entity> shown;
+    if (!def.connectors.empty()) {
+        const HarnessBuild built = buildHarness(def);
+        shown.reserve(built.entities.size());
+        int unnamed = 0;
+        for (const Entity& e : built.entities) {
+            // THE SCREENS LEFT OUT when asked: their outlines, and the drains bonding them back.
+            const bool screen = (e.meta.contains(QStringLiteral("overallShield")) || e.meta.contains(QStringLiteral("shieldGroup"))) &&
+                                e.meta.contains(QStringLiteral("rx"));
+            if (!showShields && (screen || e.meta.contains(QStringLiteral("shieldBond")))) continue;
+            shown.push_back(e);
+            // EACH WIRE NAMED AS ITS TWISTS AND SCREENS NAME IT. The generator's twists list their wires by the
+            // definition's row id; placing the drawing gives the wires real ids and points the twists at them
+            // (Editor::stampHarnessIds). The preview had neither, so no wire knew it was twisted and each was
+            // drawn straight on through its twist - a line along the middle of every cross. Named by its row
+            // here, a wire leaves the gap its twist is drawn in, as it does on the sheet. Anything with no row
+            // of its own (a drain, a pigtail) gets a name nothing refers to.
+            Entity& added = shown.back();
+            if (added.type == EntityType::Wire) {
+                const QString row = added.meta.value(QStringLiteral("defWire")).toString();
+                const bool drain = added.meta.contains(QStringLiteral("shieldBond")) ||
+                                   added.meta.contains(QStringLiteral("shieldLeg"));
+                added.id = !row.isEmpty() && !drain ? row : QStringLiteral("preview-%1").arg(++unnamed);
+            }
+        }
+    }
+    return shown;
+}
+
 // The whole harness, beside the pin tables, so the effect of a pin drag is seen at once - the full wiring, not one
 // connector at a time.
 class HarnessWiringPreview : public QWidget {
@@ -588,18 +618,7 @@ public:
 
 private:
     void rebuild() {
-        std::vector<Entity> shown;
-        if (!def_.connectors.empty()) {
-            const HarnessBuild built = buildHarness(def_);
-            shown.reserve(built.entities.size());
-            for (const Entity& e : built.entities) {
-                // THE SCREENS LEFT OUT when asked: their outlines, and the drains bonding them back.
-                const bool screen = (e.meta.contains(QStringLiteral("overallShield")) || e.meta.contains(QStringLiteral("shieldGroup"))) &&
-                                    e.meta.contains(QStringLiteral("rx"));
-                if (!showShields_ && (screen || e.meta.contains(QStringLiteral("shieldBond")))) continue;
-                shown.push_back(e);
-            }
-        }
+        const std::vector<Entity> shown = harnessPreviewEntities(def_, showShields_);
         picture_->setEntities(shown);
         picture_->fitToView();
     }

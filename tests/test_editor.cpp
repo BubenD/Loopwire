@@ -14442,6 +14442,52 @@ int run_editor_tests() {
         }
     }
 
+    // ---- A CHAMFERED CORNER IS HELD BY THE ENDS OF ITS CHAMFER ---------------------------------------------
+    // The corner itself is not drawn - it is where the two lines would have met - so its handle sat out in the
+    // air. The handles are on the two ends of the chamfer, and dragging one moves the corner: both lines that
+    // meet there follow, and the chamfer goes with them.
+    {
+        Document d;
+        Editor ed;
+        ed.setDocument(&d);
+        Entity box;
+        box.id = QStringLiteral("chamfered");
+        box.type = EntityType::Rect;
+        box.points = {{0, 0}, {100, 0}, {100, 60}, {0, 60}};
+        box.meta.insert(QStringLiteral("cornerChamfers"), QJsonArray{0.0, 0.0, 10.0, 0.0});
+        d.entities().push_back(box);
+        ed.selectById(box.id);
+        const std::vector<Vec2> grips = ed.selectionGripPoints();
+        auto has = [&](const Vec2& p) {
+            for (const Vec2& g : grips)
+                if (distance(g, p) < 1e-6) return true;
+            return false;
+        };
+        std::printf("  chamfer grips: %d handle(s); on the chamfer ends %d %d; at the cut corner %d\n",
+                    int(grips.size()), int(has({100, 50})), int(has({90, 60})), int(has({100, 60})));
+        check(has({100, 50}) && has({90, 60}), "chamfer grips: a handle on each end of the chamfer");
+        check(!has({100, 60}), "chamfer grips: none out in the air at the corner it cut off");
+        // Drag the handle on the chamfer's lower end up and to the right.
+        ed.onPointerMove({100, 50});
+        ed.onPointerPress({100, 50}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerMove({110, 55});
+        ed.onPointerMove({120, 60});
+        ed.onPointerRelease({120, 60}, Qt::LeftButton);
+        const Entity* after = nullptr;
+        for (const Entity& e : d.entities())
+            if (e.id == box.id) after = &e;
+        if (after && after->points.size() == 4)
+            std::printf("  chamfer drag: corners (%.1f,%.1f) (%.1f,%.1f) (%.1f,%.1f) (%.1f,%.1f), chamfer %.1f\n",
+                        after->points[0].x, after->points[0].y, after->points[1].x, after->points[1].y,
+                        after->points[2].x, after->points[2].y, after->points[3].x, after->points[3].y,
+                        after->meta.value(QStringLiteral("cornerChamfers")).toArray().at(2).toDouble());
+        check(after && after->points.size() == 4 && distance(after->points[2], {120, 70}) < 1e-6 &&
+                  distance(after->points[0], {0, 0}) < 1e-6,
+              "chamfer drag: the corner moves by as much as the handle did - it does not jump to the cursor");
+        check(after && std::abs(after->meta.value(QStringLiteral("cornerChamfers")).toArray().at(2).toDouble() - 10.0) < 1e-9,
+              "chamfer drag: and the chamfer goes with it");
+    }
+
     // ---- A COMMAND'S DEMONSTRATION DOES WHAT IT SAYS ------------------------------------------------------
     // Each one is worked through on the real canvas and editor; afterwards its drawing must have changed - a
     // demonstration that leaves nothing behind shows a command doing nothing.

@@ -39,6 +39,10 @@ class HarnessWiringPreview;
 // work lives in harness/HarnessBuilder so it can be tested without a UI. Every control
 // writes into def_ and asks for a re-sync, so the tables, the block map and the pin map can
 // never drift apart from the definition they show.
+// THE HARNESS AS THE BUILDER'S PREVIEW SHOWS IT: what Generate draws, with each wire named as its twists and screens
+// name it, so a twisted wire leaves the gap its twist is drawn in. Screens and their drains left out unless asked.
+std::vector<Entity> harnessPreviewEntities(const HarnessDef& def, bool showShields);
+
 class HarnessBuilderDialog : public QDialog {
     Q_OBJECT
 public:

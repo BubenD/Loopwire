@@ -1265,10 +1265,121 @@ struct TwistCached {
     // to their full width in the middle. That is the fault in the drawing: a cable that is a cable to
     // everything except the eye.
     std::vector<std::vector<std::pair<size_t, size_t>>> spans;
+    // THE LAID-UP STRETCH SEEN FROM THE SIDE, when the run asks for that look (twistLook "side"): each strand
+    // on the near side of the bundle, closed outline by outline. Empty for the woven look.
+    std::vector<std::vector<Vec2>> side;
     // What the cursor can catch on it, worked out the first time it is asked (see twistedPairSnap).
     mutable bool snapBuilt = false;
     mutable RunSnap snap;
 };
+
+// WHERE PLACE `u` ALONG THE RUN IS, and which way is across it there: between the two measured places either
+// side of it, so a shape laid along a run that bends bends with it.
+void frameAt(const TwistFrames& f, double u, Vec2& pos, Vec2& n) {
+    const size_t count = std::min({f.u.size(), f.pos.size(), f.n.size()});
+    if (count == 0) {
+        pos = {};
+        n = {0, 1};
+        return;
+    }
+    if (u <= f.u.front() || count == 1) {
+        pos = f.pos.front() + (f.pos.size() > 1 ? (f.pos[1] - f.pos[0]).normalized() * (u - f.u.front()) : Vec2{});
+        n = f.n.front();
+        return;
+    }
+    if (u >= f.u[count - 1]) {
+        const Vec2 d = (f.pos[count - 1] - f.pos[count - 2]).normalized();
+        pos = f.pos[count - 1] + d * (u - f.u[count - 1]);
+        n = f.n[count - 1];
+        return;
+    }
+    const size_t hi = static_cast<size_t>(std::upper_bound(f.u.begin(), f.u.begin() + count, u) - f.u.begin());
+    const size_t lo = hi - 1;
+    const double span = f.u[hi] - f.u[lo];
+    const double t = span > 1e-12 ? (u - f.u[lo]) / span : 0.0;
+    pos = lerp(f.pos[lo], f.pos[hi], t);
+    const Vec2 m = lerp(f.n[lo], f.n[hi], t);
+    n = m.lengthSq() > 1e-18 ? m.normalized() : f.n[lo];
+}
+
+// A LAID-UP BUNDLE SEEN FROM THE SIDE: the strands on the near side, all lying the same way, one beside the
+// next - what a bundle looks like rather than a diagram of how its wires cross. Every strand is a straight
+// band with a rounded end top and bottom, where it goes round the back of the bundle out of sight; the strands
+// behind are not drawn at all. Laid out across the run (u along it, v across), then put on the route.
+//
+// One strand crosses the bundle from edge to edge in half a lay; with N wires laid up, the next one along is a
+// lay over N further on. Each takes most of the room between it and the next, with a thin gap left, so they
+// read as wires lying close side by side and never run into one another.
+std::vector<std::vector<Vec2>> sideViewStrands(const TwistFrames& f) {
+    std::vector<std::vector<Vec2>> out;
+    const double from = f.lead, till = f.len - f.leadB;
+    if (f.straight || f.wires < 2 || f.turn <= 1e-9 || till - from <= 1e-9) return out;
+    // HOW WIDE THE BUNDLE IS: as far out as any wire goes, over the laid-up stretch.
+    double half = 0.0;
+    for (size_t i = 0; i < f.u.size() && i < f.pos.size() && i < f.n.size(); ++i) {
+        if (f.u[i] < from - 1e-9 || f.u[i] > till + 1e-9) continue;
+        for (int wire = 0; wire < f.wires; ++wire)
+            half = std::max(half, std::abs(dot(twistCentre(f, wire, i) - f.pos[i], f.n[i])) + f.thick);
+    }
+    if (half <= 1e-9) half = f.reach + f.thick;
+    if (half <= 1e-9) return out;
+    const double along = f.turn / 2.0;                 // how far along one strand gets crossing the bundle
+    const double step = f.turn / f.wires;              // and how far on the next one is
+    const double slope = std::sqrt(along * along + 4.0 * half * half);
+    const double room = step * (2.0 * half) / slope;   // between two neighbours, square to them
+    const double hw = std::max(0.05, std::min(0.4 * room, half * 0.45));
+    const Vec2 dir{along / slope, 2.0 * half / slope};  // up the strand, in (u, v)
+    const Vec2 side{-dir.y, dir.x};
+    const double reachV = half - hw;                    // where the middle of a rounded end sits
+    if (reachV <= 1e-9) return out;
+    const double alongEnd = reachV * along / half;      // how far along the strand's middle line goes
+    // Clipped to the laid-up stretch: a strand that starts before it or runs on past it is cut where it ends.
+    auto clip = [](std::vector<Vec2> poly, double bound, bool keepAbove) {
+        std::vector<Vec2> kept;
+        const size_t n = poly.size();
+        for (size_t i = 0; i < n; ++i) {
+            const Vec2 a = poly[i], b = poly[(i + 1) % n];
+            const bool inA = keepAbove ? a.x >= bound : a.x <= bound;
+            const bool inB = keepAbove ? b.x >= bound : b.x <= bound;
+            if (inA) kept.push_back(a);
+            if (inA != inB && std::abs(b.x - a.x) > 1e-12) {
+                const double t = (bound - a.x) / (b.x - a.x);
+                kept.push_back(lerp(a, b, t));
+            }
+        }
+        return kept;
+    };
+    constexpr int kArc = 8;
+    for (double s = from - along; s < till + step; s += step) {
+        // The strand's middle line, from its lower end to its upper one, centred on s.
+        const Vec2 lo{s - alongEnd / 2.0, -reachV}, hi{s + alongEnd / 2.0, reachV};
+        std::vector<Vec2> band;
+        // Up one side, round the top, down the other, round the bottom - each long side in pieces, so on a
+        // route that bends it bends too.
+        for (int k = 0; k <= 8; ++k) band.push_back(lerp(lo, hi, k / 8.0) - side * hw);
+        for (int k = 1; k < kArc; ++k) {
+            const double a = -M_PI / 2.0 + M_PI * k / kArc;
+            band.push_back(hi + dir * (hw * std::cos(a)) + side * (hw * std::sin(a)));
+        }
+        for (int k = 0; k <= 8; ++k) band.push_back(lerp(hi, lo, k / 8.0) + side * hw);
+        for (int k = 1; k < kArc; ++k) {
+            const double a = M_PI / 2.0 + M_PI * k / kArc;
+            band.push_back(lo + dir * (hw * std::cos(a)) + side * (hw * std::sin(a)));
+        }
+        band = clip(clip(band, from, true), till, false);
+        if (band.size() < 3) continue;
+        std::vector<Vec2> world;
+        world.reserve(band.size() + 1);
+        for (const Vec2& p : band) {
+            Vec2 pos, n;
+            frameAt(f, p.x, pos, n);
+            world.push_back(pos + n * p.y);
+        }
+        world.push_back(world.front());   // closed
+        out.push_back(std::move(world));
+    }
+    return out;
+}
 
 QString twistKey(const Entity& e) {
     QString k = e.id;
@@ -1290,6 +1401,8 @@ QString twistKey(const Entity& e) {
         k += QLatin1Char('/');
     };
     for (const char* m : {"twistWidth", "twistPitch", "twistEnds", "twistWires"}) put(m);
+    // How it is drawn: woven, or seen from the side. A shape, so a key - or the old look would be kept.
+    k += QStringLiteral("|look:") + e.meta.value(QStringLiteral("twistLook")).toString();
     k += twistedPairSpread(e);
     k += e.meta.value(QLatin1String("twistStraight")).toBool() ? QLatin1String("|straight")
                                                                 : QLatin1String("|laid");
@@ -1573,6 +1686,7 @@ const TwistCached* twistCached(const Entity& pair) {
             }
         }
     }
+    if (pair.meta.value(QStringLiteral("twistLook")).toString() == QLatin1String("side")) c.side = sideViewStrands(f);
     // Bounded: a session that draws and re-draws pairs all day does not keep every one of them.
     if (cache.size() > 64) cache.clear();
     return &*cache.insert(key, std::move(c));
@@ -1635,6 +1749,12 @@ std::vector<std::vector<Vec2>> twistedPairEndSleeves(const Entity& pair) {
         if (f.spreadEnd) sleeve(mid, true);
     }
     return out;
+}
+
+std::vector<std::vector<Vec2>> twistedPairSideView(const Entity& pair) {
+    if (pair.type != EntityType::TwistedPair) return {};
+    const TwistCached* c = twistCached(pair);
+    return c ? c->side : std::vector<std::vector<Vec2>>{};
 }
 
 std::vector<std::vector<Vec2>> twistedPairBody(const Entity& pair) {
@@ -1815,11 +1935,43 @@ const RunSnap* twistedPairSnap(const Entity& pair) {
     RunSnap& s = c->snap;
     const TwistFrames& f = c->frames;
     std::vector<std::vector<Vec2>> drawn = c->strands;
+    // SEEN FROM THE SIDE, the laid-up stretch is its strands' outlines and not the weave: the woven lines are
+    // kept only where they are still drawn, outside it - the fans and the straight ends.
+    if (!c->side.empty()) {
+        drawn.clear();
+        auto placeOf = [&f](const Vec2& p) {
+            double bestU = 0.0, best = 1e300;
+            for (size_t i = 1; i < f.pos.size() && i < f.u.size(); ++i) {
+                const auto hit = closestPointOnSegment(p, f.pos[i - 1], f.pos[i]);
+                if (hit.distance < best) {
+                    best = hit.distance;
+                    bestU = f.u[i - 1] + (f.u[i] - f.u[i - 1]) * hit.t;
+                }
+            }
+            return bestU;
+        };
+        for (const std::vector<Vec2>& strand : c->strands) {
+            std::vector<Vec2> piece;
+            for (size_t i = 0; i < strand.size(); ++i) {
+                const double u = placeOf(strand[i]);
+                if (u > f.lead + 1e-9 && u < f.len - f.leadB - 1e-9) {
+                    if (!piece.empty()) piece.push_back(strand[i]);   // to the edge of the stretch
+                    if (piece.size() >= 2) drawn.push_back(piece);
+                    piece.clear();
+                } else {
+                    if (piece.empty() && i > 0) piece.push_back(strand[i - 1]);
+                    piece.push_back(strand[i]);
+                }
+            }
+            if (piece.size() >= 2) drawn.push_back(piece);
+        }
+        for (const std::vector<Vec2>& band : c->side) drawn.push_back(band);
+    }
     for (const std::vector<Vec2>& cap : c->caps) drawn.push_back(cap);
     for (const std::vector<Vec2>& outline : c->body) drawn.push_back(outline);
     // A LAID-UP BUNDLE'S OUTLINE, the line along the outside of its outer strands - drawn, so caught.
     // Worked out as twistedPairWeave draws it.
-    if (!f.straight && f.wires >= 3 && !f.cableBody) {
+    if (!f.straight && f.wires >= 3 && !f.cableBody && c->side.empty()) {
         std::vector<Vec2> high, low;
         for (size_t i = 0; i < f.u.size() && i < f.pos.size() && i < f.n.size(); ++i) {
             if (f.u[i] < f.lead - 1e-9 || f.u[i] > f.len - f.leadB + 1e-9) continue;
@@ -1932,6 +2084,8 @@ std::vector<TwistedPairStretch> twistedPairWeave(const Entity& pair) {
         });
         TwistedPairStretch s;
         s.wires.reserve(order.size());
+        // WITHIN THE LAID-UP STRETCH, which a side view draws in its own way (twistedPairSideView).
+        s.laid = !f.straight && mid > f.lead - 1e-9 && mid < f.len - f.leadB + 1e-9;
         for (const int k : order) {   // back to front, so the near ones are laid over the far ones
             // ONLY OVER THE PART OF THE RUN THIS WIRE IS DRAWN ON - the same answer the strands are
             // made from, kept once (see TwistCached::spans). Taking the whole stretch instead drew
@@ -1962,6 +2116,7 @@ std::vector<TwistedPairStretch> twistedPairWeave(const Entity& pair) {
     // Drawn last, it finishes the outline without hiding the wire crossings inside.
     if (rope && !f.cableBody) {
         TwistedPairStretch side;
+        side.laid = true;
         TwistedPairStretch::Wire edges;
         // THE ENVELOPE FOLLOWS THE STRANDS instead of being two straight rails. Its shallow
         // scallops follow the lay, and the held wire positions keep it inside a tight routed knee.

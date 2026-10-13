@@ -468,6 +468,30 @@ void MainWindow::buildHarnessMechanicalTab() {
                 connect(editor_, &Editor::overlayChanged, this, syncRouteAngle);
                 connect(editor_, &Editor::toolChanged, this, [syncRouteAngle](ToolId){ syncRouteAngle(); });
                 syncRouteAngle();
+                // HOW A LAID-UP BUNDLE LOOKS: the weave, which shows how the wires cross, or the bundle seen from
+                // the side - its near strands lying one beside the next, the ones behind out of sight.
+                twistLookLabel_ = new QLabel(QStringLiteral("Look"), optW);
+                twistLookLabel_->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
+                twistLookCombo_ = new QComboBox(optW);
+                twistLookCombo_->setObjectName(QStringLiteral("twistLookCombo"));
+                twistLookCombo_->addItem(QStringLiteral("Woven"), false);
+                twistLookCombo_->addItem(QStringLiteral("Side view"), true);
+                twistLookCombo_->setCurrentIndex(editor_->twistSideView() ? 1 : 0);
+                twistLookCombo_->setMinimumWidth(84);
+                twistLookCombo_->setToolTip(QStringLiteral(
+                    "How the laid-up bundle is drawn. Woven: every wire, crossing over and under the others. "
+                    "Side view: the bundle as it looks - the strands on the near side lying one beside the "
+                    "next, all the same way, the ones behind out of sight."));
+                og->addWidget(twistLookLabel_, 0, 1);
+                og->addWidget(twistLookCombo_, 1, 1);
+                connect(twistLookCombo_, &QComboBox::currentIndexChanged, this, [this](int at) {
+                    if (!twistLookCombo_) return;
+                    editor_->setTwistSideView(twistLookCombo_->itemData(at).toBool());
+                    canvas_->update();   // a pinned bundle re-draws the other way
+                    statusBar()->showMessage(QStringLiteral("Twisted bundle: drawn %1")
+                                                 .arg(twistLookCombo_->itemText(at).toLower()),
+                                             2000);
+                });
                 for (int gap : {2, 5, 8, 11}) fg->setColumnMinimumWidth(gap, 10);
                 fg->setColumnMinimumWidth(14, 10);
                 for (int gap : {2, 5, 8, 11}) bg->setColumnMinimumWidth(gap, 10);

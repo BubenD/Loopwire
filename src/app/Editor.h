@@ -308,6 +308,9 @@ public:
     // pair laid up. Only means anything while the body IS the wires.
     RunLay twistLay() const { return twistLay_; }
     void setTwistLay(RunLay lay);
+    // A laid-up bundle seen from the side (its near strands, all lying one way) rather than woven.
+    bool twistSideView() const { return twistSideView_; }
+    void setTwistSideView(bool on);
     void setTwistBodyTransition(bool on);
     // AND WHICH OF THE TWO SORTS OF TUBING a heatshrink body is: one sleeve ALONG the run, which is
     // what it has always been, or a cable with a piece fitted OVER each of its ends.
@@ -1988,6 +1991,7 @@ private:
     bool twistBodySidesSame_ = true;               // both its ends shrink alike
     RunEnds twistTransitionEnds_ = RunEnds::Both;  // which ends of a cable wear the boot
     RunLay twistLay_ = RunLay::Straight;           // and how the gathered wires run
+    bool twistSideView_ = false;                    // a laid-up bundle drawn seen from the side
     bool twistBodyOverCable_ = false;              // tubing along the run, or over a cable
     double twistBodyFace_ = 0.0;                   // the end face across; 0 = the drawing's own
     double twistBodyShrink_ = -1.0;                // and over what length; <0 = the drawing's own

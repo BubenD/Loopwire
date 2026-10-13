@@ -7672,6 +7672,61 @@ int run_harness_tests() {
         }
     }
 
+    // ---- A LAID-UP BUNDLE SEEN FROM THE SIDE -----------------------------------------------------------------
+    // Its near strands, one beside the next, all lying the same way; nothing of the weave over that stretch.
+    {
+        Entity run;
+        run.type = EntityType::TwistedPair;
+        run.id = QStringLiteral("side-bundle");
+        run.points = {{0.0, 0.0}, {160.0, 0.0}};
+        run.a = run.points.front();
+        run.b = run.points.back();
+        run.meta.insert(QStringLiteral("twistWires"), 4);
+        check(twistedPairSideView(run).empty(), "side view: a bundle that does not ask for it is woven");
+        run.meta.insert(QStringLiteral("twistLook"), QStringLiteral("side"));
+        const auto bands = twistedPairSideView(run);
+        bool closed = true, inside = true, sameWay = true;
+        double lo = 1e9, hi = -1e9;
+        double firstSlope = 0.0;
+        std::vector<double> middles;
+        for (const auto& band : bands) {
+            closed = closed && band.size() >= 4 && distance(band.front(), band.back()) < 1e-9;
+            Vec2 c{0, 0};
+            for (const Vec2& p : band) {
+                lo = std::min(lo, p.y);
+                hi = std::max(hi, p.y);
+                inside = inside && p.x > -1e-6 && p.x < 160.0 + 1e-6;
+                c = c + p;
+            }
+            middles.push_back(c.x / band.size());
+            // Which way it leans: its lowest point against its highest.
+            Vec2 bottom = band.front(), top = band.front();
+            for (const Vec2& p : band) {
+                if (p.y < bottom.y) bottom = p;
+                if (p.y > top.y) top = p;
+            }
+            const double lean = top.x - bottom.x;
+            if (std::abs(lean) > 1e-6) {
+                if (firstSlope == 0.0) firstSlope = lean;
+                sameWay = sameWay && (lean > 0) == (firstSlope > 0);
+            }
+        }
+        std::printf("  side view: %d strand(s), across %.2f..%.2f\n", int(bands.size()), lo, hi);
+        check(bands.size() >= 8, "side view: the laid-up stretch is a row of strands");
+        check(closed, "side view: each strand is a closed outline - a wire, not two lines");
+        check(inside, "side view: and none runs past the ends of the run");
+        check(sameWay, "side view: every strand lies the same way");
+        check(hi > 0.5 && lo < -0.5 && std::abs(hi + lo) < 0.5, "side view: the strands cross the bundle from edge to edge");
+        std::sort(middles.begin(), middles.end());
+        bool apart = true;
+        for (size_t i = 1; i < middles.size(); ++i) apart = apart && middles[i] - middles[i - 1] > 0.5;
+        check(apart, "side view: one beside the next, not piled on each other");
+        int laidShown = 0;
+        for (const auto& s : twistedPairWeave(run))
+            if (s.laid) ++laidShown;
+        check(laidShown > 0, "side view: the weave says which of its stretches the side view replaces");
+    }
+
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

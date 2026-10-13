@@ -2820,7 +2820,11 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             p.drawPolyline(poly);
         };
         const QPen wirePen = p.pen();
-        for (const auto& s : twistedPairWeave(e))
+        // SEEN FROM THE SIDE, the laid-up stretch is its near strands, drawn below; the weave is drawn only
+        // where it still is - the fans and the straight ends.
+        const std::vector<std::vector<Vec2>> sideView = twistedPairSideView(e);
+        for (const auto& s : twistedPairWeave(e)) {
+            if (s.laid && !sideView.empty()) continue;
             for (const auto& wire : s.wires) {   // back to front
                 if (wire.outline.size() > 2) {
                     QPolygonF fill;
@@ -2835,6 +2839,21 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 stroke(wire.edgeA);
                 stroke(wire.edgeB);
             }
+        }
+        // EACH STRAND ON THE NEAR SIDE, one beside the next. Filled with the ground, like a wire, so it is a
+        // thing lying on top and not two lines; outlined all the way round, its rounded ends included.
+        for (const std::vector<Vec2>& band : sideView) {
+            if (band.size() < 3) continue;
+            QPolygonF outline;
+            outline.reserve(static_cast<int>(band.size()));
+            for (const Vec2& v : band) outline << vt.toScreen(v);
+            p.setPen(Qt::NoPen);
+            p.setBrush(g_bgColor);
+            p.drawPolygon(outline);
+            p.setBrush(Qt::NoBrush);
+            p.setPen(wirePen);
+            p.drawPolyline(outline);
+        }
         // AND THE LINE ACROSS EACH WIRE WHERE IT IS CUT. Two edges and nothing else is an open
         // channel: the eye reads them as a wire because they run together, and then they simply
         // stop. A cut end is a line, and a harness drawing shows it. Drawn last, over the fill of

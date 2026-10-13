@@ -971,6 +971,8 @@ private:
     QComboBox* twistTransitionCombo_ = nullptr;
     QLabel* twistTransitionLabel_ = nullptr;
     QComboBox* twistLayCombo_ = nullptr;
+    QComboBox* twistLookCombo_ = nullptr;
+    QLabel* twistLookLabel_ = nullptr;
     QLabel* twistLayLabel_ = nullptr;
     QCheckBox* twistBodyOverCableCheck_ = nullptr;
     QDoubleSpinBox* twistBodyWidthSpin_ = nullptr;

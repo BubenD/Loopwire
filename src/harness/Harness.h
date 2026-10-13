@@ -316,8 +316,13 @@ struct TwistedPairStretch {
         std::vector<Vec2> edgeA, edgeB; // and then its own two edges
     };
     std::vector<Wire> wires;            // back to front
+    bool laid = false;                  // within the laid-up stretch, which a side view draws its own way
 };
 std::vector<TwistedPairStretch> twistedPairWeave(const Entity& pair);
+// THE LAID-UP STRETCH SEEN FROM THE SIDE, when the run is drawn that way (meta twistLook "side"): the strands on
+// the near side of the bundle, all lying the same way, each a closed outline - a straight band rounded at both
+// ends where it goes round the back. The weave is not drawn over that stretch. Empty for the woven look.
+std::vector<std::vector<Vec2>> twistedPairSideView(const Entity& pair);
 bool runPointAtFraction(const Entity& e, double t, Vec2& pos, Vec2& dir);
 double runFractionNearest(const Entity& e, const Vec2& p);
 // Read / write the stored per-instance fractions (padded to `count`, evenly spaced).

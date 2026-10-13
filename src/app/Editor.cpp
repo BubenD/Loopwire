@@ -829,6 +829,37 @@ void addSleevePhysicalJoints(const Entity& e, std::vector<Grip>& g) {
             g.push_back({at, GripRole::LineMid, 0});
 }
 
+std::pair<Vec2, Vec2> visibleWallOf(const Entity& e, int seg);
+
+// THE TWO ENDS OF A CUT CORNER: where a chamfer or a fillet at corner v of a rectangle, polygon or polyline
+// leaves the line coming in and joins the line going out. Those are drawn; the corner itself is not - it is
+// where the two lines would have met. False for a corner that is not cut.
+bool cutCornerEnds(const Entity& e, int v, Vec2& before, Vec2& after) {
+    const int n = static_cast<int>(e.points.size());
+    if (n < 3 || v < 0 || v >= n) return false;
+    if (!e.meta.contains(QStringLiteral("cornerChamfers")) && !e.meta.contains(QStringLiteral("cornerRadii")))
+        return false;
+    const bool closed = e.type == EntityType::Rect || e.type == EntityType::Polygon;
+    if (!closed && (v == 0 || v == n - 1)) return false;
+    before = visibleWallOf(e, (v - 1 + n) % n).second;
+    after = visibleWallOf(e, v).first;
+    return distance(before, e.points[v]) > 1e-9 || distance(after, e.points[v]) > 1e-9;
+}
+
+// A CORNER'S HANDLES: on the corner, or - where it is cut - one on each end of the cut, on what is drawn. Each
+// carries its offset from the corner, so dragging it moves the corner by as much as the hand moves: the two
+// lines that meet there follow, and the chamfer or fillet goes with them. A handle out in the air at a corner
+// that is not drawn was the one place on the shape there was nothing to take hold of.
+void addCornerGrips(const Entity& e, int v, GripRole role, std::vector<Grip>& g) {
+    Vec2 before, after;
+    if (cutCornerEnds(e, v, before, after)) {
+        g.push_back({before, role, v, before - e.points[v]});
+        g.push_back({after, role, v, after - e.points[v]});
+    } else {
+        g.push_back({e.points[v], role, v});
+    }
+}
+
 std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {},
                           const Document* doc = nullptr) {
     std::vector<Grip> g;
@@ -1124,8 +1155,7 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
             // Offsetting changed the vertex count (tight bends) — fall back to the
             // centerline vertices.
         }
-        for (int i = 0; i < static_cast<int>(e.points.size()); ++i)
-            g.push_back({e.points[i], GripRole::Vertex, i});
+        for (int i = 0; i < static_cast<int>(e.points.size()); ++i) addCornerGrips(e, i, GripRole::Vertex, g);
         break;
     case EntityType::Spline:
     case EntityType::Wipeout:
@@ -1241,8 +1271,7 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
             g.push_back({{(e.a.x + e.b.x) / 2.0, (e.a.y + e.b.y) / 2.0}, GripRole::LineMid, 0});
             break;
         }
-        for (int i = 0; i < static_cast<int>(e.points.size()); ++i)
-            g.push_back({e.points[i], GripRole::Vertex, i});
+        for (int i = 0; i < static_cast<int>(e.points.size()); ++i) addCornerGrips(e, i, GripRole::Vertex, g);
         // Centre joint: a move handle (and an object-snap point) at the centroid.
         if (!e.points.empty()) {
             Vec2 c{0, 0};
@@ -1289,10 +1318,13 @@ std::vector<Grip> gripsOf(const Entity& e, const std::vector<Vec2>& pinEnds = {}
     case EntityType::Image:   // a picture is resized by dragging a corner, or a side
     case EntityType::Rect:
         for (int i = 0; i < static_cast<int>(e.points.size()); ++i) {
-            g.push_back({e.points[i], GripRole::RectCorner, i});
-            // Wall midpoint grip for resizing one side.
-            const Vec2 mid = lerp(e.points[i], e.points[(i + 1) % e.points.size()], 0.5);
-            g.push_back({mid, GripRole::RectEdge, i});
+            addCornerGrips(e, i, GripRole::RectCorner, g);
+            // Wall midpoint grip for resizing one side - the middle of the side as drawn, which a cut corner
+            // shortens.
+            const auto wall = e.type == EntityType::Rect ? visibleWallOf(e, i)
+                                                         : std::pair<Vec2, Vec2>{e.points[i],
+                                                                                 e.points[(i + 1) % e.points.size()]};
+            g.push_back({lerp(wall.first, wall.second, 0.5), GripRole::RectEdge, i});
         }
         // A table also gets grips on each INTERIOR grid line: drag a vertical line to
         // resize the columns either side of it, a horizontal line to resize the rows.
@@ -9353,7 +9385,7 @@ void Editor::applyEditDrag(const Vec2& target) {
             }
             if (index >= 0 && index < static_cast<int>(e->points.size())) {
                 if (e->type == EntityType::Polygon && e->points.size() >= 3)
-                    e->points = regularPolygonPoints(polygonCenter(e->points), target,
+                    e->points = regularPolygonPoints(polygonCenter(e->points), target - off,
                                                      static_cast<int>(e->points.size()), index);
                 else
                     // `off` is the grip's offset from the stored point (0 normally; for
@@ -9414,7 +9446,10 @@ void Editor::applyEditDrag(const Vec2& target) {
         case GripRole::RectCorner:
             if (e->points.size() == 4) {
                 const Vec2 opp = e->points[(index + 2) % 4];
-                Bounds b; b.expand(opp); b.expand(target);
+                // The corner goes where the hand takes it, less the handle's offset from it: a handle on
+                // the end of a chamfer moves the corner, not the chamfer's end, on to the cursor.
+                const Vec2 corner = target - off;
+                Bounds b; b.expand(opp); b.expand(corner);
                 // A picture keeps its proportions while a corner is dragged: stretching a logo out of
                 // shape is almost never what was meant, and the lock can be turned off in Properties
                 // (or the side grips used) when it is.
@@ -15131,7 +15166,11 @@ QString Editor::balloonAt(const Vec2& p) const {
     return {};
 }
 
-std::pair<Vec2, Vec2> Editor::visibleWall(const Entity& e, int seg) const {
+std::pair<Vec2, Vec2> Editor::visibleWall(const Entity& e, int seg) const { return visibleWallOf(e, seg); }
+
+namespace {
+// Where side `seg` of a shape is drawn: from corner to corner, less what a chamfer or a fillet takes off each end.
+std::pair<Vec2, Vec2> visibleWallOf(const Entity& e, int seg) {
     const int n = static_cast<int>(e.points.size());
     if (n < 2) return {e.points.empty() ? Vec2{} : e.points[0], e.points.empty() ? Vec2{} : e.points[0]};
     const bool closed = e.type == EntityType::Rect || e.type == EntityType::Polygon;
@@ -15169,6 +15208,7 @@ std::pair<Vec2, Vec2> Editor::visibleWall(const Entity& e, int seg) const {
     const double sB = std::min(setbackAt((seg + 1) % n, false), edgeLen);
     return {a + ab * sA, b - ab * sB};
 }
+} // namespace
 
 void Editor::handlePickModifyPress(const Vec2& p) {
     auto hit = hitTest(p);
@@ -17817,6 +17857,9 @@ void Editor::writeBundleMeta(Entity& e, bool straight) const {
     // can be turned into the other from its properties; one that says nothing has to be guessed at,
     // and the guess is wrong for exactly the drawings that have both on them.
     e.meta.insert(QStringLiteral("twistStraight"), straight);
+    // HOW A LAID-UP BUNDLE LOOKS: written only when it is seen from the side, so one drawn the woven way
+    // carries nothing extra and opens on an older build as it always did.
+    if (!straight && twistSideView_) e.meta.insert(QStringLiteral("twistLook"), QStringLiteral("side"));
     if (straight && twistLane_ > 1e-9)
         e.meta.insert(QStringLiteral("twistLane"), twistLane_);
     // A TRANSITION ON THE BODY END, and how its free end is finished. Written only when there is one
@@ -18032,6 +18075,12 @@ void Editor::setTwistTransitionEnds(RunEnds ends) {
     if (twistTransitionEnds_ == ends) return;
     twistTransitionEnds_ = ends;
     emit overlayChanged();   // the boots come and go, and the fans start from a new place
+}
+
+void Editor::setTwistSideView(bool on) {
+    if (twistSideView_ == on) return;
+    twistSideView_ = on;
+    emit overlayChanged();   // a pinned bundle is drawn the other way
 }
 
 void Editor::setTwistLay(RunLay lay) {

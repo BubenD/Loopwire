@@ -5076,6 +5076,13 @@ void MainWindow::syncBreakOptions() {
             QSignalBlocker b(twistWiresSpin_);
             twistWiresSpin_->setValue(editor_->twistWires());
         }
+        // THE LOOK IS A LAID-UP BUNDLE'S: a straight run has no weave to see from the side.
+        if (twistLookCombo_ && twistLookLabel_) {
+            twistLookCombo_->setVisible(twisting && !straightRun);
+            twistLookLabel_->setVisible(twisting && !straightRun);
+            QSignalBlocker b(twistLookCombo_);
+            twistLookCombo_->setCurrentIndex(editor_->twistSideView() ? 1 : 0);
+        }
         // WHICH END FANS IS ASKED ONCE. Left / right / both names the ends as sides of the sheet;
         // Single end names them in draw order and has its own box for it. Showing both at once would
         // be two controls for one setting, and the left/right one cannot even say "start" - it used
@@ -10274,6 +10281,20 @@ void MainWindow::refreshProperties() {
                      false, [this](const QString& t) {
                          editor_->setSelectionMetaBool(QStringLiteral("twistStraight"),
                                                        t == QLatin1String("Straight"));
+                     });
+        }
+        // AND HOW A LAID-UP ONE LOOKS: woven, or seen from the side - so a bundle already drawn can be shown
+        // either way without drawing it again.
+        if (bareWires && !straight) {
+            const bool sideView = e->meta.value(QStringLiteral("twistLook")).toString() == QLatin1String("side");
+            addCombo(QStringLiteral("Look"), {QStringLiteral("Woven"), QStringLiteral("Side view")},
+                     mv(QStringLiteral("twistLook")).isVaries()
+                         ? QStringLiteral("#Value")
+                         : (sideView ? QStringLiteral("Side view") : QStringLiteral("Woven")),
+                     false, [this](const QString& t) {
+                         editor_->setSelectionMeta(QStringLiteral("twistLook"),
+                                                   t == QLatin1String("Side view") ? QStringLiteral("side")
+                                                                                   : QStringLiteral("woven"));
                      });
         }
         // And the two a straight run lays itself out from: how far apart the spread wires sit, and
