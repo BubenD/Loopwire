@@ -319,12 +319,11 @@ struct TwistedPairStretch {
     bool laid = false;                  // within the laid-up stretch, which a side view draws its own way
 };
 std::vector<TwistedPairStretch> twistedPairWeave(const Entity& pair);
-// THE LAID-UP STRETCH SEEN FROM THE SIDE - the way a laid-up run is drawn unless it says it is woven (meta twistLook
-// "woven"): the outline of each strand on the near side, as the 3D view draws the bundle, each a helix's near half
-// a wire's radius either side with a rounded end where it goes round the back. Given half a strand at a time, in
-// the order they are to be drawn: each piece's `fill` (in the ground colour) hides what is behind it, and its
-// `lines` are its outline - never the cut across the middle of a strand, which is not an edge of anything. The
-// weave is not drawn over that stretch. Empty for a woven run.
+// THE LAID-UP STRETCH SEEN FROM THE SIDE - how a bundle of three or more wires is drawn unless it says it is woven
+// (meta twistLook "woven"), and a twisted pair only when it asks for it (twistLook "side"): each strand a slanted band
+// reaching right across, its corners rounded, drawn with a pair's proportions. Each piece's `fill` (in the ground
+// colour) hides what is behind it and its `lines` are its outline. The weave is not drawn over that stretch. Empty
+// for a woven run.
 struct SideStrand {
     std::vector<Vec2> fill;
     std::vector<std::vector<Vec2>> lines;

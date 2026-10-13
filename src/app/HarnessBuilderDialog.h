@@ -198,6 +198,7 @@ private:
     QStackedWidget* pages_ = nullptr;
     QPushButton* backBtn_ = nullptr;
     QPushButton* nextBtn_ = nullptr;
+    bool previewBottom_ = false;              // the drawing under the step rather than beside it (remembered)
     QWidget* shieldCards_ = nullptr;          // the Shields step: a card a connector
     QStackedWidget* viewStack_ = nullptr;     // the drawing, or the pin map
     QSplitter* mainSplit_ = nullptr;          // the step's page, and the drawing/pin map beside it - or under it

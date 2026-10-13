@@ -9808,6 +9808,46 @@ void testRoundSixtyEight() {
     check(angles.size() >= 3 && std::abs(typical - 67.0) < 1.5, "lacing: the cord's turns at 67 degrees to the cable");
 }
 
+// A CONNECTOR BUILT FROM ITS FACE: extruded, a part with a pinout starts from the pinout's outline and carries it along
+// the mechanical drawing's contour - a round face makes a round body, as tall as the drawing at every step.
+void testRoundSixtyNine() {
+    LibraryPart part;
+    // The mechanical drawing: a housing 30 long and 10 tall, a step down to 6 tall for its last 10.
+    Entity body;
+    body.type = EntityType::Polyline;
+    body.points = {{0, -5}, {20, -5}, {20, -3}, {30, -3}, {30, 3}, {20, 3}, {20, 5}, {0, 5}, {0, -5}};
+    part.mechanical = partDrawingFromEntities({body});
+    Mesh3D box = partDrawingSolid(part, false);
+    // The pinout: a round face.
+    Entity face;
+    face.type = EntityType::Circle;
+    face.center = {0, 0};
+    face.radius = 5;
+    part.fanout = partDrawingFromEntities({face});
+    Mesh3D round = partDrawingSolid(part, false);
+    // At the middle of the housing's first stretch, how far the solid reaches up (y) and across (z), and whether a
+    // point half way round between them is on a circle or out at a box's corner.
+    auto reach = [](const Mesh3D& m, double atX, double tol) {
+        double up = 0.0, across = 0.0, corner = 0.0;
+        for (const V3& v : m.v) {
+            if (std::abs(v.x - atX) > tol) continue;
+            up = std::max(up, std::abs(v.y));
+            across = std::max(across, std::abs(v.z));
+            corner = std::max(corner, std::min(std::abs(v.y), std::abs(v.z)));
+        }
+        return std::array<double, 3>{up, across, corner};
+    };
+    const auto boxAt = reach(box, -5.0, 0.4), roundAt = reach(round, -5.0, 0.4), stepAt = reach(round, 10.0, 0.4);
+    std::printf("  face build: box %.2f up %.2f across %.2f at a corner; from the face %.2f up %.2f across %.2f at 45 deg;"
+                " past the step %.2f up\n",
+                boxAt[0], boxAt[1], boxAt[2], roundAt[0], roundAt[1], roundAt[2], stepAt[0]);
+    check(!round.v.empty(), "face build: a part with a pinout is built from its face");
+    check(std::abs(roundAt[0] - 5.0) < 0.3 && std::abs(roundAt[1] - 5.0) < 0.3,
+          "face build: as tall as the drawing, and as wide - the face is round");
+    check(roundAt[2] < 4.0 && boxAt[2] > 4.5, "face build: round, not a box - nothing out at a corner");
+    check(std::abs(stepAt[0] - 3.0) < 0.4, "face build: and it follows the drawing's contour down the step");
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -9900,6 +9940,7 @@ int run_brickharness_tests() {
     ROUND(testRoundSixtySix);
     ROUND(testRoundSixtySeven);
     ROUND(testRoundSixtyEight);
+    ROUND(testRoundSixtyNine);
 #undef ROUND
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;

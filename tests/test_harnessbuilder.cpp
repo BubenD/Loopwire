@@ -87,6 +87,17 @@ HarnessDef sampleHarness() {
     return d;
 }
 
+// A NEW BUILDER STARTS EMPTY. The tests that want the usual pair of ends add them, as somebody would: Left, then Right.
+void addTwoEnds(HarnessBuilderDialog& dialog) {
+    for (const char* side : {"Left", "Right"})
+        for (QPushButton* b : dialog.findChildren<QPushButton*>())
+            if (b->text() == QLatin1String(side)) {
+                b->click();
+                break;
+            }
+    QApplication::processEvents();
+}
+
 bool sameWires(const HarnessDef& a, const HarnessDef& b) {
     if (a.wires.size() != b.wires.size()) return false;
     for (size_t i = 0; i < a.wires.size(); ++i) {
@@ -135,6 +146,7 @@ void testPhaseZero() {
     HarnessBuilderDialog dialog(&editor);
     dialog.show();
     QApplication::processEvents();
+    addTwoEnds(dialog);
     const size_t start = dialog.definition().connectors.size();
     QPushButton* addLeft = nullptr;
     for (QPushButton* b : dialog.findChildren<QPushButton*>())
@@ -180,6 +192,7 @@ void testPhaseOne() {
     dialog.resize(1400, 860);
     dialog.show();
     QApplication::processEvents();
+    addTwoEnds(dialog);
     auto* steps = dialog.findChild<QListWidget*>(QStringLiteral("harnessBuilderSteps"));
     auto* pages = dialog.findChild<QStackedWidget*>(QStringLiteral("harnessBuilderPages"));
     QStringList titles;
@@ -258,6 +271,7 @@ void testStepsRefined() {
     dialog.resize(1400, 860);
     dialog.show();
     QApplication::processEvents();
+    addTwoEnds(dialog);
     QTableWidget* connectorTable = nullptr;
     for (QTableWidget* t : dialog.findChildren<QTableWidget*>())
         if (t->columnCount() == 16 && t->horizontalHeaderItem(0) && t->horizontalHeaderItem(0)->text() == QLatin1String("Side")) connectorTable = t;
@@ -423,6 +437,7 @@ void testShieldConnectAndPinLight() {
     dialog.resize(1400, 860);
     dialog.show();
     QApplication::processEvents();
+    addTwoEnds(dialog);
     auto settle = [] { for (int k = 0; k < 4; ++k) QApplication::processEvents(); };
     dialog.setStep(1);   // Wires
     QPushButton* addWire = nullptr;

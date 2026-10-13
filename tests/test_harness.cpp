@@ -7686,52 +7686,37 @@ int run_harness_tests() {
         run.a = run.points.front();
         run.b = run.points.back();
         run.meta.insert(QStringLiteral("twistWires"), 4);
-        // Seen from the side is how a laid-up run is drawn; woven only when it says so.
+        // A bundle is drawn seen from the side; woven only when it says so.
         check(!twistedPairSideView(run).empty(), "side view: a bundle that says nothing is drawn seen from the side");
         Entity woven = run;
         woven.meta.insert(QStringLiteral("twistLook"), QStringLiteral("woven"));
         check(twistedPairSideView(woven).empty(), "side view: one that says it is woven is woven");
         const auto pieces = twistedPairSideView(run);
-        bool inside = true, allLines = true;
+        bool inside = true, closed = true;
         double lo = 1e9, hi = -1e9;
-        int lowerHalves = 0, upperHalves = 0;
+        int spanning = 0;
         for (const SideStrand& piece : pieces) {
-            allLines = allLines && !piece.lines.empty();
-            double sumY = 0.0;
-            int count = 0;
+            closed = closed && piece.lines.size() == 1 && piece.lines.front() == piece.fill;
+            double plo = 1e9, phi = -1e9;
             for (const Vec2& p : piece.fill) {
                 lo = std::min(lo, p.y);
                 hi = std::max(hi, p.y);
+                plo = std::min(plo, p.y);
+                phi = std::max(phi, p.y);
                 inside = inside && p.x > -1e-6 && p.x < 160.0 + 1e-6;
-                sumY += p.y;
-                ++count;
             }
-            if (count > 0) (sumY / count < 0 ? lowerHalves : upperHalves) += 1;
+            // A band reaches right across the bundle, its ends on the bundle's two edges.
+            if (plo < -2.0 && phi > 2.0) ++spanning;
         }
-        // THE OUTLINE NEVER CROSSES THE MIDDLE: each half's lines stop at the middle of the bundle, where the two
-        // halves of a strand meet - no line is drawn across a strand there.
-        bool noCut = true;
-        for (const SideStrand& piece : pieces)
-            for (const std::vector<Vec2>& line : piece.lines)
-                for (size_t i = 1; i < line.size(); ++i) {
-                    const Vec2 d = line[i] - line[i - 1];
-                    // A piece running square across the run, at the middle, would be the cut.
-                    if (std::abs(line[i].y) < 1e-6 && std::abs(line[i - 1].y) < 1e-6 && d.length() > 1e-6) noCut = false;
-                }
-        std::printf("  side view: %d half strand(s) (%d lower, %d upper), across %.2f..%.2f\n", int(pieces.size()),
-                    lowerHalves, upperHalves, lo, hi);
-        check(lowerHalves >= 8 && upperHalves >= 8, "side view: the laid-up stretch is a row of strands, each in two halves");
-        check(allLines, "side view: every half strand has its outline");
+        std::printf("  side view: %d band(s), %d right across, across %.2f..%.2f\n", int(pieces.size()), spanning, lo, hi);
+        check(pieces.size() >= 8, "side view: the laid-up stretch is a row of bands");
+        check(closed, "side view: each band is drawn whole - its outline is the edge of what it fills");
         check(inside, "side view: and none runs past the ends of the run");
-        check(hi > 0.5 && lo < -0.5 && std::abs(hi + lo) < 0.5, "side view: the strands cross the bundle from edge to edge");
-        check(noCut, "side view: no line across a strand where its two halves meet");
-        int laidShown = 0;
-        for (const auto& s : twistedPairWeave(run))
-            if (s.laid) ++laidShown;
-        check(laidShown > 0, "side view: the weave says which of its stretches the side view replaces");
+        check(spanning >= 0.8 * pieces.size(), "side view: the bands reach right across the bundle");
+        check(hi > 0.5 && lo < -0.5 && std::abs(hi + lo) < 0.5, "side view: from edge to edge");
     }
 
-    // ---- A TWISTED PAIR IS ITS BANDS; A BUNDLE IS A ROPE OF TWO STRANDS -----------------------------------
+    // ---- A TWISTED PAIR IS WOVEN; A BUNDLE IS ITS BANDS, AS A PAIR'S WOULD BE -------------------------------
     {
         auto runOf = [](int wires) {
             Entity run;
@@ -7743,31 +7728,18 @@ int run_harness_tests() {
             run.meta.insert(QStringLiteral("twistWires"), wires);
             return run;
         };
-        // The pair: each strand one closed band, drawn whole - its outline is its fill.
-        bool bands = true;
-        const auto pair = twistedPairSideView(runOf(2));
-        for (const SideStrand& piece : pair)
-            bands = bands && piece.lines.size() == 1 && piece.lines.front() == piece.fill;
-        check(!pair.empty() && bands, "pair look: a twisted pair is drawn as its bands");
-        // The bundle: the rope, in halves - and the same rope whatever number of wires it carries.
+        check(twistedPairSideView(runOf(2)).empty(), "pair look: a twisted pair is drawn woven, as it always was");
+        Entity asked = runOf(2);
+        asked.meta.insert(QStringLiteral("twistLook"), QStringLiteral("side"));
+        const auto pairBands = twistedPairSideView(asked);
+        check(!pairBands.empty(), "pair look: and seen from the side when it asks to be");
+        // A bundle's bands are a pair's: the same, however many wires it carries.
         const auto four = twistedPairSideView(runOf(4));
         const auto eight = twistedPairSideView(runOf(8));
-        // A half lies on one side of the middle of the bundle; a pair's band reaches right across it.
-        auto oneSide = [](const SideStrand& piece) {
-            double sum = 0.0;
-            for (const Vec2& p : piece.fill) sum += p.y;
-            return !piece.fill.empty() && std::abs(sum / piece.fill.size()) > 0.5;
-        };
-        // Judged on nearly all of them: the pieces cut short where the run's laid-up stretch ends are neither.
-        int sided = 0, spanning = 0;
-        for (const SideStrand& piece : four) sided += oneSide(piece) ? 1 : 0;
-        for (const SideStrand& piece : pair) spanning += oneSide(piece) ? 0 : 1;
-        const bool halves = !four.empty() && sided >= 0.8 * four.size();
-        const bool across = !pair.empty() && spanning >= 0.8 * pair.size();
-        check(across, "pair look: each band reaches right across the pair");
-        std::printf("  bundle look: %d piece(s) for four wires, %d for eight\n", int(four.size()), int(eight.size()));
-        check(halves, "bundle look: a bundle is drawn as the rope, half a strand at a time");
-        check(four.size() == eight.size(), "bundle look: drawn with a pair's proportions, however many wires it has");
+        std::printf("  bundle look: %d band(s) for four wires, %d for eight, %d for a pair seen from the side\n",
+                    int(four.size()), int(eight.size()), int(pairBands.size()));
+        check(!four.empty() && four.size() == eight.size(),
+              "bundle look: drawn with a pair's bands, however many wires it has");
     }
 
     // ---- A SHEET OF BUNDLES DOES NOT SLOW THE CURSOR -------------------------------------------------------

@@ -506,6 +506,93 @@ Mesh3D solidFromDrawing(const std::vector<Vec2>& pts, const Vec2& c, const V3& A
     }
     return m;
 }
+// THE PINOUT'S FACE: the outline round everything drawn on the pinout - the shape the connector shows from the front -
+// gone round evenly in `count` points, about its own middle, and how tall it is. False when there is no pinout drawn.
+bool pinoutFace(const LibraryPart& part, int count, std::vector<Vec2>& face, double& tall) {
+    std::vector<Vec2> pts;
+    for (const Entity& e : partDrawingEntities(part.fanout)) {
+        if (e.type == EntityType::Text || e.type == EntityType::Dimension) continue;
+        sampleInto(e, pts);
+    }
+    if (pts.size() < 3) return false;
+    // The hull round them: the outside of the face, whatever is drawn inside it (the pins, their numbers).
+    std::sort(pts.begin(), pts.end(), [](const Vec2& a, const Vec2& b) { return a.x < b.x || (a.x == b.x && a.y < b.y); });
+    auto cross = [](const Vec2& o, const Vec2& a, const Vec2& b) { return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x); };
+    std::vector<Vec2> hull(2 * pts.size());
+    size_t k = 0;
+    for (size_t i = 0; i < pts.size(); ++i) {
+        while (k >= 2 && cross(hull[k - 2], hull[k - 1], pts[i]) <= 0) --k;
+        hull[k++] = pts[i];
+    }
+    for (size_t i = pts.size() - 1, t = k + 1; i > 0; --i) {
+        while (k >= t && cross(hull[k - 2], hull[k - 1], pts[i - 1]) <= 0) --k;
+        hull[k++] = pts[i - 1];
+    }
+    hull.resize(k > 0 ? k - 1 : 0);
+    if (hull.size() < 3) return false;
+    Bounds b;
+    for (const Vec2& p : hull) b.expand(p);
+    tall = b.height();
+    if (tall <= 1e-9 || b.width() <= 1e-9) return false;
+    const Vec2 mid = b.center();
+    // Evenly round it, so that every step along the part has the same points, in the same order.
+    double perimeter = 0.0;
+    for (size_t i = 0; i < hull.size(); ++i) perimeter += distance(hull[i], hull[(i + 1) % hull.size()]);
+    face.clear();
+    size_t edge = 0;
+    double edgeStart = 0.0;
+    for (int j = 0; j < count; ++j) {
+        const double want = perimeter * j / count;
+        while (edge < hull.size() && edgeStart + distance(hull[edge], hull[(edge + 1) % hull.size()]) < want) {
+            edgeStart += distance(hull[edge], hull[(edge + 1) % hull.size()]);
+            ++edge;
+        }
+        const Vec2 a = hull[edge % hull.size()], bb = hull[(edge + 1) % hull.size()];
+        const double len = std::max(1e-12, distance(a, bb));
+        face.push_back(lerp(a, bb, std::clamp((want - edgeStart) / len, 0.0, 1.0)) - mid);
+    }
+    return true;
+}
+
+// A CONNECTOR BUILT FROM ITS FACE, carried along its length: the pinout's outline is where the solid starts, and it is
+// carried down the part grown and shrunk to the mechanical drawing's contour at every step - as tall as the drawing is
+// there, and the same shape. A round face makes a round body, a D a D-shaped one, and the steps of the housing the
+// drawing shows are steps in the solid.
+Mesh3D solidFromFace(const std::vector<Vec2>& pts, const Vec2& c, double lo, double hi, const std::vector<Vec2>& face,
+                     double faceTall) {
+    const int n = 40;
+    std::vector<double> top, bot;
+    if (!profileOf(pts, c, {1, 0, 0}, {0, 1, 0}, lo, hi, n, top, bot)) return {};
+    const int sides = static_cast<int>(face.size());
+    Mesh3D m;
+    for (int i = 0; i <= n; ++i) {
+        const double t = lo + (hi - lo) * i / n;
+        const double up = top[static_cast<size_t>(i)], dn = std::min(bot[static_cast<size_t>(i)], up - 0.2);
+        const double s = (up - dn) / faceTall, middle = (up + dn) / 2.0;
+        // Its face's up and down along the drawing's; its across, square to the sheet.
+        for (const Vec2& f : face) m.addVertex(V3{c.x + t, c.y + middle + f.y * s, f.x * s});
+    }
+    for (int i = 0; i < n; ++i)
+        for (int k = 0; k < sides; ++k) {
+            const int a = i * sides + k, b = i * sides + (k + 1) % sides, cc = a + sides, d = b + sides;
+            m.addTri(a, b, d);
+            m.addTri(a, d, cc);
+        }
+    // Its two ends closed, each on its own middle.
+    auto capAt = [&](int ring, bool far) {
+        V3 mid{0, 0, 0};
+        for (int k = 0; k < sides; ++k) mid = mid + m.v[static_cast<size_t>(ring * sides + k)];
+        const int centre = m.addVertex(mid * (1.0 / sides));
+        for (int k = 0; k < sides; ++k) {
+            const int a = ring * sides + k, b = ring * sides + (k + 1) % sides;
+            if (far) m.addTri(centre, a, b);
+            else m.addTri(centre, b, a);
+        }
+    };
+    capAt(0, false);
+    capAt(n, true);
+    return m;
+}
 } // namespace
 
 Mesh3D partDrawingSolid(const LibraryPart& part, bool revolve) {
@@ -519,6 +606,19 @@ Mesh3D partDrawingSolid(const LibraryPart& part, bool revolve) {
     if (outline.empty() || !box.valid) return {};
     const Vec2 c = box.center();
     const double width = std::max(0.5, box.height());
+    // EXTRUDED, AND THE PART HAS A PINOUT: its face, carried along the drawing - see solidFromFace. Without a pinout,
+    // the box it always was.
+    if (!revolve) {
+        std::vector<Vec2> face;
+        double faceTall = 0.0;
+        if (pinoutFace(part, 48, face, faceTall)) {
+            Mesh3D lofted = solidFromFace(outline, c, box.min.x - c.x, box.max.x - c.x, face, faceTall);
+            if (!lofted.v.empty()) {
+                for (V3& v : lofted.v) v = v - V3{c.x, c.y, 0.0};
+                return lofted;
+            }
+        }
+    }
     Mesh3D m = solidFromDrawing(outline, c, {1, 0, 0}, {0, 1, 0}, box.min.x - c.x, box.max.x - c.x, revolve, width, nullptr);
     for (V3& v : m.v) v = v - V3{c.x, c.y, 0.0};
     return m;

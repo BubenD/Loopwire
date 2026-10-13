@@ -814,6 +814,20 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
     connect(redoKey2, &QShortcut::activated, this, [this] { redo(); });
     footer->addWidget(undoBtn_);
     footer->addWidget(redoBtn_);
+    // WHERE THE PREVIEW GOES: beside the step or under it. The Wires step always has it under, for the table's width.
+    auto* previewWhere = new QComboBox(this);
+    previewWhere->setObjectName(QStringLiteral("harnessBuilderPreviewWhere"));
+    previewWhere->addItem(QStringLiteral("Preview at the side"), false);
+    previewWhere->addItem(QStringLiteral("Preview at the bottom"), true);
+    previewBottom_ = QSettings().value(QStringLiteral("harnessBuilder/previewBottom"), false).toBool();
+    previewWhere->setCurrentIndex(previewBottom_ ? 1 : 0);
+    previewWhere->setToolTip(QStringLiteral("Where the drawing is shown: beside the step, or under it"));
+    connect(previewWhere, &QComboBox::currentIndexChanged, this, [this, previewWhere](int at) {
+        previewBottom_ = previewWhere->itemData(at).toBool();
+        QSettings().setValue(QStringLiteral("harnessBuilder/previewBottom"), previewBottom_);
+        applyStepLayout(currentStep());
+    });
+    footer->addWidget(previewWhere);
     footer->addWidget(summaryLabel_, 1);
 
     genModeBox_ = new QComboBox(this);
@@ -823,7 +837,21 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
         "What Generate draws: the schematic itself, or a wiring list built from this "
         "definition (shield and twisted-pair groups shown as brackets and merged cells)."));
     auto* generateBtn = new QPushButton(QStringLiteral("Generate"), this);
+    generateBtn->setObjectName(QStringLiteral("harnessBuilderGenerate"));
     generateBtn->setDefault(true);
+    // BACK, NEXT AND GENERATE IN COLOURS OF THEIR OWN - different from the other buttons and from one another, so the
+    // way through the steps and the button that draws the harness are found without reading every label. Back a quiet
+    // slate, Next blue, Generate green; each a little lighter under the pointer and greyed while it cannot be used.
+    auto paint = [](QPushButton* b, const char* base, const char* hover) {
+        b->setStyleSheet(QStringLiteral("QPushButton{background:%1;color:white;border:1px solid %1;border-radius:4px;"
+                                        "padding:4px 14px;font-weight:600;}"
+                                        "QPushButton:hover{background:%2;border-color:%2;}"
+                                        "QPushButton:disabled{background:#5a5f66;border-color:#5a5f66;color:#b8bcc2;}")
+                             .arg(QLatin1String(base), QLatin1String(hover)));
+    };
+    paint(backBtn_, "#5b6b80", "#6d7e95");
+    paint(nextBtn_, "#2f74c0", "#3d86d6");
+    paint(generateBtn, "#2e8b57", "#37a366");
     generateBtn->setToolTip(QStringLiteral("Draw the harness on the sheet (one undo step)"));
     connect(generateBtn, &QPushButton::clicked, this, [this] { generate(); });
     auto* saveBtn = new QPushButton(QStringLiteral("Save"), this);
@@ -846,10 +874,7 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
         syncing_ = true;
         if (groupByBox_) groupByBox_->setCurrentIndex(groupByBox_->findData(static_cast<int>(grouping_)));
         syncing_ = false;
-        // The same two connectors a freshly opened builder starts with, so the dialog is never
-        // an empty form.
-        addConnector(HarnessSide::Left);
-        addConnector(HarnessSide::Right);
+        // AS A NEW BUILDER STARTS: with no connectors - the first is added when there is one to add.
         reloadAll();
         showIssues({}, false);
         summaryLabel_->setText(QStringLiteral("Cleared"));
@@ -895,12 +920,8 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
                                           : QStringLiteral("Placement cancelled — nothing drawn"));
         });
 
-    // A plausible two-connector harness, so the dialog is never an empty form. A saved
-    // pattern is opened deliberately with Load rather than dragged in behind the user's back.
-    if (def_.connectors.empty()) {
-        addConnector(HarnessSide::Left);
-        addConnector(HarnessSide::Right);
-    }
+    // A NEW BUILDER STARTS EMPTY: no connectors chosen for it. The ones it is to have are added - from the library or
+    // typed in - and a saved pattern is opened deliberately with Load rather than dragged in behind the user's back.
     reloadAll();
     // Opened at the first step.
     setStep(0);
@@ -1314,6 +1335,9 @@ void HarnessBuilderDialog::reloadConnectors() {
     fitColumns(connTable_, {{0, 1.15}});
     // The contacts' choice no wider than a P/N needs - its list is read when it is opened.
     connTable_->setColumnWidth(14, std::min(connTable_->columnWidth(14), 190));
+    // THE LIBRARY PART HALF AS WIDE as its name would make it: the part is chosen from its list, which is as wide as it
+    // needs to be when it is open; closed, the column was taking the room the other columns are read in.
+    connTable_->setColumnWidth(13, std::max(60, connTable_->columnWidth(13) / 2));
     connTable_->setColumnWidth(15, std::max(connTable_->columnWidth(15), 120));
 }
 
@@ -1753,10 +1777,12 @@ void HarnessBuilderDialog::applyStepLayout(int step) {
     if (!mainSplit_) return;
     // THE WIRES WANT THE WIDTH: on their step the table runs the full width, the drawing (or the pin map) under it.
     const bool wires = step == 1;
-    const Qt::Orientation want = wires ? Qt::Vertical : Qt::Horizontal;
+    // UNDER THE STEP for the Wires, and wherever it has been asked for on the others.
+    const bool under = wires || previewBottom_;
+    const Qt::Orientation want = under ? Qt::Vertical : Qt::Horizontal;
     if (mainSplit_->orientation() == want) return;
     mainSplit_->setOrientation(want);
-    const int room = wires ? mainSplit_->height() : mainSplit_->width();
+    const int room = under ? mainSplit_->height() : mainSplit_->width();
     mainSplit_->setSizes({room * 3 / 5, room - room * 3 / 5});
 }
 
