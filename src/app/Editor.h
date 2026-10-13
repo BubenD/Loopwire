@@ -1414,6 +1414,11 @@ public:
     bool hatchPreviewShown() const { return hatchPreview_.valid; }
     // The block reference the cursor is over, lit grey; empty when none.
     QString hoveredBlock() const { return hoverBlockId_; }
+    // The object under the cursor that a click would take - drawn faintly lit. Empty when none.
+    QString hoveredObject() const { return hoverId_; }
+    // Work out what is under the cursor now (normally done once it settles).
+    void updateHover();
+    void clearHover();
 
     // Apply an edited connector spec to the currently selected connector.
     void applyConnectorSpecToSelection(const ConnectorSpec& spec);
@@ -2296,6 +2301,9 @@ private:
     bool drawBigPasteGhost(QPainter& p, const ViewTransform& vt, const QColor& ghost) const;
     // The block reference under the cursor, lit a soft grey so it is clear a click would take it.
     QString hoverBlockId_;
+    QString hoverId_;   // the object under the cursor, lit faintly. Not saved.
+    Vec2 hoverAt_;                 // where the cursor last settled. Not saved.
+    QTimer* hoverTimer_ = nullptr; // waits for it to settle
     std::vector<QString> lookupHighlight_;
     // A BIG PASTE'S GHOST, drawn once and moved with the cursor: tens of thousands of objects drawn
     // afresh on every mouse move made placing them crawl. Keyed on what the picture depends on.

@@ -14516,6 +14516,81 @@ int run_editor_tests() {
         }
     }
 
+    // ---- THE OBJECT UNDER THE CURSOR IS LIT ----------------------------------------------------------------
+    // Over a line, a circle's ring or anything else a click would take, that object is drawn faintly lit; off
+    // it, nothing is; one already picked is not lit again.
+    {
+        Document d;
+        Editor ed;
+        ed.setDocument(&d);
+        ed.setPixelTolerance(6);
+        Entity line;
+        line.id = QStringLiteral("hover-line");
+        line.type = EntityType::Line;
+        line.a = {0, 0};
+        line.b = {100, 0};
+        d.entities().push_back(line);
+        Entity ring;
+        ring.id = QStringLiteral("hover-ring");
+        ring.type = EntityType::Circle;
+        ring.center = {50, 60};
+        ring.radius = 20;
+        d.entities().push_back(ring);
+        auto hoverAt = [&](const Vec2& p) {
+            ed.onPointerMove(p);
+            ed.updateHover();
+            return ed.hoveredObject();
+        };
+        check(hoverAt({50, 0.3}) == line.id, "hover: on the line, the line is lit");
+        check(hoverAt({50, 30}).isEmpty(), "hover: off everything, nothing is");
+        check(hoverAt({70.2, 60}) == ring.id, "hover: on a circle's ring, the circle is");
+        // Drawn: the lit line puts ink where the line is that was not there without it.
+        auto inkOver = [&](const Vec2& p) {
+            QImage img(240, 160, QImage::Format_ARGB32);
+            img.fill(Qt::black);
+            QPainter pt(&img);
+            ViewTransform vt;
+            vt.view.scale = 2.0;
+            vt.view.x = 10;
+            vt.view.y = 150;
+            hoverAt(p);
+            ed.drawOverlay(pt, vt);
+            pt.end();
+            int lit = 0;
+            for (int x = 20; x < 210; ++x)
+                for (int y = 145; y <= 155; ++y)
+                    if (qBlue(img.pixel(x, y)) > 40) ++lit;
+            return lit;
+        };
+        const int onLine = inkOver({50, 0.3}), offLine = inkOver({50, 30});
+        std::printf("  hover: %d lit pixel(s) along the line under the cursor, %d with the cursor away\n", onLine, offLine);
+        check(onLine > 100 && offLine == 0, "hover: the lit object is drawn over its own line");
+        ed.selectById(line.id);
+        // Picked, it is drawn as picked; the cursor over it adds nothing to that. Compared at the same place of
+        // the cursor, with and without the hover, so the snap mark the cursor shows there counts both times.
+        const int pickedOver = inkOver({30, 0.3});
+        const bool stillOver = ed.hoveredObject() == line.id;
+        ed.clearHover();
+        QImage bare(240, 160, QImage::Format_ARGB32);
+        bare.fill(Qt::black);
+        {
+            QPainter pt(&bare);
+            ViewTransform vt;
+            vt.view.scale = 2.0;
+            vt.view.x = 10;
+            vt.view.y = 150;
+            ed.drawOverlay(pt, vt);
+        }
+        int pickedBare = 0;
+        for (int x = 20; x < 210; ++x)
+            for (int y = 145; y <= 155; ++y)
+                if (qBlue(bare.pixel(x, y)) > 40) ++pickedBare;
+        std::printf("  hover: picked line, %d lit pixel(s) hovered, %d not\n", pickedOver, pickedBare);
+        check(stillOver && pickedOver == pickedBare, "hover: an object already picked is not lit again");
+        ed.clearHover();
+        check(ed.hoveredObject().isEmpty(), "hover: a cursor gone off the canvas lights nothing");
+    }
+
     // ---- AUTO CROSS ---------------------------------------------------------------------------------------
     // Every crossing gets its bridge without being clicked; one set back to plain stays plain; a bridge left
     // where the wires no longer cross goes.

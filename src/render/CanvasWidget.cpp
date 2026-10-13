@@ -1543,6 +1543,7 @@ void CanvasWidget::enterEvent(QEnterEvent* e) {
 
 void CanvasWidget::leaveEvent(QEvent* e) {
     cursorInside_ = false;
+    if (editor_) editor_->clearHover();   // nothing is under a cursor that has left
     updateDrawingDetailsHover();
     update();
     QWidget::leaveEvent(e);

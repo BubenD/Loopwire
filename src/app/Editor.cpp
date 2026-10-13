@@ -1652,6 +1652,7 @@ void Editor::setTool(ToolId t) {
     hatchPreview_ = {};
     if (hatchPreviewTimer_) hatchPreviewTimer_->stop();
     hoverBlockId_.clear();
+    hoverId_.clear();
     if (t != ToolId::ModelConnectPoint) haveConnectFirst_ = false;
     if (t != ToolId::CenterLine) centerLineFirst_.clear();
     if (t != ToolId::ModelOutputLine) haveOutputFirst_ = false;
@@ -4592,6 +4593,30 @@ void Editor::onPointerMove(const Vec2& raw) {
         if (over != hoverBlockId_) {
             hoverBlockId_ = over;
             emit overlayChanged();
+        }
+    }
+    // AND WHATEVER ELSE THE CURSOR IS ON, lit faintly: the object a click there would take, so it can be seen
+    // that the cursor is on it before the click. The same pick a click makes, so what lights is what is taken.
+    {
+        const bool picking = (tool_ == ToolId::Select || isPickModifyTool(tool_)) && !pressed_ && !editing_ &&
+                             !pastePlacing_ && hoverBlockId_.isEmpty();
+        // WORKED OUT WHEN THE CURSOR SETTLES, not on every move: finding what is under it measures every object on
+        // the sheet, which on a big drawing is more than a mouse movement can afford. A pause too short to notice
+        // is all it waits for.
+        if (!picking) {
+            if (!hoverId_.isEmpty()) {
+                hoverId_.clear();
+                emit overlayChanged();
+            }
+        } else {
+            hoverAt_ = raw;
+            if (!hoverTimer_) {
+                hoverTimer_ = new QTimer(this);
+                hoverTimer_->setSingleShot(true);
+                hoverTimer_->setInterval(30);
+                connect(hoverTimer_, &QTimer::timeout, this, [this] { updateHover(); });
+            }
+            hoverTimer_->start();
         }
     }
     const std::optional<Vec2> anchor = trackingAnchor();
@@ -20339,6 +20364,23 @@ void Editor::setLookupHighlight(const std::vector<QString>& ids) {
     emit overlayChanged();
 }
 
+void Editor::clearHover() {
+    if (hoverTimer_) hoverTimer_->stop();
+    if (hoverId_.isEmpty()) return;
+    hoverId_.clear();
+    emit overlayChanged();
+}
+
+void Editor::updateHover() {
+    QString over;
+    if (doc_ && (tool_ == ToolId::Select || isPickModifyTool(tool_)) && !pressed_ && !editing_ && !pastePlacing_ &&
+        hoverBlockId_.isEmpty())
+        if (const auto hit = hitTest(hoverAt_)) over = *hit;
+    if (over == hoverId_) return;
+    hoverId_ = over;
+    emit overlayChanged();
+}
+
 void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     // THE PART LOOKED UP (Alt + the pointer): its own lines drawn over in a light orange - every object of it, the
     // part's outline, a run's wires and body - not a box round it.
@@ -20348,6 +20390,16 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             if (const Entity* e = entityById(id); e && e->type != EntityType::Wipeout)
                 EntityRenderer::draw(p, *e, *doc_, vt, QColor(255, 176, 90));
         p.restore();
+    }
+    // THE OBJECT UNDER THE CURSOR, drawn over its own lines in a faint blue a little heavier than they are -
+    // not when it is already picked, which says more.
+    if (!hoverId_.isEmpty() && doc_ &&
+        std::find(selected_.begin(), selected_.end(), hoverId_) == selected_.end()) {
+        if (const Entity* h = entityById(hoverId_); h && h->type != EntityType::Wipeout) {
+            p.save();
+            EntityRenderer::draw(p, *h, *doc_, vt, QColor(110, 180, 255, 120));
+            p.restore();
+        }
     }
     // The block under the cursor, in a soft grey over its box - not when it is already picked, which
     // says more.
