@@ -1267,7 +1267,7 @@ struct TwistCached {
     std::vector<std::vector<std::pair<size_t, size_t>>> spans;
     // THE LAID-UP STRETCH SEEN FROM THE SIDE, when the run asks for that look (twistLook "side"): each strand
     // on the near side of the bundle, closed outline by outline. Empty for the woven look.
-    std::vector<std::vector<Vec2>> side;
+    std::vector<SideStrand> side;
     // What the cursor can catch on it, worked out the first time it is asked (see twistedPairSnap).
     mutable bool snapBuilt = false;
     mutable RunSnap snap;
@@ -1302,18 +1302,23 @@ void frameAt(const TwistFrames& f, double u, Vec2& pos, Vec2& n) {
     n = m.lengthSq() > 1e-18 ? m.normalized() : f.n[lo];
 }
 
-// A LAID-UP BUNDLE SEEN FROM THE SIDE: the strands on the near side, all lying the same way, one beside the
-// next - what a bundle looks like rather than a diagram of how its wires cross. Every strand is a straight
-// band with a rounded end top and bottom, where it goes round the back of the bundle out of sight; the strands
-// behind are not drawn at all. Laid out across the run (u along it, v across), then put on the route.
+// A LAID-UP BUNDLE SEEN FROM THE SIDE, AS IT LOOKS: the outline of each strand on the near side, as the 3D view
+// draws the bundle - no colour and no shading, only the lines. Every wire of a laid-up bundle runs round the
+// middle on a helix; from the side the near half of each turn is what is seen, a tube that climbs across the
+// bundle from one edge to the other on a curve, and goes round the back out of sight at each edge. Its outline is
+// that curve a wire's radius either side, with a rounded end where it turns away.
 //
-// One strand crosses the bundle from edge to edge in half a lay; with N wires laid up, the next one along is a
-// lay over N further on. THE STRANDS TOUCH, as the wires of a laid-up bundle do: each is a wire thick, and the
-// lay is the one that puts a wire's thickness between one strand and the next - so nothing of the strands
-// behind is seen between them. A lay asked for that is already tighter than that keeps its own figure, and its
-// strands share the room between them exactly instead.
-std::vector<std::vector<Vec2>> sideViewStrands(const TwistFrames& f) {
-    std::vector<std::vector<Vec2>> out;
+// THE STRANDS TOUCH, as the wires of a laid-up bundle do: the lay is the one that puts a wire's thickness between
+// one strand and the next, square to them, at the middle of the bundle. Where there are too many wires for strands
+// a wire thick to lie side by side, the lay drawn with is kept and the strands are drawn thinner to fit.
+//
+// WHAT HIDES WHAT: at the top edge a strand goes round behind the one after it, and at the bottom edge behind the
+// one before it. So no one order of the strands hides the right parts. Each strand is drawn as two halves - below
+// the middle and above it - the lower halves from the last strand to the first and the upper halves from the first
+// to the last, each filled with the ground so it hides what is behind it. The line across the middle where the
+// two halves meet is not part of any outline and is never drawn.
+std::vector<SideStrand> sideViewStrands(const TwistFrames& f) {
+    std::vector<SideStrand> out;
     const double from = f.lead, till = f.len - f.leadB;
     if (f.straight || f.wires < 2 || f.turn <= 1e-9 || till - from <= 1e-9) return out;
     // HOW WIDE THE BUNDLE IS: as far out as any wire goes, over the laid-up stretch.
@@ -1325,34 +1330,31 @@ std::vector<std::vector<Vec2>> sideViewStrands(const TwistFrames& f) {
     }
     if (half <= 1e-9) half = f.reach + f.thick;
     if (half <= 1e-9) return out;
-    const double wire = 2.0 * f.thick;
+    const int wires = f.wires;
+    // A WIRE AS THICK AS IT IS IN THE BUNDLE: N wires laid up round the middle fill the bundle's width, each of
+    // radius H sin(pi/N) / (1 + sin(pi/N)) - the strands the 3D view shows, not the thin line of a wire on its own.
+    const double packed = std::sin(M_PI / wires);
+    double r = std::max(1e-3, std::min(half * packed / (1.0 + packed), half * 0.49));   // a wire's radius
+    double rc = half - r;                                        // the helix its middle runs on
     double lay = f.turn;
-    // Between two neighbours, square to them, for a given lay: a lay over N along, of which the strand climbs
-    // the whole width in half.
-    auto roomFor = [&](double l) {
-        const double a = l / 2.0;
-        return (l / f.wires) * (2.0 * half) / std::sqrt(a * a + 4.0 * half * half);
-    };
-    double hw = roomFor(lay) / 2.0;
-    if (wire > 1e-9 && roomFor(lay) > wire) {
-        // The lay that leaves exactly a wire between neighbours: (2H/N)^2 l^2 = d^2 (l^2/4 + 4H^2).
-        const double k = 4.0 * half * half / (f.wires * f.wires) - wire * wire / 4.0;
-        if (k > 1e-12) {
-            lay = 2.0 * half * wire / std::sqrt(k);
-            hw = wire / 2.0;
-        }
+    // The lay at which neighbours touch: (P/N) sin(a) = 2r, with tan(a) = 2 pi Rc / P.
+    const double room = M_PI * M_PI * rc * rc - r * r * wires * wires;
+    if (room > 1e-12) {
+        lay = 2.0 * M_PI * rc * r * wires / std::sqrt(room);
+    } else {
+        const double tanA = 2.0 * M_PI * rc / lay;
+        r = std::max(1e-3, 0.5 * (lay / wires) * tanA / std::sqrt(1.0 + tanA * tanA));
+        rc = half - r;
     }
-    hw = std::max(0.05, std::min(hw, half * 0.95));
-    const double along = lay / 2.0;                    // how far along one strand gets crossing the bundle
-    const double step = lay / f.wires;                 // and how far on the next one is
-    const double slope = std::sqrt(along * along + 4.0 * half * half);
-    const Vec2 dir{along / slope, 2.0 * half / slope};  // up the strand, in (u, v)
-    const Vec2 side{-dir.y, dir.x};
-    const double reachV = half - hw;                    // where the middle of a rounded end sits
-    if (reachV <= 1e-9) return out;
-    const double alongEnd = reachV * along / half;      // how far along the strand's middle line goes
-    // Clipped to the laid-up stretch: a strand that starts before it or runs on past it is cut where it ends.
-    auto clip = [](std::vector<Vec2> poly, double bound, bool keepAbove) {
+    const double step = lay / wires;
+    const double rise = lay / (2.0 * M_PI);   // how far along the run a radian of the turn goes
+    auto middle = [&](double s, double th) { return Vec2{s + rise * th, rc * std::sin(th)}; };
+    auto across = [&](double th) {            // square to the strand, toward the upper side
+        const Vec2 d{rise, rc * std::cos(th)};
+        return Vec2{-d.y, d.x}.normalized();
+    };
+    // Kept within the laid-up stretch: an outline, and a fill, cut where the stretch ends.
+    auto clipFill = [](std::vector<Vec2> poly, double bound, bool keepAbove) {
         std::vector<Vec2> kept;
         const size_t n = poly.size();
         for (size_t i = 0; i < n; ++i) {
@@ -1360,62 +1362,78 @@ std::vector<std::vector<Vec2>> sideViewStrands(const TwistFrames& f) {
             const bool inA = keepAbove ? a.x >= bound : a.x <= bound;
             const bool inB = keepAbove ? b.x >= bound : b.x <= bound;
             if (inA) kept.push_back(a);
-            if (inA != inB && std::abs(b.x - a.x) > 1e-12) {
-                const double t = (bound - a.x) / (b.x - a.x);
-                kept.push_back(lerp(a, b, t));
-            }
+            if (inA != inB && std::abs(b.x - a.x) > 1e-12) kept.push_back(lerp(a, b, (bound - a.x) / (b.x - a.x)));
         }
         return kept;
     };
-    // EACH STRAND A SLANTED BAND REACHING RIGHT ACROSS THE BUNDLE: its top and bottom lie along the bundle's two
-    // edges, where the wire goes round the back out of sight, its two long sides lean the way the lay does, and
-    // all four corners are rounded - a wire seen from the side, not a box. A thin gap is left between one strand
-    // and the next, so each reads as a wire of its own.
-    const double sinLean = 2.0 * half / slope;                  // the strand against the run
-    const double halfAlong = 0.85 * hw / std::max(1e-9, sinLean); // half its width, measured along the run
-    const double round = 0.6 * hw;                              // the corners' radius
-    (void)reachV;
-    (void)alongEnd;
-    (void)side;
-    // A corner rounded off: from a point back along the edge coming in to one along the edge going out, curving
-    // through the corner itself.
-    auto roundCorner = [&](std::vector<Vec2>& into, const Vec2& prev, const Vec2& at, const Vec2& next) {
-        const double reach = std::min(round * 1.3, 0.45 * std::min(distance(prev, at), distance(at, next)));
-        const Vec2 in = at + (prev - at).normalized() * reach;
-        const Vec2 outP = at + (next - at).normalized() * reach;
-        for (int k = 0; k <= 6; ++k) {
-            const double t = k / 6.0;
-            into.push_back(in * ((1 - t) * (1 - t)) + at * (2 * (1 - t) * t) + outP * (t * t));
-        }
-    };
-    for (double s = from - along; s < till + step; s += step) {
-        const Vec2 bl{s - along / 2.0 - halfAlong, -half}, br{s - along / 2.0 + halfAlong, -half};
-        const Vec2 tr{s + along / 2.0 + halfAlong, half}, tl{s + along / 2.0 - halfAlong, half};
-        const Vec2 corners[4] = {bl, br, tr, tl};
-        std::vector<Vec2> band;
-        for (int c = 0; c < 4; ++c) {
-            const Vec2 prev = corners[(c + 3) % 4], at = corners[c], next = corners[(c + 1) % 4];
-            roundCorner(band, prev, at, next);
-            // The long sides in pieces, so on a route that bends the strand bends with it.
-            if (c == 1 || c == 3) {
-                const Vec2 from2 = band.back();
-                const Vec2 to2 = corners[(c + 1) % 4] + (corners[c] - corners[(c + 1) % 4]).normalized() *
-                                                            std::min(round * 1.3, 0.45 * distance(at, next));
-                for (int k = 1; k < 8; ++k) band.push_back(lerp(from2, to2, k / 8.0));
+    auto clipLine = [&](const std::vector<Vec2>& line) {
+        std::vector<std::vector<Vec2>> pieces;
+        std::vector<Vec2> cur;
+        auto inside = [&](const Vec2& p) { return p.x >= from - 1e-12 && p.x <= till + 1e-12; };
+        auto cut = [&](const Vec2& a, const Vec2& b) {
+            const double bound = (a.x < from || b.x < from) ? from : till;
+            return lerp(a, b, (bound - a.x) / (b.x - a.x));
+        };
+        for (size_t i = 0; i < line.size(); ++i) {
+            const Vec2& p = line[i];
+            if (inside(p)) {
+                if (cur.empty() && i > 0 && !inside(line[i - 1])) cur.push_back(cut(line[i - 1], p));
+                cur.push_back(p);
+            } else if (!cur.empty()) {
+                cur.push_back(cut(line[i - 1], p));
+                if (cur.size() >= 2) pieces.push_back(cur);
+                cur.clear();
             }
         }
-        band = clip(clip(band, from, true), till, false);
-        if (band.size() < 3) continue;
+        if (cur.size() >= 2) pieces.push_back(cur);
+        return pieces;
+    };
+    auto onRoute = [&](const std::vector<Vec2>& local) {
         std::vector<Vec2> world;
-        world.reserve(band.size() + 1);
-        for (const Vec2& p : band) {
+        world.reserve(local.size());
+        for (const Vec2& p : local) {
             Vec2 pos, n;
             frameAt(f, p.x, pos, n);
             world.push_back(pos + n * p.y);
         }
-        world.push_back(world.front());   // closed
-        out.push_back(std::move(world));
-    }
+        return world;
+    };
+    // One half of one strand: from the middle of the bundle out to the edge it turns away at (+1 the upper, -1
+    // the lower), its two sides and the rounded end between them.
+    auto halfStrand = [&](double s, int edge) {
+        constexpr int kSteps = 12, kCap = 8;
+        const double end = edge * M_PI / 2.0;
+        std::vector<Vec2> sideA, sideB;
+        for (int k = 0; k <= kSteps; ++k) {
+            const double th = end * k / kSteps;
+            const Vec2 m = middle(s, th), n = across(th);
+            sideA.push_back(m + n * r);
+            sideB.push_back(m - n * r);
+        }
+        // The rounded end: round from one side to the other, the way the strand was going.
+        const Vec2 c = middle(s, end);
+        const Vec2 ahead{static_cast<double>(edge), 0.0};   // along the run, onward
+        const Vec2 n = across(end);
+        std::vector<Vec2> outline = sideA;
+        for (int k = 1; k < kCap; ++k) {
+            const double phi = M_PI / 2.0 - M_PI * k / kCap;
+            outline.push_back(c + ahead * (r * std::cos(phi)) + n * (r * std::sin(phi)));
+        }
+        for (auto it = sideB.rbegin(); it != sideB.rend(); ++it) outline.push_back(*it);
+        SideStrand piece;
+        const std::vector<Vec2> fill = clipFill(clipFill(outline, from, true), till, false);
+        if (fill.size() >= 3) piece.fill = onRoute(fill);
+        for (const std::vector<Vec2>& line : clipLine(outline)) piece.lines.push_back(onRoute(line));
+        return piece;
+    };
+    std::vector<double> starts;
+    for (double s = from - lay / 4.0 - step; s < till + lay / 4.0 + step; s += step) starts.push_back(s);
+    for (auto it = starts.rbegin(); it != starts.rend(); ++it)      // the lower halves, last to first
+        if (SideStrand piece = halfStrand(*it, -1); !piece.fill.empty() || !piece.lines.empty())
+            out.push_back(std::move(piece));
+    for (double s : starts)                                          // the upper halves, first to last
+        if (SideStrand piece = halfStrand(s, +1); !piece.fill.empty() || !piece.lines.empty())
+            out.push_back(std::move(piece));
     return out;
 }
 
@@ -1724,7 +1742,8 @@ const TwistCached* twistCached(const Entity& pair) {
             }
         }
     }
-    if (pair.meta.value(QStringLiteral("twistLook")).toString() == QLatin1String("side")) c.side = sideViewStrands(f);
+    // SEEN FROM THE SIDE unless the run says it is woven: the way a laid-up bundle is drawn.
+    if (pair.meta.value(QStringLiteral("twistLook")).toString() != QLatin1String("woven")) c.side = sideViewStrands(f);
     // Bounded: a session that draws and re-draws pairs all day does not keep every one of them.
     if (cache.size() > 64) cache.clear();
     return &*cache.insert(key, std::move(c));
@@ -1789,10 +1808,10 @@ std::vector<std::vector<Vec2>> twistedPairEndSleeves(const Entity& pair) {
     return out;
 }
 
-std::vector<std::vector<Vec2>> twistedPairSideView(const Entity& pair) {
+std::vector<SideStrand> twistedPairSideView(const Entity& pair) {
     if (pair.type != EntityType::TwistedPair) return {};
     const TwistCached* c = twistCached(pair);
-    return c ? c->side : std::vector<std::vector<Vec2>>{};
+    return c ? c->side : std::vector<SideStrand>{};
 }
 
 std::vector<std::vector<Vec2>> twistedPairBody(const Entity& pair) {
@@ -2003,7 +2022,8 @@ const RunSnap* twistedPairSnap(const Entity& pair) {
             }
             if (piece.size() >= 2) drawn.push_back(piece);
         }
-        for (const std::vector<Vec2>& band : c->side) drawn.push_back(band);
+        for (const SideStrand& piece : c->side)
+            for (const std::vector<Vec2>& line : piece.lines) drawn.push_back(line);
     }
     for (const std::vector<Vec2>& cap : c->caps) drawn.push_back(cap);
     for (const std::vector<Vec2>& outline : c->body) drawn.push_back(outline);

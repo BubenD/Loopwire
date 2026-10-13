@@ -2841,7 +2841,7 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         const QPen wirePen = p.pen();
         // SEEN FROM THE SIDE, the laid-up stretch is its near strands, drawn below; the weave is drawn only
         // where it still is - the fans and the straight ends.
-        const std::vector<std::vector<Vec2>> sideView = twistedPairSideView(e);
+        const std::vector<SideStrand> sideView = twistedPairSideView(e);
         for (const auto& s : twistedPairWeave(e)) {
             if (s.laid && !sideView.empty()) continue;
             for (const auto& wire : s.wires) {   // back to front
@@ -2859,19 +2859,21 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 stroke(wire.edgeB);
             }
         }
-        // EACH STRAND ON THE NEAR SIDE, one beside the next. Filled with the ground, like a wire, so it is a
-        // thing lying on top and not two lines; outlined all the way round, its rounded ends included.
-        for (const std::vector<Vec2>& band : sideView) {
-            if (band.size() < 3) continue;
-            QPolygonF outline;
-            outline.reserve(static_cast<int>(band.size()));
-            for (const Vec2& v : band) outline << vt.toScreen(v);
-            p.setPen(Qt::NoPen);
-            p.setBrush(g_bgColor);
-            p.drawPolygon(outline);
-            p.setBrush(Qt::NoBrush);
+        // EACH STRAND ON THE NEAR SIDE, half a strand at a time in the order that hides what each goes behind:
+        // filled with the ground so it is a thing lying on top, then its outline - and only its outline, never
+        // the cut across the middle where its two halves meet.
+        for (const SideStrand& piece : sideView) {
+            if (piece.fill.size() >= 3) {
+                QPolygonF area;
+                area.reserve(static_cast<int>(piece.fill.size()));
+                for (const Vec2& v : piece.fill) area << vt.toScreen(v);
+                p.setPen(Qt::NoPen);
+                p.setBrush(g_bgColor);
+                p.drawPolygon(area);
+                p.setBrush(Qt::NoBrush);
+            }
             p.setPen(wirePen);
-            p.drawPolyline(outline);
+            for (const std::vector<Vec2>& line : piece.lines) stroke(line);
         }
         // AND THE LINE ACROSS EACH WIRE WHERE IT IS CUT. Two edges and nothing else is an open
         // channel: the eye reads them as a wire because they run together, and then they simply

@@ -319,10 +319,17 @@ struct TwistedPairStretch {
     bool laid = false;                  // within the laid-up stretch, which a side view draws its own way
 };
 std::vector<TwistedPairStretch> twistedPairWeave(const Entity& pair);
-// THE LAID-UP STRETCH SEEN FROM THE SIDE, when the run is drawn that way (meta twistLook "side"): the strands on
-// the near side of the bundle, all lying the same way, each a closed outline - a straight band rounded at both
-// ends where it goes round the back. The weave is not drawn over that stretch. Empty for the woven look.
-std::vector<std::vector<Vec2>> twistedPairSideView(const Entity& pair);
+// THE LAID-UP STRETCH SEEN FROM THE SIDE - the way a laid-up run is drawn unless it says it is woven (meta twistLook
+// "woven"): the outline of each strand on the near side, as the 3D view draws the bundle, each a helix's near half
+// a wire's radius either side with a rounded end where it goes round the back. Given half a strand at a time, in
+// the order they are to be drawn: each piece's `fill` (in the ground colour) hides what is behind it, and its
+// `lines` are its outline - never the cut across the middle of a strand, which is not an edge of anything. The
+// weave is not drawn over that stretch. Empty for a woven run.
+struct SideStrand {
+    std::vector<Vec2> fill;
+    std::vector<std::vector<Vec2>> lines;
+};
+std::vector<SideStrand> twistedPairSideView(const Entity& pair);
 bool runPointAtFraction(const Entity& e, double t, Vec2& pos, Vec2& dir);
 double runFractionNearest(const Entity& e, const Vec2& p);
 // Read / write the stored per-instance fractions (padded to `count`, evenly spaced).

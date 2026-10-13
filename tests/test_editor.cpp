@@ -11,12 +11,16 @@
 #include "model/Document.h"
 #include "app/ribbon/RibbonIcons.h"
 #include "model/PartSymbols.h"
+#include "render/CanvasWidget.h"
 #include "render/EntityRenderer.h"
 #include "tools/EntityTransforms.h"
 #include "tools/ModifyOps.h"
 #include "tools/QuickSelect.h"
 
+#include <QApplication>
+#include <QElapsedTimer>
 #include <QImage>
+#include <QMouseEvent>
 #include <QObject>
 #include <QPointF>
 #include <QJsonArray>
@@ -14721,6 +14725,68 @@ int run_editor_tests() {
         }
         std::printf("  fillet preview: %d object(s) shown, made as shown %d\n", int(preview.size()), int(asShown));
         check(asShown, "fillet preview: the click makes exactly what was shown");
+    }
+
+    // ---- THE FILLET PREVIEW, THE WAY THE HAND MAKES IT -----------------------------------------------------
+    // Through the canvas: real mouse events, and the event loop let run so the pause the preview waits for
+    // passes - two lines, and a rectangle's corner (both picks on the one object).
+    for (int shape = 0; shape < 2; ++shape) {
+        Document d;
+        d.view().scale = 3.0;
+        d.view().x = 20;
+        d.view().y = 300;
+        if (shape == 0) {
+            Entity a;
+            a.id = QStringLiteral("la");
+            a.type = EntityType::Line;
+            a.a = {10, 10};
+            a.b = {100, 10};
+            d.entities().push_back(a);
+            Entity b = a;
+            b.id = QStringLiteral("lb");
+            b.a = {100, 10};
+            b.b = {100, 80};
+            d.entities().push_back(b);
+        } else {
+            Entity r;
+            r.id = QStringLiteral("rc");
+            r.type = EntityType::Rect;
+            r.points = {{10, 10}, {100, 10}, {100, 80}, {10, 80}};
+            d.entities().push_back(r);
+        }
+        Editor ed;
+        CanvasWidget canvas;
+        canvas.resize(500, 340);
+        canvas.setDocument(&d);
+        canvas.setEditor(&ed);
+        ed.setDocument(&d);
+        canvas.show();
+        QApplication::processEvents();
+        ed.setTool(ToolId::Fillet);
+        ed.setFilletRadius(15);
+        auto toScreen = [&](const Vec2& w) { return canvas.mapToScreen(w); };
+        auto mouse = [&](QEvent::Type type, const Vec2& w, Qt::MouseButton b, Qt::MouseButtons held) {
+            const QPointF at = toScreen(w);
+            QMouseEvent ev(type, at, canvas.mapToGlobal(at), b, held, Qt::NoModifier);
+            QApplication::sendEvent(&canvas, &ev);
+        };
+        auto settle = [&] {
+            QElapsedTimer t;
+            t.start();
+            while (t.elapsed() < 120) QApplication::processEvents();
+        };
+        mouse(QEvent::MouseMove, {50, 10}, Qt::NoButton, Qt::NoButton);
+        mouse(QEvent::MouseButtonPress, {50, 10}, Qt::LeftButton, Qt::LeftButton);
+        mouse(QEvent::MouseButtonRelease, {50, 10}, Qt::LeftButton, Qt::NoButton);
+        settle();
+        for (const Vec2& w : {Vec2{100, 30}, Vec2{100, 40}, Vec2{100, 45}})
+            mouse(QEvent::MouseMove, w, Qt::NoButton, Qt::NoButton);
+        settle();
+        std::printf("  fillet preview by hand (%s): %d object(s) shown, cannot %d\n", shape == 0 ? "two lines" : "a rectangle",
+                    int(ed.filletPreview().size()), int(ed.filletCannot()));
+        check(!ed.filletPreview().empty(),
+              shape == 0 ? "fillet preview by hand: pointing at the second line shows the fillet"
+                         : "fillet preview by hand: pointing at a rectangle's other side shows the fillet");
     }
 
     // ---- THE OBJECT UNDER THE CURSOR IS LIT ----------------------------------------------------------------

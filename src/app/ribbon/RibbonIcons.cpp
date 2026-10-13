@@ -142,13 +142,23 @@ QIcon makeCadActionIcon(const QString& key, const QColor& ink) {
         else if(shape=="circle")p.drawEllipse(QPointF(12,12),9,9);
         else p.drawPolygon(QPolygonF{{12,3},{22,20},{2,20}});
         stroke(ink,1.4);const double top=shape.isEmpty()||shape=="triangle"?11:9;line(11,top+1,12.5,top);line(12.5,top,12.5,top+7);
-    }else if(key=="note"||key=="drawingdetails"){
-        box(3,3,18,18);stroke(accent);line(3,8,21,8);stroke(ink,1.3);line(6,12,18,12);line(6,16,15,16);
-        if(key=="drawingdetails"){stroke(accent,1.2);line(10,9,10,20);}
+    }else if(key=="note"){
+        // A NOTE: a sheet of notepaper, its corner turned down, with lines of writing on it.
+        p.drawPolygon(QPolygonF{{4,3},{15,3},{20,8},{20,21},{4,21}});
+        stroke(accent);p.setBrush(wash);p.drawPolygon(QPolygonF{{15,3},{15,8},{20,8}});
+        stroke(ink,1.3);line(7,10,13,10);line(7,14,17,14);line(7,18,15,18);
+    }else if(key=="drawingdetails"){
+        // THE DRAWING'S DETAILS: a sheet with its border, and the title block in the corner where the number, the
+        // revision and the title are written.
+        box(2.5,3.5,19,17);stroke(ink,1.0);box(4,5,16,14);
+        stroke(accent);p.setBrush(wash);p.drawRect(QRectF(11,13,9,6));p.setBrush(Qt::NoBrush);
+        stroke(accent,1.1);line(11,16,20,16);line(15,13,15,16);
     }else if(key=="revision"){
         box(3,3,18,18);line(3,8,21,8);stroke(accent);p.setBrush(wash);p.drawPolygon(QPolygonF{{12,10},{17,18},{7,18}});
     }else if(key=="table"){
-        box(3,4,18,16);stroke(accent);p.fillRect(QRectF(4,5,16,4),wash);line(3,9,21,9);stroke(ink,1.2);line(9,9,9,20);line(15,9,15,20);line(3,14,21,14);
+        // A TABLE: a grid of cells, three by three, its heading row shaded.
+        box(3,4,18,16);stroke(accent);p.fillRect(QRectF(3.8,4.8,16.4,4.4),wash);line(3,9.3,21,9.3);
+        stroke(ink,1.2);line(9,4,9,20);line(15,4,15,20);line(3,14.6,21,14.6);
     }else if(key.startsWith("dimension")){
         const int mode=key.mid(9).toInt();
         if(mode==0){line(4,8,4,21);line(20,8,20,21);stroke(accent,1.4);arrow({12,12},{4,12},2.7);arrow({12,12},{20,12},2.7);line(8,4,16,4);}

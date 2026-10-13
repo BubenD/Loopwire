@@ -18319,9 +18319,9 @@ void Editor::writeBundleMeta(Entity& e, bool straight) const {
     // can be turned into the other from its properties; one that says nothing has to be guessed at,
     // and the guess is wrong for exactly the drawings that have both on them.
     e.meta.insert(QStringLiteral("twistStraight"), straight);
-    // HOW A LAID-UP BUNDLE LOOKS: written only when it is seen from the side, so one drawn the woven way
-    // carries nothing extra and opens on an older build as it always did.
-    if (!straight && twistSideView_) e.meta.insert(QStringLiteral("twistLook"), QStringLiteral("side"));
+    // HOW A LAID-UP BUNDLE LOOKS, written either way: seen from the side is what a run that says nothing is drawn
+    // as, so a woven one has to say so.
+    if (!straight) e.meta.insert(QStringLiteral("twistLook"), twistSideView_ ? QStringLiteral("side") : QStringLiteral("woven"));
     if (straight && twistLane_ > 1e-9)
         e.meta.insert(QStringLiteral("twistLane"), twistLane_);
     // A TRANSITION ON THE BODY END, and how its free end is finished. Written only when there is one
@@ -20522,7 +20522,11 @@ void Editor::updateFilletPreview() {
         if (had) emit overlayChanged();
         return;
     }
-    const auto second = hitTest(hoverAt_, pickIds_);
+    // The second line as the click takes it: whatever is under the cursor, the other object where both are -
+    // and the SAME one where it is a rectangle's or a polyline's other side, whose corner is filleted.
+    auto second = hitTest(hoverAt_);
+    if (second && std::find(pickIds_.begin(), pickIds_.end(), *second) != pickIds_.end())
+        if (auto other = hitTest(hoverAt_, pickIds_)) second = other;
     if (!second) {
         if (had) emit overlayChanged();
         return;

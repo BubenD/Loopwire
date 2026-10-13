@@ -7572,6 +7572,7 @@ int run_harness_tests() {
         Entity bundle;
         bundle.type = EntityType::TwistedPair;
         bundle.id = QStringLiteral("snap-bundle");
+        bundle.meta.insert(QStringLiteral("twistLook"), QStringLiteral("woven"));   // the woven drawing, crossings and all
         bundle.points = {{0.0, 0.0}, {120.0, 0.0}};
         bundle.a = bundle.points.front();
         bundle.b = bundle.points.back();
@@ -7684,45 +7685,45 @@ int run_harness_tests() {
         run.a = run.points.front();
         run.b = run.points.back();
         run.meta.insert(QStringLiteral("twistWires"), 4);
-        check(twistedPairSideView(run).empty(), "side view: a bundle that does not ask for it is woven");
-        run.meta.insert(QStringLiteral("twistLook"), QStringLiteral("side"));
-        const auto bands = twistedPairSideView(run);
-        bool closed = true, inside = true, sameWay = true;
+        // Seen from the side is how a laid-up run is drawn; woven only when it says so.
+        check(!twistedPairSideView(run).empty(), "side view: a bundle that says nothing is drawn seen from the side");
+        Entity woven = run;
+        woven.meta.insert(QStringLiteral("twistLook"), QStringLiteral("woven"));
+        check(twistedPairSideView(woven).empty(), "side view: one that says it is woven is woven");
+        const auto pieces = twistedPairSideView(run);
+        bool inside = true, allLines = true;
         double lo = 1e9, hi = -1e9;
-        double firstSlope = 0.0;
-        std::vector<double> middles;
-        for (const auto& band : bands) {
-            closed = closed && band.size() >= 4 && distance(band.front(), band.back()) < 1e-9;
-            Vec2 c{0, 0};
-            for (const Vec2& p : band) {
+        int lowerHalves = 0, upperHalves = 0;
+        for (const SideStrand& piece : pieces) {
+            allLines = allLines && !piece.lines.empty();
+            double sumY = 0.0;
+            int count = 0;
+            for (const Vec2& p : piece.fill) {
                 lo = std::min(lo, p.y);
                 hi = std::max(hi, p.y);
                 inside = inside && p.x > -1e-6 && p.x < 160.0 + 1e-6;
-                c = c + p;
+                sumY += p.y;
+                ++count;
             }
-            middles.push_back(c.x / band.size());
-            // Which way it leans: its lowest point against its highest.
-            Vec2 bottom = band.front(), top = band.front();
-            for (const Vec2& p : band) {
-                if (p.y < bottom.y) bottom = p;
-                if (p.y > top.y) top = p;
-            }
-            const double lean = top.x - bottom.x;
-            if (std::abs(lean) > 1e-6) {
-                if (firstSlope == 0.0) firstSlope = lean;
-                sameWay = sameWay && (lean > 0) == (firstSlope > 0);
-            }
+            if (count > 0) (sumY / count < 0 ? lowerHalves : upperHalves) += 1;
         }
-        std::printf("  side view: %d strand(s), across %.2f..%.2f\n", int(bands.size()), lo, hi);
-        check(bands.size() >= 8, "side view: the laid-up stretch is a row of strands");
-        check(closed, "side view: each strand is a closed outline - a wire, not two lines");
+        // THE OUTLINE NEVER CROSSES THE MIDDLE: each half's lines stop at the middle of the bundle, where the two
+        // halves of a strand meet - no line is drawn across a strand there.
+        bool noCut = true;
+        for (const SideStrand& piece : pieces)
+            for (const std::vector<Vec2>& line : piece.lines)
+                for (size_t i = 1; i < line.size(); ++i) {
+                    const Vec2 d = line[i] - line[i - 1];
+                    // A piece running square across the run, at the middle, would be the cut.
+                    if (std::abs(line[i].y) < 1e-6 && std::abs(line[i - 1].y) < 1e-6 && d.length() > 1e-6) noCut = false;
+                }
+        std::printf("  side view: %d half strand(s) (%d lower, %d upper), across %.2f..%.2f\n", int(pieces.size()),
+                    lowerHalves, upperHalves, lo, hi);
+        check(lowerHalves >= 8 && upperHalves >= 8, "side view: the laid-up stretch is a row of strands, each in two halves");
+        check(allLines, "side view: every half strand has its outline");
         check(inside, "side view: and none runs past the ends of the run");
-        check(sameWay, "side view: every strand lies the same way");
         check(hi > 0.5 && lo < -0.5 && std::abs(hi + lo) < 0.5, "side view: the strands cross the bundle from edge to edge");
-        std::sort(middles.begin(), middles.end());
-        bool apart = true;
-        for (size_t i = 1; i < middles.size(); ++i) apart = apart && middles[i] - middles[i - 1] > 0.5;
-        check(apart, "side view: one beside the next, not piled on each other");
+        check(noCut, "side view: no line across a strand where its two halves meet");
         int laidShown = 0;
         for (const auto& s : twistedPairWeave(run))
             if (s.laid) ++laidShown;

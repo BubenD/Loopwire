@@ -156,8 +156,9 @@ void MainWindow::buildHomeTab() {
         // a tool that is only on a tab you have to go to is a tool nobody uses.
         addGroup(lay, QStringLiteral("Annotation"),
                  toolRow({ToolId::Text, ToolId::Dimension, ToolId::Note, ToolId::Revision,
-                          ToolId::CenterMark, ToolId::CenterLine, ToolId::DetailView},
-                         {leaderBtn, tb, makeDrawingDetailsButton(page, true)}));
+                          ToolId::CenterMark, ToolId::CenterLine, ToolId::DetailView, ToolId::Arrow},
+                         {leaderBtn, makeNoteMarkButton(page, QStringLiteral("homeNoteMark")), tb,
+                          makeDrawingDetailsButton(page, true)}));
     }
 
     // Properties group: Layer + Color dropdowns.

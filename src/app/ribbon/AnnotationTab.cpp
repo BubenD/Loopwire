@@ -25,6 +25,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
+#include <QSignalBlocker>
 #include <QSpinBox>
 #include <QTabWidget>
 #include <QToolButton>
@@ -98,39 +99,7 @@ void MainWindow::buildAnnotationTab() {
         tableBtn->setFocusPolicy(Qt::NoFocus);
         tableBtn->setToolTip(QStringLiteral("Table — set rows/columns, then drag its size"));
         connect(tableBtn, &QToolButton::clicked, this, [this] { insertTableCommand(); });
-        // NOTE MARKS: the number in a triangle that ties a place on the drawing to a note, and the same in
-        // a square, a hexagon or a diamond. A click places the triangle; the fall menu has the others.
-        auto* markBtn = new QToolButton(page);
-        markBtn->setObjectName(QStringLiteral("annotationNoteMark"));
-        markBtn->setProperty("cadActionIcon", QStringLiteral("notemark_triangle"));
-        markBtn->setIcon(makeCadActionIcon(QStringLiteral("notemark_triangle")));
-        markBtn->setIconSize(QSize(28, 28));
-        markBtn->setToolButtonStyle(Qt::ToolButtonIconOnly);
-        markBtn->setAutoRaise(true);
-        markBtn->setFocusPolicy(Qt::NoFocus);
-        markBtn->setToolTip(QStringLiteral("Note mark — a number in a triangle, with a leader; the menu has "
-                                           "the other shapes"));
-        markBtn->setPopupMode(QToolButton::MenuButtonPopup);
-        connect(markBtn, &QToolButton::clicked, this,
-                [this] { editor_->beginNoteMark(QStringLiteral("triangle")); });
-        auto* mm = new QMenu(markBtn);
-        for (const auto& [shape, name] : {std::pair{QStringLiteral("triangle"), QStringLiteral("Triangle")},
-                                          std::pair{QStringLiteral("square"), QStringLiteral("Square")},
-                                          std::pair{QStringLiteral("hexagon"), QStringLiteral("Hexagon")},
-                                          std::pair{QStringLiteral("diamond"), QStringLiteral("Diamond")},
-                                          std::pair{QStringLiteral("circle"), QStringLiteral("Circle")}}) {
-            QAction* a = mm->addAction(makeCadActionIcon(QStringLiteral("notemark_") + shape), name);
-            const QString chosen = shape;
-            connect(a, &QAction::triggered, this, [this, chosen] { editor_->beginNoteMark(chosen); });
-        }
-        // WITH LEADER: off, a note mark is put down by one click with no leader to it.
-        mm->addSeparator();
-        QAction* withLeader = mm->addAction(QStringLiteral("With leader"));
-        withLeader->setObjectName(QStringLiteral("annotationNoteMarkLeader"));
-        withLeader->setCheckable(true);
-        withLeader->setChecked(editor_->noteMarkLeader());
-        connect(withLeader, &QAction::toggled, this, [this](bool on) { editor_->setNoteMarkLeader(on); });
-        markBtn->setMenu(mm);
+        auto* markBtn = makeNoteMarkButton(page, QStringLiteral("annotationNoteMark"));
         // Leader, Note, Revision and Table in the SAME two rows: two by two, the note mark beside them.
         addGroup(lay, QStringLiteral("Callouts"),
                  toolRow({ToolId::Note, ToolId::Revision}, {balloonBtn, tableBtn, markBtn}));
@@ -138,6 +107,48 @@ void MainWindow::buildAnnotationTab() {
     addGroup(lay,QStringLiteral("Drawing"),makeDrawingDetailsButton(page));
     lay->addStretch(1);
     ribbon_->addTab(page, QStringLiteral("Annotation"));
+}
+
+// NOTE MARKS: the number in a triangle that ties a place on the drawing to a note, and the same in a square, a
+// hexagon, a diamond or a circle. A click places the triangle; the fall menu has the others and whether it has a
+// leader. Made here for every tab that offers it, so they all offer the same thing.
+QToolButton* MainWindow::makeNoteMarkButton(QWidget* parent, const QString& name) {
+    auto* markBtn = new QToolButton(parent);
+    markBtn->setObjectName(name);
+    markBtn->setProperty("cadActionIcon", QStringLiteral("notemark_triangle"));
+    markBtn->setIcon(makeCadActionIcon(QStringLiteral("notemark_triangle")));
+    markBtn->setIconSize(QSize(28, 28));
+    markBtn->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    markBtn->setAutoRaise(true);
+    markBtn->setFocusPolicy(Qt::NoFocus);
+    markBtn->setToolTip(QStringLiteral("Note mark — a number in a triangle, with a leader; the menu has "
+                                       "the other shapes"));
+    markBtn->setPopupMode(QToolButton::MenuButtonPopup);
+    connect(markBtn, &QToolButton::clicked, this, [this] { editor_->beginNoteMark(QStringLiteral("triangle")); });
+    auto* mm = new QMenu(markBtn);
+    for (const auto& [shape, label] : {std::pair{QStringLiteral("triangle"), QStringLiteral("Triangle")},
+                                       std::pair{QStringLiteral("square"), QStringLiteral("Square")},
+                                       std::pair{QStringLiteral("hexagon"), QStringLiteral("Hexagon")},
+                                       std::pair{QStringLiteral("diamond"), QStringLiteral("Diamond")},
+                                       std::pair{QStringLiteral("circle"), QStringLiteral("Circle")}}) {
+        QAction* a = mm->addAction(makeCadActionIcon(QStringLiteral("notemark_") + shape), label);
+        const QString chosen = shape;
+        connect(a, &QAction::triggered, this, [this, chosen] { editor_->beginNoteMark(chosen); });
+    }
+    // WITH LEADER: off, a note mark is put down by one click with no leader to it. Read again each time the menu
+    // opens, so the tick says the same on every tab that has the button.
+    mm->addSeparator();
+    QAction* withLeader = mm->addAction(QStringLiteral("With leader"));
+    withLeader->setObjectName(name + QStringLiteral("Leader"));
+    withLeader->setCheckable(true);
+    withLeader->setChecked(editor_->noteMarkLeader());
+    connect(withLeader, &QAction::toggled, this, [this](bool on) { editor_->setNoteMarkLeader(on); });
+    connect(mm, &QMenu::aboutToShow, this, [this, withLeader] {
+        QSignalBlocker b(withLeader);
+        withLeader->setChecked(editor_->noteMarkLeader());
+    });
+    markBtn->setMenu(mm);
+    return markBtn;
 }
 
 } // namespace Loopwire

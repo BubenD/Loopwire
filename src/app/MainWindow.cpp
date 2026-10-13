@@ -10302,7 +10302,7 @@ void MainWindow::refreshProperties() {
         // AND HOW A LAID-UP ONE LOOKS: woven, or seen from the side - so a bundle already drawn can be shown
         // either way without drawing it again.
         if (bareWires && !straight) {
-            const bool sideView = e->meta.value(QStringLiteral("twistLook")).toString() == QLatin1String("side");
+            const bool sideView = e->meta.value(QStringLiteral("twistLook")).toString() != QLatin1String("woven");
             addCombo(QStringLiteral("Look"), {QStringLiteral("Woven"), QStringLiteral("Side view")},
                      mv(QStringLiteral("twistLook")).isVaries()
                          ? QStringLiteral("#Value")
