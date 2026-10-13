@@ -14663,6 +14663,66 @@ int run_editor_tests() {
         }
     }
 
+    // ---- FILLET: THE SECOND LINE PREVIEWED BEFORE IT IS CLICKED -----------------------------------------------
+    // With the first line picked, the cursor on a second shows the fillet the click would make - the very one it
+    // then makes; on one that cannot be filleted with the first, a red X says so. R shows the radius it has.
+    {
+        Document d;
+        Editor ed;
+        ed.setDocument(&d);
+        ed.setPixelTolerance(6);
+        Entity a;
+        a.id = QStringLiteral("fa");
+        a.type = EntityType::Line;
+        a.a = {10, 10};
+        a.b = {100, 10};
+        d.entities().push_back(a);
+        Entity b = a;
+        b.id = QStringLiteral("fb");
+        b.a = {100, 10};
+        b.b = {100, 80};
+        d.entities().push_back(b);
+        Entity c = a;
+        c.id = QStringLiteral("fc");
+        c.a = {10, 40};
+        c.b = {90, 40};
+        d.entities().push_back(c);
+        ed.setTool(ToolId::Fillet);
+        ed.setFilletRadius(20);
+        QString promptValue;
+        QObject::connect(&ed, &Editor::dynamicPromptWith, [&](const QString&, const QString& v) { promptValue = v; });
+        ed.acceptCommandInput(QStringLiteral("r"));
+        std::printf("  fillet r: the field opens with \"%s\"\n", qPrintable(promptValue));
+        check(promptValue == QLatin1String("20"), "fillet r: the radius field opens with the radius it has");
+        ed.setTool(ToolId::Fillet);
+        ed.onPointerMove({50, 10});
+        ed.onPointerPress({50, 10}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerRelease({50, 10}, Qt::LeftButton);
+        ed.onPointerMove({100, 50});
+        ed.updateHover();
+        const std::vector<Entity> preview = ed.filletPreview();
+        check(!preview.empty() && !ed.filletCannot(), "fillet preview: over a line it can meet, the fillet is shown");
+        ed.onPointerMove({50, 40});
+        ed.updateHover();
+        check(ed.filletCannot() && ed.filletPreview().empty(), "fillet preview: over a parallel line, the red X");
+        ed.onPointerMove({100, 50});
+        ed.updateHover();
+        ed.onPointerPress({100, 50}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerRelease({100, 50}, Qt::LeftButton);
+        // What the click made is what was shown: every previewed object is now on the drawing as shown.
+        bool asShown = !preview.empty();
+        for (const Entity& shown : preview) {
+            bool found = false;
+            for (const Entity& e : d.entities())
+                if (e.type == shown.type && distance(e.a, shown.a) < 1e-9 && distance(e.b, shown.b) < 1e-9 &&
+                    distance(e.center, shown.center) < 1e-9 && std::abs(e.radius - shown.radius) < 1e-9)
+                    found = true;
+            asShown = asShown && found;
+        }
+        std::printf("  fillet preview: %d object(s) shown, made as shown %d\n", int(preview.size()), int(asShown));
+        check(asShown, "fillet preview: the click makes exactly what was shown");
+    }
+
     // ---- THE OBJECT UNDER THE CURSOR IS LIT ----------------------------------------------------------------
     // Over a line, a circle's ring or anything else a click would take, that object is drawn faintly lit; off
     // it, nothing is; one already picked is not lit again.

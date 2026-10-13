@@ -355,6 +355,13 @@ void CanvasWidget::setEditor(Editor* editor) {
             editor_, &Editor::dynamicPrompt, this,
             [this](const QString& label) { showDynInput(QString(), label); },
             Qt::QueuedConnection);
+        connect(
+            editor_, &Editor::dynamicPromptWith, this,
+            [this](const QString& label, const QString& value) {
+                showDynInput(value, label);
+                dynInput_->selectAll();   // typing replaces it; Enter keeps it
+            },
+            Qt::QueuedConnection);
     }
     invalidateScene();
     if (editor)

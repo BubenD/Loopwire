@@ -13068,7 +13068,8 @@ bool Editor::acceptCommandInput(const QString& text) {
             filletInputMode_ = true;
             emit message(QStringLiteral("Fillet radius <%1>: enter value and press Enter")
                              .arg(filletRadius_));
-            emit dynamicPrompt(QStringLiteral("Fillet radius"));
+            // THE RADIUS IT HAS NOW, in the field beside the cursor: Enter keeps it, a number typed replaces it.
+            emit dynamicPromptWith(QStringLiteral("Fillet radius"), QString::number(filletRadius_));
             return true;
         }
     }
@@ -20509,6 +20510,60 @@ void Editor::setLookupHighlight(const std::vector<QString>& ids) {
     emit overlayChanged();
 }
 
+// THE FILLET AS IT WOULD BE, before the second click: worked out by doing it - on a copy of the drawing, by the
+// same code the click runs - so what is shown is exactly what the click will make. Nothing changed on the copy
+// means it cannot be done there, and the cursor says so with a small red X.
+void Editor::updateFilletPreview() {
+    const bool had = !filletPreview_.empty() || filletCannot_;
+    filletPreview_.clear();
+    filletCovered_.clear();
+    filletCannot_ = false;
+    if (!doc_ || (tool_ != ToolId::Fillet && tool_ != ToolId::Chamfer) || pickIds_.size() != 1 || pressed_) {
+        if (had) emit overlayChanged();
+        return;
+    }
+    const auto second = hitTest(hoverAt_, pickIds_);
+    if (!second) {
+        if (had) emit overlayChanged();
+        return;
+    }
+    Document scratch;
+    scratch.entities() = doc_->entities();
+    scratch.view() = doc_->view();
+    Editor trial;
+    trial.doc_ = &scratch;
+    trial.tool_ = tool_;
+    trial.pickIds_ = pickIds_;
+    trial.pickPts_ = pickPts_;
+    trial.filletRadius_ = filletRadius_;
+    trial.chamferDist_ = chamferDist_;
+    trial.pixelTol_ = pixelTol_;
+    trial.inputScale_ = inputScale_;
+    trial.handlePickModifyPress(hoverAt_);
+    auto same = [](const Entity& x, const Entity& y) {
+        return x.type == y.type && x.a.x == y.a.x && x.a.y == y.a.y && x.b.x == y.b.x && x.b.y == y.b.y &&
+               x.center.x == y.center.x && x.center.y == y.center.y && x.radius == y.radius &&
+               x.radiusY == y.radiusY && x.startAngle == y.startAngle && x.endAngle == y.endAngle &&
+               x.points.size() == y.points.size() &&
+               std::equal(x.points.begin(), x.points.end(), y.points.begin(),
+                          [](const Vec2& p, const Vec2& q) { return p.x == q.x && p.y == q.y; }) &&
+               x.meta == y.meta;
+    };
+    QHash<QString, const Entity*> before;
+    for (const Entity& e : doc_->entities()) before.insert(e.id, &e);
+    QSet<QString> after;
+    for (const Entity& e : scratch.entities()) {
+        after.insert(e.id);
+        const Entity* was = before.value(e.id, nullptr);
+        if (!was || !same(*was, e)) filletPreview_.push_back(e);
+        if (was && !same(*was, e)) filletCovered_.push_back(*was);
+    }
+    for (const Entity& e : doc_->entities())
+        if (!after.contains(e.id)) filletCovered_.push_back(e);
+    filletCannot_ = filletPreview_.empty() && filletCovered_.empty();
+    emit overlayChanged();
+}
+
 void Editor::clearHover() {
     if (hoverTimer_) hoverTimer_->stop();
     if (hoverId_.isEmpty()) return;
@@ -20517,6 +20572,7 @@ void Editor::clearHover() {
 }
 
 void Editor::updateHover() {
+    updateFilletPreview();
     QString over;
     if (doc_ && (tool_ == ToolId::Select || isPickModifyTool(tool_)) && !pressed_ && !editing_ && !pastePlacing_ &&
         hoverBlockId_.isEmpty())
@@ -20536,9 +20592,31 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 EntityRenderer::draw(p, *e, *doc_, vt, QColor(255, 176, 90));
         p.restore();
     }
+    // THE FILLET AS THE SECOND CLICK WOULD MAKE IT: what it changes rubbed out in the ground colour, and the
+    // result drawn over in green. Where it cannot be made, a small red X beside the cursor.
+    if (doc_ && (tool_ == ToolId::Fillet || tool_ == ToolId::Chamfer) && pickIds_.size() == 1) {
+        if (!filletPreview_.empty() || !filletCovered_.empty()) {
+            p.save();
+            for (const Entity& e : filletCovered_)
+                EntityRenderer::draw(p, e, *doc_, vt, EntityRenderer::backgroundColor());
+            for (const Entity& e : filletPreview_) EntityRenderer::draw(p, e, *doc_, vt, QColor(90, 220, 140));
+            p.restore();
+        } else if (filletCannot_) {
+            const QPointF c = vt.toScreen(hoverAt_) + QPointF(14, 14);
+            p.save();
+            QPen red(QColor(235, 70, 60));
+            red.setCosmetic(true);
+            red.setWidthF(2.0);
+            p.setPen(red);
+            p.drawLine(c + QPointF(-4, -4), c + QPointF(4, 4));
+            p.drawLine(c + QPointF(4, -4), c + QPointF(-4, 4));
+            p.restore();
+        }
+    }
     // THE OBJECT UNDER THE CURSOR, drawn over its own lines in a faint blue a little heavier than they are -
     // not when it is already picked, which says more.
-    if (!hoverId_.isEmpty() && doc_ &&
+    // (Not while a fillet is previewed: the second line is drawn there as it will be.)
+    if (!hoverId_.isEmpty() && doc_ && filletPreview_.empty() && filletCovered_.empty() &&
         std::find(selected_.begin(), selected_.end(), hoverId_) == selected_.end()) {
         if (const Entity* h = entityById(hoverId_); h && h->type != EntityType::Wipeout) {
             p.save();
@@ -22062,7 +22140,10 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     // only the picked WALL (the edge between the two nearest joints) is highlighted —
     // not the whole shape — so it's clear which segment the corner op will use. Other
     // primitives (single lines) are re-stroked whole.
-    if ((tool_ == ToolId::Fillet || tool_ == ToolId::Chamfer) && !pickIds_.empty()) {
+    // Not while the preview shows the fillet: that draws the picked line as it will be, and this would draw it
+    // over the top as it is.
+    const bool filletShown = !filletPreview_.empty() || !filletCovered_.empty();
+    if ((tool_ == ToolId::Fillet || tool_ == ToolId::Chamfer) && !pickIds_.empty() && !filletShown) {
         const QColor mark = paperInk(QColor("#ffcf3f"));
         QPen wp(mark);
         wp.setCosmetic(true);

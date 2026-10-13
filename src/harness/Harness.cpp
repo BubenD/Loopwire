@@ -1367,22 +1367,42 @@ std::vector<std::vector<Vec2>> sideViewStrands(const TwistFrames& f) {
         }
         return kept;
     };
-    constexpr int kArc = 8;
-    for (double s = from - along; s < till + step; s += step) {
-        // The strand's middle line, from its lower end to its upper one, centred on s.
-        const Vec2 lo{s - alongEnd / 2.0, -reachV}, hi{s + alongEnd / 2.0, reachV};
-        std::vector<Vec2> band;
-        // Up one side, round the top, down the other, round the bottom - each long side in pieces, so on a
-        // route that bends it bends too.
-        for (int k = 0; k <= 8; ++k) band.push_back(lerp(lo, hi, k / 8.0) - side * hw);
-        for (int k = 1; k < kArc; ++k) {
-            const double a = -M_PI / 2.0 + M_PI * k / kArc;
-            band.push_back(hi + dir * (hw * std::cos(a)) + side * (hw * std::sin(a)));
+    // EACH STRAND A SLANTED BAND REACHING RIGHT ACROSS THE BUNDLE: its top and bottom lie along the bundle's two
+    // edges, where the wire goes round the back out of sight, its two long sides lean the way the lay does, and
+    // all four corners are rounded - a wire seen from the side, not a box. A thin gap is left between one strand
+    // and the next, so each reads as a wire of its own.
+    const double sinLean = 2.0 * half / slope;                  // the strand against the run
+    const double halfAlong = 0.85 * hw / std::max(1e-9, sinLean); // half its width, measured along the run
+    const double round = 0.6 * hw;                              // the corners' radius
+    (void)reachV;
+    (void)alongEnd;
+    (void)side;
+    // A corner rounded off: from a point back along the edge coming in to one along the edge going out, curving
+    // through the corner itself.
+    auto roundCorner = [&](std::vector<Vec2>& into, const Vec2& prev, const Vec2& at, const Vec2& next) {
+        const double reach = std::min(round * 1.3, 0.45 * std::min(distance(prev, at), distance(at, next)));
+        const Vec2 in = at + (prev - at).normalized() * reach;
+        const Vec2 outP = at + (next - at).normalized() * reach;
+        for (int k = 0; k <= 6; ++k) {
+            const double t = k / 6.0;
+            into.push_back(in * ((1 - t) * (1 - t)) + at * (2 * (1 - t) * t) + outP * (t * t));
         }
-        for (int k = 0; k <= 8; ++k) band.push_back(lerp(hi, lo, k / 8.0) + side * hw);
-        for (int k = 1; k < kArc; ++k) {
-            const double a = M_PI / 2.0 + M_PI * k / kArc;
-            band.push_back(lo + dir * (hw * std::cos(a)) + side * (hw * std::sin(a)));
+    };
+    for (double s = from - along; s < till + step; s += step) {
+        const Vec2 bl{s - along / 2.0 - halfAlong, -half}, br{s - along / 2.0 + halfAlong, -half};
+        const Vec2 tr{s + along / 2.0 + halfAlong, half}, tl{s + along / 2.0 - halfAlong, half};
+        const Vec2 corners[4] = {bl, br, tr, tl};
+        std::vector<Vec2> band;
+        for (int c = 0; c < 4; ++c) {
+            const Vec2 prev = corners[(c + 3) % 4], at = corners[c], next = corners[(c + 1) % 4];
+            roundCorner(band, prev, at, next);
+            // The long sides in pieces, so on a route that bends the strand bends with it.
+            if (c == 1 || c == 3) {
+                const Vec2 from2 = band.back();
+                const Vec2 to2 = corners[(c + 1) % 4] + (corners[c] - corners[(c + 1) % 4]).normalized() *
+                                                            std::min(round * 1.3, 0.45 * distance(at, next));
+                for (int k = 1; k < 8; ++k) band.push_back(lerp(from2, to2, k / 8.0));
+            }
         }
         band = clip(clip(band, from, true), till, false);
         if (band.size() < 3) continue;

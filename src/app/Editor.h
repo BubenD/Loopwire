@@ -1432,6 +1432,10 @@ public:
     // Work out what is under the cursor now (normally done once it settles).
     void updateHover();
     void clearHover();
+    // The fillet (or chamfer) the second click would make, worked out on a copy of the drawing.
+    void updateFilletPreview();
+    bool filletCannot() const { return filletCannot_; }
+    const std::vector<Entity>& filletPreview() const { return filletPreview_; }
 
     // Apply an edited connector spec to the currently selected connector.
     void applyConnectorSpecToSelection(const ConnectorSpec& spec);
@@ -1648,6 +1652,8 @@ signals:
     // for an inline value (e.g. fillet radius / gap) — so the user can type it
     // immediately and keep drawing.
     void dynamicPrompt(const QString& placeholder);
+    // The same field opened with a value already in it, selected: Enter keeps it, typing replaces it.
+    void dynamicPromptWith(const QString& placeholder, const QString& value);
     // The hatch live-edit target changed (a hatch was created, or the session
     // ended) — the host re-points the contextual Hatch tab.
     void hatchTargetChanged();
@@ -2023,7 +2029,7 @@ private:
     bool twistBodySidesSame_ = true;               // both its ends shrink alike
     RunEnds twistTransitionEnds_ = RunEnds::Both;  // which ends of a cable wear the boot
     RunLay twistLay_ = RunLay::Straight;           // and how the gathered wires run
-    bool twistSideView_ = false;                    // a laid-up bundle drawn seen from the side
+    bool twistSideView_ = true;                     // a laid-up bundle drawn seen from the side (Look: Woven to weave)
     bool connectionPinStub_ = true;                 // the Connection pin tool places a connector's pin (the Y)
     bool twistBodyOverCable_ = false;              // tubing along the run, or over a cable
     double twistBodyFace_ = 0.0;                   // the end face across; 0 = the drawing's own
@@ -2317,6 +2323,9 @@ private:
     QString hoverId_;   // the object under the cursor, lit faintly. Not saved.
     Vec2 hoverAt_;                 // where the cursor last settled. Not saved.
     QTimer* hoverTimer_ = nullptr; // waits for it to settle
+    std::vector<Entity> filletPreview_;   // what the second fillet click would make or change. Not saved.
+    std::vector<Entity> filletCovered_;   // ...and what it would change or take away
+    bool filletCannot_ = false;           // the object under the cursor cannot be filleted with the first
     std::vector<QString> lookupHighlight_;
     // A BIG PASTE'S GHOST, drawn once and moved with the cursor: tens of thousands of objects drawn
     // afresh on every mouse move made placing them crawl. Keyed on what the picture depends on.
