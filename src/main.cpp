@@ -49,6 +49,8 @@ int main(int argc, char** argv) {
         app.setStyleSheet(QString::fromUtf8(qss.readAll()));
     // A right-click menu must have a background. See installOpaqueMenus.
     Loopwire::installOpaqueMenus(&app);
+    // A drop-down shows its lines whole. See installWideComboPopups.
+    Loopwire::installWideComboPopups(&app);
     // The wheel scrolls; it never changes a figure in a box or a drop-down, in any window. See wheelScrollsNotFields.
     Loopwire::wheelScrollsNotFieldsAnywhere();
 

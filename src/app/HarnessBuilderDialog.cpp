@@ -40,6 +40,9 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPushButton>
+#include <QAbstractButton>
+#include <QDrag>
+#include <QMimeData>
 #include <QProxyStyle>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -378,6 +381,41 @@ void saveCustomColor(const QString& code, const QString& name, const QString& he
 // A PIN LIT ON THE PIN MAP: a light wash of yellow, not a solid block, so the pin's own text still reads.
 const QColor kLitPin(255, 209, 102, 70);
 
+// A PIN BEING DRAGGED IS SEE-THROUGH: the pin in the hand is drawn at half strength, so the pins it passes over - and
+// the white line where it will land - are seen through it.
+class PinList : public QListWidget {
+public:
+    using QListWidget::QListWidget;
+
+protected:
+    void startDrag(Qt::DropActions supported) override {
+        const QModelIndexList picked = selectedIndexes();
+        if (picked.isEmpty()) return;
+        QMimeData* data = model()->mimeData(picked);
+        if (!data) return;
+        const QRect r = visualRect(picked.front());
+        const qreal dpr = devicePixelRatioF();
+        QPixmap face(r.size() * dpr);
+        face.setDevicePixelRatio(dpr);
+        face.fill(Qt::transparent);
+        viewport()->render(&face, QPoint(), QRegion(r));
+        QPixmap faint(face.size());
+        faint.setDevicePixelRatio(dpr);
+        faint.fill(Qt::transparent);
+        {
+            QPainter p(&faint);
+            p.setOpacity(0.45);
+            p.drawPixmap(0, 0, face);
+        }
+        auto* drag = new QDrag(this);
+        drag->setMimeData(data);
+        drag->setPixmap(faint);
+        drag->setHotSpot(viewport()->mapFromGlobal(QCursor::pos()) - r.topLeft());
+        // The move itself is the list's own: an internal move puts the row where it is dropped.
+        drag->exec(supported, defaultDropAction());
+    }
+};
+
 // WHERE A DRAGGED PIN WILL LAND: a white line across the pin list between the two pins it goes between (or a white
 // outline, dropped on a pin), drawn plainly where the platform's own marker is too faint to see on the dark list.
 class PinDropStyle : public QProxyStyle {
@@ -642,6 +680,22 @@ public:
         enlarge_->setAutoRaise(true);
         connect(enlarge_, &QToolButton::clicked, this, [this] { if (onActivate_) onActivate_(); });
         lay->addWidget(enlarge_, 0, Qt::AlignRight);
+        // FIT, see-through in the picture's corner: the whole harness back in view after zooming and moving about.
+        fit_ = new QToolButton(picture_);
+        fit_->setObjectName(QStringLiteral("harnessBuilderPreviewFit"));
+        fit_->setText(QStringLiteral("Fit"));
+        fit_->setToolTip(QStringLiteral("Fit the whole harness to the picture"));
+        fit_->setCursor(Qt::ArrowCursor);
+        fit_->setStyleSheet(QStringLiteral(
+            "QToolButton{background:rgba(40,48,58,110);color:rgba(230,236,244,210);border:1px solid rgba(160,180,200,90);"
+            "border-radius:4px;padding:2px 8px;}QToolButton:hover{background:rgba(60,72,86,190);color:white;}"));
+        connect(fit_, &QToolButton::clicked, this, [this] { picture_->fitToView(); });
+        picture_->installEventFilter(this);
+        placeFit();
+    }
+    bool eventFilter(QObject* watched, QEvent* ev) override {
+        if (watched == picture_ && (ev->type() == QEvent::Resize || ev->type() == QEvent::Show)) placeFit();
+        return QWidget::eventFilter(watched, ev);
     }
     void setDefinition(const HarnessDef& def) {
         def_ = def;
@@ -678,8 +732,16 @@ private:
         if (fit) picture_->fitToView();
     }
 
+    void placeFit() {
+        if (!fit_) return;
+        fit_->adjustSize();
+        fit_->move(picture_->width() - fit_->width() - 8, 8);
+        fit_->raise();
+    }
+
     DrawingPreview* picture_ = nullptr;
     QToolButton* enlarge_ = nullptr;
+    QToolButton* fit_ = nullptr;
     HarnessDef def_;
     bool showShields_ = true;
     QStringList litPins_;
@@ -913,7 +975,7 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
         "definition (shield and twisted-pair groups shown as brackets and merged cells)."));
     auto* generateBtn = new QPushButton(QStringLiteral("Generate"), this);
     generateBtn->setObjectName(QStringLiteral("harnessBuilderGenerate"));
-    generateBtn->setDefault(true);
+    generateBtn->setAutoDefault(false);   // Enter in a field applies the field; Generate is pressed, not stumbled into
     // BACK, NEXT AND GENERATE IN COLOURS OF THEIR OWN - different from the other buttons and from one another, so the
     // way through the steps and the button that draws the harness are found without reading every label. Back a quiet
     // slate, Next blue, Generate green; each a little lighter under the pointer and greyed while it cannot be used.
@@ -1572,24 +1634,30 @@ QWidget* HarnessBuilderDialog::buildPinMapSection() {
     pinMapHost_->setMinimumHeight(0);
     tables->setMinimumHeight(90);
 
-    // THE OPTIMISERS, here where the pins are: each only re-orders pins.
+    // THE OPTIMISERS, here where the pins are: each only re-orders pins. ON AND OFF, and whatever is on is optimised
+    // for together, in one pass - fewest crossings, shields together, twists together, or any two, or all three.
     auto* minBtn = new QPushButton(QStringLiteral("Minimise crossings"), this);
     minBtn->setObjectName(QStringLiteral("harnessBuilderMinimise"));
     minBtn->setToolTip(QStringLiteral(
-        "Re-order the pins of every connector for the fewest crossings while keeping "
-        "twisted pairs and shielded wires on neighbouring pins (the connectors themselves "
-        "stay where they are)"));
-    connect(minBtn, &QPushButton::clicked, this, [this] { runMinimizeCrossings(); });
+        "On: re-order the pins of every connector for the fewest crossings (the connectors themselves stay where they "
+        "are), together with whatever else is on"));
     auto* shieldBtn = new QPushButton(QStringLiteral("Optimise by shield"), this);
+    shieldBtn->setObjectName(QStringLiteral("harnessBuilderOptShield"));
     shieldBtn->setToolTip(QStringLiteral(
-        "Re-order the pins so every shielded group lands on neighbouring pins, so each "
-        "screen encloses a solid band"));
-    connect(shieldBtn, &QPushButton::clicked, this, [this] { runOptimizeBy(/*shield=*/true); });
+        "On: every shielded group on neighbouring pins, so each screen encloses a solid band - together with whatever "
+        "else is on"));
     auto* twistBtn = new QPushButton(QStringLiteral("Optimise by twist"), this);
+    twistBtn->setObjectName(QStringLiteral("harnessBuilderOptTwist"));
     twistBtn->setToolTip(QStringLiteral(
-        "Re-order the pins so every twisted group lands on neighbouring pins, so each pair "
-        "can actually be braided"));
-    connect(twistBtn, &QPushButton::clicked, this, [this] { runOptimizeBy(/*shield=*/false); });
+        "On: every twisted group on neighbouring pins, so each pair can be braided - together with whatever else is on"));
+    for (QPushButton* b : {minBtn, shieldBtn, twistBtn}) {
+        b->setCheckable(true);
+        b->setAutoDefault(false);
+        b->setStyleSheet(QStringLiteral("QPushButton:checked{background:#2d5a80;color:white;}"));
+        connect(b, &QPushButton::toggled, this, [this, minBtn, shieldBtn, twistBtn] {
+            runCombinedOptimise(minBtn->isChecked(), shieldBtn->isChecked(), twistBtn->isChecked());
+        });
+    }
     auto* box = new QWidget(this);
     auto* bv = new QVBoxLayout(box);
     bv->setContentsMargins(0, 0, 0, 0);
@@ -1641,20 +1709,15 @@ QWidget* HarnessBuilderDialog::buildPreviewColumn() {
     v->addWidget(viewStack_, 3);
     auto* switchRow = new QHBoxLayout();
     switchRow->setSpacing(4);
-    drawingBtn_ = new QPushButton(QStringLiteral("Drawing"), column);
-    drawingBtn_->setObjectName(QStringLiteral("harnessBuilderShowDrawing"));
-    drawingBtn_->setToolTip(QStringLiteral("The harness as Generate will draw it"));
+    // ONE BUTTON FOR THE TWO VIEWS: it says what it will show - the pin map while the drawing is up, the drawing while
+    // the pin map is.
     pinMapBtn_ = new QPushButton(QStringLiteral("Pin map"), column);
-    pinMapBtn_->setObjectName(QStringLiteral("harnessBuilderShowPinMap"));
-    pinMapBtn_->setToolTip(QStringLiteral("What lands on each pin of each connector - drag pins to re-order them"));
-    for (QPushButton* b : {drawingBtn_, pinMapBtn_}) {
-        b->setCheckable(true);
-        b->setAutoExclusive(true);
-        switchRow->addWidget(b);
-    }
-    drawingBtn_->setChecked(true);
-    connect(drawingBtn_, &QPushButton::clicked, this, [this] { showPinMap(false); });
-    connect(pinMapBtn_, &QPushButton::clicked, this, [this] { showPinMap(true); });
+    pinMapBtn_->setObjectName(QStringLiteral("harnessBuilderViewSwitch"));
+    pinMapBtn_->setAutoDefault(false);
+    pinMapBtn_->setToolTip(QStringLiteral("Show the pin map - what lands on each pin of each connector, drag pins to re-order "
+                                          "them - or the harness as Generate will draw it"));
+    switchRow->addWidget(pinMapBtn_);
+    connect(pinMapBtn_, &QPushButton::clicked, this, [this] { showPinMap(!showingPinMap()); });
     switchRow->addStretch(1);
     auto* checks = new QPushButton(QStringLiteral("Checks"), column);
     checks->setObjectName(QStringLiteral("wizardChecks"));
@@ -1879,8 +1942,7 @@ bool HarnessBuilderDialog::showingPinMap() const { return viewStack_ && viewStac
 void HarnessBuilderDialog::showPinMap(bool on) {
     if (!viewStack_) return;
     viewStack_->setCurrentIndex(on ? 1 : 0);
-    if (pinMapBtn_) pinMapBtn_->setChecked(on);
-    if (drawingBtn_) drawingBtn_->setChecked(!on);
+    if (pinMapBtn_) pinMapBtn_->setText(on ? QStringLiteral("Drawing") : QStringLiteral("Pin map"));
     if (viewCaption_) viewCaption_->setText(on ? QStringLiteral("PIN MAP") : QStringLiteral("AS IT WILL BE DRAWN"));
     if (shieldPreviewBox_) shieldPreviewBox_->setVisible(!on);
 }
@@ -2055,7 +2117,7 @@ void HarnessBuilderDialog::reloadPinMap() {
         cap->setStyleSheet(QStringLiteral("font-weight:700;")); // the window's own text colour, light or dark
         v->addWidget(cap);
 
-        auto* list = new QListWidget(col);
+        auto* list = new PinList(col);
         list->setObjectName(QStringLiteral("harnessBuilderPins_") + c.id);
         // CTRL+HOVER: the pin and every pin wired to it, lit (see eventFilter).
         list->setMouseTracking(true);
@@ -2216,6 +2278,9 @@ QList<QPair<QString, QString>> HarnessBuilderDialog::endpointChoices() const {
     return out;
 }
 
+QString HarnessBuilderDialog::gaugeValueOf(const QString& label) { return gaugeValueFor(label); }
+QString HarnessBuilderDialog::gaugeLabelOf(const QString& mm2) { return gaugeLabelFor(mm2); }
+
 QStringList HarnessBuilderDialog::gaugeChoices() {
     QStringList out;
     for (const QString& mm2 : wireGaugeChoices()) out << gaugeLabelFor(mm2);
@@ -2234,6 +2299,7 @@ QStringList HarnessBuilderDialog::colorChoices() {
 QWidget* HarnessBuilderDialog::buildWiresSection() {
     auto* addBtn = makeAddButton(this, QStringLiteral("Add wire"),
                                 QStringLiteral("One more conductor between two connectors"));
+    addBtn->setObjectName(QStringLiteral("harnessBuilderAddWire"));
     connect(addBtn, &QPushButton::clicked, this, [this] {
         // Grouped, a new row has to belong somewhere: the group decides which connectors it runs
         // between (or which shield / twisted group it joins), and guessing would drop it into a
@@ -2763,6 +2829,16 @@ void HarnessBuilderDialog::keyPressEvent(QKeyEvent* e) {
             return;
         }
     }
+    // ENTER IN A FIELD APPLIES THAT FIELD, AND NOTHING ELSE. A dialog hands Enter to its default button, and here that
+    // drew the whole harness on the sheet the moment a number was typed. A button with the focus still answers it.
+    if (e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) {
+        QWidget* field = focusWidget();
+        if (!qobject_cast<QAbstractButton*>(field)) {
+            if (auto* spin = qobject_cast<QAbstractSpinBox*>(field)) spin->interpretText();
+            e->accept();
+            return;
+        }
+    }
     QDialog::keyPressEvent(e);
 }
 
@@ -3007,6 +3083,15 @@ void HarnessBuilderDialog::addWire() {
     // free pins, which is what a new row almost always wants to be.
     const HarnessConnector* from = nullptr;
     const HarnessConnector* to = nullptr;
+    // THE CONNECTORS THE LAST WIRE WAS GIVEN, while they have a pin free: a wire is added to where the last one went,
+    // so a run of wires to a connector chosen once does not have to be pointed at it again each time.
+    if (!def_.wires.empty()) {
+        const HarnessWire& last = def_.wires.back();
+        const HarnessConnector* lastFrom = harnessConnById(def_, last.fromConn);
+        const HarnessConnector* lastTo = harnessConnById(def_, last.toConn);
+        if (lastFrom && nextFreePin(*lastFrom) > 0) from = lastFrom;
+        if (lastTo && lastTo != from && nextFreePin(*lastTo) > 0) to = lastTo;
+    }
     for (const auto& c : def_.connectors) {
         if (!from && c.side == HarnessSide::Left) from = &c;
         if (!to && c.side == HarnessSide::Right) to = &c;
@@ -3257,6 +3342,9 @@ void HarnessBuilderDialog::mergeGroupCells() {
         return nullptr;
     };
     for (const GroupCol& gc : kCols) {
+        // A column out of sight gets no merged editor: a widget spanning rows of a hidden column is still shown, and
+        // it was drawn over the first column. The rows are built again when the column is shown (More fields).
+        if (wireTable_->isColumnHidden(gc.col)) continue;
         auto valueAt = [&](int row) -> QString {
             const HarnessWire* w = wireAt(row);
             return w ? (w->*gc.field) : QString();
@@ -4159,6 +4247,31 @@ void HarnessBuilderDialog::runMinimizeCrossings() {
             .arg(harnessBundleBreaks(def_, true))
             .arg(twistBefore)
             .arg(harnessBundleBreaks(def_, false)));
+}
+
+void HarnessBuilderDialog::runCombinedOptimise(bool crossings, bool shields, bool twists) {
+    if (!crossings && !shields && !twists) {
+        if (issueView_) issueView_->setHtml(QStringLiteral("<span style='color:#8a96a3'>No optimiser on - the pinout is left as it is.</span>"));
+        return;
+    }
+    const int crossBefore = harnessCrossings(def_);
+    const int shieldBefore = harnessBundleBreaks(def_, true), twistBefore = harnessBundleBreaks(def_, false);
+    optimizeHarnessCombined(def_, crossings, shields, twists);
+    reloadAll();
+    QStringList on;
+    if (crossings) on << QStringLiteral("crossings");
+    if (shields) on << QStringLiteral("shields");
+    if (twists) on << QStringLiteral("twists");
+    if (issueView_)
+        issueView_->setHtml(QStringLiteral("<span style='color:#7ee0a0'>Pinout re-ordered for %1 together — crossings %2 → %3, "
+                                           "split shields %4 → %5, split twists %6 → %7.</span>")
+                                .arg(on.join(QStringLiteral(", ")))
+                                .arg(crossBefore)
+                                .arg(harnessCrossings(def_))
+                                .arg(shieldBefore)
+                                .arg(harnessBundleBreaks(def_, true))
+                                .arg(twistBefore)
+                                .arg(harnessBundleBreaks(def_, false)));
 }
 
 void HarnessBuilderDialog::runOptimizeBy(bool shield) {

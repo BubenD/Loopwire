@@ -1047,6 +1047,18 @@ int optimizeHarnessForShields(HarnessDef& def) {
     return harnessBundleBreaks(def, /*shield=*/true);
 }
 
+int optimizeHarnessCombined(HarnessDef& def, bool crossings, bool shields, bool twists) {
+    if (!crossings && !shields && !twists) return harnessCrossings(def);
+    HarnessOptimizeWeights w;
+    w.crossing = crossings ? 1 : 0;
+    w.shieldBreak = shields ? 1000 : 0;
+    w.twistBreak = twists ? 1000 : 0;
+    // Populated pins at the top as a tie-break: worth less than any term asked for.
+    w.pinOrder = crossings ? 20 : 1;
+    optimizeHarnessPinout(def, w);
+    return harnessCrossings(def);
+}
+
 int optimizeHarnessForTwists(HarnessDef& def) {
     HarnessOptimizeWeights w;
     w.crossing = 1;
@@ -2270,9 +2282,23 @@ HarnessBuild buildHarness(const HarnessDef& def) {
         Entity e;
         e.type = EntityType::Wire;
         e.layer = QStringLiteral("Wires");
-        // Out of the pin, then up or down to the leg: a right-angled run like every other wire.
-        if (std::abs(pinPt.y - leg.y) < 1e-6) e.points = {pinPt, leg};
-        else e.points = {pinPt, {leg.x, pinPt.y}, leg};
+        // Out of the pin, then up or down to the leg: a right-angled run like every other wire. AND INTO THE LEG FROM
+        // THE CONNECTOR'S SIDE - from the left for a connector on the left, from the right for one on the right: it
+        // turns short of the screen and comes along level to the leg's end, rather than running up the leg's own line
+        // through the screen it drains.
+        if (std::abs(pinPt.y - leg.y) < 1e-6) {
+            e.points = {pinPt, leg};
+        } else {
+            const double side = pinPt.x < leg.x ? -1.0 : 1.0;   // which side of the leg the connector is on
+            double ringHalf = 0.0;
+            for (const Entity& sc : out.entities)
+                if (sc.type == EntityType::Screen && !sc.points.empty() && distance(sc.points.back(), leg) < 1e-6)
+                    ringHalf = std::max(ringHalf, sc.meta.value("rx").toDouble());
+            const double room = std::abs(leg.x - pinPt.x);
+            const double turn = std::min(room * 0.5, ringHalf + std::max(4.0, L.shieldLegLength * 0.5));
+            const double xTurn = leg.x + side * turn;
+            e.points = {pinPt, {xTurn, pinPt.y}, {xTurn, leg.y}, leg};
+        }
         e.meta.insert("wireColor", w.color);
         e.meta.insert("wireGauge", w.gauge);
         e.meta.insert("shieldLeg", shieldKey); // which screen's leg it lands on

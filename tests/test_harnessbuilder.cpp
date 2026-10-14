@@ -23,6 +23,9 @@
 #include <QSplitter>
 #include <QSettings>
 #include <QToolButton>
+#include <QKeyEvent>
+#include "app/UiBits.h"
+#include "harness/Harness.h"
 #include <QSpinBox>
 #include <QDoubleSpinBox>
 #include <QComboBox>
@@ -324,8 +327,9 @@ void testStepsRefined() {
               lib->contactPn == QLatin1String("CT-22") && kept && kept->contactPn == QLatin1String("CT-22") && contactDrawn,
           "connectors: one from the library - its P/N, its 9 pins and its separate contact P/N, saved and on the drawing");
     // ---- THE DRAWING OR THE PIN MAP, AT ANY STEP; THE PIN MAP IN PLACEMENT ORDER ----
-    auto* showMap = dialog.findChild<QPushButton*>(QStringLiteral("harnessBuilderShowPinMap"));
-    auto* showDrawing = dialog.findChild<QPushButton*>(QStringLiteral("harnessBuilderShowDrawing"));
+    // One button for the two views: it shows the pin map, then the drawing again.
+    auto* showMap = dialog.findChild<QPushButton*>(QStringLiteral("harnessBuilderViewSwitch"));
+    auto* showDrawing = showMap;
     dialog.setStep(1);   // Wires
     if (showMap) showMap->click();
     QApplication::processEvents();
@@ -916,7 +920,7 @@ void testWizardTablesAndBom() {
     if (wires && row >= 0) emit wires->cellClicked(row, 0);
     QApplication::processEvents();
     auto fieldWidth = [&] {
-        auto* gauge = wizard.findChild<QLineEdit*>(QStringLiteral("wizardGauge"));
+        auto* gauge = wizard.findChild<QWidget*>(QStringLiteral("wizardGauge"));
         return gauge ? gauge->width() : -1;
     };
     const int narrow = fieldWidth();
@@ -956,6 +960,179 @@ void testWizardTablesAndBom() {
     else settings.remove(uiKey + QStringLiteral("bomDock"));
 }
 
+// THE WIZARD, SECOND ROUND: one view switch, optimisers on together, a see-through dragged pin, Fit on the picture, a
+// new wire where the last went, Enter applies a field only, gauges in the app's notation, part lists shown whole, and
+// a drain into its screen's leg from its connector's side.
+void testWizardSecondRound() {
+    Document doc;
+    Editor editor;
+    editor.setDocument(&doc);
+    HarnessBuilderDialog wizard(&editor);
+    wizard.resize(1200, 800);
+    wizard.show();
+    QApplication::processEvents();
+    HarnessDef def;
+    auto connector = [](const char* id, const char* name, HarnessSide side, int order) {
+        HarnessConnector c;
+        c.id = QLatin1String(id);
+        c.designator = QLatin1String(name);
+        c.side = side;
+        c.order = order;
+        c.pinCount = 6;
+        return c;
+    };
+    def.connectors = {connector("c1", "J1", HarnessSide::Left, 0), connector("c2", "P1", HarnessSide::Right, 0),
+                      connector("c3", "P2", HarnessSide::Right, 1)};
+    auto wire = [](const char* id, const char* from, int fp, const char* to, int tp) {
+        HarnessWire w;
+        w.id = QLatin1String(id);
+        w.fromConn = QLatin1String(from);
+        w.fromPin = fp;
+        w.toConn = QLatin1String(to);
+        w.toPin = tp;
+        w.gauge = QStringLiteral("0.5");
+        return w;
+    };
+    // A pair twisted together but split apart on P2, so the twist optimiser has something to do.
+    def.wires = {wire("w1", "c1", 1, "c2", 1), wire("w2", "c1", 2, "c3", 1), wire("w3", "c1", 3, "c3", 4),
+                 wire("w4", "c1", 4, "c3", 2)};   // w4 between the pair on P2: the pair is split
+    def.wires[1].twistGroup = def.wires[2].twistGroup = QStringLiteral("TP1");
+    wizard.loadDemand(def, QStringLiteral("round two"));
+    wizard.setStep(1);
+    QApplication::processEvents();
+
+    // ONE VIEW SWITCH.
+    auto* viewSwitch = wizard.findChild<QPushButton*>(QStringLiteral("harnessBuilderViewSwitch"));
+    const QString before = viewSwitch ? viewSwitch->text() : QString();
+    if (viewSwitch) viewSwitch->click();
+    QApplication::processEvents();
+    const bool onMap = wizard.showingPinMap();
+    const QString during = viewSwitch ? viewSwitch->text() : QString();
+    if (viewSwitch) viewSwitch->click();
+    QApplication::processEvents();
+    check(viewSwitch && before == QLatin1String("Pin map") && onMap && during == QLatin1String("Drawing") && !wizard.showingPinMap() &&
+              !wizard.findChild<QPushButton*>(QStringLiteral("harnessBuilderShowDrawing")),
+          "wizard view: one button switches the drawing and the pin map, saying which it will show");
+
+    // THE OPTIMISERS, ON AND OFF, TOGETHER.
+    auto* cross = wizard.findChild<QPushButton*>(QStringLiteral("harnessBuilderMinimise"));
+    auto* twist = wizard.findChild<QPushButton*>(QStringLiteral("harnessBuilderOptTwist"));
+    auto* shieldOpt = wizard.findChild<QPushButton*>(QStringLiteral("harnessBuilderOptShield"));
+    const int splitBefore = harnessBundleBreaks(wizard.definition(), false);
+    if (twist) twist->click();
+    if (cross) cross->click();
+    QApplication::processEvents();
+    std::printf("  wizard optimisers: split twists %d -> %d, crossings %d\n", splitBefore,
+                harnessBundleBreaks(wizard.definition(), false), harnessCrossings(wizard.definition()));
+    check(cross && twist && shieldOpt && cross->isCheckable() && twist->isChecked() && cross->isChecked() && !shieldOpt->isChecked(),
+          "wizard optimisers: on/off buttons, each keeping its state");
+    check(splitBefore > 0 && harnessBundleBreaks(wizard.definition(), false) == 0,
+          "wizard optimisers: with twist and crossings on, the pair is put on neighbouring pins");
+    {
+        HarnessDef untouched = def;
+        const HarnessDef copy = untouched;
+        optimizeHarnessCombined(untouched, false, false, false);
+        bool same = true;
+        for (size_t i = 0; i < copy.connectors.size(); ++i)
+            same = same && harnessPinSequence(copy.connectors[i]) == harnessPinSequence(untouched.connectors[i]);
+        check(same, "wizard optimisers: with nothing on, the pinout is left alone");
+    }
+    if (twist) twist->click();
+    if (cross) cross->click();
+
+    // FIT ON THE PICTURE, see-through.
+    auto* fit = wizard.findChild<QToolButton*>(QStringLiteral("harnessBuilderPreviewFit"));
+    check(fit && fit->text() == QLatin1String("Fit") && fit->styleSheet().contains(QLatin1String("rgba")) &&
+              fit->parentWidget() && fit->parentWidget()->objectName() == QLatin1String("harnessBuilderPreviewPicture"),
+          "wizard preview: a see-through Fit button over the picture");
+
+    // A NEW WIRE WHERE THE LAST WENT: J1 to P2, not the first right-hand connector.
+    if (auto* add = wizard.findChild<QPushButton*>(QStringLiteral("harnessBuilderAddWire"))) add->click();
+    QApplication::processEvents();
+    const HarnessWire& added = wizard.definition().wires.back();
+    std::printf("  wizard add wire: %s-%d to %s-%d\n", qPrintable(added.fromConn), added.fromPin, qPrintable(added.toConn), added.toPin);
+    check(wizard.definition().wires.size() == 5 && added.fromConn == QLatin1String("c1") && added.toConn == QLatin1String("c3") &&
+              added.toPin > 0,
+          "wizard add wire: the new wire goes to the connectors the last one went to, on a free pin");
+
+    // ENTER IN A FIELD APPLIES IT, AND DRAWS NOTHING.
+    const size_t drawnBefore = doc.entities().size();
+    auto* field = wizard.findChild<QLineEdit*>();
+    for (auto* edit : wizard.findChildren<QLineEdit*>())
+        if (edit->isVisible() && edit->isEnabled()) { field = edit; break; }
+    if (field) {
+        field->setFocus();
+        QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        QApplication::sendEvent(field, &enter);
+    }
+    QApplication::processEvents();
+    check(field && doc.entities().size() == drawnBefore && wizard.isVisible(),
+          "wizard fields: Enter applies the field and does not generate the drawing");
+
+    // GAUGES IN AWG, when the options say AWG.
+    const bool wasAwg = wireGaugeNotationAwg();
+    setWireGaugeNotationAwg(true);
+    if (auto* wires = wizard.findChild<QTableWidget*>(QStringLiteral("wizardWireTable")))
+        for (int r = 0; r < wires->rowCount(); ++r)
+            if (wires->columnSpan(r, 0) == 1) { emit wires->cellClicked(r, 0); break; }
+    QApplication::processEvents();
+    auto* gaugeBox = wizard.findChild<QComboBox*>(QStringLiteral("wizardGauge"));
+    std::printf("  wizard gauge: %s\n", gaugeBox ? qPrintable(gaugeBox->currentText()) : "-");
+    check(gaugeBox && gaugeBox->currentText().contains(QLatin1String("AWG")), "wizard details: the gauge reads in AWG when the options say AWG");
+    setWireGaugeNotationAwg(wasAwg);
+
+    // A PART LIST SHOWN WHOLE: a drop-down opens as wide as its longest line.
+    {
+        installWideComboPopups(QCoreApplication::instance());
+        QWidget host;
+        host.resize(300, 100);
+        auto* box = new QComboBox(&host);
+        box->setFixedWidth(90);
+        box->addItem(QStringLiteral("Connector · A19507-801 (MMCP-27-WD-10.0-C-PP-OR-B) Omnetics, 27 way"));
+        box->addItem(QStringLiteral("Wire"));
+        host.show();
+        QApplication::processEvents();
+        box->showPopup();
+        QApplication::processEvents();
+        QWidget* popup = box->view()->window();
+        const int want = box->view()->sizeHintForColumn(0);
+        std::printf("  part list popup: %d px for a %d px line\n", popup ? popup->width() : -1, want);
+        check(popup && popup->width() >= want, "part lists: a drop-down opens wide enough for its longest line");
+        box->hidePopup();
+    }
+
+    // A DRAIN INTO ITS SCREEN'S LEG FROM ITS CONNECTOR'S SIDE.
+    {
+        HarnessDef shielded;
+        shielded.connectors = {connector("a", "J1", HarnessSide::Left, 0), connector("b", "P1", HarnessSide::Right, 0)};
+        shielded.wires = {wire("s1", "a", 1, "b", 1), wire("s2", "a", 2, "b", 2), wire("s3", "a", 4, "b", 4)};
+        shielded.wires[0].shieldGroup = shielded.wires[1].shieldGroup = QStringLiteral("S1");
+        HarnessWire drainL = wire("dl", "a", 6, "", 0);
+        drainL.toConn = harnessInternalShieldKey(QStringLiteral("S1"));
+        drainL.color = QStringLiteral("DRAIN");
+        shielded.wires.push_back(drainL);
+        HarnessDef rightHand = shielded;
+        rightHand.wires.back().fromConn = QStringLiteral("b");
+        for (const HarnessDef* d : {&shielded, &rightHand}) {
+            const bool fromLeft = d == &shielded;
+            const Entity* drain = nullptr;
+            const HarnessBuild built = buildHarness(*d);   // kept: the drain is read after the loop
+            for (const Entity& e : built.entities)
+                if (e.type == EntityType::Wire && e.meta.value(QStringLiteral("shieldLeg")).toString().size()) drain = &e;
+            bool level = false, fromItsSide = false;
+            if (drain && drain->points.size() >= 2) {
+                const Vec2 end = drain->points.back(), before2 = drain->points[drain->points.size() - 2];
+                level = std::abs(end.y - before2.y) < 1e-6;
+                fromItsSide = fromLeft ? before2.x < end.x : before2.x > end.x;
+            }
+            std::printf("  drain from the %s connector: %d point(s), into the leg %s\n", fromLeft ? "left" : "right",
+                        drain ? int(drain->points.size()) : 0, level ? (fromItsSide ? "level, from its side" : "level, other side") : "upright");
+            check(drain && level && fromItsSide, fromLeft ? "shield drain: from a left connector it comes into the leg from the left"
+                                                           : "shield drain: from a right connector it comes into the leg from the right");
+        }
+    }
+}
+
 int run_harnessbuilder_tests() {
     g_fail = 0;
     std::printf("harness builder tests:\n");
@@ -967,6 +1144,7 @@ int run_harnessbuilder_tests() {
     testFittedPinsGreyTheContacts();
     testHarnessDemand();
     testWizardTablesAndBom();
+    testWizardSecondRound();
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

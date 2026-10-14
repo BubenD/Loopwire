@@ -208,6 +208,11 @@ void HarnessBuilderDialog::setCompactColumns(bool compact) {
         hide(connTable_, c, (c >= 8 && c <= 11) ||
             (compact && c != 0 && c != 1 && c != 2 && c != 4 && c != kDeleteColumn && c != 13 && c != 14));
     keepDeleteColumnLast();
+    // The rows again, so a merged editor is made for a column only while it is in sight (see mergeGroupCells).
+    const bool wasSyncing = syncing_;
+    syncing_ = true;
+    reloadWires();
+    syncing_ = wasSyncing;
 }
 
 // THE DELETE BUTTON IS THE LAST COLUMN of each table, narrow and with no heading - moved there on the screen, so every
@@ -313,6 +318,31 @@ void HarnessBuilderDialog::refreshWireDetails() {
         connect(spin, &QDoubleSpinBox::valueChanged, this, [commit, setter](double value) { commit([setter, value](auto& current) { setter(current, value); }); });
         f->addRow(caption, spin);
     };
+    // A GAUGE IN THE APP'S NOTATION - "20 AWG" when the options say AWG, "0.5 mm2" when they say mm2 - kept as mm2.
+    // A size not on the list can still be typed.
+    auto gauge = [&](QFormLayout* f, const QString& caption, const QString& name, const QString& value, auto setter) {
+        auto* box = new QComboBox(wireDetails_);
+        box->setObjectName(name);
+        box->setEditable(true);
+        box->setInsertPolicy(QComboBox::NoInsert);
+        for (const QString& label : gaugeChoices()) box->addItem(label, gaugeValueOf(label));
+        const int at = box->findData(value);
+        if (at >= 0) box->setCurrentIndex(at);
+        else box->setEditText(value.isEmpty() ? QString() : gaugeLabelOf(value));
+        box->lineEdit()->setProperty("wizardValueField", true);
+        box->lineEdit()->installEventFilter(this);
+        createdFields.insert(name, box);
+        auto apply = [commit, box, setter] {
+            const QString text = box->currentText().trimmed();
+            const QString mm2 = box->currentIndex() >= 0 && box->itemText(box->currentIndex()) == text
+                                    ? box->currentData().toString()
+                                    : gaugeValueOf(text);
+            commit([setter, mm2](auto& current) { setter(current, mm2); });
+        };
+        connect(box, &QComboBox::activated, this, apply);
+        connect(box->lineEdit(), &QLineEdit::editingFinished, this, apply);
+        f->addRow(caption, box);
+    };
     auto part = [&](QFormLayout* f, const QString& caption, const QString& name, const QString& current, const std::vector<PartKind>& kinds, auto setter) {
         auto* box = wizardPartChoice(wireDetails_, kinds, current); box->setObjectName(name);
         connect(box, &QComboBox::currentIndexChanged, this, [commit, box, setter](int index) {
@@ -345,7 +375,7 @@ void HarnessBuilderDialog::refreshWireDetails() {
          [this](auto& current, const QString& value) { current.partNumber = value; current.libPart.clear(); for (auto& member : def_.wires) if (!current.bundle.isEmpty() && member.bundle == current.bundle) { member.partNumber = value; member.libPart.clear(); } });
     length(form, QStringLiteral("Cut length (cable / wire)"), QStringLiteral("wizardCutLength"), w.cutLengthMm,
          [this](auto& current, double value) { current.cutLengthMm = value; for (auto& member : def_.wires) if (!current.bundle.isEmpty() && member.bundle == current.bundle) member.cutLengthMm = value; });
-    text(form, QStringLiteral("Gauge"), QStringLiteral("wizardGauge"), w.gauge, [](auto& current, const QString& value) { current.gauge = value; });
+    gauge(form, QStringLiteral("Gauge"), QStringLiteral("wizardGauge"), w.gauge, [](auto& current, const QString& value) { current.gauge = value; });
     text(form, QStringLiteral("Bundle"), QStringLiteral("wizardBundle"), w.bundle, [](auto& current, const QString& value) { current.bundle = value; });
     text(form, QStringLiteral("Label"), QStringLiteral("wizardLabel"), w.label, [](auto& current, const QString& value) { current.label = value; });
     auto* colors = new QWidget(wireDetails_); auto* colorRow = new QHBoxLayout(colors); colorRow->setContentsMargins(0, 0, 0, 0);
@@ -405,7 +435,7 @@ void HarnessBuilderDialog::refreshWireDetails() {
         if (!harnessTailAt(w, end)) continue;
         part(f, QStringLiteral("Hook-up wire"), prefix + "WirePart", t.wireLibPart, {PartKind::Wire}, [end](auto& current, const QString& value) { auto& t = end == 0 ? current.fromTermination : current.toTermination; t.wireLibPart = value; t.wirePn.clear(); });
         text(f, QStringLiteral("Or wire P/N"), prefix + "WirePn", t.wirePn, [end](auto& current, const QString& value) { auto& t = end == 0 ? current.fromTermination : current.toTermination; t.wirePn = value; t.wireLibPart.clear(); });
-        text(f, QStringLiteral("Tail gauge"), prefix + "Gauge", t.wireGauge, [end](auto& current, const QString& value) { (end == 0 ? current.fromTermination : current.toTermination).wireGauge = value; });
+        gauge(f, QStringLiteral("Tail gauge"), prefix + "Gauge", t.wireGauge, [end](auto& current, const QString& value) { (end == 0 ? current.fromTermination : current.toTermination).wireGauge = value; });
         text(f, QStringLiteral("Tail colour (e.g. WH-BL)"), prefix + "Color", t.wireColor, [end](auto& current, const QString& value) { (end == 0 ? current.fromTermination : current.toTermination).wireColor = value.toUpper(); });
         length(f, QStringLiteral("Tail cut length"), prefix + "Length", t.lengthMm, [end](auto& current, double value) { (end == 0 ? current.fromTermination : current.toTermination).lengthMm = value; });
         part(f, QStringLiteral("Splice"), prefix + "SplicePart", t.spliceLibPart, {PartKind::Splice}, [end](auto& current, const QString& value) { auto& t = end == 0 ? current.fromTermination : current.toTermination; t.spliceLibPart = value; t.splicePn.clear(); });

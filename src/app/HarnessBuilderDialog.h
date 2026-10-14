@@ -191,6 +191,8 @@ private:
     // Targeted pinout optimisation: gather the shielded groups (shield=true) or the
     // twisted groups onto neighbouring pins.
     void runOptimizeBy(bool shield);
+    // The pin optimisers that are switched on, run together in one pass (see optimizeHarnessCombined).
+    void runCombinedOptimise(bool crossings, bool shields, bool twists);
     // Unify is a two-step: a button arms a pick, Enter applies it, Esc abandons it. Rows are
     // only selectable while one is pending, so nothing can be picked by accident.
     void armUnify(const QString& kind); // "cable" | "coax" | "coax-splice" | "loose"
@@ -226,6 +228,9 @@ private:
     // Every endpoint a wire end can name - connectors and shields - as (key, label) pairs.
     QList<QPair<QString, QString>> endpointChoices() const;
     static QStringList gaugeChoices();
+    // A gauge as the list shows it ("20 AWG" or "0.5 mm2") as the mm2 figure kept, and the other way.
+    static QString gaugeValueOf(const QString& label);
+    static QString gaugeLabelOf(const QString& mm2);
     static QStringList colorChoices();
     // Guard: while a reload is writing the widgets, their signals must not be read back
     // as user edits.
@@ -242,7 +247,6 @@ private:
     QWidget* shieldCards_ = nullptr;          // the Shields step: a card a connector
     QStackedWidget* viewStack_ = nullptr;     // the drawing, or the pin map
     QSplitter* mainSplit_ = nullptr;          // the step's page, and the drawing/pin map beside it - or under it
-    QPushButton* drawingBtn_ = nullptr;
     QPushButton* pinMapBtn_ = nullptr;
     QLabel* viewCaption_ = nullptr;
     void applyStepLayout(int step);

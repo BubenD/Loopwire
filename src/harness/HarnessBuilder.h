@@ -354,6 +354,10 @@ int minimizeHarnessCrossings(HarnessDef& def);
 int optimizeHarnessForShields(HarnessDef& def);
 // Group the twisted wires onto neighbouring pins above all else.
 int optimizeHarnessForTwists(HarnessDef& def);
+// WHATEVER IS ASKED FOR, TOGETHER: the fewest crossings, shields on neighbouring pins, twists on neighbouring pins -
+// any of them, in one pass, each asked-for term weighed in and the rest left out. Nothing asked for changes nothing.
+// Returns the crossings it settled on.
+int optimizeHarnessCombined(HarnessDef& def, bool crossings, bool shields, bool twists);
 
 // ---- Knee lanes ------------------------------------------------------------
 // The order a set of wires should turn in, so their vertical runs cut across as few of the

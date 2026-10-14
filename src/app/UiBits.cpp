@@ -24,6 +24,8 @@
 #include <QPixmap>
 #include <QPushButton>
 #include <QSettings>
+#include <QScreen>
+#include <QScrollBar>
 #include <QSize>
 #include <QStyle>
 #include <QStyleFactory>
@@ -668,6 +670,45 @@ QToolButton* makeEyeToggle(QWidget* parent, const QString& shownText, const QStr
 void installOpaqueMenus(QCoreApplication* app) {
     if (!app) return;
     app->installEventFilter(new OpaqueMenuFilter(app));
+}
+
+namespace {
+// See installWideComboPopups.
+class WidePopupFilter : public QObject {
+public:
+    using QObject::QObject;
+    bool eventFilter(QObject* obj, QEvent* ev) override {
+        if (ev->type() != QEvent::Show) return false;
+        auto* popup = qobject_cast<QWidget*>(obj);
+        if (!popup || !popup->isWindow()) return false;
+        QAbstractItemView* view = nullptr;
+        int floor = 0;
+        if (auto* combo = qobject_cast<QComboBox*>(popup->parentWidget())) {
+            view = combo->view();   // a drop-down's list, in the frame it pops up in
+            floor = combo->width();
+        } else if (auto* list = qobject_cast<QAbstractItemView*>(popup); list && (popup->windowFlags() & Qt::Popup)) {
+            view = list;            // a completer's list of matches
+        }
+        if (!view || !view->model() || view->model()->rowCount() == 0) return false;
+        const QStyle* style = view->style();
+        const bool scrolls = view->verticalScrollBar() && view->verticalScrollBar()->maximum() > 0;
+        int want = view->sizeHintForColumn(0) + 2 * view->frameWidth() + 12 +
+                   (scrolls || view->model()->rowCount() > 30 ? style->pixelMetric(QStyle::PM_ScrollBarExtent) : 0);
+        want = std::max(want, floor);
+        const QRect screen = popup->screen() ? popup->screen()->availableGeometry() : QRect(0, 0, 1920, 1080);
+        want = std::min(want, screen.width() - 16);
+        if (want <= popup->width()) return false;
+        int x = popup->x();
+        if (x + want > screen.right()) x = std::max(screen.left(), screen.right() - want);
+        popup->setGeometry(x, popup->y(), want, popup->height());
+        return false;
+    }
+};
+} // namespace
+
+void installWideComboPopups(QCoreApplication* app) {
+    if (!app) return;
+    app->installEventFilter(new WidePopupFilter(app));
 }
 
 namespace {

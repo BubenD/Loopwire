@@ -139,4 +139,9 @@ QWidget* makeColorListEditor(QWidget* parent, const QStringList& codes, const QS
 // ordinary opaque popup, painted in the colours of the application stylesheet.
 void installOpaqueMenus(QCoreApplication* app);
 
+// EVERY DROP-DOWN OPENS AS WIDE AS ITS LONGEST LINE - a list of parts shows each part whole, not cut to the width of the
+// box it drops from - and the same for the matches an editable box offers as it is typed in. Never narrower than the
+// box, never wider than the screen. Call once, at startup.
+void installWideComboPopups(QCoreApplication* app);
+
 } // namespace Loopwire
