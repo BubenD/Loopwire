@@ -2640,15 +2640,22 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             p.drawLine(vt.toScreen(end), vt.toScreen(wordsAt));
         }
         p.drawPolyline(toScreenPoly(e.points, vt));
-        const QPointF tip = vt.toScreen(e.points[0]);
-        const QPointF from = vt.toScreen(e.points[1]);
-        const double dx = tip.x() - from.x(), dy = tip.y() - from.y();
-        const double len = std::hypot(dx, dy);
-        if (len > 1e-9) {
-            const QPointF dir(dx / len, dy / len);
-            const double arrowW = e.meta.value("arrowSize").toDouble(3.3) *
-                                  EntityRenderer::annotationScale();
-            drawArrowHead(p, tip, dir, color, std::clamp(arrowW * vt.scale(), 5.0, 40.0));
+        // THE HEAD, of the kind asked for (closed by default), on the tip - and on the far end too where the arrow
+        // is asked to point both ways, which only a bare arrow with no words on that end can.
+        {
+            const QString kind = e.meta.value("arrowhead").toString(QStringLiteral("closed"));
+            const double arrowW = e.meta.value("arrowSize").toDouble(3.3) * EntityRenderer::annotationScale();
+            const double headLen = std::clamp(arrowW * vt.scale(), 5.0, 40.0);
+            auto head = [&](const Vec2& at, const Vec2& before) {
+                const QPointF a = vt.toScreen(at), b = vt.toScreen(before);
+                const double dx = a.x() - b.x(), dy = a.y() - b.y();
+                const double len = std::hypot(dx, dy);
+                if (len > 1e-9) drawLeaderArrow(p, a, QPointF(dx / len, dy / len), color, kind, headLen);
+            };
+            head(e.points[0], e.points[1]);
+            const bool both = e.meta.value("arrowEnds").toString() == QLatin1String("both");
+            if (both && landing <= 1e-9 && e.meta.value("text").toString().isEmpty())
+                head(e.points.back(), e.points[e.points.size() - 2]);
         }
         // The words sit at the far end - where the leader lands - reading away from what it points at, and
         // the line RUNS INTO THEM: with no landing shelf the last thing the leader has is its end point, and

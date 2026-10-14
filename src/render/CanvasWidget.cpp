@@ -104,7 +104,7 @@ CanvasWidget::CanvasWidget(QWidget* parent) : QWidget(parent) {
     // completer, and handed every event of the application it asks the completer for its popup -
     // which makes one - in the middle of whatever else is going on.
     qApp->installEventFilter(new AltWatcher(this));
-    setCursor(Qt::BlankCursor); // hide the OS cursor; we draw an AutoCAD crosshair
+    setCursor(crosshairCursor()); // the crosshair IS the pointer - see crosshairCursor
     QPalette pal = palette();
     pal.setColor(QPalette::Window, QColor("#10141b"));
     setPalette(pal);
@@ -1005,7 +1005,7 @@ void CanvasWidget::setDrawingDetailsVisible(bool visible) {
     if(drawingDetailsVisible_==visible)return;
     drawingDetailsVisible_=visible;
     drawingDetailsExpandTimer_->stop();drawingDetailsFoldTimer_->stop();drawingDetailsHoverExpanded_=false;
-    if(!visible){drawingDetailsFrame_={};drawingDetailsMinimize_={};setCursor(inlineEditing_?Qt::ArrowCursor:Qt::BlankCursor);}
+    if(!visible){drawingDetailsFrame_={};drawingDetailsMinimize_={};setCursor(inlineEditing_?QCursor(Qt::ArrowCursor):crosshairCursor());}
     QSettings().setValue(QStringLiteral("canvas/showDrawingDetails"),visible);
     update();
 }
@@ -1024,7 +1024,7 @@ void CanvasWidget::setPlainCanvas(bool plain) {
 
 void CanvasWidget::updateDrawingDetailsHover() {
     const bool inside=drawingDetailsVisible_&&cursorInside_&&drawingDetailsFrame_.contains(lastMousePos_);
-    setCursor(inside||inlineEditing_?Qt::ArrowCursor:Qt::BlankCursor);
+    setCursor(inside||inlineEditing_?QCursor(Qt::ArrowCursor):crosshairCursor());
     if(inside){
         drawingDetailsFoldTimer_->stop();
         if(drawingDetailsMinimized_&&!drawingDetailsPinned_&&!drawingDetailsHoverExpanded_&&drawingDetailsHoverArmed_&&!drawingDetailsExpandTimer_->isActive())drawingDetailsExpandTimer_->start();
@@ -1135,28 +1135,73 @@ QPointF CanvasWidget::crosshairScreenPos() const {
     return lastMousePos_;
 }
 
+// Arm length: 100% spans the whole viewport; smaller = a compact crosshair.
+double CanvasWidget::crosshairArm() const {
+    return crosshairPct_ >= 100 ? std::max(width(), height())
+                                : std::min(width(), height()) * 0.5 * crosshairPct_ / 100.0;
+}
+
+// How far the pointer itself reaches from its middle, in screen pixels: the arms up to the largest pointer the
+// system draws without trouble.
+int CanvasWidget::crosshairCursorReach() const {
+    const double dpr = std::max(1.0, devicePixelRatioF());
+    return std::max(pickboxPx_ + 2, std::min(int(std::lround(crosshairArm())), int(127 / dpr)));
+}
+
+// THE CROSSHAIR IS THE SYSTEM'S POINTER, drawn as one: the pick box and the arms. The system moves its pointer the
+// moment the mouse moves - no repaint of the drawing comes between the hand and what is seen - and a crosshair the
+// program painted itself trailed a frame or two behind. Kept until the size, colour, pick box or screen changes.
+QCursor CanvasWidget::crosshairCursor() const {
+    const double dpr = std::max(1.0, devicePixelRatioF());
+    const int reach = crosshairCursorReach();
+    const QString key = QStringLiteral("%1/%2/%3/%4").arg(reach).arg(pickboxPx_).arg(crosshairColor_.name()).arg(dpr);
+    if (key == crosshairCursorKey_) return crosshairCursor_;
+    const int half = int(std::lround(reach * dpr));
+    const int pick = int(std::lround(pickboxPx_ * dpr));
+    QPixmap pm(2 * half + 1, 2 * half + 1);
+    pm.fill(Qt::transparent);
+    {
+        QPainter p(&pm);
+        p.setRenderHint(QPainter::Antialiasing, false);
+        p.setPen(QPen(crosshairColor_, 1));
+        p.drawLine(0, half, half - pick - 1, half);
+        p.drawLine(half + pick + 1, half, 2 * half, half);
+        p.drawLine(half, 0, half, half - pick - 1);
+        p.drawLine(half, half + pick + 1, half, 2 * half);
+        p.drawRect(half - pick, half - pick, 2 * pick, 2 * pick);
+    }
+    pm.setDevicePixelRatio(dpr);
+    crosshairCursorKey_ = key;
+    crosshairCursor_ = QCursor(pm);
+    return crosshairCursor_;
+}
+
+void CanvasWidget::refreshCrosshairCursor() {
+    if (cursor().shape() == Qt::BitmapCursor) setCursor(crosshairCursor());
+}
+
+// What the pointer cannot carry: the arms past the largest pointer there is, for a crosshair across the whole
+// view. Drawn at the mouse, where the pointer is; a snap is shown by its marker, not by moving the crosshair.
 void CanvasWidget::drawCrosshair(QPainter& p) const {
-    const QPointF c = crosshairScreenPos();
+    const double arm = crosshairArm();
+    const double inner = crosshairCursorReach();
+    if (arm <= inner + 0.5) return;
+    const QPointF c = lastMousePos_;
     p.setRenderHint(QPainter::Antialiasing, false);
     QPen pen(crosshairColor_);
     pen.setCosmetic(true);
     pen.setWidth(1);
     p.setPen(pen);
     p.setBrush(Qt::NoBrush);
-    const double pick = pickboxPx_; // half-size of the central pick box
-    // Arm length: 100% spans the whole viewport; smaller = a compact crosshair.
-    const double arm = (crosshairPct_ >= 100)
-                           ? std::max(width(), height())
-                           : std::min(width(), height()) * 0.5 * crosshairPct_ / 100.0;
-    p.drawLine(QPointF(std::max(0.0, c.x() - arm), c.y()), QPointF(c.x() - pick, c.y()));
-    p.drawLine(QPointF(c.x() + pick, c.y()), QPointF(std::min<double>(width(), c.x() + arm), c.y()));
-    p.drawLine(QPointF(c.x(), std::max(0.0, c.y() - arm)), QPointF(c.x(), c.y() - pick));
-    p.drawLine(QPointF(c.x(), c.y() + pick), QPointF(c.x(), std::min<double>(height(), c.y() + arm)));
-    p.drawRect(QRectF(c.x() - pick, c.y() - pick, 2 * pick, 2 * pick));
+    p.drawLine(QPointF(std::max(0.0, c.x() - arm), c.y()), QPointF(c.x() - inner, c.y()));
+    p.drawLine(QPointF(c.x() + inner, c.y()), QPointF(std::min<double>(width(), c.x() + arm), c.y()));
+    p.drawLine(QPointF(c.x(), std::max(0.0, c.y() - arm)), QPointF(c.x(), c.y() - inner));
+    p.drawLine(QPointF(c.x(), c.y() + inner), QPointF(c.x(), std::min<double>(height(), c.y() + arm)));
 }
 
 void CanvasWidget::resizeEvent(QResizeEvent* e) {
     if (crosshairTop_) crosshairTop_->setGeometry(rect());
+    refreshCrosshairCursor();   // the arms are a share of the view
     positionBottomOverlay();
     if (bottomOverlay_) bottomOverlay_->raise();
     holdTheDrawingStill();
@@ -1515,25 +1560,28 @@ void CanvasWidget::mouseMoveEvent(QMouseEvent* e) {
     // The crosshair follows the cursor, at the rate a screen can show it - and when nothing but the cursor has
     // moved, only the strips its lines cross are painted again, where it was and where it is now.
     if (editor_ && editor_->pointerOnlyMovesCursor() && !rightDown_) {
-        const QPointF at = crosshairScreenPos();
+        const QPointF at = lastMousePos_;
         pendingCursorRegion_ += crosshairBands(lastCrosshairAt_);
         pendingCursorRegion_ += crosshairBands(at);
         lastCrosshairAt_ = at;
         requestRepaint(true);
     } else {
-        lastCrosshairAt_ = crosshairScreenPos();
+        lastCrosshairAt_ = lastMousePos_;
         requestRepaint();
     }
 }
 
-// THE STRIPS A CROSSHAIR AT `at` TOUCHES: across the canvas through it and down the canvas through it, wide
-// enough for the pick box and for the snap mark and lit handle beside it.
+// WHAT A MOVE OF THE POINTER AT `at` CAN CHANGE ON THE CANVAS: the snap mark and the lit handle beside it, and -
+// where the crosshair reaches further than the pointer does - the strips its long arms lie along.
 QRegion CanvasWidget::crosshairBands(const QPointF& at) const {
     if (at.x() < -1e8) return {};
     const int reach = pickboxPx_ + 40;
     const int x = int(std::lround(at.x())), y = int(std::lround(at.y()));
-    QRegion r(QRect(0, y - reach, width(), 2 * reach + 1));
-    r += QRect(x - reach, 0, 2 * reach + 1, height());
+    QRegion r(QRect(x - reach, y - reach, 2 * reach + 1, 2 * reach + 1));
+    if (crosshairArm() > crosshairCursorReach() + 0.5) {
+        r += QRect(0, y - 1, width(), 3);
+        r += QRect(x - 1, 0, 3, height());
+    }
     return r;
 }
 
@@ -1604,7 +1652,7 @@ void CanvasWidget::mouseReleaseEvent(QMouseEvent* e) {
         capturing_ = false;
         captureActive_ = false;
         captureCb_ = nullptr;
-        setCursor(inlineEditing_ ? Qt::ArrowCursor : Qt::BlankCursor);
+        setCursor(inlineEditing_ ? QCursor(Qt::ArrowCursor) : crosshairCursor());
         update();
         // Ignore a zero-area window (a click without a drag).
         if (cb && std::abs(b.x - a.x) > 1e-6 && std::abs(b.y - a.y) > 1e-6) cb(a, b);
@@ -1619,15 +1667,14 @@ void CanvasWidget::mouseReleaseEvent(QMouseEvent* e) {
         viewportPanning_ = false;
         viewportMoving_ = false;
         viewportDragCorner_ = -1;
-        setCursor(inlineEditing_ ? Qt::ArrowCursor : Qt::BlankCursor);
+        setCursor(inlineEditing_ ? QCursor(Qt::ArrowCursor) : crosshairCursor());
         invalidateScene();
         e->accept();
         return;
     }
     if (panning_ && e->button() == Qt::MiddleButton) {
         panning_ = false;
-        setCursor(inlineEditing_ ? Qt::ArrowCursor
-                                 : Qt::BlankCursor); // resume the drawn crosshair after panning
+        setCursor(inlineEditing_ ? QCursor(Qt::ArrowCursor) : crosshairCursor()); // resume the drawn crosshair after panning
         invalidateScene(); // rebuild once for the final view (fills exposed edges)
         e->accept();
         return;
@@ -1752,7 +1799,7 @@ void CanvasWidget::keyPressEvent(QKeyEvent* e) {
         capturing_ = false;
         captureActive_ = false;
         captureCb_ = nullptr;
-        setCursor(inlineEditing_ ? Qt::ArrowCursor : Qt::BlankCursor);
+        setCursor(inlineEditing_ ? QCursor(Qt::ArrowCursor) : crosshairCursor());
         update();
         e->accept();
         return;

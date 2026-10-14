@@ -14,6 +14,7 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QInputDialog>
 #include <QLabel>
 #include <QListWidget>
 #include <QMessageBox>
@@ -54,7 +55,7 @@ bool readDemand(QWidget* parent, const QString& path, HarnessDemand& demand) {
 
 QString issueLine(const DemandIssue& i) {
     if (i.sheet.isEmpty()) return i.text;
-    if (i.row > 0) return QStringLiteral("%1, row %2: %3").arg(i.sheet).arg(i.row).arg(i.text);
+    if (i.row > 0) return QStringLiteral("%1, Pinout row %2: %3").arg(i.sheet).arg(i.row).arg(i.text);
     return QStringLiteral("%1: %2").arg(i.sheet, i.text);
 }
 } // namespace
@@ -68,7 +69,7 @@ void MainWindow::exportHarnessDemand(bool fromBuilder) {
                                                     "harness there first, or save a blank template."));
             return;
         }
-        demand = harnessDemandFromDef(harnessDlg_->definition());
+        demand.cables.push_back(harnessDemandFromDef(harnessDlg_->definition()));
     }
     const QString name = fromBuilder ? QStringLiteral("Harness demand.xlsx") : QStringLiteral("Harness demand template.xlsx");
     QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Save harness demand"),
@@ -93,16 +94,38 @@ void MainWindow::importHarnessDemand() {
     HarnessDemand demand;
     if (!readDemand(this, path, demand)) return;
     rememberDir(path);
+    if (demand.cables.empty()) {
+        QMessageBox::information(this, QStringLiteral("Harness demand"),
+                                 QStringLiteral("%1 has a pinout table with no connectors filled in.")
+                                     .arg(QFileInfo(path).fileName()));
+        return;
+    }
+    // ONE CABLE AT A TIME: the builder holds one harness, so a workbook of several asks which.
+    size_t which = 0;
+    if (demand.cables.size() > 1) {
+        QStringList names;
+        for (const DemandCable& c : demand.cables)
+            names << (c.function.isEmpty() ? c.name : QStringLiteral("%1 - %2").arg(c.name, c.function.simplified()));
+        bool ok = false;
+        const QString chosen = QInputDialog::getItem(this, QStringLiteral("Import harness demand"),
+                                                     QStringLiteral("The workbook has %1 cables. Which one?")
+                                                         .arg(demand.cables.size()),
+                                                     names, 0, false, &ok);
+        if (!ok) return;
+        which = size_t(std::max<qsizetype>(0, names.indexOf(chosen)));
+    }
+    const DemandCable& cable = demand.cables[which];
     std::vector<DemandIssue> issues;
-    const HarnessDef def = harnessDefFromDemand(demand, &issues);
+    const HarnessDef def = harnessDefFromDemand(cable, &issues);
     // WHAT WAS READ, and what could not be taken as written - shown before the builder is filled, so a demand with
     // something wrong in it can be sent back rather than half used.
     QDialog dlg(this);
     dlg.setObjectName(QStringLiteral("harnessDemandImport"));
     dlg.setWindowTitle(QStringLiteral("Import harness demand"));
     auto* lay = new QVBoxLayout(&dlg);
-    QString who = demand.info.harnessName;
-    if (!demand.info.customer.isEmpty()) who += (who.isEmpty() ? QString() : QStringLiteral(" - ")) + demand.info.customer;
+    QString who = cable.name;
+    if (!cable.function.isEmpty()) who += (who.isEmpty() ? QString() : QStringLiteral(" - ")) + cable.function.simplified();
+    if (!demand.info.customer.isEmpty()) who += (who.isEmpty() ? QString() : QStringLiteral(", ")) + demand.info.customer;
     auto* summary = new QLabel(QStringLiteral("<b>%1</b><br>%2 connector(s), %3 wire row(s)")
                                    .arg((who.isEmpty() ? QFileInfo(path).fileName() : who).toHtmlEscaped())
                                    .arg(def.connectors.size())
@@ -124,7 +147,7 @@ void MainWindow::importHarnessDemand() {
     lay->addWidget(buttons);
     if (dlg.exec() != QDialog::Accepted) return;
     showHarnessBuilder();
-    if (harnessDlg_) harnessDlg_->loadDemand(def, QFileInfo(path).fileName());
+    if (harnessDlg_) harnessDlg_->loadDemand(def, cable.name.isEmpty() ? QFileInfo(path).fileName() : cable.name);
 }
 
 void MainWindow::harnessDemandOverview() {

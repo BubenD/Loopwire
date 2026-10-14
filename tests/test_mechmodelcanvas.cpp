@@ -120,8 +120,8 @@ int run_mechmodelcanvas_tests() {
     // was moved onto: no crosshair, because that is only painted over the drawing, and no arrow either.
     {
         CanvasWidget canvas;
-        check(canvas.cursor().shape() == Qt::BlankCursor,
-              "cursor: the canvas itself hides the pointer");
+        check(canvas.cursor().shape() == Qt::BitmapCursor,
+              "cursor: the canvas's pointer is the crosshair, drawn as the system's own pointer");
         auto* row = new QWidget(&canvas);
         auto* tabs = new QTabBar(row);
         tabs->addTab(QStringLiteral("Model"));

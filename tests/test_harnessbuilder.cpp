@@ -586,217 +586,232 @@ void testFittedPinsGreyTheContacts() {
           "fitted pins: a library contact's P/N is shown, greyed - the library's, not typed");
 }
 
-// THE HARNESS DEMAND: a workbook a customer fills in, read back into a builder definition.
+// THE HARNESS DEMAND: a pinout table a customer fills in - a block per cable, a row per connector, a column per
+// signal - read back into a builder definition.
 void testHarnessDemand() {
-    HarnessDemand demand;
-    demand.info.customer = QStringLiteral("Acme");
-    demand.info.harnessName = QStringLiteral("Sensor loom");
-    demand.info.partNumber = QStringLiteral("AC-100");
-    DemandConnector j1;
-    j1.designator = QStringLiteral("J1");
-    j1.end = QStringLiteral("A");
-    j1.description = QStringLiteral("Controller");
-    j1.pins = 8;
-    j1.overallShield = true;
-    j1.drainTo = QStringLiteral("Body");
-    DemandConnector p1;
-    p1.designator = QStringLiteral("P1");
-    p1.end = QStringLiteral("B");
-    p1.pinNames = QStringLiteral("Letters");   // no pin count: as many as are used
-    demand.connectors = {j1, p1};
-    auto row = [](const char* from, const char* fp, const char* to, const char* tp, const char* signal) {
-        DemandConnection c;
-        c.from = QLatin1String(from);
-        c.fromPin = QLatin1String(fp);
-        c.to = QLatin1String(to);
-        c.toPin = QLatin1String(tp);
-        c.signal = QLatin1String(signal);
+    auto connector = [](const char* name, const char* type, int pins, std::initializer_list<const char*> cells) {
+        DemandConnector c;
+        c.name = QString::fromUtf8(name);
+        c.type = QLatin1String(type);
+        c.maxPins = pins;
+        for (const char* cell : cells) c.cells << QString::fromUtf8(cell);
         return c;
     };
-    DemandConnection canH = row("J1", "1", "P1", "A", "CAN_H");
-    canH.twistGroup = QStringLiteral("TP1");
-    canH.shieldGroup = QStringLiteral("S1");
-    DemandConnection canL = row("J1", "2", "P1", "B", "CAN_L");
-    canL.twistGroup = QStringLiteral("TP1");
-    canL.shieldGroup = QStringLiteral("S1");
-    DemandConnection power = row("J1", "3", "P1", "C", "+24V");
-    power.gauge = QStringLiteral("20 AWG");
-    power.color = QStringLiteral("Red");
-    DemandConnection rf = row("J1", "4", "P1", "D", "RF");
-    rf.type = QStringLiteral("Coax");
-    rf.coaxShieldFromPin = QStringLiteral("5");
-    rf.coaxShieldToPin = QStringLiteral("E");
-    DemandConnection lead = row("J1", "6", "", "", "SPARE");
-    demand.connections = {canH, canL, power, rf, lead};
-    DemandGroup s1;
-    s1.name = QStringLiteral("S1");
-    s1.kind = QStringLiteral("Shielded");
-    s1.drainConnector = QStringLiteral("J1");
-    s1.drainPin = QStringLiteral("7");
-    demand.groups = {s1};
+    auto signal = [](const char* name, const char* group = "", int id = -1) {
+        DemandSignal s;
+        s.name = QLatin1String(name);
+        s.group = QLatin1String(group);
+        s.groupId = id;
+        return s;
+    };
+    // A MOTOR WITH LEADS, its phases a shielded twisted three, its halls under one shield, its thermistor twisted -
+    // the second cable of the drawing office's sheet.
+    DemandCable motor;
+    motor.name = QStringLiteral("HGC700151");
+    motor.function = QStringLiteral("Tilt - GR43 to Motor subassembly");
+    motor.signalColumns = {signal("THERM-", "Twist", 1), signal("THERM+", "Twist", 1), signal("HALL_5V", "Shield", 2),
+                     signal("HALL_GND", "Shield", 2), signal("HALL_A", "Shield", 2), signal("PH_A", "Shield+Twist", 3),
+                     signal("PH_B", "Shield+Twist", 3), signal("PH_C", "Shield+Twist", 3)};
+    motor.connectors = {connector("Motor", "TBM2G-06813C", 0, {"White", "White", "Blue", "Green", "Brown", "RED\n\"U\"", "White", "Black"}),
+                        connector("43-J5\nPH PW OUT", "M300-2250396F2", 3, {"", "", "", "", "", "1", "2", "3"}),
+                        connector("43-J3\nHALLS", "GHR-07V-S", 7, {"1", "2", "3", "4", "5", "", "", ""})};
+    motor.connectors[0].length = QStringLiteral("N/A");
+    // A CONTROLLER CABLE, ground on two pins at each end, a lettered connector, a coax.
+    DemandCable ebox;
+    ebox.name = QStringLiteral("HGC700150");
+    ebox.function = QStringLiteral("Tilt - GR43 to Ebox");
+    ebox.signalColumns = {signal("A-", "Twist", 1), signal("A+", "Twist", 1), signal("GND"), signal("RF", "Coax", 2),
+                    signal("SHIELD", "Coax", 2)};
+    ebox.connectors = {connector("E.Box", "A19507-801", 27, {"5", "4", "21,25", "10", "11"}),
+                       connector("43-J2", "505432-2201", 22, {"1", "3", "22,26", "7", "8"}),
+                       connector("43-J7", "LTR", 0, {"A", "B", "", "", ""})};
+    HarnessDemand demand;
+    demand.info.customer = QStringLiteral("Acme");
+    demand.info.project = QStringLiteral("Tilt");
+    demand.cables = {ebox, motor};
 
-    // OUT AND BACK IN: every sheet and field as written.
+    // OUT AND BACK IN: each cable's block as written.
     const QByteArray book = harnessDemandToXlsx(demand);
     HarnessDemand read;
     QString error;
     const bool ok = harnessDemandFromXlsx(book, read, &error);
-    std::printf("  demand: workbook %d bytes, read %s, %d connector(s), %d connection(s), %d group(s)\n",
-                int(book.size()), ok ? "ok" : qPrintable(error), int(read.connectors.size()),
-                int(read.connections.size()), int(read.groups.size()));
-    check(ok && read.info.customer == QLatin1String("Acme") && read.info.partNumber == QLatin1String("AC-100"),
-          "demand: the workbook reads back, its details with it");
-    check(read.connectors.size() == 2 && read.connectors[1].pinNames == QLatin1String("Letters") &&
-              read.connectors[0].overallShield && read.connectors[0].pins == 8,
-          "demand: the connectors read back as written");
-    check(read.connections.size() == 5 && read.connections[3].type == QLatin1String("Coax") &&
-              read.connections[3].coaxShieldToPin == QLatin1String("E") && read.connections[4].to.isEmpty(),
-          "demand: the connections read back, the coax and the flying lead with them");
-    check(read.groups.size() == 1 && read.groups[0].drainPin == QLatin1String("7"), "demand: the groups read back");
-    // THE DROP-DOWNS ON THE CELLS THEY BELONG TO: Excel refuses a whole workbook over one range it cannot read.
+    std::printf("  demand: workbook %d bytes, read %s, %d cable(s)\n", int(book.size()), ok ? "ok" : qPrintable(error),
+                int(read.cables.size()));
+    check(ok && read.info.customer == QLatin1String("Acme") && read.cables.size() == 2,
+          "demand: the workbook reads back, both cables and the details");
+    if (read.cables.size() == 2) {
+        const DemandCable& m = read.cables[1];
+        std::printf("  demand: second cable %s \"%s\", %d connector(s), %d signal(s), first row %s\n", qPrintable(m.name),
+                    qPrintable(m.function), int(m.connectors.size()), int(m.signalColumns.size()),
+                    m.connectors.empty() ? "-" : qPrintable(m.connectors[0].cells.join(QLatin1Char('|'))));
+        check(m.name == QLatin1String("HGC700151") && m.function == motor.function && m.connectors.size() == 3 &&
+                  m.signalColumns.size() == 8,
+              "demand: a cable's name, function, connectors and signals read back");
+        check(m.signalColumns[0].group == QLatin1String("Twist") && m.signalColumns[1].groupId == m.signalColumns[0].groupId &&
+                  m.signalColumns[4].group == QLatin1String("Shield") && m.signalColumns[2].groupId == m.signalColumns[4].groupId &&
+                  m.signalColumns[7].group == QLatin1String("Shield+Twist") && m.signalColumns[5].groupId == m.signalColumns[7].groupId &&
+                  m.signalColumns[5].groupId != m.signalColumns[4].groupId,
+              "demand: the group row reads back - each group over its own columns");
+        check(m.connectors[1].name == QLatin1String("43-J5\nPH PW OUT") && m.connectors[1].cells[6] == QLatin1String("2") &&
+                  m.connectors[0].cells[5] == QLatin1String("RED\n\"U\""),
+              "demand: the cells read back as written, lines and all");
+        check(read.cables[0].connectors[0].cells[2] == QLatin1String("21,25"), "demand: several pins in a cell read back");
+    }
+    // THE DROP-DOWNS on the group row, on the cells they belong to: Excel refuses a whole workbook over one range it
+    // cannot read.
     {
         QByteArray sheet;
         for (const ZipItem& z : readZip(book))
-            if (z.name == QLatin1String("xl/worksheets/sheet4.xml")) sheet = z.data;
-        const QList<QByteArray> ranges = [&] {
-            QList<QByteArray> out;
-            for (qsizetype at = sheet.indexOf("sqref=\""); at >= 0; at = sheet.indexOf("sqref=\"", at + 1))
-                out << sheet.mid(at + 7, sheet.indexOf('"', at + 7) - at - 7);
-            return out;
-        }();
+            if (z.name == QLatin1String("xl/worksheets/sheet3.xml")) sheet = z.data;
+        QList<QByteArray> ranges;
+        for (qsizetype at = sheet.indexOf("sqref=\""); at >= 0; at = sheet.indexOf("sqref=\"", at + 1))
+            ranges << sheet.mid(at + 7, sheet.indexOf('"', at + 7) - at - 7);
         bool wellFormed = !ranges.isEmpty();
         for (const QByteArray& r : ranges)
-            wellFormed = wellFormed && QRegularExpression(QStringLiteral("^[A-Z]+2:[A-Z]+500$")).match(QString::fromLatin1(r)).hasMatch();
-        std::printf("  demand: Connections drop-downs on %s\n", ranges.join(' ').constData());
-        check(wellFormed && ranges.contains("F2:F500"), "demand: each drop-down is on its column from row 2 down (Type on F2:F500)");
+            wellFormed = wellFormed && QRegularExpression(QStringLiteral("^[A-Z]+[0-9]+:[A-Z]+[0-9]+$")).match(QString::fromLatin1(r)).hasMatch();
+        std::printf("  demand: group row drop-downs on %s\n", ranges.join(' ').constData());
+        check(wellFormed && ranges.contains("J1:Q1"), "demand: each group row's drop-down is on its signal columns, every block as wide as the widest (J1:Q1)");
     }
 
-    // AS A DEFINITION.
+    // THE MOTOR CABLE AS A DEFINITION.
     std::vector<DemandIssue> issues;
-    const HarnessDef def = harnessDefFromDemand(read, &issues);
+    const HarnessDef def = harnessDefFromDemand(motor, &issues);
     for (const DemandIssue& i : issues) std::printf("    issue: %s %d %s\n", qPrintable(i.sheet), i.row, qPrintable(i.text));
-    const HarnessConnector* cj1 = nullptr;
-    const HarnessConnector* cp1 = nullptr;
-    for (const HarnessConnector& c : def.connectors) (c.designator == QLatin1String("J1") ? cj1 : cp1) = &c;
-    check(cj1 && cp1 && cj1->side == HarnessSide::Left && cp1->side == HarnessSide::Right,
-          "demand: End A on the left, End B on the right");
-    check(cp1 && cp1->annotation == QLatin1String("letters") && cp1->pinCount == 5,
-          "demand: a lettered connector with no pin count has as many pins as its wires reach (A to E)");
-    check(cj1 && cj1->shieldLeft && cj1->drainTo == QLatin1String("body"),
-          "demand: an overall shield drained to the body");
-    int twisted = 0, shielded = 0, coaxRows = 0, open = 0, drains = 0;
-    bool braidOnPins = false, power20 = false;
-    QSet<QString> coaxBundles;
+    QStringList names;
+    for (const HarnessConnector& c : def.connectors)
+        names << QStringLiteral("%1/%2/%3").arg(c.designator, c.side == HarnessSide::Left ? "L" : "R").arg(c.pinCount);
+    std::printf("  demand: connectors %s, %d wire(s)\n", qPrintable(names.join(QStringLiteral(" "))), int(def.wires.size()));
+    check(names == QStringList({QStringLiteral("43-J5/L/3"), QStringLiteral("43-J3/R/7")}),
+          "demand: a part with only leads is no connector; the first with pins is on the left, the next on the right");
+    int leads = 0, twisted = 0, shielded = 0, both = 0;
+    bool phaseRed = false;
     for (const HarnessWire& w : def.wires) {
-        if (w.twistGroup == QLatin1String("TP1")) ++twisted;
-        if (w.shieldGroup == QLatin1String("S1")) ++shielded;
-        if (harnessIsCoaxKind(w.kind)) {
-            ++coaxRows;
-            coaxBundles.insert(w.bundle);
-            if (w.color == QLatin1String("SHIELD")) braidOnPins = w.fromPin == 5 && w.toPin == 5;
-        }
-        if (harnessIsOpenEndpoint(w.toConn)) ++open;
-        if (w.toConn == harnessInternalShieldKey(QStringLiteral("S1")) && w.fromPin == 7) ++drains;
-        if (w.label == QLatin1String("+24V")) power20 = w.gauge == QLatin1String("0.5") && w.color == QLatin1String("RD");
+        if (harnessIsOpenEndpoint(w.fromConn) || harnessIsOpenEndpoint(w.toConn)) ++leads;
+        if (!w.twistGroup.isEmpty() && w.shieldGroup.isEmpty()) ++twisted;
+        if (w.twistGroup.isEmpty() && !w.shieldGroup.isEmpty()) ++shielded;
+        if (!w.twistGroup.isEmpty() && !w.shieldGroup.isEmpty()) ++both;
+        if (w.label == QLatin1String("PH_A")) phaseRed = w.color == QLatin1String("RD");
     }
-    check(twisted == 2 && shielded == 2, "demand: the twisted pair and its shield group");
-    check(coaxRows == 2 && coaxBundles.size() == 1 && braidOnPins,
-          "demand: a coax is two rows of one bundle, its braid on the shield pins (J1-5 to P1-E)");
-    check(open == 1, "demand: an empty To is a flying lead");
-    check(drains == 1, "demand: the shield group's drain is a wire from J1-7 to the screen");
-    check(power20, "demand: 20 AWG is 0.5 mm2 and Red is RD");
-    check(issues.empty(), "demand: a demand filled in properly reads with nothing to check");
+    check(def.wires.size() == 8 && leads == 8, "demand: every motor signal is a wire from its lead to its pin (or a lead alone)");
+    check(twisted == 2 && shielded == 3 && both == 3, "demand: the twist, the shield and the shielded twisted three");
+    check(phaseRed, "demand: a lead's colour is its wire's - RED (\"U\") is RD");
+    bool thermFlying = false;
+    for (const DemandIssue& i : issues)
+        if (i.text.contains(QLatin1String("THERM"))) thermFlying = true;
+    check(!thermFlying, "demand: a signal from a lead to nowhere else is a flying lead, not a fault");
+
+    // THE CONTROLLER CABLE: two pins to two pins in order, a lettered connector, a coax's signal and braid.
+    issues.clear();
+    const HarnessDef ctl = harnessDefFromDemand(ebox, &issues);
+    for (const DemandIssue& i : issues) std::printf("    issue: %s %d %s\n", qPrintable(i.sheet), i.row, qPrintable(i.text));
+    QStringList grounds;
+    int coaxRows = 0;
+    bool braid = false, letteredJ7 = false;
+    for (const HarnessWire& w : ctl.wires) {
+        if (w.label == QLatin1String("GND")) grounds << QStringLiteral("%1-%2").arg(w.fromPin).arg(w.toPin);
+        if (harnessIsCoaxKind(w.kind)) ++coaxRows;
+        if (harnessIsCoaxKind(w.kind) && w.color == QLatin1String("SHIELD")) braid = w.fromPin == 11 && w.toPin == 8;
+    }
+    for (const HarnessConnector& c : ctl.connectors)
+        if (c.designator == QLatin1String("43-J7")) letteredJ7 = c.annotation == QLatin1String("letters") && c.pinCount == 2;
+    std::printf("  demand: GND wires %s\n", qPrintable(grounds.join(QStringLiteral(" "))));
+    check(grounds == QStringList({QStringLiteral("21-22"), QStringLiteral("25-26")}), "demand: 21,25 to 22,26 is two wires, pin by pin");
+    check(coaxRows == 2 && braid, "demand: a coax is its signal and its braid, the braid E.Box-11 to 43-J2-8");
+    check(letteredJ7, "demand: a connector written with letters is lettered, as many pins as it uses");
+    int aMinus = 0;
+    for (const HarnessWire& w : ctl.wires)
+        if (w.label == QLatin1String("A-")) ++aMinus;
+    check(aMinus == 2, "demand: a signal on three connectors is a wire from the first to each of the others");
 
     // WHAT CANNOT BE TAKEN AS WRITTEN is reported on its row.
-    HarnessDemand bad = demand;
-    bad.connections[0].to = QStringLiteral("X9");
-    bad.connections[2].color = QStringLiteral("Mauve");
-    bad.connections[3].coaxShieldToPin.clear();
-    std::vector<DemandIssue> badIssues;
-    harnessDefFromDemand(bad, &badIssues);
-    auto reported = [&](int rowNo, const char* words) {
+    {
+        DemandCable bad = ebox;
+        bad.connectors[1].cells[0] = QStringLiteral("x9");
+        bad.connectors[1].sheetRow = 7;
+        std::vector<DemandIssue> badIssues;
+        harnessDefFromDemand(bad, &badIssues);
+        bool reported = false;
         for (const DemandIssue& i : badIssues)
-            if (i.sheet == QLatin1String("Connections") && i.row == rowNo && i.text.contains(QLatin1String(words)))
-                return true;
-        return false;
-    };
-    check(reported(2, "X9") && reported(4, "Mauve") && reported(5, "braid"),
-          "demand: an unknown connector, an unknown colour and a coax with no braid pin are each reported on their row");
+            if (i.row == 7 && i.text.contains(QLatin1String("x9"))) reported = true;
+        check(reported, "demand: a pin that cannot be read is reported on its row");
+    }
 
-    // AS EXCEL SAVES IT: shared strings, numbers as numbers, the columns in another order.
+    // AS EXCEL SAVES IT: shared strings, numbers as numbers, merged cells - the cable's name merged down its rows,
+    // a shield merged over its columns, and two twisted pairs written cell by cell.
     {
         auto entry = [](const char* name, const QString& xml) { return ZipItem{QLatin1String(name), xml.toUtf8()}; };
         const QString shared = QStringLiteral(
             "<sst xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">"
-            "<si><t>Designator</t></si><si><t>End</t></si><si><t>J1</t></si><si><t>A</t></si><si><t>P1</t></si>"
-            "<si><t>B</t></si><si><t>To</t></si><si><t>To pin</t></si><si><t>From</t></si><si><t>From pin</t></si>"
-            "<si><r><t>SIG</t></r><r><t>NAL</t></r></si><si><t>Signal</t></si></sst>");
-        const QString connectors = QStringLiteral(
+            "<si><t>Cable Name</t></si><si><t>Connector\nName</t></si><si><t>HGC1</t></si><si><t>J1</t></si>"
+            "<si><t>P1</t></si><si><t>Twist</t></si><si><t>Shiled</t></si><si><t>A-</t></si><si><t>A+</t></si>"
+            "<si><t>B-</t></si><si><t>B+</t></si><si><r><t>S</t></r><r><t>1</t></r></si><si><t>S2</t></si>"
+            "<si><t>Mating Connector</t></si></sst>");
+        // Columns: A Cable Name, B Connector Name, C..F two twisted pairs, G..H a shield; I mating.
+        const QString pinout = QStringLiteral(
             "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>"
-            "<row r=\"1\"><c r=\"A1\" t=\"s\"><v>0</v></c><c r=\"B1\" t=\"s\"><v>1</v></c></row>"
-            "<row r=\"2\"><c r=\"A2\" t=\"s\"><v>2</v></c><c r=\"B2\" t=\"s\"><v>3</v></c></row>"
-            "<row r=\"4\"><c r=\"A4\" t=\"s\"><v>4</v></c><c r=\"B4\" t=\"s\"><v>5</v></c></row>"
-            "</sheetData></worksheet>");
-        const QString connections = QStringLiteral(
-            "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>"
-            "<row r=\"1\"><c r=\"A1\" t=\"s\"><v>6</v></c><c r=\"B1\" t=\"s\"><v>7</v></c><c r=\"C1\" t=\"s\"><v>8</v></c>"
-            "<c r=\"D1\" t=\"s\"><v>9</v></c><c r=\"F1\" t=\"s\"><v>11</v></c></row>"
-            "<row r=\"2\"><c r=\"A2\" t=\"s\"><v>4</v></c><c r=\"B2\"><v>2</v></c><c r=\"C2\" t=\"s\"><v>2</v></c>"
-            "<c r=\"D2\"><v>1.0000000000001</v></c><c r=\"F2\" t=\"s\"><v>10</v></c></row>"
-            "</sheetData></worksheet>");
+            "<row r=\"2\"><c r=\"C2\" t=\"s\"><v>5</v></c><c r=\"D2\" t=\"s\"><v>5</v></c><c r=\"E2\" t=\"s\"><v>5</v></c>"
+            "<c r=\"F2\" t=\"s\"><v>5</v></c><c r=\"G2\" t=\"s\"><v>6</v></c></row>"
+            "<row r=\"3\"><c r=\"A3\" t=\"s\"><v>0</v></c><c r=\"B3\" t=\"s\"><v>1</v></c><c r=\"C3\" t=\"s\"><v>7</v></c>"
+            "<c r=\"D3\" t=\"s\"><v>8</v></c><c r=\"E3\" t=\"s\"><v>9</v></c><c r=\"F3\" t=\"s\"><v>10</v></c>"
+            "<c r=\"G3\" t=\"s\"><v>11</v></c><c r=\"H3\" t=\"s\"><v>12</v></c><c r=\"I3\" t=\"s\"><v>13</v></c></row>"
+            "<row r=\"4\"><c r=\"A4\" t=\"s\"><v>2</v></c><c r=\"B4\" t=\"s\"><v>3</v></c><c r=\"C4\"><v>1</v></c>"
+            "<c r=\"D4\"><v>2</v></c><c r=\"E4\"><v>3</v></c><c r=\"F4\"><v>4.0000000000001</v></c><c r=\"G4\"><v>5</v></c>"
+            "<c r=\"H4\"><v>6</v></c></row>"
+            "<row r=\"5\"><c r=\"B5\" t=\"s\"><v>4</v></c><c r=\"C5\"><v>1</v></c><c r=\"D5\"><v>2</v></c>"
+            "<c r=\"E5\"><v>3</v></c><c r=\"F5\"><v>4</v></c><c r=\"G5\"><v>5</v></c><c r=\"H5\"><v>6</v></c></row>"
+            "</sheetData><mergeCells count=\"2\"><mergeCell ref=\"A4:A5\"/><mergeCell ref=\"G2:H2\"/></mergeCells></worksheet>");
         const QString workbook = QStringLiteral(
             "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" "
             "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets>"
-            "<sheet name=\"Connectors\" sheetId=\"1\" r:id=\"rId1\"/><sheet name=\"Connections\" sheetId=\"2\" r:id=\"rId2\"/>"
-            "</sheets></workbook>");
+            "<sheet name=\"Harnesses\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>");
         const QString rels = QStringLiteral(
             "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
-            "<Relationship Id=\"rId1\" Type=\"x\" Target=\"worksheets/sheet1.xml\"/>"
-            "<Relationship Id=\"rId2\" Type=\"x\" Target=\"/xl/worksheets/sheet2.xml\"/></Relationships>");
+            "<Relationship Id=\"rId1\" Type=\"x\" Target=\"/xl/worksheets/sheet1.xml\"/></Relationships>");
         const QByteArray excel = writeZip({entry("xl/workbook.xml", workbook), entry("xl/_rels/workbook.xml.rels", rels),
-                                           entry("xl/sharedStrings.xml", shared),
-                                           entry("xl/worksheets/sheet1.xml", connectors),
-                                           entry("xl/worksheets/sheet2.xml", connections)});
+                                           entry("xl/sharedStrings.xml", shared), entry("xl/worksheets/sheet1.xml", pinout)});
         HarnessDemand fromExcel;
         const bool readOk = harnessDemandFromXlsx(excel, fromExcel, &error);
-        const DemandConnection* c = fromExcel.connections.empty() ? nullptr : &fromExcel.connections.front();
-        std::printf("  demand from Excel: %s, %d connector(s), first connection %s-%s to %s-%s \"%s\"\n",
-                    readOk ? "read" : qPrintable(error), int(fromExcel.connectors.size()),
-                    c ? qPrintable(c->from) : "-", c ? qPrintable(c->fromPin) : "-", c ? qPrintable(c->to) : "-",
-                    c ? qPrintable(c->toPin) : "-", c ? qPrintable(c->signal) : "-");
-        check(readOk && fromExcel.connectors.size() == 2 && c && c->from == QLatin1String("J1") &&
-                  c->fromPin == QLatin1String("1") && c->to == QLatin1String("P1") && c->toPin == QLatin1String("2") &&
-                  c->signal == QLatin1String("SIGNAL"),
-              "demand: a workbook as Excel saves it reads - shared strings, numbers, columns found by their headings");
+        const DemandCable* c = fromExcel.cables.empty() ? nullptr : &fromExcel.cables.front();
+        QStringList groups;
+        if (c)
+            for (const DemandSignal& s : c->signalColumns) groups << QStringLiteral("%1:%2#%3").arg(s.name, s.group).arg(s.groupId);
+        std::printf("  demand from Excel: %s, %s, %s\n", readOk ? "read" : qPrintable(error), c ? qPrintable(c->name) : "-",
+                    qPrintable(groups.join(QStringLiteral(" "))));
+        check(readOk && c && c->name == QLatin1String("HGC1") && c->connectors.size() == 2 &&
+                  c->connectors[1].name == QLatin1String("P1") && c->connectors[0].cells[3] == QLatin1String("4"),
+              "demand: a table as Excel saves it reads - shared strings, numbers, the name merged down its rows");
+        check(c && c->signalColumns.size() == 6 && c->signalColumns[0].groupId == c->signalColumns[1].groupId &&
+                  c->signalColumns[2].groupId == c->signalColumns[3].groupId && c->signalColumns[1].groupId != c->signalColumns[2].groupId &&
+                  c->signalColumns[4].group == QLatin1String("Shield") && c->signalColumns[5].groupId == c->signalColumns[4].groupId &&
+                  c->signalColumns[4].name == QLatin1String("S1"),
+              "demand: two pairs written Twist cell by cell are two pairs; a merged Shiled is one shield");
         HarnessDemand none;
         check(!harnessDemandFromXlsx(QByteArray("not a workbook"), none, &error) && !error.isEmpty(),
               "demand: something that is not a workbook is refused with a reason");
     }
 
-    // A BLANK TEMPLATE reads back as an empty demand.
+    // A BLANK TEMPLATE reads back as nothing filled in.
     {
         HarnessDemand blank;
         const bool blankOk = harnessDemandFromXlsx(harnessDemandToXlsx(HarnessDemand{}), blank, &error);
-        check(blankOk && blank.connectors.empty() && blank.connections.empty() && blank.groups.empty(),
-              "demand: a blank template reads back as nothing filled in");
+        check(blankOk && blank.cables.empty(), "demand: a blank template reads back as nothing filled in");
     }
 
     // FROM THE BUILDER AND BACK: the same wires, groups and coax.
     {
-        const HarnessDemand out = harnessDemandFromDef(def);
+        const DemandCable out = harnessDemandFromDef(ctl, QStringLiteral("HGC700150"));
         const HarnessDef again = harnessDefFromDemand(out);
-        auto count = [](const HarnessDef& d, auto pred) {
-            return int(std::count_if(d.wires.begin(), d.wires.end(), pred));
-        };
+        auto count = [](const HarnessDef& d, auto pred) { return int(std::count_if(d.wires.begin(), d.wires.end(), pred)); };
         auto twist = [](const HarnessWire& w) { return !w.twistGroup.isEmpty(); };
         auto coax = [](const HarnessWire& w) { return harnessIsCoaxKind(w.kind); };
-        std::printf("  demand from the builder: %d wire row(s) -> %d connection(s) -> %d wire row(s)\n",
-                    int(def.wires.size()), int(out.connections.size()), int(again.wires.size()));
-        check(again.wires.size() == def.wires.size() && count(again, twist) == count(def, twist) &&
-                  count(again, coax) == count(def, coax) && again.connectors.size() == def.connectors.size(),
+        std::printf("  demand from the builder: %d wire(s) -> %d signal column(s) -> %d wire(s)\n", int(ctl.wires.size()),
+                    int(out.signalColumns.size()), int(again.wires.size()));
+        check(again.wires.size() == ctl.wires.size() && count(again, twist) == count(ctl, twist) &&
+                  count(again, coax) == count(ctl, coax) && again.connectors.size() == ctl.connectors.size(),
               "demand: the builder's harness sent out as a demand comes back the same");
     }
 
-    // ON PAPER.
+    // ON PAPER: a page a cable.
     {
         const QString pdf = QDir::temp().filePath(QStringLiteral("loopwire-demand-test.pdf"));
         QFile::remove(pdf);
@@ -804,11 +819,12 @@ void testHarnessDemand() {
         const bool wrote = writeHarnessDemandPdf(read, pdf, &pdfError);
         QFile f(pdf);
         const bool opened = f.open(QIODevice::ReadOnly);
-        const QByteArray head = opened ? f.read(4) : QByteArray();
-        const qint64 size = opened ? f.size() : 0;
+        const QByteArray all = opened ? f.readAll() : QByteArray();
         f.close();
-        std::printf("  demand overview: %s, %lld bytes\n", wrote ? "written" : qPrintable(pdfError), size);
-        check(wrote && head == "%PDF" && size > 2000, "demand: the overview is written as a PDF");
+        const int pages = int(all.count("/Type /Page\n") + all.count("/Type /Page\r") + all.count("/Type /Page "));
+        std::printf("  demand overview: %s, %d bytes\n", wrote ? "written" : qPrintable(pdfError), int(all.size()));
+        check(wrote && all.startsWith("%PDF") && all.size() > 2000, "demand: the overview is written as a PDF");
+        (void)pages;
         QFile::remove(pdf);
     }
 }

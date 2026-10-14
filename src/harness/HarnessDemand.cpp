@@ -11,6 +11,7 @@
 #include <QPageSize>
 #include <QPainter>
 #include <QPdfWriter>
+#include <QPoint>
 #include <QRegularExpression>
 #include <QSet>
 #include <QXmlStreamReader>
@@ -22,80 +23,60 @@ namespace Loopwire {
 
 namespace {
 
-// ---- The sheets and their headings ------------------------------------------------------------------------------
-// One list, read by the writer and the reader both: a heading written is a heading found.
-
 const QString kInfo = QStringLiteral("Info");
-const QString kConnectors = QStringLiteral("Connectors");
-const QString kConnections = QStringLiteral("Connections");
-const QString kGroups = QStringLiteral("Groups");
-const QString kLists = QStringLiteral("Lists");
+const QString kPinout = QStringLiteral("Pinout");
 
-struct Column {
-    QString heading;
-    int width;            // in characters
-    QString note;         // what goes in it, for the Instructions sheet
+// ---- The table's columns ----------------------------------------------------------------------------------------
+// The columns before the signals and the one after them, by heading - written in this order, found by heading when
+// read (spaces and line breaks aside, any case), so a table laid out a little differently still reads.
+
+enum Fixed { CableName, Function, NumConnectors, Length, ConnectorType, ConnectorImg, MaxPins, EmptyPins, ConnectorName, FixedCount };
+
+struct ColumnHeading {
+    QString text;
+    int width;
 };
 
-const std::vector<Column>& connectorColumns() {
-    static const std::vector<Column> c{
-        {QStringLiteral("Designator"), 12, QStringLiteral("The connector's name on the drawing: J1, P2, X3 ...")},
-        {QStringLiteral("End"), 7, QStringLiteral("A or B - which end of the harness it is at")},
-        {QStringLiteral("Description"), 30, QStringLiteral("What it is or what it plugs into")},
-        {QStringLiteral("Mating part"), 24, QStringLiteral("The connector's part number or type, if known")},
-        {QStringLiteral("Pins"), 7, QStringLiteral("How many pins it has (left empty: as many as are used)")},
-        {QStringLiteral("Pin names"), 11, QStringLiteral("Numbers (1, 2, 3) or Letters (A, B, C)")},
-        {QStringLiteral("Overall shield"), 14, QStringLiteral("Yes when one screen goes round everything at this connector")},
-        {QStringLiteral("Shield drain to"), 15, QStringLiteral("Where that screen is terminated: None, Body (the shell) or Pin")},
-        {QStringLiteral("Drain pin"), 10, QStringLiteral("The pin, when the drain goes to a pin")},
-        {QStringLiteral("Notes"), 36, QString()},
-    };
-    return c;
+const ColumnHeading kFixed[FixedCount] = {
+    {QStringLiteral("Cable Name"), 13},      {QStringLiteral("Function"), 22},
+    {QStringLiteral("Number of connectors"), 11}, {QStringLiteral("Length (mm)"), 8},
+    {QStringLiteral("Connector type"), 30},  {QStringLiteral("Connector IMG"), 14},
+    {QStringLiteral("Max Number of pins"), 8}, {QStringLiteral("Empty Pins"), 7},
+    {QStringLiteral("Connector Name"), 12}};
+const QString kMating = QStringLiteral("Mating Connector");
+
+// A heading as compared: letters and digits only, lower case. "Max\nNumber\nof pins" is "maxnumberofpins".
+QString key(const QString& s) {
+    QString k;
+    for (const QChar c : s)
+        if (c.isLetterOrNumber()) k += c.toLower();
+    return k;
 }
 
-const std::vector<Column>& connectionColumns() {
-    static const std::vector<Column> c{
-        {QStringLiteral("From"), 10, QStringLiteral("Connector at one end (empty: a flying lead)")},
-        {QStringLiteral("From pin"), 9, QStringLiteral("Its pin")},
-        {QStringLiteral("To"), 10, QStringLiteral("Connector at the other end (empty: a flying lead)")},
-        {QStringLiteral("To pin"), 9, QStringLiteral("Its pin")},
-        {QStringLiteral("Signal"), 18, QStringLiteral("What the wire carries: CAN_H, +24V, GND ...")},
-        {QStringLiteral("Type"), 8, QStringLiteral("Wire or Coax")},
-        {QStringLiteral("Twist group"), 12, QStringLiteral("Wires twisted together share a name here: TP1, TP2 ...")},
-        {QStringLiteral("Shield group"), 12, QStringLiteral("Wires screened together share a name here: S1, S2 ...")},
-        {QStringLiteral("Gauge"), 9, QStringLiteral("Cross-section in mm2 (0.5) or AWG (20 AWG); optional")},
-        {QStringLiteral("Colour"), 10, QStringLiteral("Insulation colour (RD or Red); optional")},
-        {QStringLiteral("Coax shield from pin"), 12, QStringLiteral("A coax: the pin its braid lands on at the From end")},
-        {QStringLiteral("Coax shield to pin"), 12, QStringLiteral("A coax: the pin its braid lands on at the To end")},
-        {QStringLiteral("Notes"), 36, QString()},
-    };
-    return c;
-}
-
-const std::vector<Column>& groupColumns() {
-    static const std::vector<Column> c{
-        {QStringLiteral("Group"), 10, QStringLiteral("A twist or shield group named on the Connections sheet")},
-        {QStringLiteral("Kind"), 10, QStringLiteral("Twisted or Shielded")},
-        {QStringLiteral("Drain connector"), 15, QStringLiteral("A shielded group: the connector its drain is taken to")},
-        {QStringLiteral("Drain pin"), 10, QStringLiteral("And the pin")},
-        {QStringLiteral("Notes"), 36, QString()},
-    };
-    return c;
+// A group label as written - "Twist", "shield + twist", "Shiled" (as typed in a hurry) - as one of Twist, Shield,
+// Shield+Twist or Coax. Empty when it is none of them.
+QString groupLabel(const QString& written) {
+    const QString k = key(written);
+    if (k.isEmpty()) return {};
+    const bool shield = k.contains(QLatin1String("shi")) || k.contains(QLatin1String("scr"));
+    const bool twist = k.contains(QLatin1String("twist"));
+    if (k.contains(QLatin1String("coax"))) return QStringLiteral("Coax");
+    if (shield && twist) return QStringLiteral("Shield+Twist");
+    if (shield) return QStringLiteral("Shield");
+    if (twist) return QStringLiteral("Twist");
+    return {};
 }
 
 const QStringList& infoFields() {
-    static const QStringList f{QStringLiteral("Customer"),    QStringLiteral("Project"),
-                               QStringLiteral("Harness name"), QStringLiteral("Harness P/N"),
-                               QStringLiteral("Revision"),    QStringLiteral("Date"),
-                               QStringLiteral("Contact"),     QStringLiteral("E-mail"),
-                               QStringLiteral("Notes")};
+    static const QStringList f{QStringLiteral("Customer"), QStringLiteral("Project"),  QStringLiteral("Harness P/N"),
+                               QStringLiteral("Revision"), QStringLiteral("Date"),     QStringLiteral("Contact"),
+                               QStringLiteral("E-mail"),   QStringLiteral("Notes")};
     return f;
 }
 
 QString* infoField(DemandInfo& i, int at) {
-    QString* f[] = {&i.customer, &i.project, &i.harnessName, &i.partNumber, &i.revision,
-                    &i.date,     &i.contact, &i.email,       &i.notes};
-    return at >= 0 && at < 9 ? f[at] : nullptr;
+    QString* f[] = {&i.customer, &i.project, &i.partNumber, &i.revision, &i.date, &i.contact, &i.email, &i.notes};
+    return at >= 0 && at < 8 ? f[at] : nullptr;
 }
 
 // ---- Writing the workbook ----------------------------------------------------------------------------------------
@@ -112,35 +93,29 @@ QString colName(int c) {   // 0 -> A, 25 -> Z, 26 -> AA
     return s;
 }
 
-// The styles the cells are given, by number (see stylesXml).
-enum Style { Plain = 0, Heading = 1, Body = 2, Title = 3, Note = 4, Label = 5 };
+QString cellRef(int row, int col) { return colName(col) + QString::number(row + 1); }   // both 0-based
 
-struct Cell {
-    QString text;
-    int style = Body;
-    bool number = false;
+// The styles the cells are given, by number (see stylesXml).
+enum Style {
+    Plain = 0, Heading = 1, Body = 2, Title = 3, Note = 4, Label = 5, SignalHead = 6, GroupHead = 7,
+    GroupHeadRed = 8, BodyLeft = 9, FunctionText = 10, Value = 11
 };
 
 struct Sheet {
     QString name;
-    bool hidden = false;
     std::vector<int> widths;
-    std::vector<std::vector<Cell>> rows;
-    int freezeRows = 0;
-    // Drop-downs: the cells they are on ("F2:F500") and what they offer - a list in quotes or a range.
-    std::vector<std::pair<QString, QString>> lists;
+    std::map<std::pair<int, int>, std::pair<QString, int>> cells;   // (row, col) -> text, style
+    std::map<int, double> heights;
+    std::vector<QString> merges;
+    std::vector<std::pair<QString, QString>> lists;   // drop-downs: cells, what they offer
+    void put(int r, int c, const QString& text, int style) { cells[{r, c}] = {text, style}; }
 };
 
 QString sheetXml(const Sheet& s) {
     QString x = QStringLiteral("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
                                "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" "
-                               "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">");
-    x += QStringLiteral("<sheetViews><sheetView workbookViewId=\"0\">");
-    if (s.freezeRows > 0)
-        x += QStringLiteral("<pane ySplit=\"%1\" topLeftCell=\"A%2\" activePane=\"bottomLeft\" state=\"frozen\"/>")
-                 .arg(s.freezeRows)
-                 .arg(s.freezeRows + 1);
-    x += QStringLiteral("</sheetView></sheetViews>");
+                               "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">"
+                               "<sheetViews><sheetView workbookViewId=\"0\"/></sheetViews>");
     if (!s.widths.empty()) {
         x += QStringLiteral("<cols>");
         for (size_t c = 0; c < s.widths.size(); ++c)
@@ -148,26 +123,32 @@ QString sheetXml(const Sheet& s) {
         x += QStringLiteral("</cols>");
     }
     x += QStringLiteral("<sheetData>");
-    for (size_t r = 0; r < s.rows.size(); ++r) {
-        x += QStringLiteral("<row r=\"%1\">").arg(r + 1);
-        for (size_t c = 0; c < s.rows[r].size(); ++c) {
-            const Cell& cell = s.rows[r][c];
-            const QString ref = colName(int(c)) + QString::number(r + 1);
-            if (cell.text.isEmpty()) {
-                if (cell.style != Plain) x += QStringLiteral("<c r=\"%1\" s=\"%2\"/>").arg(ref).arg(cell.style);
-                continue;
-            }
-            if (cell.number)
-                x += QStringLiteral("<c r=\"%1\" s=\"%2\"><v>%3</v></c>").arg(ref).arg(cell.style).arg(cell.text);
-            else
-                x += QStringLiteral("<c r=\"%1\" s=\"%2\" t=\"inlineStr\"><is><t xml:space=\"preserve\">%3</t></is></c>")
-                         .arg(ref)
-                         .arg(cell.style)
-                         .arg(xmlText(cell.text));
+    int row = -1;
+    for (const auto& [rc, cell] : s.cells) {
+        if (rc.first != row) {
+            if (row >= 0) x += QStringLiteral("</row>");
+            row = rc.first;
+            x += QStringLiteral("<row r=\"%1\"").arg(row + 1);
+            if (const auto h = s.heights.find(row); h != s.heights.end())
+                x += QStringLiteral(" ht=\"%1\" customHeight=\"1\"").arg(h->second);
+            x += QLatin1Char('>');
         }
-        x += QStringLiteral("</row>");
+        const QString ref = cellRef(rc.first, rc.second);
+        if (cell.first.isEmpty())
+            x += QStringLiteral("<c r=\"%1\" s=\"%2\"/>").arg(ref).arg(cell.second);
+        else
+            x += QStringLiteral("<c r=\"%1\" s=\"%2\" t=\"inlineStr\"><is><t xml:space=\"preserve\">%3</t></is></c>")
+                     .arg(ref)
+                     .arg(cell.second)
+                     .arg(xmlText(cell.first));
     }
+    if (row >= 0) x += QStringLiteral("</row>");
     x += QStringLiteral("</sheetData>");
+    if (!s.merges.empty()) {
+        x += QStringLiteral("<mergeCells count=\"%1\">").arg(s.merges.size());
+        for (const QString& m : s.merges) x += QStringLiteral("<mergeCell ref=\"%1\"/>").arg(m);
+        x += QStringLiteral("</mergeCells>");
+    }
     if (!s.lists.empty()) {
         x += QStringLiteral("<dataValidations count=\"%1\">").arg(s.lists.size());
         for (const auto& [range, offer] : s.lists)
@@ -176,82 +157,141 @@ QString sheetXml(const Sheet& s) {
                      .arg(range, xmlText(offer));
         x += QStringLiteral("</dataValidations>");
     }
-    x += QStringLiteral("<pageMargins left=\"0.5\" right=\"0.5\" top=\"0.6\" bottom=\"0.6\" header=\"0.3\" footer=\"0.3\"/>"
+    x += QStringLiteral("<pageMargins left=\"0.4\" right=\"0.4\" top=\"0.5\" bottom=\"0.5\" header=\"0.3\" footer=\"0.3\"/>"
                         "<pageSetup orientation=\"landscape\"/></worksheet>");
     return x;
 }
 
 QString stylesXml() {
-    return QStringLiteral(
+    auto xf = [](int font, int fill, int border, const char* horizontal, bool text = false) {
+        return QStringLiteral("<xf numFmtId=\"%1\" fontId=\"%2\" fillId=\"%3\" borderId=\"%4\" xfId=\"0\" applyNumberFormat=\"1\" "
+                              "applyFont=\"1\" applyFill=\"1\" applyBorder=\"1\" applyAlignment=\"1\">"
+                              "<alignment horizontal=\"%5\" vertical=\"center\" wrapText=\"1\"/></xf>")
+            .arg(text ? 49 : 0)
+            .arg(font)
+            .arg(fill)
+            .arg(border)
+            .arg(QLatin1String(horizontal));
+    };
+    QString x = QStringLiteral(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
         "<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">"
         "<fonts count=\"5\">"
-        "<font><sz val=\"11\"/><name val=\"Calibri\"/></font>"
-        "<font><b/><sz val=\"11\"/><color rgb=\"FFFFFFFF\"/><name val=\"Calibri\"/></font>"
+        "<font><sz val=\"10\"/><name val=\"Calibri\"/></font>"
+        "<font><b/><sz val=\"10\"/><name val=\"Calibri\"/></font>"
         "<font><b/><sz val=\"16\"/><color rgb=\"FF1F3A5F\"/><name val=\"Calibri\"/></font>"
         "<font><i/><sz val=\"10\"/><color rgb=\"FF555555\"/><name val=\"Calibri\"/></font>"
-        "<font><b/><sz val=\"11\"/><name val=\"Calibri\"/></font>"
+        "<font><b/><sz val=\"10\"/><color rgb=\"FFFF0000\"/><name val=\"Calibri\"/></font>"
         "</fonts>"
-        "<fills count=\"3\">"
+        "<fills count=\"5\">"
         "<fill><patternFill patternType=\"none\"/></fill>"
         "<fill><patternFill patternType=\"gray125\"/></fill>"
-        "<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FF2F5D8A\"/><bgColor indexed=\"64\"/></patternFill></fill>"
+        "<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FFC6EFCE\"/><bgColor indexed=\"64\"/></patternFill></fill>"
+        "<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FFDDEBF7\"/><bgColor indexed=\"64\"/></patternFill></fill>"
+        "<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FF9BC2E6\"/><bgColor indexed=\"64\"/></patternFill></fill>"
         "</fills>"
-        "<borders count=\"2\">"
-        "<border><left/><right/><top/><bottom/><diagonal/></border>"
-        "<border><left style=\"thin\"><color rgb=\"FFB7C3D0\"/></left><right style=\"thin\"><color rgb=\"FFB7C3D0\"/></right>"
-        "<top style=\"thin\"><color rgb=\"FFB7C3D0\"/></top><bottom style=\"thin\"><color rgb=\"FFB7C3D0\"/></bottom><diagonal/></border>"
-        "</borders>"
+        "<borders count=\"2\"><border><left/><right/><top/><bottom/><diagonal/></border>"
+        "<border><left style=\"thin\"><color rgb=\"FF000000\"/></left><right style=\"thin\"><color rgb=\"FF000000\"/></right>"
+        "<top style=\"thin\"><color rgb=\"FF000000\"/></top><bottom style=\"thin\"><color rgb=\"FF000000\"/></bottom>"
+        "<diagonal/></border></borders>"
         "<cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>"
-        "<cellXfs count=\"6\">"
-        "<xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/>"
-        "<xf numFmtId=\"0\" fontId=\"1\" fillId=\"2\" borderId=\"1\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\" applyBorder=\"1\" applyAlignment=\"1\">"
-        "<alignment vertical=\"center\" wrapText=\"1\"/></xf>"
-        "<xf numFmtId=\"49\" fontId=\"0\" fillId=\"0\" borderId=\"1\" xfId=\"0\" applyNumberFormat=\"1\" applyBorder=\"1\"/>"
-        "<xf numFmtId=\"0\" fontId=\"2\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\"/>"
-        "<xf numFmtId=\"0\" fontId=\"3\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyAlignment=\"1\">"
-        "<alignment vertical=\"top\" wrapText=\"1\"/></xf>"
-        "<xf numFmtId=\"0\" fontId=\"4\" fillId=\"0\" borderId=\"1\" xfId=\"0\" applyFont=\"1\" applyBorder=\"1\"/>"
-        "</cellXfs>"
-        "<cellStyles count=\"1\"><cellStyle name=\"Normal\" xfId=\"0\" builtinId=\"0\"/></cellStyles>"
-        "</styleSheet>");
+        "<cellXfs count=\"12\">"
+        "<xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/>");
+    x += xf(1, 2, 1, "center");          // Heading
+    x += xf(0, 0, 1, "center", true);    // Body
+    x += QStringLiteral("<xf numFmtId=\"0\" fontId=\"2\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\"/>");   // Title
+    x += QStringLiteral("<xf numFmtId=\"0\" fontId=\"3\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyAlignment=\"1\">"
+                        "<alignment vertical=\"top\" wrapText=\"1\"/></xf>");   // Note
+    x += xf(1, 0, 1, "left");            // Label
+    x += xf(1, 3, 1, "center", true);    // SignalHead
+    x += xf(1, 4, 1, "center");          // GroupHead
+    x += xf(4, 4, 1, "center");          // GroupHeadRed
+    x += xf(0, 0, 1, "left", true);      // BodyLeft
+    x += xf(4, 0, 1, "center");          // FunctionText
+    x += xf(0, 0, 1, "left", true);      // Value
+    x += QStringLiteral("</cellXfs><cellStyles count=\"1\"><cellStyle name=\"Normal\" xfId=\"0\" builtinId=\"0\"/></cellStyles>"
+                        "</styleSheet>");
+    return x;
 }
 
-// A table sheet: its headings, then `filled` rows, then empty bordered rows to write in.
-Sheet tableSheet(const QString& name, const std::vector<Column>& cols, const std::vector<QStringList>& filled,
-                 int blankRows) {
-    Sheet s;
-    s.name = name;
-    s.freezeRows = 1;
-    std::vector<Cell> head;
-    for (const Column& c : cols) {
-        s.widths.push_back(c.width);
-        head.push_back({c.heading, Heading});
+// What a cell says - see below.
+QString colourCode(const QString& written);
+QString firstLine(const QString& s);
+QStringList cellParts(const QString& cell);
+
+// ONE CABLE'S BLOCK, from `top` (0-based): the group row, the headings, a row per connector. The rows it took.
+int writeCableBlock(Sheet& s, int top, const DemandCable& cable, int blankSignals, int blankConnectors) {
+    const int nSignals = std::max<int>(int(cable.signalColumns.size()), blankSignals);
+    const int nConnectors = std::max<int>(int(cable.connectors.size()), blankConnectors);
+    const int head = top + 1, first = top + 2, last = first + nConnectors - 1;
+    const int sig0 = FixedCount, mating = FixedCount + nSignals;
+    for (int c = 0; c < FixedCount; ++c) s.put(head, c, kFixed[c].text, Heading);
+    s.put(head, mating, kMating, Heading);
+    s.heights[head] = 40;
+    for (int k = 0; k < nSignals; ++k)
+        s.put(head, sig0 + k, k < int(cable.signalColumns.size()) ? cable.signalColumns[size_t(k)].name : QString(), SignalHead);
+    // THE GROUP ROW: each run of one group over its columns, merged; the rest left to be filled in.
+    for (int k = 0; k < nSignals; ++k) {
+        const DemandSignal* sig = k < int(cable.signalColumns.size()) ? &cable.signalColumns[size_t(k)] : nullptr;
+        if (!sig || sig->group.isEmpty()) {
+            s.put(top, sig0 + k, QString(), Plain);
+            continue;
+        }
+        int end = k;
+        while (end + 1 < int(cable.signalColumns.size()) && cable.signalColumns[size_t(end + 1)].groupId == sig->groupId &&
+               cable.signalColumns[size_t(end + 1)].group == sig->group)
+            ++end;
+        const bool red = sig->group != QLatin1String("Twist");
+        for (int c = k; c <= end; ++c) s.put(top, sig0 + c, c == k ? sig->group : QString(), red ? GroupHeadRed : GroupHead);
+        if (end > k) s.merges.push_back(cellRef(top, sig0 + k) + QLatin1Char(':') + cellRef(top, sig0 + end));
+        k = end;
     }
-    s.rows.push_back(head);
-    for (const QStringList& r : filled) {
-        std::vector<Cell> row;
-        for (size_t c = 0; c < cols.size(); ++c) row.push_back({c < size_t(r.size()) ? r[int(c)] : QString(), Body});
-        s.rows.push_back(row);
+    s.lists.push_back({cellRef(top, sig0) + QLatin1Char(':') + cellRef(top, mating - 1),
+                       QStringLiteral("\"Twist,Shield,Shield+Twist,Coax\"")});
+    // THE CONNECTORS, the cable's own cells merged down beside them.
+    for (int r = 0; r < nConnectors; ++r) {
+        const DemandConnector* dc = r < int(cable.connectors.size()) ? &cable.connectors[size_t(r)] : nullptr;
+        const int row = first + r;
+        s.put(row, CableName, r == 0 ? cable.name : QString(), Heading);
+        s.put(row, Function, r == 0 ? cable.function : QString(), FunctionText);
+        s.put(row, NumConnectors, r == 0 && !cable.connectors.empty() ? QString::number(cable.connectors.size()) : QString(),
+              Body);
+        s.put(row, Length, dc ? dc->length : QString(), Body);
+        s.put(row, ConnectorType, dc ? dc->type : QString(), Body);
+        s.put(row, ConnectorImg, dc ? dc->image : QString(), Body);
+        s.put(row, MaxPins, dc && dc->maxPins > 0 ? QString::number(dc->maxPins) : QString(), Body);
+        QString empty;
+        if (dc && dc->maxPins > 0) {
+            int used = 0;
+            for (const QString& cell : dc->cells) {
+                if (cell.trimmed().isEmpty() || key(cell) == QLatin1String("na")) continue;
+                // A lead is one; a cell of pins is as many as it names.
+                used += colourCode(firstLine(cell)).isEmpty() ? std::max<int>(1, int(cellParts(cell).size())) : 1;
+            }
+            empty = QString::number(std::max(0, dc->maxPins - used));
+        }
+        s.put(row, EmptyPins, empty, Body);
+        s.put(row, ConnectorName, dc ? dc->name : QString(), Body);
+        for (int k = 0; k < nSignals; ++k)
+            s.put(row, sig0 + k, dc && k < dc->cells.size() ? dc->cells[k] : QString(), Body);
+        s.put(row, mating, dc ? dc->mating : QString(), BodyLeft);
+        s.heights[row] = 30;
     }
-    for (int k = 0; k < blankRows; ++k) s.rows.push_back(std::vector<Cell>(cols.size(), Cell{QString(), Body}));
-    return s;
-}
-
-int columnOf(const std::vector<Column>& cols, const QString& heading) {
-    for (size_t c = 0; c < cols.size(); ++c)
-        if (cols[c].heading == heading) return int(c);
-    return -1;
-}
-
-QString rangeOf(const std::vector<Column>& cols, const QString& heading, int lastRow) {
-    const QString c = colName(columnOf(cols, heading));
-    return c + QStringLiteral("2:") + c + QString::number(lastRow);
+    if (nConnectors > 1)
+        for (const int c : {int(CableName), int(Function), int(NumConnectors)})
+            s.merges.push_back(cellRef(first, c) + QLatin1Char(':') + cellRef(last, c));
+    return last - top + 1;
 }
 
 // ---- Reading the workbook ----------------------------------------------------------------------------------------
 
-using Rows = std::vector<QStringList>;
+struct ReadSheet {
+    std::vector<QStringList> rows;
+    std::vector<std::pair<QPoint, QPoint>> merges;   // (col, row) top-left and bottom-right, 0-based
+    QString at(int r, int c) const {
+        return r >= 0 && r < int(rows.size()) && c >= 0 && c < rows[size_t(r)].size() ? rows[size_t(r)][c] : QString();
+    }
+};
 
 int columnIndex(const QString& ref) {   // "BC12" -> 54
     int c = 0;
@@ -260,6 +300,12 @@ int columnIndex(const QString& ref) {   // "BC12" -> 54
         c = c * 26 + (ch.toUpper().unicode() - u'A' + 1);
     }
     return c - 1;
+}
+
+QPoint refPoint(const QString& ref) {   // "B3" -> (1, 2)
+    int i = 0;
+    while (i < ref.size() && ref[i].isLetter()) ++i;
+    return {columnIndex(ref), ref.mid(i).toInt() - 1};
 }
 
 QStringList sharedStrings(const QByteArray& xml) {
@@ -284,8 +330,8 @@ QStringList sharedStrings(const QByteArray& xml) {
     return out;
 }
 
-Rows sheetRows(const QByteArray& xml, const QStringList& shared) {
-    Rows rows;
+ReadSheet readSheet(const QByteArray& xml, const QStringList& shared) {
+    ReadSheet s;
     QXmlStreamReader r(xml);
     int rowAt = -1;
     while (!r.atEnd()) {
@@ -294,22 +340,22 @@ Rows sheetRows(const QByteArray& xml, const QStringList& shared) {
         if (r.name() == QLatin1String("row")) {
             const int n = r.attributes().value(QLatin1String("r")).toInt();
             rowAt = n > 0 ? n - 1 : rowAt + 1;
-            if (int(rows.size()) <= rowAt) rows.resize(size_t(rowAt + 1));
+            if (int(s.rows.size()) <= rowAt) s.rows.resize(size_t(rowAt + 1));
+        } else if (r.name() == QLatin1String("mergeCell")) {
+            const QStringList ends = r.attributes().value(QLatin1String("ref")).toString().split(QLatin1Char(':'));
+            if (ends.size() == 2) s.merges.push_back({refPoint(ends[0]), refPoint(ends[1])});
         } else if (r.name() == QLatin1String("c") && rowAt >= 0) {
             const QString ref = r.attributes().value(QLatin1String("r")).toString();
             const QString type = r.attributes().value(QLatin1String("t")).toString();
-            QStringList& row = rows[size_t(rowAt)];
+            QStringList& row = s.rows[size_t(rowAt)];
             const int col = ref.isEmpty() ? int(row.size()) : columnIndex(ref);
             QString value;
             while (!r.atEnd()) {
                 r.readNext();
                 if (r.isEndElement() && r.name() == QLatin1String("c")) break;
                 if (!r.isStartElement()) continue;
-                if (r.name() == QLatin1String("v")) {
-                    value = r.readElementText();
-                } else if (r.name() == QLatin1String("t")) {
-                    value += r.readElementText(QXmlStreamReader::IncludeChildElements);
-                }
+                if (r.name() == QLatin1String("v")) value = r.readElementText();
+                else if (r.name() == QLatin1String("t")) value += r.readElementText(QXmlStreamReader::IncludeChildElements);
             }
             if (type == QLatin1String("s")) {
                 const int i = value.toInt();
@@ -328,14 +374,13 @@ Rows sheetRows(const QByteArray& xml, const QStringList& shared) {
             }
         }
     }
-    return rows;
+    return s;
 }
 
-// The workbook's sheets by name (lower case), each its rows.
-bool readWorkbook(const QByteArray& bytes, QHash<QString, Rows>& sheets, QString* error) {
-    const std::vector<ZipItem> items = readZip(bytes);
+// The workbook's sheets in order, each with its name.
+bool readWorkbook(const QByteArray& bytes, std::vector<std::pair<QString, ReadSheet>>& sheets, QString* error) {
     QHash<QString, QByteArray> files;
-    for (const ZipItem& z : items) files.insert(z.name, z.data);
+    for (const ZipItem& z : readZip(bytes)) files.insert(z.name, z.data);
     if (!files.contains(QStringLiteral("xl/workbook.xml"))) {
         if (error) *error = QStringLiteral("This is not an Excel workbook (.xlsx).");
         return false;
@@ -361,59 +406,119 @@ bool readWorkbook(const QByteArray& bytes, QHash<QString, Rows>& sheets, QString
         QString id;
         for (const QXmlStreamAttribute& a : r.attributes())
             if (a.name() == QLatin1String("id")) id = a.value().toString();   // r:id, whatever its prefix
-        const QString name = r.attributes().value(QLatin1String("name")).toString().trimmed().toLower();
         const QString file = targets.value(id);
-        if (!file.isEmpty() && files.contains(file)) sheets.insert(name, sheetRows(files.value(file), shared));
-    }
-    if (!sheets.contains(kConnections.toLower()) || !sheets.contains(kConnectors.toLower())) {
-        if (error) *error = QStringLiteral("The workbook has no Connectors and Connections sheets - is it a harness demand?");
-        return false;
+        if (!file.isEmpty() && files.contains(file))
+            sheets.push_back({r.attributes().value(QLatin1String("name")).toString().trimmed(),
+                              readSheet(files.value(file), shared)});
     }
     return true;
 }
 
-// A table's rows as heading -> value, each with the row number it was on. Rows with nothing in them are left out.
-struct TableRow {
-    int row = 0;
-    QHash<QString, QString> v;
-    QString at(const QString& heading) const { return v.value(heading.toLower()); }
-};
+// A merged area's cells all take the value of its top-left cell - which is the only one a merge keeps.
+void spreadMerges(ReadSheet& s) {
+    for (const auto& [tl, br] : s.merges) {
+        const QString v = s.at(tl.y(), tl.x());
+        for (int r = tl.y(); r <= br.y(); ++r)
+            for (int c = tl.x(); c <= br.x(); ++c) {
+                if (r == tl.y() && c == tl.x()) continue;
+                if (int(s.rows.size()) <= r) s.rows.resize(size_t(r + 1));
+                QStringList& row = s.rows[size_t(r)];
+                while (row.size() <= c) row << QString();
+                if (row[c].isEmpty()) row[c] = v;
+            }
+    }
+}
 
-std::vector<TableRow> tableRows(const Rows& rows) {
-    std::vector<TableRow> out;
-    if (rows.empty()) return out;
-    const QStringList& head = rows.front();
-    for (size_t r = 1; r < rows.size(); ++r) {
-        TableRow t;
-        t.row = int(r) + 1;
-        bool any = false;
-        for (int c = 0; c < head.size() && c < rows[r].size(); ++c) {
-            if (rows[r][c].isEmpty()) continue;
-            t.v.insert(head[c].trimmed().toLower(), rows[r][c]);
-            any = true;
+// Which merged area of row `r` column `c` is in, as its first column; -1 when none.
+int mergeStart(const ReadSheet& s, int r, int c) {
+    for (const auto& [tl, br] : s.merges)
+        if (r >= tl.y() && r <= br.y() && c >= tl.x() && c <= br.x()) return tl.x();
+    return -1;
+}
+
+// Every block on a sheet: found by its heading row (a "Cable Name" heading), read down to the first row that is
+// empty, a group row or another block's headings.
+void readBlocks(const ReadSheet& raw, std::vector<DemandCable>& out) {
+    ReadSheet s = raw;
+    spreadMerges(s);
+    for (int h = 0; h < int(s.rows.size()); ++h) {
+        const QStringList& head = s.rows[size_t(h)];
+        int col[FixedCount];
+        std::fill(std::begin(col), std::end(col), -1);
+        int mating = -1;
+        for (int c = 0; c < head.size(); ++c) {
+            const QString k = key(head[c]);
+            if (k.isEmpty()) continue;
+            if (k == QLatin1String("cablename")) col[CableName] = c;
+            else if (k == QLatin1String("function")) col[Function] = c;
+            else if (k.startsWith(QLatin1String("numberofconn"))) col[NumConnectors] = c;
+            else if (k.startsWith(QLatin1String("length"))) col[Length] = c;
+            else if (k == QLatin1String("connectortype")) col[ConnectorType] = c;
+            else if (k.startsWith(QLatin1String("connectorim"))) col[ConnectorImg] = c;
+            else if (k.startsWith(QLatin1String("max"))) col[MaxPins] = c;
+            else if (k.startsWith(QLatin1String("empty"))) col[EmptyPins] = c;
+            else if (k == QLatin1String("connectorname")) col[ConnectorName] = c;
+            else if (k.startsWith(QLatin1String("mating"))) mating = c;
         }
-        if (any) out.push_back(t);
+        if (col[CableName] < 0 || col[ConnectorName] < 0) continue;
+        // The signals: the columns after the connector's name, up to the mating connector (or the last heading).
+        const int sigFrom = col[ConnectorName] + 1;
+        int sigTo = mating >= 0 ? mating - 1 : int(head.size()) - 1;
+        while (sigTo >= sigFrom && s.at(h, sigTo).isEmpty()) --sigTo;
+        DemandCable cable;
+        // THE GROUP ROW, above: a merged label is one group over its columns; labels written cell by cell are one
+        // group to a run of the same label - a twist or a coax two columns at a time, since they stand side by side.
+        int groupNo = 0, runLen = 0;
+        for (int c = sigFrom; c <= sigTo; ++c) {
+            DemandSignal sig;
+            sig.name = s.at(h, c);
+            sig.group = groupLabel(s.at(h - 1, c));
+            if (!sig.group.isEmpty()) {
+                const int m = mergeStart(raw, h - 1, c);
+                const bool sameRun = !cable.signalColumns.empty() && cable.signalColumns.back().group == sig.group;
+                const bool inMerge = m >= 0 && m < c;
+                const bool pairFull = (sig.group == QLatin1String("Twist") || sig.group == QLatin1String("Coax")) && runLen >= 2;
+                const bool continues = sameRun && (inMerge || (m < 0 && mergeStart(raw, h - 1, c - 1) < 0 && !pairFull));
+                if (!continues) {
+                    ++groupNo;
+                    runLen = 0;
+                }
+                sig.groupId = groupNo;
+                ++runLen;
+            } else {
+                runLen = 0;
+            }
+            cable.signalColumns.push_back(sig);
+        }
+        // THE CONNECTORS, a row each, down to an empty row, a group row or another block's headings.
+        for (int r = h + 1; r < int(s.rows.size()); ++r) {
+            bool any = false, onlyLabels = true, isHeading = false;
+            for (int c = 0; c < s.rows[size_t(r)].size(); ++c) {
+                const QString v = s.at(r, c);
+                if (key(v) == QLatin1String("cablename")) isHeading = true;
+                if (v.isEmpty() || c == col[CableName] || c == col[Function] || c == col[NumConnectors]) continue;
+                any = true;
+                if (groupLabel(v).isEmpty()) onlyLabels = false;
+            }
+            if (!any || onlyLabels || isHeading) break;
+            if (cable.name.isEmpty()) cable.name = s.at(r, col[CableName]);
+            if (cable.function.isEmpty()) cable.function = s.at(r, col[Function]);
+            DemandConnector dc;
+            dc.sheetRow = r + 1;
+            dc.name = s.at(r, col[ConnectorName]);
+            dc.type = s.at(r, col[ConnectorType]);
+            dc.image = s.at(r, col[ConnectorImg]);
+            dc.maxPins = s.at(r, col[MaxPins]).toInt();
+            dc.length = s.at(r, col[Length]);
+            dc.mating = s.at(r, mating);
+            for (int c = sigFrom; c <= sigTo; ++c) dc.cells << s.at(r, c);
+            cable.connectors.push_back(dc);
+        }
+        if (!cable.connectors.empty()) out.push_back(cable);
     }
-    return out;
 }
 
-bool yes(const QString& s) {
-    const QString t = s.trimmed().toLower();
-    return t == QLatin1String("yes") || t == QLatin1String("y") || t == QLatin1String("x") ||
-           t == QLatin1String("true") || t == QLatin1String("1");
-}
-
-// ---- The lists the drop-downs offer -----------------------------------------------------------------------------
-
-QStringList colourChoices() {
-    QStringList out;
-    for (const QString& code : wireColorCodes()) {
-        if (code == QLatin1String("SHIELD") || code == QLatin1String("DRAIN") || code.startsWith(QLatin1String("SIGNAL")))
-            continue;
-        out << code;
-    }
-    return out;
-}
+// ---- What a cell says -------------------------------------------------------------------------------------------
 
 // A colour as written - its code (RD) or its name (Red), any case - as the builder's code. Empty when unknown.
 QString colourCode(const QString& written) {
@@ -426,20 +531,11 @@ QString colourCode(const QString& written) {
     return {};
 }
 
-// A gauge as written - 0.5, 0.5 mm2, 0,5 or 20 AWG - as the builder's mm2 figure. Empty when unknown.
-QString gaugeCode(const QString& written) {
-    QString w = written.trimmed().toLower();
-    if (w.isEmpty()) return {};
-    w.replace(QLatin1Char(','), QLatin1Char('.'));
-    const bool awg = w.contains(QLatin1String("awg"));
-    w.remove(QRegularExpression(QStringLiteral("[^0-9.]")));
-    bool ok = false;
-    const double n = w.toDouble(&ok);
-    if (!ok) return {};
-    for (const QString& mm2 : wireGaugeChoices()) {
-        if (awg ? wireGaugeAwg(mm2).toDouble() == n : std::abs(mm2.toDouble() - n) < 1e-9) return mm2;
-    }
-    return awg ? QString() : QString::number(n);   // an odd cross-section is still a cross-section
+// The first line of a cell: "43-J2\nCOMM" is 43-J2, "RED\n"U"" is RED.
+QString firstLine(const QString& s) { return s.section(QLatin1Char('\n'), 0, 0).trimmed(); }
+
+QStringList cellParts(const QString& cell) {
+    return firstLine(cell).split(QRegularExpression(QStringLiteral("[,;/ ]+")), Qt::SkipEmptyParts);
 }
 
 } // namespace
@@ -447,114 +543,74 @@ QString gaugeCode(const QString& written) {
 // ---- The workbook, out ------------------------------------------------------------------------------------------
 
 QByteArray harnessDemandToXlsx(const HarnessDemand& d) {
-    constexpr int kLast = 500;   // how far down the drop-downs reach
     std::vector<Sheet> sheets;
-
-    // INSTRUCTIONS: what each sheet is for, each column of it, and a worked example.
+    // INSTRUCTIONS.
     {
         Sheet s;
         s.name = QStringLiteral("Instructions");
-        s.widths = {26, 90};
-        auto line = [&](const QString& a, const QString& b = QString(), int sa = Label, int sb = Note) {
-            s.rows.push_back({Cell{a, a.isEmpty() ? Plain : sa}, Cell{b, b.isEmpty() ? Plain : sb}});
+        s.widths = {24, 100};
+        int r = 0;
+        auto line = [&](const QString& a, const QString& b = QString()) {
+            if (!a.isEmpty()) s.put(r, 0, a, Label);
+            if (!b.isEmpty()) s.put(r, 1, b, Note);
+            ++r;
         };
-        s.rows.push_back({Cell{QStringLiteral("Harness demand"), Title}});
-        line(QString(), QStringLiteral("Fill in this workbook to describe the harness you need, then send it back. "
-                                       "An overview is enough: which connector pin goes to which, and which wires "
-                                       "are twisted, shielded or coax. Part numbers are welcome but not required."));
+        s.put(r++, 0, QStringLiteral("Harness demand"), Title);
+        line(QString(), QStringLiteral("Describe each cable on the Pinout sheet and send the workbook back. An overview is "
+                                       "enough; part numbers are welcome but not required."));
         line(QString());
-        line(QStringLiteral("Info"), QStringLiteral("Who you are and which harness this is."));
-        line(QStringLiteral("Connectors"), QStringLiteral("One row per connector. End A is drawn on the left, End B on "
-                                                          "the right; a harness with branches puts several connectors "
-                                                          "on one end."));
-        for (const Column& c : connectorColumns())
-            if (!c.note.isEmpty()) line(QStringLiteral("   ") + c.heading, c.note, Plain);
-        line(QStringLiteral("Connections"), QStringLiteral("One row per wire. A coax is one row: its centre on the pins, "
-                                                           "its braid on the two Coax shield pins."));
-        for (const Column& c : connectionColumns())
-            if (!c.note.isEmpty()) line(QStringLiteral("   ") + c.heading, c.note, Plain);
-        line(QStringLiteral("Groups"), QStringLiteral("Optional: a shielded group's drain, and notes on any group."));
-        for (const Column& c : groupColumns())
-            if (!c.note.isEmpty()) line(QStringLiteral("   ") + c.heading, c.note, Plain);
-        line(QString());
-        line(QStringLiteral("Example"), QStringLiteral("J1 (End A, 4 pins) to P1 (End B, 4 pins), a shielded twisted "
-                                                       "pair for CAN and two power wires:"));
-        line(QString(), QStringLiteral("J1 pin 1 -> P1 pin 1, CAN_H, Twist group TP1, Shield group S1"));
-        line(QString(), QStringLiteral("J1 pin 2 -> P1 pin 2, CAN_L, Twist group TP1, Shield group S1"));
-        line(QString(), QStringLiteral("J1 pin 3 -> P1 pin 3, +24V, 1 mm2, Red"));
-        line(QString(), QStringLiteral("J1 pin 4 -> P1 pin 4, GND, 1 mm2, Black"));
-        line(QString(), QStringLiteral("Groups: S1, Shielded, drain to J1 pin 4"));
+        line(QStringLiteral("Info"), QStringLiteral("Who you are and which project this is."));
+        line(QStringLiteral("Pinout"), QStringLiteral("One block per cable: a row for each connector, a column for each "
+                                                      "signal. For more cables, copy the block below the last one, with "
+                                                      "an empty row between them."));
+        line(QStringLiteral("   Rows"), QStringLiteral("The first connector is the cable's main end; the others are the "
+                                                       "ends it goes to."));
+        line(QStringLiteral("   Signal columns"), QStringLiteral("Write the signal's name in the heading (CAN_H, +24V, "
+                                                                 "GND ...). Under it, on each connector's row, write the "
+                                                                 "pin it lands on there. Several pins: 21,25."));
+        line(QStringLiteral("   Leads"), QStringLiteral("A part with flying leads instead of pins (a motor): write the "
+                                                        "lead's colour (White, Blue ...) in place of a pin."));
+        line(QStringLiteral("   Group row"), QStringLiteral("Above the signal headings: Twist over the two columns of a "
+                                                            "twisted pair, Shield over the columns screened together, "
+                                                            "Shield+Twist for both, Coax over a coax's signal and its "
+                                                            "braid. Merge the cells over a group, or write the label in "
+                                                            "each of them."));
+        line(QStringLiteral("   Max Number of pins"), QStringLiteral("How many pins the connector has; N/A for leads."));
+        line(QStringLiteral("   Mating Connector"), QStringLiteral("What it plugs into, if known."));
         sheets.push_back(s);
     }
-    // INFO: field and value.
+    // INFO.
     {
         Sheet s;
         s.name = kInfo;
         s.widths = {18, 60};
-        s.rows.push_back({Cell{QStringLiteral("Field"), Heading}, Cell{QStringLiteral("Value"), Heading}});
+        s.put(0, 0, QStringLiteral("Field"), Heading);
+        s.put(0, 1, QStringLiteral("Value"), Heading);
         DemandInfo info = d.info;
-        for (int i = 0; i < infoFields().size(); ++i)
-            s.rows.push_back({Cell{infoFields()[i], Label}, Cell{*infoField(info, i), Body}});
+        for (int i = 0; i < infoFields().size(); ++i) {
+            s.put(i + 1, 0, infoFields()[i], Label);
+            s.put(i + 1, 1, *infoField(info, i), Value);
+        }
         sheets.push_back(s);
     }
-    // CONNECTORS.
-    {
-        std::vector<QStringList> filled;
-        for (const DemandConnector& c : d.connectors)
-            filled.push_back({c.designator, c.end, c.description, c.matingPart, c.pins > 0 ? QString::number(c.pins) : QString(),
-                              c.pinNames, c.overallShield ? QStringLiteral("Yes") : QStringLiteral("No"), c.drainTo,
-                              c.drainPin, c.notes});
-        Sheet s = tableSheet(kConnectors, connectorColumns(), filled, 30);
-        const auto& cols = connectorColumns();
-        s.lists = {{rangeOf(cols, QStringLiteral("End"), kLast), QStringLiteral("\"A,B\"")},
-                   {rangeOf(cols, QStringLiteral("Pin names"), kLast), QStringLiteral("\"Numbers,Letters\"")},
-                   {rangeOf(cols, QStringLiteral("Overall shield"), kLast), QStringLiteral("\"Yes,No\"")},
-                   {rangeOf(cols, QStringLiteral("Shield drain to"), kLast), QStringLiteral("\"None,Body,Pin\"")}};
-        sheets.push_back(s);
-    }
-    // CONNECTIONS.
-    {
-        std::vector<QStringList> filled;
-        for (const DemandConnection& c : d.connections)
-            filled.push_back({c.from, c.fromPin, c.to, c.toPin, c.signal, c.type, c.twistGroup, c.shieldGroup, c.gauge,
-                              c.color, c.coaxShieldFromPin, c.coaxShieldToPin, c.notes});
-        Sheet s = tableSheet(kConnections, connectionColumns(), filled, 100);
-        const auto& cols = connectionColumns();
-        const QString designators = QStringLiteral("Connectors!$A$2:$A$%1").arg(kLast);
-        const int colours = int(colourChoices().size()), gauges = int(wireGaugeChoices().size());
-        s.lists = {{rangeOf(cols, QStringLiteral("From"), kLast), designators},
-                   {rangeOf(cols, QStringLiteral("To"), kLast), designators},
-                   {rangeOf(cols, QStringLiteral("Type"), kLast), QStringLiteral("\"Wire,Coax\"")},
-                   {rangeOf(cols, QStringLiteral("Gauge"), kLast), QStringLiteral("Lists!$B$2:$B$%1").arg(gauges + 1)},
-                   {rangeOf(cols, QStringLiteral("Colour"), kLast), QStringLiteral("Lists!$A$2:$A$%1").arg(colours + 1)}};
-        sheets.push_back(s);
-    }
-    // GROUPS.
-    {
-        std::vector<QStringList> filled;
-        for (const DemandGroup& g : d.groups) filled.push_back({g.name, g.kind, g.drainConnector, g.drainPin, g.notes});
-        Sheet s = tableSheet(kGroups, groupColumns(), filled, 20);
-        const auto& cols = groupColumns();
-        s.lists = {{rangeOf(cols, QStringLiteral("Kind"), kLast), QStringLiteral("\"Twisted,Shielded\"")},
-                   {rangeOf(cols, QStringLiteral("Drain connector"), kLast),
-                    QStringLiteral("Connectors!$A$2:$A$%1").arg(kLast)}};
-        sheets.push_back(s);
-    }
-    // LISTS, out of sight: what the colour and gauge drop-downs offer.
+    // THE PINOUT: the cables one under another, or one empty block to fill in.
     {
         Sheet s;
-        s.name = kLists;
-        s.hidden = true;
-        s.widths = {12, 12};
-        s.rows.push_back({Cell{QStringLiteral("Colour"), Heading}, Cell{QStringLiteral("Gauge mm2"), Heading}});
-        const QStringList colours = colourChoices(), gauges = wireGaugeChoices();
-        for (int i = 0; i < std::max(colours.size(), gauges.size()); ++i)
-            s.rows.push_back({Cell{i < colours.size() ? colours[i] : QString(), Plain},
-                              Cell{i < gauges.size() ? gauges[i] : QString(), Plain}});
+        s.name = kPinout;
+        int widest = d.cables.empty() ? 24 : 0;
+        for (const DemandCable& c : d.cables) widest = std::max<int>(widest, int(c.signalColumns.size()));
+        for (const ColumnHeading& h : kFixed) s.widths.push_back(h.width);
+        for (int k = 0; k < widest; ++k) s.widths.push_back(9);
+        s.widths.push_back(24);
+        int top = 0;
+        if (d.cables.empty()) {
+            writeCableBlock(s, top, DemandCable{}, 24, 6);
+        } else {
+            for (const DemandCable& c : d.cables) top += writeCableBlock(s, top, c, widest, 0) + 1;
+        }
         sheets.push_back(s);
     }
 
-    // The package around them.
     std::vector<ZipItem> parts;
     QString types = QStringLiteral(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
@@ -569,7 +625,7 @@ QByteArray harnessDemandToXlsx(const HarnessDemand& d) {
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
         "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" "
         "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">"
-        "<bookViews><workbookView activeTab=\"0\"/></bookViews><sheets>");
+        "<bookViews><workbookView activeTab=\"2\"/></bookViews><sheets>");
     QString bookRels = QStringLiteral(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
         "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">");
@@ -579,10 +635,7 @@ QByteArray harnessDemandToXlsx(const HarnessDemand& d) {
         types += QStringLiteral("<Override PartName=\"/xl/worksheets/sheet%1.xml\" "
                                 "ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>")
                      .arg(n);
-        book += QStringLiteral("<sheet name=\"%1\" sheetId=\"%2\"%3 r:id=\"rId%2\"/>")
-                    .arg(xmlText(sheets[i].name))
-                    .arg(n)
-                    .arg(sheets[i].hidden ? QStringLiteral(" state=\"hidden\"") : QString());
+        book += QStringLiteral("<sheet name=\"%1\" sheetId=\"%2\" r:id=\"rId%2\"/>").arg(xmlText(sheets[i].name)).arg(n);
         bookRels += QStringLiteral("<Relationship Id=\"rId%1\" "
                                    "Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" "
                                    "Target=\"worksheets/sheet%1.xml\"/>")
@@ -611,378 +664,302 @@ QByteArray harnessDemandToXlsx(const HarnessDemand& d) {
 // ---- The workbook, in -------------------------------------------------------------------------------------------
 
 bool harnessDemandFromXlsx(const QByteArray& bytes, HarnessDemand& out, QString* error) {
-    QHash<QString, Rows> sheets;
+    std::vector<std::pair<QString, ReadSheet>> sheets;
     if (!readWorkbook(bytes, sheets, error)) return false;
     out = HarnessDemand{};
-    // INFO: a field's value is beside it, wherever the row is.
-    for (const QStringList& row : sheets.value(kInfo.toLower())) {
-        if (row.size() < 2) continue;
-        const int at = infoFields().indexOf(row[0].trimmed());
-        if (QString* f = infoField(out.info, at)) *f = row[1];
+    bool anyHeading = false;
+    for (const auto& [name, sheet] : sheets) {
+        if (name.compare(kInfo, Qt::CaseInsensitive) == 0) {
+            for (const QStringList& row : sheet.rows) {
+                if (row.size() < 2) continue;
+                const int at = infoFields().indexOf(row[0].trimmed());
+                if (QString* f = infoField(out.info, at)) *f = row[1];
+            }
+            continue;
+        }
+        for (const QStringList& row : sheet.rows)
+            for (const QString& v : row)
+                if (key(v) == QLatin1String("cablename")) anyHeading = true;
+        readBlocks(sheet, out.cables);
     }
-    for (const TableRow& r : tableRows(sheets.value(kConnectors.toLower()))) {
-        DemandConnector c;
-        c.designator = r.at(QStringLiteral("Designator"));
-        c.end = r.at(QStringLiteral("End"));
-        c.description = r.at(QStringLiteral("Description"));
-        c.matingPart = r.at(QStringLiteral("Mating part"));
-        c.pins = r.at(QStringLiteral("Pins")).toInt();
-        c.pinNames = r.at(QStringLiteral("Pin names"));
-        c.overallShield = yes(r.at(QStringLiteral("Overall shield")));
-        c.drainTo = r.at(QStringLiteral("Shield drain to"));
-        c.drainPin = r.at(QStringLiteral("Drain pin"));
-        c.notes = r.at(QStringLiteral("Notes"));
-        out.connectors.push_back(c);
-    }
-    for (const TableRow& r : tableRows(sheets.value(kConnections.toLower()))) {
-        DemandConnection c;
-        c.from = r.at(QStringLiteral("From"));
-        c.fromPin = r.at(QStringLiteral("From pin"));
-        c.to = r.at(QStringLiteral("To"));
-        c.toPin = r.at(QStringLiteral("To pin"));
-        c.signal = r.at(QStringLiteral("Signal"));
-        c.type = r.at(QStringLiteral("Type"));
-        c.twistGroup = r.at(QStringLiteral("Twist group"));
-        c.shieldGroup = r.at(QStringLiteral("Shield group"));
-        c.gauge = r.at(QStringLiteral("Gauge"));
-        c.color = r.at(QStringLiteral("Colour"));
-        if (c.color.isEmpty()) c.color = r.at(QStringLiteral("Color"));
-        c.coaxShieldFromPin = r.at(QStringLiteral("Coax shield from pin"));
-        c.coaxShieldToPin = r.at(QStringLiteral("Coax shield to pin"));
-        c.notes = r.at(QStringLiteral("Notes"));
-        out.connections.push_back(c);
-    }
-    for (const TableRow& r : tableRows(sheets.value(kGroups.toLower()))) {
-        DemandGroup g;
-        g.name = r.at(QStringLiteral("Group"));
-        g.kind = r.at(QStringLiteral("Kind"));
-        g.drainConnector = r.at(QStringLiteral("Drain connector"));
-        g.drainPin = r.at(QStringLiteral("Drain pin"));
-        g.notes = r.at(QStringLiteral("Notes"));
-        out.groups.push_back(g);
+    if (!anyHeading) {
+        if (error) *error = QStringLiteral("No pinout table was found - a demand has a heading row with Cable Name, "
+                                           "Connector Name and the signals.");
+        return false;
     }
     return true;
 }
 
-// ---- A demand as a definition -----------------------------------------------------------------------------------
+// ---- A cable as a definition ------------------------------------------------------------------------------------
 
-HarnessDef harnessDefFromDemand(const HarnessDemand& d, std::vector<DemandIssue>* issues) {
+HarnessDef harnessDefFromDemand(const DemandCable& cable, std::vector<DemandIssue>* issues) {
     HarnessDef def;
-    auto issue = [&](const QString& sheet, int row, const QString& text) {
-        if (issues) issues->push_back({sheet, row, text});
+    const QString where = cable.name.isEmpty() ? QStringLiteral("Cable") : cable.name;
+    auto issue = [&](int row, const QString& text) {
+        if (issues) issues->push_back({where, row, text});
     };
-    // The connectors, each on its end in the order listed. Rows are numbered as the sheet numbers them: the
-    // headings are row 1, so the n-th connector listed is not necessarily on row n + 1 - an empty row is skipped
-    // when read - but listed order is what is kept.
-    QHash<QString, QString> idOf;   // designator, upper case -> connector id
-    int orderLeft = 0, orderRight = 0;
-    // The highest pin each connector's wires use, for a connector whose pin count was not given.
-    QHash<QString, int> highest;
-    std::vector<QString> rowId(d.connectors.size());   // the id each listed connector was given, "" when left out
-    for (size_t i = 0; i < d.connectors.size(); ++i) {
-        const DemandConnector& dc = d.connectors[i];
-        const int row = int(i) + 2;
-        const QString name = dc.designator.trimmed();
-        if (name.isEmpty()) {
-            issue(kConnectors, row, QStringLiteral("A connector with no designator is left out"));
-            continue;
+    // WHAT EACH CELL SAYS: pins (numbers, or letters on a lettered connector), or a lead's colour.
+    struct Place {
+        int row = 0;                // which connector
+        std::vector<int> pins;      // the pins there
+        bool isLead = false;        // or a flying lead,
+        QString lead;               // of this colour (a code)
+    };
+    const int nRows = int(cable.connectors.size());
+    const int nSignals = int(cable.signalColumns.size());
+    // A ROW IS LETTERED when every pin written on it is a single letter (a lead's colour aside).
+    std::vector<bool> lettered(size_t(nRows), false);
+    for (int r = 0; r < nRows; ++r) {
+        bool any = false, letters = true;
+        for (const QString& cell : cable.connectors[size_t(r)].cells) {
+            if (!colourCode(firstLine(cell)).isEmpty() || key(cell) == QLatin1String("na") || firstLine(cell) == QLatin1String("-"))
+                continue;
+            for (const QString& part : cellParts(cell)) {
+                any = true;
+                if (!(part.size() == 1 && part[0].isLetter())) letters = false;
+            }
         }
-        if (idOf.contains(name.toUpper())) {
-            issue(kConnectors, row, QStringLiteral("%1 is listed twice; the first is kept").arg(name));
-            continue;
+        lettered[size_t(r)] = any && letters;
+    }
+    std::vector<std::vector<Place>> placesOf = std::vector<std::vector<Place>>(size_t(nSignals));
+    std::vector<int> highest(size_t(nRows), 0);
+    std::vector<bool> hasPins(size_t(nRows), false);
+    for (int k = 0; k < nSignals; ++k)
+        for (int r = 0; r < nRows; ++r) {
+            const DemandConnector& dc = cable.connectors[size_t(r)];
+            const QString cell = k < dc.cells.size() ? firstLine(dc.cells[k]) : QString();
+            if (cell.isEmpty() || key(cell) == QLatin1String("na") || cell == QLatin1String("-")) continue;
+            Place p;
+            p.row = r;
+            const QString colour = colourCode(cell);
+            if (!colour.isEmpty() && !lettered[size_t(r)]) {
+                p.isLead = true;
+                p.lead = colour;
+            } else {
+                for (const QString& part : cellParts(cell)) {
+                    bool ok = false;
+                    int pin = part.toInt(&ok);
+                    if (!ok && part.size() == 1 && part[0].isLetter()) pin = part[0].toUpper().unicode() - u'A' + 1;
+                    if (pin <= 0) {
+                        issue(dc.sheetRow, QStringLiteral("%1, %2: \"%3\" is not a pin - left out")
+                                               .arg(firstLine(dc.name), cable.signalColumns[size_t(k)].name, part));
+                        continue;
+                    }
+                    p.pins.push_back(pin);
+                    highest[size_t(r)] = std::max(highest[size_t(r)], pin);
+                }
+                if (p.pins.empty()) continue;
+                hasPins[size_t(r)] = true;
+            }
+            placesOf[size_t(k)].push_back(p);
         }
+    // THE CONNECTORS: the rows with pins. A part only of leads (a motor) is not a connector - its wires are flying
+    // leads, each the colour written.
+    std::vector<QString> idOf = std::vector<QString>(size_t(nRows));
+    int right = 0;
+    for (int r = 0; r < nRows; ++r) {
+        if (!hasPins[size_t(r)]) continue;
+        const DemandConnector& dc = cable.connectors[size_t(r)];
         HarnessConnector c;
         c.id = QStringLiteral("c%1").arg(def.connectors.size() + 1);
-        rowId[i] = c.id;
-        c.designator = name;
-        c.partNumber = dc.matingPart;
-        const QString end = dc.end.trimmed().toUpper();
-        if (end == QLatin1String("B") || end == QLatin1String("RIGHT") || end == QLatin1String("2")) {
-            c.side = HarnessSide::Right;
-            c.order = orderRight++;
-        } else {
-            if (!end.isEmpty() && end != QLatin1String("A") && end != QLatin1String("LEFT") && end != QLatin1String("1"))
-                issue(kConnectors, row, QStringLiteral("%1: End \"%2\" is not A or B - put on End A").arg(name, dc.end));
+        c.designator = firstLine(dc.name).isEmpty() ? QStringLiteral("X%1").arg(r + 1) : firstLine(dc.name);
+        c.partNumber = firstLine(dc.type);
+        c.annotation = lettered[size_t(r)] ? QStringLiteral("letters") : QStringLiteral("numbers");
+        c.pinCount = std::max(dc.maxPins, highest[size_t(r)]);
+        if (dc.maxPins > 0 && highest[size_t(r)] > dc.maxPins)
+            issue(dc.sheetRow, QStringLiteral("%1 has %2 pins but a signal lands on pin %3")
+                                   .arg(c.designator)
+                                   .arg(dc.maxPins)
+                                   .arg(highest[size_t(r)]));
+        // The first connector is the cable's main end; the rest are where it goes.
+        if (def.connectors.empty()) {
             c.side = HarnessSide::Left;
-            c.order = orderLeft++;
+            c.order = 0;
+        } else {
+            c.side = HarnessSide::Right;
+            c.order = right++;
         }
-        c.annotation = dc.pinNames.trimmed().toLower().startsWith(QLatin1String("let")) ? QStringLiteral("letters")
-                                                                                        : QStringLiteral("numbers");
-        c.pinCount = dc.pins;
-        if (c.side == HarnessSide::Left) c.shieldLeft = dc.overallShield;
-        else c.shieldRight = dc.overallShield;
-        idOf.insert(name.toUpper(), c.id);
+        idOf[size_t(r)] = c.id;
         def.connectors.push_back(c);
     }
-    auto connOf = [&](const QString& name) -> HarnessConnector* {
-        const QString id = idOf.value(name.trimmed().toUpper());
-        for (HarnessConnector& c : def.connectors)
-            if (c.id == id) return &c;
-        return nullptr;
-    };
-    // A pin as written - a number, or a letter on a lettered connector - as the connector's pin number. 0 when it
-    // cannot be read; the caller says so.
-    auto pinOf = [&](const HarnessConnector& c, const QString& written) {
-        const QString w = written.trimmed();
-        if (w.isEmpty()) return 0;
-        bool ok = false;
-        const int n = w.toInt(&ok);
-        if (ok && n > 0 && c.annotation != QLatin1String("letters")) return n;
-        const int upTo = std::max({c.pinCount, highest.value(c.id), 26});
-        HarnessConnector probe = c;
-        probe.pinCount = upTo;
-        for (int p = 1; p <= upTo; ++p)
-            if (harnessPinLabel(probe, p).compare(w, Qt::CaseInsensitive) == 0) return p;
-        return ok && n > 0 ? n : 0;
-    };
-    // The connections. Gauges and colours written in any of the usual ways; groups by name.
-    int coaxCount = 0;
-    for (size_t i = 0; i < d.connections.size(); ++i) {
-        const DemandConnection& dc = d.connections[i];
-        const int row = int(i) + 2;
-        HarnessWire w;
-        w.id = QStringLiteral("w%1").arg(i + 1);
-        w.label = dc.signal;
-        w.twistGroup = dc.twistGroup.trimmed();
-        w.shieldGroup = dc.shieldGroup.trimmed();
-        auto end = [&](const QString& conn, const QString& pin, QString& outConn, int& outPin, const char* which) {
-            if (conn.trimmed().isEmpty()) {
-                outConn = harnessOpenEndpointKey();
-                outPin = 0;
-                return true;
+    // THE GROUPS, named: a twist, a shield, both, a coax.
+    std::map<int, QString> groupName;
+    int twists = 0, shields = 0, coaxes = 0;
+    for (const DemandSignal& s : cable.signalColumns) {
+        if (s.group.isEmpty() || groupName.count(s.groupId)) continue;
+        if (s.group == QLatin1String("Twist")) groupName[s.groupId] = QStringLiteral("TP%1").arg(++twists);
+        else if (s.group == QLatin1String("Shield")) groupName[s.groupId] = QStringLiteral("S%1").arg(++shields);
+        else if (s.group == QLatin1String("Shield+Twist")) groupName[s.groupId] = QStringLiteral("STP%1").arg(++twists);
+        else groupName[s.groupId] = QStringLiteral("COAX%1").arg(++coaxes);
+    }
+    std::map<int, int> coaxColumns;   // coax group -> its columns met so far
+    // THE WIRES: from the signal's first place to each other one - two pins to two pins in their order, one pin to
+    // several in turn.
+    int wireNo = 0;
+    for (int k = 0; k < nSignals; ++k) {
+        const DemandSignal& sig = cable.signalColumns[size_t(k)];
+        const std::vector<Place>& places = placesOf[size_t(k)];
+        if (places.empty()) continue;
+        const QString group = sig.group.isEmpty() ? QString() : groupName[sig.groupId];
+        const bool braid = sig.group == QLatin1String("Coax") && coaxColumns[sig.groupId]++ >= 1;
+        auto make = [&](const Place& a, int ai, const Place* b, int bi) {
+            HarnessWire w;
+            w.id = QStringLiteral("w%1").arg(++wireNo);
+            w.label = sig.name;
+            if (sig.group == QLatin1String("Twist") || sig.group == QLatin1String("Shield+Twist")) w.twistGroup = group;
+            if (sig.group == QLatin1String("Shield") || sig.group == QLatin1String("Shield+Twist")) w.shieldGroup = group;
+            if (sig.group == QLatin1String("Coax")) {
+                w.kind = QStringLiteral("coax");
+                w.bundle = group;
+                if (braid) {
+                    w.color = QStringLiteral("SHIELD");
+                    w.label.clear();
+                }
             }
-            HarnessConnector* c = connOf(conn);
-            if (!c) {
-                issue(kConnections, row, QStringLiteral("%1 connector \"%2\" is not on the Connectors sheet")
-                                             .arg(QLatin1String(which), conn));
-                return false;
+            auto end = [&](const Place& p, int i, QString& conn, int& pin) {
+                if (p.isLead) {
+                    conn = harnessOpenEndpointKey();
+                    pin = 0;
+                    if (!braid) w.color = p.lead;
+                } else {
+                    conn = idOf[size_t(p.row)];
+                    pin = p.pins[size_t(i) % p.pins.size()];
+                }
+            };
+            end(a, ai, w.fromConn, w.fromPin);
+            if (b) {
+                end(*b, bi, w.toConn, w.toPin);
+            } else {
+                w.toConn = harnessOpenEndpointKey();
+                w.toPin = 0;
             }
-            outConn = c->id;
-            outPin = pinOf(*c, pin);
-            if (outPin <= 0)
-                issue(kConnections, row, QStringLiteral("%1 pin \"%2\" of %3 cannot be read - left unlanded")
-                                             .arg(QLatin1String(which), pin, c->designator));
-            highest[c->id] = std::max(highest.value(c->id), outPin);
-            return true;
-        };
-        if (!end(dc.from, dc.fromPin, w.fromConn, w.fromPin, "From") || !end(dc.to, dc.toPin, w.toConn, w.toPin, "To"))
-            continue;
-        if (!dc.gauge.trimmed().isEmpty()) {
-            const QString g = gaugeCode(dc.gauge);
-            if (g.isEmpty()) issue(kConnections, row, QStringLiteral("Gauge \"%1\" is not a size - 0.5 used").arg(dc.gauge));
-            else w.gauge = g;
-        }
-        if (!dc.color.trimmed().isEmpty()) {
-            const QString code = colourCode(dc.color);
-            if (code.isEmpty()) issue(kConnections, row, QStringLiteral("Colour \"%1\" is not known - White used").arg(dc.color));
-            else w.color = code;
-        }
-        const QString type = dc.type.trimmed().toLower();
-        if (type.startsWith(QLatin1String("coax"))) {
-            // A COAX IS TWO ROWS of one bundle: the signal as written, and its braid between the two shield pins.
-            w.kind = QStringLiteral("coax");
-            w.bundle = QStringLiteral("COAX%1").arg(++coaxCount);
-            HarnessWire braid = w;
-            braid.id = w.id + QStringLiteral("s");
-            braid.color = QStringLiteral("SHIELD");
-            braid.label.clear();
-            braid.twistGroup.clear();
-            if (const HarnessConnector* c = harnessConnById(def, w.fromConn))
-                braid.fromPin = pinOf(*c, dc.coaxShieldFromPin);
-            if (const HarnessConnector* c = harnessConnById(def, w.toConn)) braid.toPin = pinOf(*c, dc.coaxShieldToPin);
-            if ((harnessConnById(def, w.fromConn) && braid.fromPin <= 0) ||
-                (harnessConnById(def, w.toConn) && braid.toPin <= 0))
-                issue(kConnections, row, QStringLiteral("Coax %1: say which pins its braid lands on (Coax shield from / to "
-                                                        "pin)").arg(dc.signal.isEmpty() ? w.bundle : dc.signal));
-            highest[braid.fromConn] = std::max(highest.value(braid.fromConn), braid.fromPin);
-            highest[braid.toConn] = std::max(highest.value(braid.toConn), braid.toPin);
             def.wires.push_back(w);
-            def.wires.push_back(braid);
+        };
+        const Place& first = places.front();
+        if (places.size() == 1) {
+            if (!first.isLead)
+                issue(cable.connectors[size_t(first.row)].sheetRow,
+                      QStringLiteral("%1 lands only on %2 - drawn as a flying lead")
+                          .arg(sig.name, firstLine(cable.connectors[size_t(first.row)].name)));
+            const int n = std::max<int>(1, int(first.pins.size()));
+            for (int i = 0; i < n; ++i) make(first, i, nullptr, 0);
             continue;
         }
-        if (!type.isEmpty() && type != QLatin1String("wire"))
-            issue(kConnections, row, QStringLiteral("Type \"%1\" is not Wire or Coax - taken as a wire").arg(dc.type));
-        def.wires.push_back(w);
-    }
-    // A CONNECTOR WITH NO PIN COUNT has as many as its wires reach; one with fewer than they reach is told so.
-    for (size_t i = 0; i < def.connectors.size(); ++i) {
-        HarnessConnector& c = def.connectors[i];
-        const int used = highest.value(c.id);
-        if (c.pinCount <= 0) {
-            c.pinCount = std::max(1, used);
-        } else if (used > c.pinCount) {
-            issue(kConnectors, 0, QStringLiteral("%1 has %2 pins but a wire goes to pin %3 - given %3")
-                                      .arg(c.designator).arg(c.pinCount).arg(used));
-            c.pinCount = used;
+        for (size_t o = 1; o < places.size(); ++o) {
+            const Place& other = places[o];
+            const int n = std::max(std::max<int>(1, int(first.pins.size())), std::max<int>(1, int(other.pins.size())));
+            for (int i = 0; i < n; ++i) make(first, i, &other, i);
         }
     }
-    // THE OVERALL SHIELDS' DRAINS, now that the pins are known.
-    for (size_t i = 0; i < d.connectors.size(); ++i) {
-        const DemandConnector& dc = d.connectors[i];
-        HarnessConnector* c = connOf(dc.designator);
-        if (!c || c->id != rowId[i]) continue;
-        const QString to = dc.drainTo.trimmed().toLower();
-        if (!dc.overallShield) {
-            if (!to.isEmpty() && to != QLatin1String("none"))
-                issue(kConnectors, int(i) + 2, QStringLiteral("%1 has a shield drain but no overall shield").arg(c->designator));
-            continue;
-        }
-        if (to == QLatin1String("body")) {
-            c->drainTo = QStringLiteral("body");
-        } else if (to == QLatin1String("pin")) {
-            const int pin = pinOf(*c, dc.drainPin);
-            if (pin > 0) c->drainTo = QStringLiteral("pin:%1:%2").arg(c->id).arg(pin);
-            else issue(kConnectors, int(i) + 2, QStringLiteral("%1: the drain pin \"%2\" cannot be read").arg(c->designator, dc.drainPin));
-        }
-    }
-    harnessSyncDrains(def);
-    // THE GROUPS: a shielded group's drain is a wire from the pin named to the group's screen.
-    QSet<QString> twistNames, shieldNames;
-    for (const HarnessWire& w : def.wires) {
-        if (!w.twistGroup.isEmpty()) twistNames.insert(w.twistGroup.toUpper());
-        if (!w.shieldGroup.isEmpty()) shieldNames.insert(w.shieldGroup.toUpper());
-    }
-    for (size_t i = 0; i < d.groups.size(); ++i) {
-        const DemandGroup& g = d.groups[i];
-        const int row = int(i) + 2;
-        const QString name = g.name.trimmed();
-        if (name.isEmpty()) continue;
-        const bool shielded = g.kind.trimmed().toLower().startsWith(QLatin1String("shield"));
-        if (!twistNames.contains(name.toUpper()) && !shieldNames.contains(name.toUpper())) {
-            issue(kGroups, row, QStringLiteral("Group %1 is named by no connection").arg(name));
-            continue;
-        }
-        if (g.drainConnector.trimmed().isEmpty()) continue;
-        if (!shielded || !shieldNames.contains(name.toUpper())) {
-            issue(kGroups, row, QStringLiteral("Group %1 has a drain but is not a shield group").arg(name));
-            continue;
-        }
-        HarnessConnector* c = connOf(g.drainConnector);
-        if (!c) {
-            issue(kGroups, row, QStringLiteral("Drain connector \"%1\" is not on the Connectors sheet").arg(g.drainConnector));
-            continue;
-        }
-        QString group = name;   // as the wires spell it
-        for (const HarnessWire& w : def.wires)
-            if (w.shieldGroup.compare(name, Qt::CaseInsensitive) == 0) group = w.shieldGroup;
-        HarnessWire drain;
-        drain.id = QStringLiteral("g%1").arg(i + 1);
-        drain.fromConn = c->id;
-        drain.fromPin = pinOf(*c, g.drainPin);
-        drain.toConn = harnessInternalShieldKey(group);
-        drain.toPin = 0;
-        drain.color = QStringLiteral("DRAIN");
-        if (drain.fromPin <= 0)
-            issue(kGroups, row, QStringLiteral("Group %1: the drain pin \"%2\" cannot be read").arg(name, g.drainPin));
-        def.wires.push_back(drain);
-    }
+    for (const auto& [id, count] : coaxColumns)
+        if (count != 2)
+            issue(0, QStringLiteral("Coax %1 has %2 column(s): a coax is its signal and its braid").arg(groupName[id]).arg(count));
     // AND WHAT THE BUILDER ITSELF WOULD SAY of it: a pin carrying two wires, a twist of one wire, and the rest.
-    for (const HarnessIssue& h : validateHarness(def)) issue(QString(), 0, h.message);
+    for (const HarnessIssue& h : validateHarness(def)) issue(0, h.message);
     return def;
 }
 
-HarnessDemand harnessDemandFromDef(const HarnessDef& def) {
-    HarnessDemand d;
-    auto nameOf = [&](const QString& id) {
-        const HarnessConnector* c = harnessConnById(def, id);
-        return c ? c->designator : QString();
-    };
-    auto pinName = [&](const QString& id, int pin) {
-        const HarnessConnector* c = harnessConnById(def, id);
-        return c && pin > 0 ? harnessPinLabel(*c, pin) : QString();
-    };
-    // On each end in its order.
+DemandCable harnessDemandFromDef(const HarnessDef& def, const QString& name) {
+    DemandCable cable;
+    cable.name = name;
+    // The connectors: the left end first, then the right, each in its order.
     std::vector<const HarnessConnector*> conns;
     for (const HarnessConnector& c : def.connectors) conns.push_back(&c);
     std::stable_sort(conns.begin(), conns.end(), [](const HarnessConnector* a, const HarnessConnector* b) {
         return a->side != b->side ? a->side == HarnessSide::Left : a->order < b->order;
     });
+    QHash<QString, int> rowOf;
     for (const HarnessConnector* c : conns) {
+        rowOf.insert(c->id, int(cable.connectors.size()));
         DemandConnector dc;
-        dc.designator = c->designator;
-        dc.end = c->side == HarnessSide::Left ? QStringLiteral("A") : QStringLiteral("B");
-        dc.matingPart = c->partNumber;
-        dc.pins = c->pinCount;
-        dc.pinNames = c->annotation == QLatin1String("letters") ? QStringLiteral("Letters") : QStringLiteral("Numbers");
-        dc.overallShield = c->side == HarnessSide::Left ? c->shieldLeft : c->shieldRight;
-        if (dc.overallShield) {
-            if (c->drainTo == QLatin1String("body")) {
-                dc.drainTo = QStringLiteral("Body");
-            } else if (c->drainTo.startsWith(QLatin1String("pin:"))) {
-                dc.drainTo = QStringLiteral("Pin");
-                const QStringList parts = c->drainTo.split(QLatin1Char(':'));
-                if (parts.size() == 3) dc.drainPin = pinName(parts[1], parts[2].toInt());
-            } else {
-                dc.drainTo = QStringLiteral("None");
-            }
-        }
-        d.connectors.push_back(dc);
+        dc.name = c->designator;
+        dc.type = c->partNumber;
+        dc.maxPins = c->pinCount;
+        cable.connectors.push_back(dc);
     }
-    // The connections: a coax's two rows as one, the drains made by the connectors left to them.
-    QSet<QString> done;
-    std::map<QString, QString> groupDrain;   // shield group -> "connector id|pin"
-    for (const HarnessWire& w : def.wires) {
-        if (harnessIsDrainRow(w)) continue;
-        if (harnessIsShieldEndpoint(w.toConn) || harnessIsShieldEndpoint(w.fromConn)) {
-            const bool toShield = harnessIsShieldEndpoint(w.toConn);
-            const QString group = harnessShieldEndpointGroup(toShield ? w.toConn : w.fromConn);
-            if (!group.isEmpty())
-                groupDrain[group] = (toShield ? w.fromConn : w.toConn) + QLatin1Char('|') +
-                                    QString::number(toShield ? w.fromPin : w.toPin);
+    // The signals, a column a wire: the members of a group side by side, a coax's signal before its braid.
+    std::vector<const HarnessWire*> wires;
+    for (const HarnessWire& w : def.wires)
+        if (!harnessIsDrainRow(w) && !harnessIsShieldEndpoint(w.fromConn) && !harnessIsShieldEndpoint(w.toConn))
+            wires.push_back(&w);
+    auto groupKey = [](const HarnessWire* w) {
+        if (harnessIsCoaxKind(w->kind)) return QStringLiteral("C:") + w->bundle;
+        if (!w->twistGroup.isEmpty()) return QStringLiteral("T:") + w->twistGroup + QLatin1Char('/') + w->shieldGroup;
+        if (!w->shieldGroup.isEmpty()) return QStringLiteral("S:") + w->shieldGroup;
+        return QString();
+    };
+    auto isBraid = [](const HarnessWire* w) {
+        return harnessIsCoaxKind(w->kind) && w->color.startsWith(QLatin1String("SHIELD"));
+    };
+    std::vector<const HarnessWire*> ordered;
+    QSet<const HarnessWire*> taken;
+    for (const HarnessWire* w : wires) {
+        if (taken.contains(w)) continue;
+        const QString g = groupKey(w);
+        if (g.isEmpty()) {
+            ordered.push_back(w);
+            taken.insert(w);
             continue;
         }
-        if (harnessIsCoaxKind(w.kind) && w.color.startsWith(QLatin1String("SHIELD"))) continue;   // with its signal
-        if (done.contains(w.id)) continue;
-        DemandConnection c;
-        c.from = harnessIsOpenEndpoint(w.fromConn) ? QString() : nameOf(w.fromConn);
-        c.fromPin = pinName(w.fromConn, w.fromPin);
-        c.to = harnessIsOpenEndpoint(w.toConn) ? QString() : nameOf(w.toConn);
-        c.toPin = pinName(w.toConn, w.toPin);
-        c.signal = w.label;
-        c.type = harnessIsCoaxKind(w.kind) ? QStringLiteral("Coax") : QStringLiteral("Wire");
-        c.twistGroup = w.twistGroup;
-        c.shieldGroup = w.shieldGroup;
-        c.gauge = w.gauge;
-        c.color = w.color;
-        if (harnessIsCoaxKind(w.kind))
-            for (const HarnessWire& o : def.wires)
-                if (o.bundle == w.bundle && harnessIsCoaxKind(o.kind) && o.color.startsWith(QLatin1String("SHIELD"))) {
-                    c.coaxShieldFromPin = pinName(o.fromConn, o.fromPin);
-                    c.coaxShieldToPin = pinName(o.toConn, o.toPin);
-                    break;
+        for (const bool braids : {false, true})
+            for (const HarnessWire* o : wires)
+                if (!taken.contains(o) && groupKey(o) == g && isBraid(o) == braids) {
+                    ordered.push_back(o);
+                    taken.insert(o);
                 }
-        d.connections.push_back(c);
     }
-    // The groups: each twisted and shielded one named, with a shield's drain.
-    QStringList twisted, shielded;
-    for (const HarnessWire& w : def.wires) {
-        if (!w.twistGroup.isEmpty() && !twisted.contains(w.twistGroup)) twisted << w.twistGroup;
-        if (!w.shieldGroup.isEmpty() && !shielded.contains(w.shieldGroup)) shielded << w.shieldGroup;
-    }
-    for (const QString& g : twisted) d.groups.push_back({g, QStringLiteral("Twisted"), {}, {}, {}});
-    for (const QString& g : shielded) {
-        DemandGroup group{g, QStringLiteral("Shielded"), {}, {}, {}};
-        if (const auto it = groupDrain.find(g); it != groupDrain.end()) {
-            const QStringList parts = it->second.split(QLatin1Char('|'));
-            group.drainConnector = nameOf(parts.value(0));
-            group.drainPin = pinName(parts.value(0), parts.value(1).toInt());
+    QHash<QString, int> groupIds;
+    for (const HarnessWire* w : ordered) {
+        DemandSignal sig;
+        sig.name = !w->label.isEmpty() ? w->label : isBraid(w) ? QStringLiteral("SHIELD") : w->id;
+        const QString g = groupKey(w);
+        if (!g.isEmpty()) {
+            sig.group = g.startsWith(QLatin1String("C:")) ? QStringLiteral("Coax")
+                        : g.startsWith(QLatin1String("S:")) ? QStringLiteral("Shield")
+                        : w->shieldGroup.isEmpty()          ? QStringLiteral("Twist")
+                                                            : QStringLiteral("Shield+Twist");
+            if (!groupIds.contains(g)) groupIds.insert(g, int(groupIds.size()) + 1);
+            sig.groupId = groupIds.value(g);
         }
-        d.groups.push_back(group);
+        const int k = int(cable.signalColumns.size());
+        cable.signalColumns.push_back(sig);
+        for (DemandConnector& dc : cable.connectors) dc.cells << QString();
+        auto mark = [&](const QString& conn, int pin) {
+            if (!rowOf.contains(conn) || pin <= 0) return;
+            const HarnessConnector* c = harnessConnById(def, conn);
+            QString& cell = cable.connectors[size_t(rowOf.value(conn))].cells[k];
+            const QString p = c ? harnessPinLabel(*c, pin) : QString::number(pin);
+            cell = cell.isEmpty() ? p : cell + QLatin1Char(',') + p;
+        };
+        mark(w->fromConn, w->fromPin);
+        mark(w->toConn, w->toPin);
+        // A flying lead's end is its colour, on a row of its own when it has no connector to sit on.
+        if (harnessIsOpenEndpoint(w->toConn) || harnessIsOpenEndpoint(w->fromConn)) {
+            int leads = -1;
+            for (size_t r = 0; r < cable.connectors.size(); ++r)
+                if (cable.connectors[r].name == QLatin1String("Leads")) leads = int(r);
+            if (leads < 0) {
+                DemandConnector dc;
+                dc.name = QStringLiteral("Leads");
+                for (int i = 0; i <= k; ++i) dc.cells << QString();
+                cable.connectors.push_back(dc);
+                leads = int(cable.connectors.size()) - 1;
+            }
+            cable.connectors[size_t(leads)].cells[k] = wireColorName(w->color);
+        }
     }
-    return d;
+    return cable;
 }
 
 // ---- The demand on paper ----------------------------------------------------------------------------------------
 
 bool writeHarnessDemandPdf(const HarnessDemand& d, const QString& path, QString* error) {
-    std::vector<DemandIssue> issues;
-    const HarnessDef def = harnessDefFromDemand(d, &issues);
     QPdfWriter pdf(path);
     pdf.setPageSize(QPageSize(QPageSize::A3));
     pdf.setPageOrientation(QPageLayout::Landscape);
     pdf.setPageMargins(QMarginsF(12, 12, 12, 12), QPageLayout::Millimeter);
     pdf.setResolution(150);
-    pdf.setTitle(QStringLiteral("Harness demand - %1").arg(d.info.harnessName));
+    pdf.setTitle(QStringLiteral("Harness demand - %1").arg(d.info.project));
     QPainter p;
     if (!p.begin(&pdf)) {
         if (error) *error = QStringLiteral("cannot write %1").arg(path);
@@ -990,64 +967,143 @@ bool writeHarnessDemandPdf(const HarnessDemand& d, const QString& path, QString*
     }
     const QRectF page(QPointF(0, 0), QSizeF(pdf.width(), pdf.height()));
     const double mm = pdf.resolution() / 25.4;
-    const QColor ink(20, 30, 45), rule(150, 165, 185), head(47, 93, 138);
-
-    // THE TITLE AND THE DETAILS, across the top.
+    const QColor ink(20, 30, 45), rule(60, 60, 60), green(198, 239, 206), blue(155, 194, 230), light(221, 235, 247);
     QFont title(QStringLiteral("Arial"));
     title.setPixelSize(int(7 * mm));
     title.setBold(true);
-    p.setFont(title);
-    p.setPen(ink);
-    const QString heading = d.info.harnessName.isEmpty() ? QStringLiteral("Harness demand")
-                                                         : QStringLiteral("Harness demand - %1").arg(d.info.harnessName);
-    p.drawText(QRectF(page.left(), page.top(), page.width(), 10 * mm), Qt::AlignLeft | Qt::AlignVCenter, heading);
     QFont small(QStringLiteral("Arial"));
-    small.setPixelSize(int(3.2 * mm));
-    p.setFont(small);
-    const QStringList details{
-        QStringLiteral("Customer: %1").arg(d.info.customer), QStringLiteral("Project: %1").arg(d.info.project),
-        QStringLiteral("Harness P/N: %1").arg(d.info.partNumber), QStringLiteral("Revision: %1").arg(d.info.revision),
-        QStringLiteral("Date: %1").arg(d.info.date),
-        QStringLiteral("Contact: %1 %2").arg(d.info.contact, d.info.email).trimmed()};
-    const double detailTop = page.top() + 11 * mm;
-    for (int i = 0; i < details.size(); ++i)
-        p.drawText(QRectF(page.left() + (i % 3) * page.width() / 3.0, detailTop + (i / 3) * 5 * mm, page.width() / 3.0,
-                          5 * mm),
-                   Qt::AlignLeft | Qt::AlignVCenter, details[i]);
-    double top = detailTop + 11 * mm;
-    if (!d.info.notes.isEmpty()) {
-        const QRectF notes(page.left(), top, page.width(), 10 * mm);
-        p.drawText(notes, Qt::AlignLeft | Qt::TextWordWrap, QStringLiteral("Notes: %1").arg(d.info.notes));
-        top += 10 * mm;
-    }
-    p.setPen(QPen(rule, 0.3 * mm));
-    p.drawLine(QPointF(page.left(), top), QPointF(page.right(), top));
-    top += 3 * mm;
+    small.setPixelSize(int(2.8 * mm));
+    QFont bold = small;
+    bold.setBold(true);
+    std::vector<DemandCable> cables = d.cables;
+    if (cables.empty()) cables.push_back(DemandCable{});
+    for (size_t pageNo = 0; pageNo < cables.size(); ++pageNo) {
+        const DemandCable& cable = cables[pageNo];
+        if (pageNo > 0) pdf.newPage();
+        std::vector<DemandIssue> issues;
+        const HarnessDef def = harnessDefFromDemand(cable, &issues);
+        // THE TITLE AND THE DETAILS.
+        p.setFont(title);
+        p.setPen(ink);
+        QString heading = cable.name.isEmpty() ? QStringLiteral("Harness demand") : cable.name;
+        if (!cable.function.isEmpty()) heading += QStringLiteral(" - ") + cable.function;
+        p.drawText(QRectF(page.left(), page.top(), page.width(), 10 * mm), Qt::AlignLeft | Qt::AlignVCenter, heading);
+        p.setFont(small);
+        const QStringList details{QStringLiteral("Customer: %1").arg(d.info.customer),
+                                  QStringLiteral("Project: %1").arg(d.info.project),
+                                  QStringLiteral("Harness P/N: %1").arg(d.info.partNumber),
+                                  QStringLiteral("Revision: %1").arg(d.info.revision),
+                                  QStringLiteral("Date: %1").arg(d.info.date),
+                                  QStringLiteral("Contact: %1 %2").arg(d.info.contact, d.info.email).trimmed()};
+        const double detailTop = page.top() + 11 * mm;
+        for (int i = 0; i < details.size(); ++i)
+            p.drawText(QRectF(page.left() + (i % 3) * page.width() / 3.0, detailTop + (i / 3) * 4.5 * mm,
+                              page.width() / 3.0, 4.5 * mm),
+                       Qt::AlignLeft | Qt::AlignVCenter, details[i]);
+        double top = detailTop + 10 * mm;
+        p.setPen(QPen(rule, 0.3 * mm));
+        p.drawLine(QPointF(page.left(), top), QPointF(page.right(), top));
+        top += 2 * mm;
 
-    // THE HARNESS AS THE BUILDER DRAWS IT, in the left part of the page.
-    const double tableWidth = page.width() * 0.36;
-    const QRectF drawingArea(page.left(), top, page.width() - tableWidth - 6 * mm, page.bottom() - top);
-    {
+        // THE PINOUT TABLE at the bottom, as the customer wrote it.
+        const int nSig = int(cable.signalColumns.size());
+        const double rowH = 8 * mm;   // two lines of a cell
+        const int issueLines = issues.empty() ? 0 : std::min<int>(6, int(issues.size()) + 1);
+        const double tableH = rowH * (2 + std::max<int>(1, int(cable.connectors.size())));
+        const double tableTop = page.bottom() - tableH - rowH * issueLines;
+        {
+            const double fixedW[] = {28 * mm, 50 * mm, 14 * mm, 14 * mm};   // name, type, pins, length
+            const double fixed = fixedW[0] + fixedW[1] + fixedW[2] + fixedW[3];
+            const double sigW = nSig > 0 ? std::min(22 * mm, (page.width() - fixed - 30 * mm) / nSig) : 0.0;
+            const double matingW = std::max(20 * mm, page.width() - fixed - sigW * nSig);
+            auto box = [&](const QRectF& r, const QString& text, const QColor& fill, bool strong, bool red = false) {
+                if (fill.isValid()) p.fillRect(r, fill);
+                p.setPen(QPen(rule, 0.2 * mm));
+                p.drawRect(r);
+                p.setFont(strong ? bold : small);
+                p.setPen(red ? QColor(220, 0, 0) : ink);
+                p.drawText(r.adjusted(0.6 * mm, 0, -0.6 * mm, 0), Qt::AlignCenter | Qt::TextWordWrap, text);
+            };
+            double y = tableTop;
+            double x = page.left() + fixed;
+            for (int k = 0; k < nSig; ++k) {   // the group row
+                const DemandSignal& s = cable.signalColumns[size_t(k)];
+                if (s.group.isEmpty()) {
+                    x += sigW;
+                    continue;
+                }
+                int end = k;
+                while (end + 1 < nSig && cable.signalColumns[size_t(end + 1)].groupId == s.groupId) ++end;
+                box(QRectF(x, y, sigW * (end - k + 1), rowH), s.group, blue, true, s.group != QLatin1String("Twist"));
+                x += sigW * (end - k + 1);
+                k = end;
+            }
+            y += rowH;
+            x = page.left();
+            const QStringList fixedHeads{QStringLiteral("Connector Name"), QStringLiteral("Connector type"),
+                                         QStringLiteral("Max pins"), QStringLiteral("Length")};
+            for (int c = 0; c < 4; ++c) {
+                box(QRectF(x, y, fixedW[c], rowH), fixedHeads[c], green, true);
+                x += fixedW[c];
+            }
+            for (const DemandSignal& s : cable.signalColumns) {
+                box(QRectF(x, y, sigW, rowH), s.name, light, true);
+                x += sigW;
+            }
+            box(QRectF(x, y, matingW, rowH), kMating, green, true);
+            y += rowH;
+            for (const DemandConnector& dc : cable.connectors) {
+                x = page.left();
+                const QStringList fixedCells{dc.name.simplified(), dc.type.simplified(),
+                                             dc.maxPins > 0 ? QString::number(dc.maxPins) : QStringLiteral("N/A"), dc.length};
+                for (int c = 0; c < 4; ++c) {
+                    box(QRectF(x, y, fixedW[c], rowH), fixedCells[c], QColor(), c == 0);
+                    x += fixedW[c];
+                }
+                for (int k = 0; k < nSig; ++k) {
+                    box(QRectF(x, y, sigW, rowH), k < dc.cells.size() ? dc.cells[k].simplified() : QString(), QColor(), false);
+                    x += sigW;
+                }
+                box(QRectF(x, y, matingW, rowH), dc.mating.simplified(), QColor(), false);
+                y += rowH;
+            }
+            // What could not be taken as written.
+            if (!issues.empty()) {
+                p.setFont(bold);
+                p.setPen(QColor(170, 60, 30));
+                p.drawText(QRectF(page.left(), y, page.width(), rowH), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("To check:"));
+                y += rowH;
+                p.setFont(small);
+                for (size_t i = 0; i < issues.size() && i < 5; ++i) {
+                    const QString at = issues[i].row > 0 ? QStringLiteral("row %1: ").arg(issues[i].row) : QString();
+                    p.drawText(QRectF(page.left(), y, page.width(), rowH), Qt::AlignLeft | Qt::AlignVCenter, at + issues[i].text);
+                    y += rowH;
+                }
+            }
+        }
+
+        // THE HARNESS AS THE BUILDER DRAWS IT, between the details and the table.
+        const QRectF drawingArea(page.left(), top, page.width(), tableTop - top - 4 * mm);
         HarnessBuild build = buildHarness(def);
         Document doc;
         doc.entities().clear();
         int n = 0;
-        Bounds box;
+        Bounds bounds;
         for (Entity& e : build.entities) {
             e.id = QStringLiteral("demand%1").arg(++n);
             const Bounds b = e.bounds();
             if (b.valid) {
-                box.expand(b.min);
-                box.expand(b.max);
+                bounds.expand(b.min);
+                bounds.expand(b.max);
             }
             doc.entities().push_back(e);
         }
-        if (box.valid && box.max.x > box.min.x && box.max.y > box.min.y) {
-            const double scale = std::min(drawingArea.width() / (box.max.x - box.min.x),
-                                          drawingArea.height() / (box.max.y - box.min.y)) * 0.94;
+        if (bounds.valid && bounds.max.x > bounds.min.x && bounds.max.y > bounds.min.y && drawingArea.height() > 10 * mm) {
+            const double scale = std::min(drawingArea.width() / (bounds.max.x - bounds.min.x),
+                                          drawingArea.height() / (bounds.max.y - bounds.min.y)) * 0.94;
             ViewTransform vt;
             vt.view.scale = scale;
-            const Vec2 mid = (box.min + box.max) * 0.5;
+            const Vec2 mid = (bounds.min + bounds.max) * 0.5;
             vt.view.x = drawingArea.center().x() - mid.x * scale;
             vt.view.y = drawingArea.center().y() + mid.y * scale;
             p.save();
@@ -1055,97 +1111,6 @@ bool writeHarnessDemandPdf(const HarnessDemand& d, const QString& path, QString*
             p.setRenderHint(QPainter::Antialiasing, true);
             for (const Entity& e : doc.entities()) EntityRenderer::draw(p, e, doc, vt, ink);
             p.restore();
-        }
-    }
-
-    // EACH CONNECTOR'S PINOUT, down the right: pin, signal, where it goes and what it is part of.
-    {
-        double y = top;
-        const double x = page.right() - tableWidth;
-        const double rowH = 4.6 * mm;
-        const double cols[] = {0.12, 0.30, 0.30, 0.28};   // pin, signal, to, group / type
-        QFont bold = small;
-        bold.setBold(true);
-        auto cell = [&](double& cx, int c, const QString& text, bool header) {
-            const QRectF r(cx, y, tableWidth * cols[c], rowH);
-            if (header) p.fillRect(r, head);
-            p.setPen(QPen(rule, 0.2 * mm));
-            p.drawRect(r);
-            p.setPen(header ? Qt::white : ink);
-            p.drawText(r.adjusted(1 * mm, 0, -1 * mm, 0), Qt::AlignLeft | Qt::AlignVCenter,
-                       p.fontMetrics().elidedText(text, Qt::ElideRight, int(r.width() - 2 * mm)));
-            cx += r.width();
-        };
-        for (const HarnessConnector& c : def.connectors) {
-            if (y + 3 * rowH > page.bottom()) break;
-            p.setFont(bold);
-            p.setPen(ink);
-            QString name = c.designator;
-            for (const DemandConnector& dc : d.connectors)
-                if (dc.designator.compare(c.designator, Qt::CaseInsensitive) == 0 && !dc.description.isEmpty())
-                    name += QStringLiteral(" - ") + dc.description;
-            p.drawText(QRectF(x, y, tableWidth, rowH), Qt::AlignLeft | Qt::AlignVCenter,
-                       QStringLiteral("%1   (End %2, %3 pins%4)")
-                           .arg(name, c.side == HarnessSide::Left ? QStringLiteral("A") : QStringLiteral("B"))
-                           .arg(c.pinCount)
-                           .arg(c.partNumber.isEmpty() ? QString() : QStringLiteral(", ") + c.partNumber));
-            y += rowH;
-            double cx = x;
-            cell(cx, 0, QStringLiteral("Pin"), true);
-            cell(cx, 1, QStringLiteral("Signal"), true);
-            cell(cx, 2, QStringLiteral("To"), true);
-            cell(cx, 3, QStringLiteral("Group / type"), true);
-            y += rowH;
-            p.setFont(small);
-            for (const int pin : harnessPinSequence(c)) {
-                if (y + rowH > page.bottom()) break;
-                QString signal, to, group;
-                for (const HarnessWire& w : def.wires) {
-                    const bool here = (w.fromConn == c.id && w.fromPin == pin) || (w.toConn == c.id && w.toPin == pin);
-                    if (!here) continue;
-                    const bool atFrom = w.fromConn == c.id && w.fromPin == pin;
-                    const QString otherConn = atFrom ? w.toConn : w.fromConn;
-                    const int otherPin = atFrom ? w.toPin : w.fromPin;
-                    signal = harnessIsCoaxKind(w.kind) && w.color.startsWith(QLatin1String("SHIELD"))
-                                 ? QStringLiteral("coax braid")
-                                 : (w.color == QLatin1String("DRAIN") ? QStringLiteral("drain") : w.label);
-                    if (harnessIsOpenEndpoint(otherConn)) to = QStringLiteral("flying lead");
-                    else if (harnessIsShieldEndpoint(otherConn)) to = harnessShieldEndpointLabel(def, otherConn);
-                    else if (const HarnessConnector* o = harnessConnById(def, otherConn))
-                        to = otherPin > 0 ? QStringLiteral("%1-%2").arg(o->designator, harnessPinLabel(*o, otherPin))
-                                          : o->designator;
-                    QStringList g;
-                    if (!w.twistGroup.isEmpty()) g << QStringLiteral("twist %1").arg(w.twistGroup);
-                    if (!w.shieldGroup.isEmpty()) g << QStringLiteral("shield %1").arg(w.shieldGroup);
-                    if (harnessIsCoaxKind(w.kind)) g << w.bundle;
-                    group = g.join(QStringLiteral(", "));
-                    break;
-                }
-                double rx = x;
-                cell(rx, 0, harnessPinLabel(c, pin), false);
-                cell(rx, 1, signal, false);
-                cell(rx, 2, to, false);
-                cell(rx, 3, group, false);
-                y += rowH;
-            }
-            y += rowH * 0.6;
-        }
-        // WHAT COULD NOT BE TAKEN AS WRITTEN, where there is room left for it.
-        if (!issues.empty() && y + 2 * rowH < page.bottom()) {
-            p.setFont(bold);
-            p.setPen(QColor(170, 60, 30));
-            p.drawText(QRectF(x, y, tableWidth, rowH), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("To check"));
-            y += rowH;
-            p.setFont(small);
-            for (const DemandIssue& i : issues) {
-                if (y + rowH > page.bottom()) break;
-                const QString where = i.sheet.isEmpty() ? QString()
-                                      : i.row > 0     ? QStringLiteral("%1 row %2: ").arg(i.sheet).arg(i.row)
-                                                      : i.sheet + QStringLiteral(": ");
-                p.drawText(QRectF(x, y, tableWidth, rowH), Qt::AlignLeft | Qt::AlignVCenter,
-                           p.fontMetrics().elidedText(where + i.text, Qt::ElideRight, int(tableWidth)));
-                y += rowH;
-            }
         }
     }
     p.end();

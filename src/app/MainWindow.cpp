@@ -11534,7 +11534,28 @@ void MainWindow::refreshProperties() {
     // --- Leader section: the words it carries, and the sizes it is drawn at. ---
     if (e && e->type == EntityType::Leader) {
         const QString id = e->id;
-        addHeader(QStringLiteral("Leader"));
+        // A PLAIN ARROW is a leader with no words: called what it is, and given what an arrow has - its head, and
+        // whether it points both ways.
+        const bool bareArrow = mv(QStringLiteral("text")).toString().isEmpty();
+        addHeader(bareArrow ? QStringLiteral("Arrow") : QStringLiteral("Leader"));
+        {
+            static const QVector<QPair<QString, QString>> heads = {
+                {"Closed filled", "closed"}, {"Closed blank", "blank"}, {"Open", "open"}, {"Dot", "dot"},
+                {"Architectural tick", "tick"}, {"None", "none"}};
+            QVector<ComboEntry> items;
+            for (const auto& h : heads) items.push_back({h.first, makeArrowheadIcon(h.second), h.second});
+            addIconCombo(QStringLiteral("Arrowhead"), items, mv(QStringLiteral("arrowhead")).toString("closed"),
+                         [this](const QString& d) { editor_->setSelectionMeta(QStringLiteral("arrowhead"), d); });
+        }
+        if (bareArrow)
+            addCombo(QStringLiteral("Heads"), {QStringLiteral("At the tip"), QStringLiteral("Both ends")},
+                     mv(QStringLiteral("arrowEnds")).toString() == QLatin1String("both") ? QStringLiteral("Both ends")
+                                                                                          : QStringLiteral("At the tip"),
+                     false, [this](const QString& v) {
+                         editor_->setSelectionMeta(QStringLiteral("arrowEnds"), v == QLatin1String("Both ends")
+                                                                                    ? QStringLiteral("both")
+                                                                                    : QStringLiteral("tip"));
+                     });
         // A callout's label, changed here or by double-clicking the callout itself. Both were missing:
         // the only way to correct a label was to delete the whole callout and draw another.
         {

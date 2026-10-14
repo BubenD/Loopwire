@@ -5,6 +5,7 @@
 #include "render/EntityRenderer.h"
 
 #include <QColor>
+#include <QCursor>
 #include <QImage>
 #include <QPixmap>
 #include <QPoint>
@@ -122,11 +123,13 @@ public:
 
     // ---- Display options (Options dialog) ----
     int crosshairSize() const { return crosshairPct_; }   // 1..100 (% of viewport)
-    void setCrosshairSize(int pct) { crosshairPct_ = std::clamp(pct, 1, 100); update(); }
+    void setCrosshairSize(int pct) { crosshairPct_ = std::clamp(pct, 1, 100); refreshCrosshairCursor(); update(); }
     QColor crosshairColor() const { return crosshairColor_; }
-    void setCrosshairColor(const QColor& c) { crosshairColor_ = c; update(); }
+    void setCrosshairColor(const QColor& c) { crosshairColor_ = c; refreshCrosshairCursor(); update(); }
     int pickboxSize() const { return pickboxPx_; }
-    void setPickboxSize(int px) { pickboxPx_ = std::clamp(px, 1, 30); update(); }
+    void setPickboxSize(int px) { pickboxPx_ = std::clamp(px, 1, 30); refreshCrosshairCursor(); update(); }
+    // The pointer the canvas shows: the crosshair, drawn as the system's own pointer so it moves with the mouse.
+    QCursor crosshairCursor() const;
     QColor backgroundColor() const { return bgColor_; }
     // Setting the background also re-derives the grid colors so the minor and
     // major grid lines stay visible (lighter than a dark bg, darker than a light
@@ -217,7 +220,7 @@ public:
     // the AutoCAD crosshair and restore the normal OS cursor.
     void setInlineEditing(bool on) {
         inlineEditing_ = on;
-        setCursor(on ? Qt::ArrowCursor : Qt::BlankCursor);
+        setCursor(on ? QCursor(Qt::ArrowCursor) : crosshairCursor());
         update();
     }
 
@@ -285,6 +288,12 @@ public:
     // drawing the extra ones are what makes the cursor lag behind the hand.
     void requestRepaint(bool cursorOnly = false);
     QRegion crosshairBands(const QPointF& at) const;
+    double crosshairArm() const;
+    int crosshairCursorReach() const;
+    void refreshCrosshairCursor();
+    // The crosshair pointer as last drawn, and what it was drawn for. Not saved.
+    mutable QCursor crosshairCursor_;
+    mutable QString crosshairCursorKey_;
     // The frame clock and whether one is already on its way. See requestRepaint.
     QElapsedTimer frameClock_;
     bool repaintPending_ = false;
