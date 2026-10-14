@@ -1646,6 +1646,12 @@ bool CanvasWidget::event(QEvent* e) {
             e->accept();
             return true;
         }
+        // A DIGIT IN THE MIDDLE OF A COMMAND IS A FIGURE BEING TYPED - a length, a radius - and stays here. With nothing
+        // going on, 3 and 2 are the window's: the 3D view and back.
+        if (k->key() >= Qt::Key_0 && k->key() <= Qt::Key_9 && editor_ && editor_->wantsTypedNumbers()) {
+            e->accept();
+            return true;
+        }
     }
     return QWidget::event(e);
 }

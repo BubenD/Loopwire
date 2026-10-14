@@ -42,6 +42,9 @@ class HarnessWiringPreview;
 // THE HARNESS AS THE BUILDER'S PREVIEW SHOWS IT: what Generate draws, with each wire named as its twists and screens
 // name it, so a twisted wire leaves the gap its twist is drawn in. Screens and their drains left out unless asked.
 std::vector<Entity> harnessPreviewEntities(const HarnessDef& def, bool showShields);
+struct PartsLibrary;
+// For the tests: the parts the builder offers, given rather than read from the libraries on this machine.
+void useHarnessBuilderLibraryForTest(const PartsLibrary& lib);
 
 class HarnessBuilderDialog : public QDialog {
     Q_OBJECT

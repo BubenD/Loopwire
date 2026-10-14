@@ -363,6 +363,9 @@ struct TwistFrames {
     // mostly drawn this way - the wires only get laid up where the drawing says they are twisted -
     // and the two are the same object with the same handles, so one can be made the other.
     bool straight = false;
+    // SEEN FROM THE SIDE (see sideViewStrands): the bundle is drawn as its bands, and its wires come out of it at the
+    // ends each in its own place, in the order they fan out in - not from where the weave would have them.
+    bool sideView = false;
     double lane = 0.0;           // between wires where they are spread out, centre to centre
     double laneB = 0.0;          // ...at the finish end
     double packed = 0.0;         // ...and the pitch they run at inside the bundle
@@ -605,6 +608,10 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
                   (spread == QLatin1String("left") && !startIsLeft) ||
                   spread == QLatin1String("finish");
     f.straight = pair.meta.value(QStringLiteral("twistStraight")).toBool();
+    {
+        const QString look = pair.meta.value(QStringLiteral("twistLook")).toString();
+        f.sideView = !f.straight && (f.wires >= 3 ? look != QLatin1String("woven") : look == QLatin1String("side"));
+    }
     // AND HOW MANY OF THEM CARRY ON. All of them unless the drawing says fewer; never more than there
     // are, and never none.
     f.trunk = std::clamp(pair.meta.value(QStringLiteral("twistTrunkWires")).toInt(f.wires), 1,
@@ -1029,9 +1036,12 @@ double twistOffset(const TwistFrames& f, int k, double u) {
             swing = f.packed / 2.0;
         }
     }
-    const double inRun = f.straight ? lane : f.reach * std::cos(phase);
+    // SEEN FROM THE SIDE, a wire comes out of the bundle where it fans out to, so the wires leave it side by side and
+    // straight - none crossing another on its way out, as they did leaving the weave from where it put them.
+    const double inRun = f.straight || f.sideView ? lane : f.reach * std::cos(phase);
     if (u > f.lead && u < f.len - f.leadB)
-        return !f.straight ? f.reach * std::cos(2.0 * M_PI * (u - f.lead) / f.turn + phase)
+        return f.sideView    ? lane   // seen from the side nothing of the weave is shown: each wire keeps its place
+               : !f.straight ? f.reach * std::cos(2.0 * M_PI * (u - f.lead) / f.turn + phase)
                : twin >= 0 ? centre + swing * std::cos(lanePhase(f, j, u))
                            : lane;
     // WHERE A SPREAD END PUTS IT. Laid up, the wires are spread evenly across the bundle - they are

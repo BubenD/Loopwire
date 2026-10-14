@@ -6121,6 +6121,7 @@ int run_editor_tests() {
         Editor ed;
         ed.setDocument(&d);
         ed.twistWires() = 6;
+        ed.setTwistSideView(false);   // the woven drawing: its wires travel across the bundle
         ed.setTool(ToolId::TwistedHarness);
         ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
         ed.onPointerMove({200, 0});
@@ -6217,6 +6218,7 @@ int run_editor_tests() {
             e.meta.insert("twistPitch", kTwistedPairPitch);
             e.meta.insert("twistEnds", kTwistedPairLead);
             e.meta.insert("twistSpread", spread);
+            e.meta.insert("twistLook", "woven");   // how the woven drawing spreads its ends (side view keeps each wire's place)
             return e;
         };
         auto endCount = [](const Entity& e, bool atBack) {
@@ -6306,6 +6308,7 @@ int run_editor_tests() {
             e.meta.insert("twistSpread", spread);
             e.meta.insert("twistStraight", straight);
             if (lane > 0.0) e.meta.insert("twistLane", lane);
+            e.meta.insert("twistLook", "woven");   // laid up, the woven drawing - the one whose wires cross
             return e;
         };
         // Each wire is two lines; its middle is between them. Kept in WIRE ORDER unless asked to be
@@ -6410,6 +6413,7 @@ int run_editor_tests() {
                   "wires run: saved and read back, it is still a straight run of four wires");
             // The Properties panel turns one lay into the other on the object itself.
             ed.selectById(d.entities()[0].id);
+            ed.setSelectionMeta(QStringLiteral("twistLook"), QStringLiteral("woven"));   // the woven drawing, which crosses
             ed.setSelectionMetaBool(QStringLiteral("twistStraight"), false);
             const std::vector<double> a = midsAt(d.entities()[0], 80.0);
             const std::vector<double> b = midsAt(d.entities()[0], 95.0);
@@ -6975,6 +6979,7 @@ int run_editor_tests() {
         ed.setDocument(&d);
         ed.twistWires() = 5;
         ed.setTwistSpread(QStringLiteral("left"));
+        ed.setTwistSideView(false);   // the woven drawing, whose unspread end gathers its wires
         ed.setTool(ToolId::TwistedHarnessRoute);
         ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
         ed.onPointerMove({100, 0});

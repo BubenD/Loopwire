@@ -1429,6 +1429,9 @@ public:
     QString hoveredBlock() const { return hoverBlockId_; }
     // The object under the cursor that a click would take - drawn faintly lit. Empty when none.
     QString hoveredObject() const { return hoverId_; }
+    // Whether a digit typed on the canvas now is a figure for what is going on - a tool armed, something being drawn
+    // or moved - rather than free for the window (3 and 2: the 3D view and back).
+    bool wantsTypedNumbers() const { return tool_ != ToolId::Select || drafting_ || !modifyPts_.empty(); }
     // Work out what is under the cursor now (normally done once it settles).
     void updateHover();
     void clearHover();

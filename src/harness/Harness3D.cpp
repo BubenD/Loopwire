@@ -506,13 +506,35 @@ Mesh3D solidFromDrawing(const std::vector<Vec2>& pts, const Vec2& c, const V3& A
     }
     return m;
 }
-// THE PINOUT'S FACE: the outline round everything drawn on the pinout - the shape the connector shows from the front -
-// gone round evenly in `count` points, about its own middle, and how tall it is. False when there is no pinout drawn.
+// THE PINOUT'S FACE: the largest closed outline on the pinout - the ring, the rectangle or the closed shape the pins sit
+// in, which is the shape the connector shows from the front - gone round evenly in `count` points, about its own
+// middle, and how tall it is. Only CLOSED outlines: a pinout drawing also carries the lines that call each pin out to
+// its label, and those reach well past the face; taken in, they made a big octagon of a round connector. False when
+// the pinout has no closed outline.
 bool pinoutFace(const LibraryPart& part, int count, std::vector<Vec2>& face, double& tall) {
     std::vector<Vec2> pts;
+    double largest = 0.0;
     for (const Entity& e : partDrawingEntities(part.fanout)) {
-        if (e.type == EntityType::Text || e.type == EntityType::Dimension) continue;
-        sampleInto(e, pts);
+        const bool closedPoly = (e.type == EntityType::Polyline || e.type == EntityType::Spline) &&
+                                (e.meta.value(QStringLiteral("closed")).toBool() ||
+                                 (e.points.size() >= 3 && distance(e.points.front(), e.points.back()) < 1e-6));
+        const bool closed = e.type == EntityType::Circle || e.type == EntityType::Ellipse || e.type == EntityType::Rect ||
+                            e.type == EntityType::Polygon || closedPoly;
+        if (!closed) continue;
+        std::vector<Vec2> ring;
+        sampleInto(e, ring);
+        if (ring.size() < 3) continue;
+        double area = 0.0;
+        for (size_t i = 0; i < ring.size(); ++i) {
+            const Vec2& p = ring[i];
+            const Vec2& q = ring[(i + 1) % ring.size()];
+            area += p.x * q.y - q.x * p.y;
+        }
+        area = std::abs(area) / 2.0;
+        if (area > largest) {
+            largest = area;
+            pts = ring;
+        }
     }
     if (pts.size() < 3) return false;
     // The hull round them: the outside of the face, whatever is drawn inside it (the pins, their numbers).

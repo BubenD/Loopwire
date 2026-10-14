@@ -545,6 +545,12 @@ private:
 
 
 
+// For the tests: the parts the builder offers, given rather than read from the libraries on this machine.
+void useHarnessBuilderLibraryForTest(const PartsLibrary& lib) {
+    sharedLibraryStore() = lib;
+    sharedLibraryLoaded() = true;
+}
+
 std::vector<Entity> harnessPreviewEntities(const HarnessDef& def, bool showShields) {
     std::vector<Entity> shown;
     if (!def.connectors.empty()) {
@@ -1266,8 +1272,14 @@ void HarnessBuilderDialog::reloadConnectors() {
                     // materials say the same thing.
                     if (const LibraryPart* p = sharedLibrary().byId(cc->libPart)) {
                         if (!p->mfrPn.isEmpty()) cc->partNumber = p->mfrPn;
+                        // A CONNECTOR WITH ITS PINS FITTED has no contact to order: they are its own.
+                        if (partIncludesPins(*p)) {
+                            cc->contactsIncluded = true;
+                            cc->contactLibPart.clear();
+                            cc->contactPn.clear();
+                        }
                         // And the contact it is built with, where the library ties one to it.
-                        if (const LibraryPart* contact = sharedLibrary().byId(p->contactId()); contact && cc->contactsIncluded) {
+                        else if (const LibraryPart* contact = sharedLibrary().byId(p->contactId()); contact && cc->contactsIncluded) {
                             cc->contactsIncluded = false;
                             cc->contactLibPart = contact->id;
                             cc->contactPn = contact->mfrPn;
@@ -1299,6 +1311,15 @@ void HarnessBuilderDialog::reloadConnectors() {
             const int at = c.contactsIncluded ? 0 : !c.contactLibPart.isEmpty() ? contacts->findData(c.contactLibPart) : contacts->count() - 1;
             contacts->setCurrentIndex(std::max(0, at));
             contacts->setToolTip(QStringLiteral("Are the contacts bought with the connector, or a part of their own?"));
+            // A LIBRARY CONNECTOR WITH ITS OWN PINS: they are in it and nothing else can be, so the choice is greyed.
+            const LibraryPart* connectorPart = sharedLibrary().byId(c.libPart);
+            const bool pinsFitted = connectorPart && partIncludesPins(*connectorPart);
+            if (pinsFitted) {
+                contacts->setCurrentIndex(0);
+                contacts->setEnabled(false);
+                contacts->setToolTip(QStringLiteral("%1 comes with its pins fitted - its contacts are its own")
+                                         .arg(connectorPart->title()));
+            }
             centerCombo(contacts);
             connect(contacts, &QComboBox::currentIndexChanged, this, [this, id, contacts](int i) {
                 if (syncing_ || i < 0) return;
@@ -1314,8 +1335,15 @@ void HarnessBuilderDialog::reloadConnectors() {
             connTable_->setCellWidget(row, 14, contacts);
             auto* contactPn = new QLineEdit(c.contactPn, connTable_);
             contactPn->setObjectName(QStringLiteral("harnessBuilderContactPn_") + id);
-            contactPn->setPlaceholderText(c.contactsIncluded ? QStringLiteral("in the connector") : QStringLiteral("contact P/N"));
-            contactPn->setEnabled(!c.contactsIncluded);
+            contactPn->setPlaceholderText(pinsFitted           ? QStringLiteral("pins fitted")
+                                          : c.contactsIncluded ? QStringLiteral("in the connector")
+                                                               : QStringLiteral("contact P/N"));
+            // THE CONTACT P/N IS TYPED ONLY WHERE IT IS ONE TYPED: a library contact's is the library's - shown here, greyed,
+            // so it cannot drift from the part it names - and a connector with its pins in it has none to give.
+            contactPn->setEnabled(!pinsFitted && !c.contactsIncluded && c.contactLibPart.isEmpty());
+            contactPn->setToolTip(pinsFitted ? QStringLiteral("The pins are fitted in the connector - no contact to order")
+                                  : !c.contactLibPart.isEmpty() ? QStringLiteral("The library contact's own P/N")
+                                                                : QStringLiteral("The contact's P/N, as it is ordered"));
             centerEdit(contactPn);
             connect(contactPn, &QLineEdit::editingFinished, this, [this, id, contactPn] {
                 if (syncing_) return;
@@ -1353,6 +1381,8 @@ QString HarnessBuilderDialog::addConnectorFromLibrary(const LibraryPart& part, c
     c.partNumber = part.mfrPn;
     const int pins = part.value(QStringLiteral("pins")).toInt();
     c.pinCount = std::max(1, pins > 0 ? pins : part.wayCount());
+    // ITS PINS ALREADY FITTED: there is no contact to order - the contacts are the connector's own.
+    if (partIncludesPins(part)) contact = nullptr;
     if (contact) {
         c.contactsIncluded = false;
         c.contactLibPart = contact->id;

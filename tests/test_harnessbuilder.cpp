@@ -543,6 +543,44 @@ void testPreviewTwistsFindTheirWires() {
     check(!wireIds.contains(QString()), "preview twists: no wire is left without a name");
 }
 
+// A LIBRARY CONNECTOR WITH ITS PINS FITTED has no contact to choose: both contact fields greyed. One whose contact is a
+// library part shows that part's P/N, greyed - it is the library's, not typed.
+void testFittedPinsGreyTheContacts() {
+    Document doc(QStringLiteral("fitted pins"));
+    Editor editor;
+    editor.setDocument(&doc);
+    HarnessBuilderDialog dialog(&editor);
+    dialog.resize(1400, 860);
+    dialog.show();
+    QApplication::processEvents();
+    PartsLibrary lib;
+    const QString fittedId = lib.add(PartKind::Connector).id;
+    lib.byId(fittedId)->mfrPn = QStringLiteral("HDR-6");
+    setPartIncludesPins(*lib.byId(fittedId), true);
+    const QString housingId = lib.add(PartKind::Connector).id;
+    lib.byId(housingId)->mfrPn = QStringLiteral("HSG-6");
+    const QString contactId = lib.add(PartKind::ContactPin).id;
+    lib.byId(contactId)->mfrPn = QStringLiteral("CT-1");
+    tieContactToConnector(lib, housingId, contactId);
+    useHarnessBuilderLibraryForTest(lib);
+    const QString fitted = dialog.addConnectorFromLibrary(*lib.byId(fittedId), lib.byId(contactId));
+    const QString housing = dialog.addConnectorFromLibrary(*lib.byId(housingId), lib.byId(contactId));
+    QApplication::processEvents();
+    auto* fittedChoice = dialog.findChild<QComboBox*>(QStringLiteral("harnessBuilderContacts_") + fitted);
+    auto* fittedPn = dialog.findChild<QLineEdit*>(QStringLiteral("harnessBuilderContactPn_") + fitted);
+    auto* housingChoice = dialog.findChild<QComboBox*>(QStringLiteral("harnessBuilderContacts_") + housing);
+    auto* housingPn = dialog.findChild<QLineEdit*>(QStringLiteral("harnessBuilderContactPn_") + housing);
+    std::printf("  fitted pins: contacts %d/%d, P/N %d; housing contacts %d, P/N \"%s\" %d\n",
+                fittedChoice ? int(fittedChoice->isEnabled()) : -1, fittedChoice ? fittedChoice->currentIndex() : -1,
+                fittedPn ? int(fittedPn->isEnabled()) : -1, housingChoice ? int(housingChoice->isEnabled()) : -1,
+                housingPn ? qPrintable(housingPn->text()) : "-", housingPn ? int(housingPn->isEnabled()) : -1);
+    check(fittedChoice && !fittedChoice->isEnabled() && fittedChoice->currentIndex() == 0 && fittedPn && !fittedPn->isEnabled(),
+          "fitted pins: a connector with its own pins has its contact fields greyed - its contacts are in it");
+    check(housingChoice && housingChoice->isEnabled() && housingPn && !housingPn->isEnabled() &&
+              housingPn->text() == QLatin1String("CT-1"),
+          "fitted pins: a library contact's P/N is shown, greyed - the library's, not typed");
+}
+
 int run_harnessbuilder_tests() {
     g_fail = 0;
     std::printf("harness builder tests:\n");
@@ -551,6 +589,7 @@ int run_harnessbuilder_tests() {
     testStepsRefined();
     testShieldConnectAndPinLight();
     testPreviewTwistsFindTheirWires();
+    testFittedPinsGreyTheContacts();
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

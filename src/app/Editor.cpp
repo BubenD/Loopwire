@@ -11704,6 +11704,9 @@ void Editor::finishDraw() {
         e.meta.insert(QStringLiteral("twistWidth"), kTwistedPairWidth * 1.5);
         e.meta.insert(QStringLiteral("twistPitch"), kTwistedPairPitch);
         e.meta.insert(QStringLiteral("twistEnds"), kTwistedPairLead);
+        // AND HOW IT LOOKS, as the ribbon's Look says - it was never written here, so a bundle drawn with this tool
+        // took no notice of Woven.
+        e.meta.insert(QStringLiteral("twistLook"), twistSideView_ ? QStringLiteral("side") : QStringLiteral("woven"));
         break;
     case ToolId::HeatshrinkRoute: {
         // The sleeve, along the knees that were clicked - see heatshrinkFromRoute.

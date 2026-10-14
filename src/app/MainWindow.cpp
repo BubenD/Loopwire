@@ -132,6 +132,7 @@
 #include <QFile>
 #include <QTextStream>
 #include <QSettings>
+#include <QShortcut>
 #include <QTemporaryDir>
 #include <QSignalBlocker>
 #include <QTimer>
@@ -4689,12 +4690,29 @@ void MainWindow::buildRibbon() {
         // WHAT IS LEFT PUT AWAY FIRST, then what is opened: each gives back the panels it put away before the next one
         // puts away what it does not want.
         const bool preview = ribbon_->widget(i) == view3dTabPage_, system = ribbon_->widget(i) == systemTabPage_;
+        if (!preview) last2dTab_ = i;   // where 2 goes back to from the 3D view
         if (!preview) showPreview3D(false);
         if (!system) showSystemDesign(false);
         if (preview) showPreview3D(true);
         if (system) showSystemDesign(true);
         syncUndoRedo();
     });
+    // 3 AND 2: THE 3D VIEW AND BACK. 3 opens the 3D preview; 2 goes back to the tab the drawing was being worked on in.
+    // Not while a field is being typed in - it keeps its digits - nor while the canvas is in the middle of a command,
+    // where a digit is a figure being typed (see CanvasWidget::event).
+    {
+        auto* to3d = new QShortcut(QKeySequence(Qt::Key_3), this);
+        to3d->setObjectName(QStringLiteral("shortcut3dView"));
+        connect(to3d, &QShortcut::activated, this, [this] {
+            if (view3dTabPage_ && ribbon_->currentWidget() != view3dTabPage_) ribbon_->setCurrentWidget(view3dTabPage_);
+        });
+        auto* to2d = new QShortcut(QKeySequence(Qt::Key_2), this);
+        to2d->setObjectName(QStringLiteral("shortcut2dView"));
+        connect(to2d, &QShortcut::activated, this, [this] {
+            if (!view3dTabPage_ || ribbon_->currentWidget() != view3dTabPage_) return;
+            ribbon_->setCurrentIndex(last2dTab_ >= 0 && last2dTab_ < ribbon_->count() ? last2dTab_ : 0);
+        });
+    }
     // THE CORNER'S UNDO AND REDO kept in step with the system diagram and the 3D route as they change.
     if (systemView_) connect(systemView_, &SystemDesignView::changed, this, [this] { syncUndoRedo(); systemUnbacked_ = true; });
     // RECOVERY COPIES every few minutes (two, unless the settings say otherwise).

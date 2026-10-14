@@ -1085,6 +1085,7 @@ private:
     // The 3D Preview tab: its page, its drawn buttons by icon, its route tools by tool; the middle of the window as
     // the drawing or the 3D view, and what the 3D view's panel stood in for while it is there.
     QWidget* view3dTabPage_ = nullptr;
+    int last2dTab_ = 0;   // the tab the 2 key goes back to from the 3D view. Not saved.
     QList<QPair<QString, QToolButton*>> preview3dIcons_;
     // THE 3D PREVIEW TAB'S GROUPS, each folded into one button (its name and an arrow, the group in a popup under it)
     // where the window is too narrow for all of them open - the least used first.

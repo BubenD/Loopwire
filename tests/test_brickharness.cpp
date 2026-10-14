@@ -26,6 +26,7 @@
 #include "harness/RouteGravity.h"
 #include "harness/RouteKeepOut.h"
 #include "harness/RouteLink.h"
+#include "render/CanvasWidget.h"
 #include "render/Render3D.h"
 #include "harness/BrickHarness.h"
 #include "harness/PartsLibrary.h"
@@ -77,6 +78,7 @@ bool writeTestStepAssembly(const QString& path);
 #include <QFile>
 #include <QJsonObject>
 #include <QKeyEvent>
+#include <QShortcut>
 #include <QLineEdit>
 #include <QGroupBox>
 
@@ -9823,7 +9825,15 @@ void testRoundSixtyNine() {
     face.type = EntityType::Circle;
     face.center = {0, 0};
     face.radius = 5;
-    part.fanout = partDrawingFromEntities({face});
+    // And the lines that call its pins out to their labels, reaching well past the face - which are not its outline.
+    Entity callout;
+    callout.type = EntityType::Line;
+    callout.a = {2, 2};
+    callout.b = {30, 25};
+    Entity label = callout;
+    label.a = {30, 25};
+    label.b = {45, 25};
+    part.fanout = partDrawingFromEntities({face, callout, label});
     Mesh3D round = partDrawingSolid(part, false);
     // At the middle of the housing's first stretch, how far the solid reaches up (y) and across (z), and whether a
     // point half way round between them is on a circle or out at a box's corner.
@@ -9846,6 +9856,53 @@ void testRoundSixtyNine() {
           "face build: as tall as the drawing, and as wide - the face is round");
     check(roundAt[2] < 4.0 && boxAt[2] > 4.5, "face build: round, not a box - nothing out at a corner");
     check(std::abs(stepAt[0] - 3.0) < 0.4, "face build: and it follows the drawing's contour down the step");
+}
+
+// 3 AND 2: the 3D view and back to the tab the drawing was being worked on in. A digit typed in the middle of a command
+// stays the canvas's - it is a figure being typed.
+void testRoundSeventy() {
+    MainWindow win;
+    win.show();
+    QApplication::processEvents();
+    QTabWidget* ribbon = nullptr;
+    int preview = -1, annotation = -1;
+    for (QTabWidget* t : win.findChildren<QTabWidget*>())
+        for (int i = 0; i < t->count(); ++i) {
+            if (t->tabText(i) == QLatin1String("3D Preview")) {
+                ribbon = t;
+                preview = i;
+            }
+            if (t->tabText(i) == QLatin1String("Annotation")) annotation = i;
+        }
+    auto* to3d = win.findChild<QShortcut*>(QStringLiteral("shortcut3dView"));
+    auto* to2d = win.findChild<QShortcut*>(QStringLiteral("shortcut2dView"));
+    check(ribbon && preview >= 0 && annotation >= 0 && to3d && to2d, "keys: the 3D view on 3 and back on 2");
+    if (!ribbon || !to3d || !to2d) return;
+    ribbon->setCurrentIndex(annotation);
+    QApplication::processEvents();
+    emit to3d->activated();
+    QApplication::processEvents();
+    const int on3 = ribbon->currentIndex();
+    emit to2d->activated();
+    QApplication::processEvents();
+    const int on2 = ribbon->currentIndex();
+    std::printf("  keys: from tab %d, 3 opened tab %d (the 3D view is %d), 2 came back to %d\n", annotation, on3, preview, on2);
+    check(on3 == preview, "keys: 3 opens the 3D view");
+    check(on2 == annotation, "keys: 2 goes back to the tab the drawing was being worked on in");
+    // A digit in the middle of a command is the canvas's: it is a figure.
+    auto* canvas = win.findChild<CanvasWidget*>();
+    Editor* editor = win.findChild<Editor*>();
+    if (canvas && editor) {
+        editor->setTool(ToolId::Line);
+        QKeyEvent busy(QEvent::ShortcutOverride, Qt::Key_3, Qt::NoModifier, QStringLiteral("3"));
+        QApplication::sendEvent(canvas, &busy);
+        editor->setTool(ToolId::Select);
+        QKeyEvent idle(QEvent::ShortcutOverride, Qt::Key_3, Qt::NoModifier, QStringLiteral("3"));
+        idle.ignore();
+        QApplication::sendEvent(canvas, &idle);
+        check(busy.isAccepted() && !idle.isAccepted(),
+              "keys: a digit typed while drawing is a figure for the canvas; with nothing going on it is the window's");
+    }
 }
 
 int run_brickharness_tests() {
@@ -9941,6 +9998,7 @@ int run_brickharness_tests() {
     ROUND(testRoundSixtySeven);
     ROUND(testRoundSixtyEight);
     ROUND(testRoundSixtyNine);
+    ROUND(testRoundSeventy);
 #undef ROUND
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;

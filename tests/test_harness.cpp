@@ -7742,6 +7742,30 @@ int run_harness_tests() {
               "bundle look: drawn with a pair's bands, however many wires it has");
     }
 
+    // ---- A BUNDLE'S WIRES COME OUT OF IT SIDE BY SIDE -------------------------------------------------------
+    // Seen from the side, each wire leaves the bundle in the order it fans out in: none crosses another on its way.
+    {
+        Entity run;
+        run.type = EntityType::TwistedPair;
+        run.id = QStringLiteral("out-of-the-bundle");
+        run.points = {{0.0, 0.0}, {160.0, 0.0}};
+        run.a = run.points.front();
+        run.b = run.points.back();
+        run.meta.insert(QStringLiteral("twistWires"), 5);
+        const auto edges = twistedPairStrands(run);
+        int crossings = 0;
+        for (size_t a = 0; a < edges.size(); ++a)
+            for (size_t b = a + 1; b < edges.size(); ++b) {
+                if (a / 2 == b / 2) continue;   // the two edges of one wire
+                for (size_t i = 1; i < edges[a].size(); ++i)
+                    for (size_t j = 1; j < edges[b].size(); ++j)
+                        if (segmentSegmentIntersection(edges[a][i - 1], edges[a][i], edges[b][j - 1], edges[b][j]))
+                            ++crossings;
+            }
+        std::printf("  bundle ends: %d wire(s), %d crossing(s) among them\n", int(edges.size() / 2), crossings);
+        check(edges.size() == 10 && crossings == 0, "bundle ends: the wires come out of the bundle side by side, none crossing");
+    }
+
     // ---- A SHEET OF BUNDLES DOES NOT SLOW THE CURSOR -------------------------------------------------------
     // More runs than the measurement cache once held, and a reach wide enough to take in thousands of the short
     // pieces bundles are drawn with: snapping stays a matter of milliseconds.
