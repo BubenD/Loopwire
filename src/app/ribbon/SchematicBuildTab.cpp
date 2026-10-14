@@ -1,4 +1,4 @@
-// The Schematic build ribbon tab. Split out of MainWindow.cpp so each tab is one file: the ribbon was the
+// The Harness schematic ribbon tab. Split out of MainWindow.cpp so each tab is one file: the ribbon was the
 // largest thing in that file and the place every new feature landed. Still MainWindow members, so
 // nothing about what they build or reach has changed.
 #include "app/MainWindow.h"
@@ -506,7 +506,7 @@ void MainWindow::buildSchematicBuildTab() {
         addGroup(lay, QStringLiteral("Tools"), tw);
     }
     lay->addStretch(1);
-    ribbon_->addTab(page, QStringLiteral("Schematic build"));
+    ribbon_->addTab(page, QStringLiteral("Harness schematic"));
 }
 
 } // namespace Loopwire

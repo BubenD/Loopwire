@@ -7691,7 +7691,9 @@ int run_harness_tests() {
         Entity woven = run;
         woven.meta.insert(QStringLiteral("twistLook"), QStringLiteral("woven"));
         check(twistedPairSideView(woven).empty(), "side view: one that says it is woven is woven");
-        const auto pieces = twistedPairSideView(run);
+        const auto all = twistedPairSideView(run);
+        std::vector<SideStrand> pieces, wiresIn;
+        for (const SideStrand& piece : all) (piece.wire ? wiresIn : pieces).push_back(piece);
         bool inside = true, closed = true;
         double lo = 1e9, hi = -1e9;
         int spanning = 0;
@@ -7714,6 +7716,31 @@ int run_harness_tests() {
         check(inside, "side view: and none runs past the ends of the run");
         check(spanning >= 0.8 * pieces.size(), "side view: the bands reach right across the bundle");
         check(hi > 0.5 && lo < -0.5 && std::abs(hi + lo) < 0.5, "side view: from edge to edge");
+        // THE WIRES GO INTO THE ROPE: each of the four at each end, from the end of the stretch in under a band,
+        // its end hidden - a wire's last point lies inside one of the bands.
+        auto insideBand = [&](const Vec2& p) {
+            for (const SideStrand& band : pieces) {
+                bool in = false;
+                const auto& poly = band.fill;
+                for (size_t i = 0, j = poly.size() - 1; i < poly.size(); j = i++)
+                    if ((poly[i].y > p.y) != (poly[j].y > p.y) &&
+                        p.x < (poly[j].x - poly[i].x) * (p.y - poly[i].y) / (poly[j].y - poly[i].y) + poly[i].x)
+                        in = !in;
+                if (in) return true;
+            }
+            return false;
+        };
+        int hidden = 0;
+        for (const SideStrand& w : wiresIn) {
+            if (w.lines.size() != 2 || w.lines[0].size() < 2) continue;
+            // The end inside the rope is the one further from the run's nearer end.
+            const Vec2 a = (w.lines[0].front() + w.lines[1].front()) * 0.5;
+            const Vec2 b = (w.lines[0].back() + w.lines[1].back()) * 0.5;
+            const Vec2 deep = std::min(a.x, 160.0 - a.x) > std::min(b.x, 160.0 - b.x) ? a : b;
+            if (insideBand(deep)) ++hidden;
+        }
+        std::printf("  side view: %d wire(s) into the rope, %d ending under a band\n", int(wiresIn.size()), hidden);
+        check(wiresIn.size() == 8 && hidden == 8, "side view: every wire goes into the rope at each end, under a band");
     }
 
     // ---- A TWISTED PAIR IS WOVEN; A BUNDLE IS ITS BANDS, AS A PAIR'S WOULD BE -------------------------------
@@ -7734,8 +7761,14 @@ int run_harness_tests() {
         const auto pairBands = twistedPairSideView(asked);
         check(!pairBands.empty(), "pair look: and seen from the side when it asks to be");
         // A bundle's bands are a pair's: the same, however many wires it carries.
-        const auto four = twistedPairSideView(runOf(4));
-        const auto eight = twistedPairSideView(runOf(8));
+        auto bandsOf = [](const std::vector<SideStrand>& all) {
+            std::vector<SideStrand> bands;
+            for (const SideStrand& piece : all)
+                if (!piece.wire) bands.push_back(piece);
+            return bands;
+        };
+        const auto four = bandsOf(twistedPairSideView(runOf(4)));
+        const auto eight = bandsOf(twistedPairSideView(runOf(8)));
         std::printf("  bundle look: %d band(s) for four wires, %d for eight, %d for a pair seen from the side\n",
                     int(four.size()), int(eight.size()), int(pairBands.size()));
         check(!four.empty() && four.size() == eight.size(),

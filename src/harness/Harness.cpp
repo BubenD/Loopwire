@@ -1312,12 +1312,16 @@ void frameAt(const TwistFrames& f, double u, Vec2& pos, Vec2& n) {
     n = m.lengthSq() > 1e-18 ? m.normalized() : f.n[lo];
 }
 
-// A TWISTED PAIR SEEN FROM THE SIDE: each strand a slanted band reaching right across the pair, its ends on the
-// pair's two edges and its corners rounded, a thin gap between one and the next - the way a pair is drawn.
-// `strands`: how many strands the lay is drawn with - a pair's two, for a bundle drawn the way a pair is.
-std::vector<std::vector<Vec2>> pairBandStrands(const TwistFrames& f, int strands = 0) {
-    const int lay2 = strands > 0 ? strands : f.wires;
-    std::vector<std::vector<Vec2>> out;
+// A LAID-UP RUN SEEN FROM THE SIDE: each strand a band reaching right across the bundle, its ends on the bundle's
+// two edges and its corners rounded, a thin gap between one and the next - drawn with a pair's proportions, two
+// strands across, however many wires a bundle carries. A band is the near half of a turn of the helix, so it is an
+// S: steepest in the middle of the bundle and leaning over towards its edges, where the wire goes round the back.
+// Only whole bands are drawn, set evenly in the stretch, and the wires come out of the rope from under the first
+// and the last of them. A bundle is drawn this way unless it says it is woven; a twisted pair only when it asks
+// to be (see twistCached).
+std::vector<SideStrand> sideViewStrands(const TwistFrames& f) {
+    constexpr int lay2 = 2;
+    std::vector<SideStrand> out;
     const double from = f.lead, till = f.len - f.leadB;
     if (f.straight || f.wires < 2 || f.turn <= 1e-9 || till - from <= 1e-9) return out;
     // HOW WIDE THE BUNDLE IS: as far out as any wire goes, over the laid-up stretch.
@@ -1329,19 +1333,16 @@ std::vector<std::vector<Vec2>> pairBandStrands(const TwistFrames& f, int strands
     }
     if (half <= 1e-9) half = f.reach + f.thick;
     if (half <= 1e-9) return out;
-    // A WIRE AS THICK AS ITS SHARE OF THE WIDTH: the run's width split between the strands it is drawn with - a pair's
-    // own two wires, and the same two for a bundle drawn as a pair is, whatever the number of wires in it.
+    // A STRAND AS THICK AS ITS SHARE OF THE WIDTH, and the lay that leaves exactly that between neighbours:
+    // (2H/N)^2 l^2 = d^2 (l^2/4 + 4H^2).
     const double wire = 2.0 * half / lay2;
     double lay = f.turn;
-    // Between two neighbours, square to them, for a given lay: a lay over N along, of which the strand climbs
-    // the whole width in half.
     auto roomFor = [&](double l) {
         const double a = l / 2.0;
         return (l / lay2) * (2.0 * half) / std::sqrt(a * a + 4.0 * half * half);
     };
     double hw = roomFor(lay) / 2.0;
     if (wire > 1e-9 && roomFor(lay) > wire) {
-        // The lay that leaves exactly a wire between neighbours: (2H/N)^2 l^2 = d^2 (l^2/4 + 4H^2).
         const double k = 4.0 * half * half / (lay2 * lay2) - wire * wire / 4.0;
         if (k > 1e-12) {
             lay = 2.0 * half * wire / std::sqrt(k);
@@ -1352,85 +1353,107 @@ std::vector<std::vector<Vec2>> pairBandStrands(const TwistFrames& f, int strands
     const double along = lay / 2.0;                    // how far along one strand gets crossing the bundle
     const double step = lay / lay2;                    // and how far on the next one is
     const double slope = std::sqrt(along * along + 4.0 * half * half);
-    const Vec2 dir{along / slope, 2.0 * half / slope};  // up the strand, in (u, v)
-    const Vec2 side{-dir.y, dir.x};
-    const double reachV = half - hw;                    // where the middle of a rounded end sits
-    if (reachV <= 1e-9) return out;
-    const double alongEnd = reachV * along / half;      // how far along the strand's middle line goes
-    // Clipped to the laid-up stretch: a strand that starts before it or runs on past it is cut where it ends.
-    auto clip = [](std::vector<Vec2> poly, double bound, bool keepAbove) {
-        std::vector<Vec2> kept;
-        const size_t n = poly.size();
-        for (size_t i = 0; i < n; ++i) {
-            const Vec2 a = poly[i], b = poly[(i + 1) % n];
-            const bool inA = keepAbove ? a.x >= bound : a.x <= bound;
-            const bool inB = keepAbove ? b.x >= bound : b.x <= bound;
-            if (inA) kept.push_back(a);
-            if (inA != inB && std::abs(b.x - a.x) > 1e-12) {
-                const double t = (bound - a.x) / (b.x - a.x);
-                kept.push_back(lerp(a, b, t));
-            }
-        }
-        return kept;
-    };
-    // EACH STRAND A SLANTED BAND REACHING RIGHT ACROSS THE BUNDLE: its top and bottom lie along the bundle's two
-    // edges, where the wire goes round the back out of sight, its two long sides lean the way the lay does, and
-    // all four corners are rounded - a wire seen from the side, not a box. A thin gap is left between one strand
-    // and the next, so each reads as a wire of its own.
-    const double sinLean = 2.0 * half / slope;                  // the strand against the run
+    const double sinLean = 2.0 * half / slope;                    // the strand against the run
     const double halfAlong = 0.85 * hw / std::max(1e-9, sinLean); // half its width, measured along the run
-    const double round = 0.6 * hw;                              // the corners' radius
-    (void)reachV;
-    (void)alongEnd;
-    (void)side;
-    // A corner rounded off: from a point back along the edge coming in to one along the edge going out, curving
-    // through the corner itself.
-    auto roundCorner = [&](std::vector<Vec2>& into, const Vec2& prev, const Vec2& at, const Vec2& next) {
-        const double reach = std::min(round * 1.3, 0.45 * std::min(distance(prev, at), distance(at, next)));
-        const Vec2 in = at + (prev - at).normalized() * reach;
-        const Vec2 outP = at + (next - at).normalized() * reach;
-        for (int k = 0; k <= 6; ++k) {
-            const double t = k / 6.0;
-            into.push_back(in * ((1 - t) * (1 - t)) + at * (2 * (1 - t) * t) + outP * (t * t));
-        }
-    };
-    for (double s = from - along; s < till + step; s += step) {
-        const Vec2 bl{s - along / 2.0 - halfAlong, -half}, br{s - along / 2.0 + halfAlong, -half};
-        const Vec2 tr{s + along / 2.0 + halfAlong, half}, tl{s + along / 2.0 - halfAlong, half};
-        const Vec2 corners[4] = {bl, br, tr, tl};
-        std::vector<Vec2> band;
-        for (int c = 0; c < 4; ++c) {
-            const Vec2 prev = corners[(c + 3) % 4], at = corners[c], next = corners[(c + 1) % 4];
-            roundCorner(band, prev, at, next);
-            // The long sides in pieces, so on a route that bends the strand bends with it.
-            if (c == 1 || c == 3) {
-                const Vec2 from2 = band.back();
-                const Vec2 to2 = corners[(c + 1) % 4] + (corners[c] - corners[(c + 1) % 4]).normalized() *
-                                                            std::min(round * 1.3, 0.45 * distance(at, next));
-                for (int k = 1; k < 8; ++k) band.push_back(lerp(from2, to2, k / 8.0));
-            }
-        }
-        band = clip(clip(band, from, true), till, false);
-        if (band.size() < 3) continue;
+    const double round = 0.6 * hw;                                // the corners' radius
+    const double extent = along + 2.0 * halfAlong;                // a whole band, end to end along the run
+    if (till - from < extent) return out;
+    // THE MIDDLE OF A BAND, at height v across the bundle: the helix seen from the side, v = R sin(2 pi u / lay),
+    // its radius a little beyond the bundle's edge so the strand leans over there without lying flat.
+    const double radius = 1.15 * half;
+    const double edgeTurn = std::asin(half / radius);
+    auto middleAt = [&](double v) { return (along / 2.0) * std::asin(std::clamp(v / radius, -1.0, 1.0)) / edgeTurn; };
+    // AS MANY WHOLE BANDS AS THE STRETCH HOLDS, the room left over shared between its two ends.
+    const int bands = int(std::floor((till - from - extent) / step + 1e-9)) + 1;
+    const double first = from + (till - from - extent - (bands - 1) * step) / 2.0 + extent / 2.0;
+    const double last = first + (bands - 1) * step;
+    auto toWorld = [&f](const std::vector<Vec2>& local) {
         std::vector<Vec2> world;
-        world.reserve(band.size() + 1);
-        for (const Vec2& p : band) {
+        world.reserve(local.size() + 1);
+        for (const Vec2& p : local) {
             Vec2 pos, n;
             frameAt(f, p.x, pos, n);
             world.push_back(pos + n * p.y);
         }
-        world.push_back(world.front());   // closed
-        out.push_back(std::move(world));
+        return world;
+    };
+    // THE WIRES COME OUT OF THE ROPE: each runs in from the end of the stretch at its own place across it and goes
+    // in under the first band, stopping along that band's middle so no end of it shows. Drawn first, so the band
+    // lies over it.
+    for (int k = 0; k < f.wires; ++k) {
+        const double lane = twistOffset(f, k, (from + till) / 2.0);
+        for (const bool atStart : {true, false}) {
+            const double endU = atStart ? first + middleAt(lane) : last + middleAt(lane);
+            const double a = atStart ? from : endU, b = atStart ? endU : till;
+            if (b - a <= 1e-9) continue;
+            std::vector<Vec2> top, bottom;
+            constexpr int pieces = 12;
+            for (int q = 0; q <= pieces; ++q) {
+                const double u = a + (b - a) * q / pieces;
+                top.push_back({u, lane + f.thick});
+                bottom.push_back({u, lane - f.thick});
+            }
+            SideStrand piece;
+            piece.wire = true;
+            std::vector<Vec2> ring = top;
+            ring.insert(ring.end(), bottom.rbegin(), bottom.rend());
+            piece.fill = toWorld(ring);
+            piece.lines = {toWorld(top), toWorld(bottom)};
+            out.push_back(std::move(piece));
+        }
     }
-    return out;
-}
-
-// A LAID-UP RUN SEEN FROM THE SIDE: its bands, drawn with a pair's proportions - two strands across, however many
-// wires a bundle carries - each band whole, its outline the edge of what it fills. A bundle is drawn this way unless
-// it says it is woven; a twisted pair only when it asks to be (see twistCached).
-std::vector<SideStrand> sideViewStrands(const TwistFrames& f) {
-    std::vector<SideStrand> out;
-    for (const std::vector<Vec2>& band : pairBandStrands(f, 2)) out.push_back({band, {band}});
+    // EACH BAND: its two long sides the middle moved half its width either way along the run, its top and bottom
+    // on the bundle's edges, all four corners rounded - a wire seen from the side, not a box.
+    constexpr int sides = 16;
+    for (int b = 0; b < bands; ++b) {
+        const double s = first + b * step;
+        std::vector<Vec2> ring;
+        std::vector<size_t> corners;
+        for (int q = 0; q <= sides; ++q) {   // up the left side
+            const double v = -half + 2.0 * half * q / sides;
+            if (q == 0 || q == sides) corners.push_back(ring.size());
+            ring.push_back({s + middleAt(v) - halfAlong, v});
+        }
+        for (int q = sides; q >= 0; --q) {   // and down the right
+            const double v = -half + 2.0 * half * q / sides;
+            if (q == 0 || q == sides) corners.push_back(ring.size());
+            ring.push_back({s + middleAt(v) + halfAlong, v});
+        }
+        // A corner rounded off: from a point back along the outline to one on along it, curving through the corner.
+        const size_t n = ring.size();
+        std::vector<double> arc(n + 1, 0.0);
+        for (size_t i = 0; i < n; ++i) arc[i + 1] = arc[i] + distance(ring[i], ring[(i + 1) % n]);
+        const double reach = std::min(round * 1.3, 0.45 * 2.0 * halfAlong);
+        auto pointAt = [&](double d) {   // the point at arc length d round the ring
+            d = std::fmod(d + arc[n], arc[n]);
+            const size_t i = size_t(std::upper_bound(arc.begin(), arc.end(), d) - arc.begin()) - 1;
+            const double seg = arc[std::min(i + 1, n)] - arc[i];
+            return seg > 1e-12 ? lerp(ring[i % n], ring[(i + 1) % n], (d - arc[i]) / seg) : ring[i % n];
+        };
+        auto nearCorner = [&](size_t i) {
+            for (const size_t c : corners) {
+                const double d = std::abs(arc[i] - arc[c]);
+                if (std::min(d, arc[n] - d) < reach) return true;
+            }
+            return false;
+        };
+        std::vector<Vec2> band;
+        for (size_t i = 0; i < n; ++i) {
+            if (std::find(corners.begin(), corners.end(), i) != corners.end()) {
+                const Vec2 in = pointAt(arc[i] - reach), at = ring[i], outP = pointAt(arc[i] + reach);
+                for (int k = 0; k <= 6; ++k) {
+                    const double t = k / 6.0;
+                    band.push_back(in * ((1 - t) * (1 - t)) + at * (2 * (1 - t) * t) + outP * (t * t));
+                }
+            } else if (!nearCorner(i)) {
+                band.push_back(ring[i]);
+            }
+        }
+        if (band.size() < 3) continue;
+        std::vector<Vec2> world = toWorld(band);
+        world.push_back(world.front());   // closed
+        out.push_back({world, {world}});
+    }
     return out;
 }
 

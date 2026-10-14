@@ -1118,8 +1118,8 @@ int run_drawingspace_tests() {
         QTabBar* tabs = nullptr;
         for (QTabBar* bar : win.findChildren<QTabBar*>())
             for (int i = 0; i < bar->count(); ++i)
-                if (bar->tabText(i) == QStringLiteral("Schematic build")) tabs = bar;
-        check(tabs != nullptr, "symbols: there is a Schematic build tab to place from");
+                if (bar->tabText(i) == QStringLiteral("Harness schematic")) tabs = bar;
+        check(tabs != nullptr, "symbols: there is a Harness schematic tab to place from");
 
         // Every stock schematic symbol has a button of its own, named for the symbol.
         const QStringList wanted{QStringLiteral("Resistor (box)"), QStringLiteral("Resistor (zigzag)"),

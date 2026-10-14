@@ -354,7 +354,7 @@ void MainWindow::showHarnessRibbonTabs(bool on) {
         // Note them all down FIRST, then take them out from the last one backwards. Removing as we
         // went shifted every tab after it down one, so the second one was noted at the first one's
         // index and the two came back the wrong way round.
-        for (const char* want : {"Schematic build", "Harness mechanical"}) {
+        for (const char* want : {"Harness schematic", "Harness mechanical"}) {
             const QString title = QString::fromLatin1(want);
             for (int i = 0; i < ribbon_->count(); ++i)
                 if (ribbon_->tabText(i) == title) {

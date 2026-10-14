@@ -616,8 +616,8 @@ int run_mechmodelcanvas_tests() {
                 if (ribbon->tabBar()->isTabVisible(i)) shown << ribbon->tabText(i);
         std::printf("  symbol session: tabs %s\n", qPrintable(shown.join(QStringLiteral(", "))));
         check(shown.contains(QStringLiteral("Home")) && shown.contains(QStringLiteral("Modify")) &&
-                  shown.contains(QStringLiteral("Schematic build")),
-              "symbol session: Home to draw with, Modify to change it, Schematic build for the "
+                  shown.contains(QStringLiteral("Harness schematic")),
+              "symbol session: Home to draw with, Modify to change it, Harness schematic for the "
               "schematic's own pieces");
         check(!shown.contains(QStringLiteral("Harness mechanical")) &&
                   !shown.contains(QStringLiteral("Annotation")) &&
@@ -642,7 +642,7 @@ int run_mechmodelcanvas_tests() {
             check(gaps == 0, "symbol session: the tabs that are showing sit next to one another");
         }
 
-        // A WAY TO FINISH, FROM WHATEVER TAB IS OPEN. A symbol is drawn with Modify and Schematic build as
+        // A WAY TO FINISH, FROM WHATEVER TAB IS OPEN. A symbol is drawn with Modify and Harness schematic as
         // much as with Home, and the two buttons that finish the session were on Home alone: crossing to
         // another tab to draw took them out of sight, which is a session with a way in and no way out.
         //

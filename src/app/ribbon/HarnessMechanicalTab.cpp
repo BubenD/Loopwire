@@ -91,7 +91,7 @@ constexpr QSize kSpecialCell(40, 40);
 
 // ---- HARNESS MECHANICAL ---- the physical side of the harness: the bundle and its
 //      branches drawn to shape, their lengths dimensioned, and the parts called out.
-//      (The schematic side lives on Schematic build.) ----
+//      (The schematic side lives on Harness schematic.) ----
 void MainWindow::buildHarnessMechanicalTab() {
     auto [page, lay] = makeTabPage();
     // The bundle used to have a group of its own - a double polyline for the body, a plain one for a

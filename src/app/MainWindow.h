@@ -701,7 +701,7 @@ private:
     QHash<Document*, bool> mechModelEditSchematic_;
     QWidget* mechModelSessionGroup_ = nullptr;
     // Capture and Cancel beside the tab bar: the way out of a model session, visible from every tab. They
-    // used to be on Home alone, and a symbol is drawn on Modify and Schematic build as much as on Home.
+    // used to be on Home alone, and a symbol is drawn on Modify and Harness schematic as much as on Home.
     QWidget* modelSessionCorner_ = nullptr;
     QToolButton* cornerCaptureBtn_ = nullptr;
     QToolButton* cornerCancelBtn_ = nullptr;
@@ -900,7 +900,7 @@ private:
     QVector<QAction*> allToolActions_; // every tool button instance (for theme re-tint)
     // Modify "Operations" icon buttons (key + button) for theme re-tinting.
     QVector<QPair<QString, QToolButton*>> opButtons_;
-    // Every "Match properties" button instance (Home + Schematic build): they latch
+    // Every "Match properties" button instance (Home + Harness schematic): they latch
     // together while the command is armed, so it is obvious it is waiting for clicks.
     QVector<QToolButton*> matchBtns_;
 
@@ -1016,7 +1016,7 @@ private:
     QSpinBox* twistTrunkSpin_ = nullptr;        // wires through the bundle, straight runs only
     QLabel* twistTrunkLabel_ = nullptr;
     // The Harness-mechanical groups, so placing a break can take the tab over the way the twist tool
-    // takes over Schematic build: while it is armed the tab shows the mark's own numbers and nothing
+    // takes over Harness schematic: while it is armed the tab shows the mark's own numbers and nothing
     // else, because nothing else applies until it is placed.
     QVector<QWidget*> mechGroups_;
     // The icons in the Special group, one cell each. Kept so that while one of them is being USED the

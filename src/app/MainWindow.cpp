@@ -4610,11 +4610,11 @@ void MainWindow::buildRibbon() {
     // place every new feature landed.
     // Undo and Redo live in the ribbon's top right corner: small, always there whichever tab is
     // open, and out of the way of the tools. They used to be a group of their own at the front of
-    // Home and of Schematic build - two large buttons taking the best place on the tab, and absent
+    // Home and of Harness schematic - two large buttons taking the best place on the tab, and absent
     // from every other tab.
     //
     // AND THE WAY OUT OF A MODEL SESSION GOES THERE TOO, for the same reason. Capture and Cancel were on the
-    // Home tab, in the session's own group - and a symbol is drawn with Modify and Schematic build as much as
+    // Home tab, in the session's own group - and a symbol is drawn with Modify and Harness schematic as much as
     // with Home, so the moment you crossed to another tab to draw the two buttons that FINISH what you are
     // doing went out of sight. A session you can leave only by going back to the tab you started on is a
     // session with a way in and no way out.
@@ -4763,7 +4763,7 @@ void MainWindow::updateModelRibbonTabs() {
     // What a model session puts away, and what it must not.
     //
     // A default model is one part drawn on its own, so laying out a whole harness has nothing to act
-    // on - Harness mechanical goes away for EITHER kind of model session. Schematic build is the
+    // on - Harness mechanical goes away for EITHER kind of model session. Harness schematic is the
     // opposite: it is where a schematic symbol is actually drawn (its Connector/Wire/Splice tools and
     // the Connection pin tool), so it stays for a SCHEMATIC session and only goes for a mechanical
     // one. Everything else stays. View went too, and that was wrong - zooming, panning and the layers
@@ -4771,7 +4771,7 @@ void MainWindow::updateModelRibbonTabs() {
     // you cannot draw in. Import stays for the same reason: a part is often traced from a supplier's
     // DXF, and that is the one thing you most want to bring in here.
     // A DEFAULT MODEL'S SCHEMATIC SYMBOL IS DRAWN WITH THREE TABS AND NOTHING ELSE: Home to draw with,
-    // Modify to change what is drawn, Schematic build to put the schematic's own pieces down. A symbol is a
+    // Modify to change what is drawn, Harness schematic to put the schematic's own pieces down. A symbol is a
     // small glyph - a dozen lines and a few pins - and every other tab is about a SHEET: dimensioning and
     // calling out a drawing, importing a supplier's DXF, laying a harness out, setting a title block. None of
     // it applies to a glyph, and the house rule for this application is that while a function is being used
@@ -4793,10 +4793,10 @@ void MainWindow::updateModelRibbonTabs() {
         if (schematicDefaultModel) {
             if (contextual(ribbon_->widget(i))) return false;
             return !(title == QStringLiteral("Home") || title == QStringLiteral("Modify") ||
-                     title == QStringLiteral("Schematic build"));
+                     title == QStringLiteral("Harness schematic"));
         }
         if (title == QStringLiteral("Harness mechanical")) return true;
-        if (title == QStringLiteral("Schematic build")) return !schematicModel;
+        if (title == QStringLiteral("Harness schematic")) return !schematicModel;
         return false;
     };
     if (modelEdit && home >= 0 && putAway(ribbon_->currentIndex())) ribbon_->setCurrentIndex(home);
@@ -12875,10 +12875,10 @@ void MainWindow::showConnectorRibbon(bool on) {
         connectorTab_->show();
     } else if (idx >= 0) {
         ribbon_->removeTab(idx); // detaches but does not delete connectorTab_
-        // Return to the Schematic build tab (where the connector was opened from), not Home.
+        // Return to the Harness schematic tab (where the connector was opened from), not Home.
         int sb = 0;
         for (int i = 0; i < ribbon_->count(); ++i)
-            if (ribbon_->tabText(i) == QStringLiteral("Schematic build")) { sb = i; break; }
+            if (ribbon_->tabText(i) == QStringLiteral("Harness schematic")) { sb = i; break; }
         ribbon_->setCurrentIndex(sb);
     }
 }
@@ -13523,10 +13523,10 @@ void MainWindow::showWireRibbon(bool on) {
         wireTab_->show();
     } else if (idx >= 0) {
         ribbon_->removeTab(idx); // detaches, does not delete
-        // Return to the Schematic build tab (where wiring/shield was launched from).
+        // Return to the Harness schematic tab (where wiring/shield was launched from).
         int sb = 0;
         for (int i = 0; i < ribbon_->count(); ++i)
-            if (ribbon_->tabText(i) == QStringLiteral("Schematic build")) { sb = i; break; }
+            if (ribbon_->tabText(i) == QStringLiteral("Harness schematic")) { sb = i; break; }
         ribbon_->setCurrentIndex(sb);
     }
 }

@@ -9218,7 +9218,7 @@ void Editor::finishWireBand(const Vec2& fenceEnd) {
         doc_->setDirty(true);
         emit changed();
         // Finished placing: return to the Select tool (region select). setTool(Select)
-        // drops the Wire ribbon, which sends the tab back to Schematic build.
+        // drops the Wire ribbon, which sends the tab back to Harness schematic.
         setTool(ToolId::Select);
         return;
     }

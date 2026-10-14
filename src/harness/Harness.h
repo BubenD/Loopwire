@@ -320,13 +320,14 @@ struct TwistedPairStretch {
 };
 std::vector<TwistedPairStretch> twistedPairWeave(const Entity& pair);
 // THE LAID-UP STRETCH SEEN FROM THE SIDE - how a bundle of three or more wires is drawn unless it says it is woven
-// (meta twistLook "woven"), and a twisted pair only when it asks for it (twistLook "side"): each strand a slanted band
-// reaching right across, its corners rounded, drawn with a pair's proportions. Each piece's `fill` (in the ground
-// colour) hides what is behind it and its `lines` are its outline. The weave is not drawn over that stretch. Empty
-// for a woven run.
+// (meta twistLook "woven"), and a twisted pair only when it asks for it (twistLook "side"): each strand an S-shaped
+// band reaching right across, its corners rounded, drawn with a pair's proportions, and the wires going in under the
+// first and the last band. Each piece's `fill` (in the ground colour) hides what is behind it and its `lines` are its
+// outline - a band's closed, a wire's its two edges. The weave is not drawn over that stretch. Empty for a woven run.
 struct SideStrand {
     std::vector<Vec2> fill;
     std::vector<std::vector<Vec2>> lines;
+    bool wire = false;   // a wire going into the rope, not a band of it
 };
 std::vector<SideStrand> twistedPairSideView(const Entity& pair);
 bool runPointAtFraction(const Entity& e, double t, Vec2& pos, Vec2& dir);
@@ -360,7 +361,7 @@ struct ConnectorSpec {
     QStringList pins;         // per-pin labels (size == pinCount)
     QStringList pinGauge;     // per-pin wire cross-section (AWG or mm² string), size==pinCount
     QStringList pinAmp;       // per-pin ampere rating (string), size==pinCount
-    // Web-parity build options (Schematic build "Connector build" ribbon):
+    // Web-parity build options (Harness schematic "Connector build" ribbon):
     QString annotation = QStringLiteral("numbers"); // "numbers" | "letters"
     QString pinOrder = QStringLiteral("top");       // "top" (1 at top) | "bottom"
     QString rectMode = QStringLiteral("dynamic");   // "dynamic" (auto H, W=40) | "custom"
