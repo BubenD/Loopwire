@@ -360,6 +360,7 @@ std::vector<BomRow> bomFromDrawing(const Document& doc, const PartsLibrary& lib)
     std::vector<Placed> placedInOrder;
     QSet<QString> countedInstances;
     for (const Entity& e : doc.entities()) {
+        if (e.meta.value("wizardPhysicalBom").toBool()) continue;
         const QString instance = e.meta.value(QStringLiteral("blockInst")).toString();
         const QString placedId = e.meta.value(QStringLiteral("libPart")).toString();
         if (instance.isEmpty() || placedId.isEmpty()) continue;
@@ -428,6 +429,20 @@ std::vector<BomRow> bomFromDrawing(const Document& doc, const PartsLibrary& lib)
         }
     }
     for (const Entity& e : doc.entities()) {
+        for (const auto& entry : e.meta.value("wizardMaterials").toArray()) {
+            const auto material = entry.toObject();
+            const QString id = material.value("partId").toString();
+            const LibraryPart* part = lib.byId(id);
+            BomRow row = part ? bomRowFromPart(*part, 0) : BomRow{};
+            if (!part) { row.description = material.value("description").toString(); row.mfrPn = material.value("pn").toString();
+                         row.partId = id; row.unit = material.value("length").toBool() ? QStringLiteral("mm") : QStringLiteral("each"); }
+            const double quantity = material.value("quantity").toDouble();
+            row.qty = quantity;
+            if (material.value("length").toBool() && !convertPartUnit(quantity, QStringLiteral("mm"), row.unit, row.qty)) row.qty = 1;
+            row.ref = material.value("ref").toString(); row.fromDrawing = true;
+            out.push_back(row);
+        }
+        if (e.meta.value("wizardPhysicalBom").toBool()) continue;
         // A part stamped on the entity (by the harness builder, or by inserting a library part)
         // is what the row is about; the entity only says how much of it there is.
         const QString partId = e.meta.value(QStringLiteral("libPart")).toString();

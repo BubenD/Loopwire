@@ -21,6 +21,8 @@
 #include "harness/PartsLibrary.h"
 #include <QLabel>
 #include <QSplitter>
+#include <QSettings>
+#include <QToolButton>
 #include <QSpinBox>
 #include <QDoubleSpinBox>
 #include <QComboBox>
@@ -355,10 +357,11 @@ void testStepsRefined() {
     check(order == want, "pin map: the connectors in the order they are placed - each side top to bottom");
     // ---- THE WIRES STEP: THE TABLE FULL WIDTH, THE DRAWING UNDER IT ----
     auto* split = dialog.findChild<QSplitter*>(QStringLiteral("harnessBuilderSplit"));
-    const bool under = split && split->orientation() == Qt::Vertical;
+    const bool under = split && split->orientation() == (dialog.width() < 1120 ? Qt::Vertical : Qt::Horizontal);
     dialog.setStep(0);
     QApplication::processEvents();
-    check(under && split->orientation() == Qt::Horizontal, "wires step: the table the full width, the drawing under it; beside it on the other steps");
+    check(under && split->orientation() == (dialog.width() < 1120 ? Qt::Vertical : Qt::Horizontal),
+          "compact steps: preview is beside the editor on wide windows and below it on narrow windows");
     // ---- DRAINS: to the body or a pin, direct or through a hook-up wire ----
     dialog.setStep(1);   // Wires
     QPushButton* addWire = nullptr;
@@ -513,7 +516,7 @@ void testShieldConnectAndPinLight() {
     auto* farList = qobject_cast<QListWidget*>(visible(QStringLiteral("harnessBuilderPins_") + w.toConn));
     bool farShown = false;
     for (int r = 0; farList && r < farList->count(); ++r)
-        if (farList->item(r)->data(Qt::UserRole).toInt() == w.toPin) farShown = farList->item(r)->background().color() == QColor("#ffd166");
+        if (farList->item(r)->data(Qt::UserRole).toInt() == w.toPin) farShown = farList->item(r)->background().color() == QColor(255, 209, 102, 70);   // lit lightly
     if (list && item) {
         const QPointF at = list->visualItemRect(item).center();
         QMouseEvent plain(QEvent::MouseMove, at, list->viewport()->mapToGlobal(at), Qt::NoButton, Qt::NoButton, Qt::NoModifier);
@@ -829,6 +832,130 @@ void testHarnessDemand() {
     }
 }
 
+// THE WIZARD'S TABLES, BOM AND STEPS: the delete button last, loose wires grouped by trunk, short detail fields, a BOM
+// that can be attached to the window, no tick on a step with nothing in it, a lit pin washed lightly.
+void testWizardTablesAndBom() {
+    QSettings settings;
+    const QString uiKey = QStringLiteral("harnessBuilder/ui/v2/");
+    const QVariant priorDock = settings.value(uiKey + QStringLiteral("bomDock"));
+    settings.remove(uiKey + QStringLiteral("bomDock"));
+    Document doc;
+    Editor editor;
+    editor.setDocument(&doc);
+    HarnessBuilderDialog wizard(&editor);
+    wizard.resize(1200, 800);
+    wizard.show();
+    QApplication::processEvents();
+    auto* steps = wizard.findChild<QListWidget*>(QStringLiteral("harnessBuilderSteps"));
+    auto blankIcon = [&](int step) {
+        if (!steps || step >= steps->count()) return false;
+        const QImage img = steps->item(step)->icon().pixmap(36, 36).toImage();
+        for (int y = 0; y < img.height(); ++y)
+            for (int x = 0; x < img.width(); ++x)
+                if (qAlpha(img.pixel(x, y)) > 0) return false;
+        return true;
+    };
+    check(blankIcon(0) && blankIcon(1) && blankIcon(2) && blankIcon(3),
+          "wizard steps: nothing filled in, no step is ticked");
+
+    HarnessDef def;
+    HarnessConnector j1;
+    j1.id = QStringLiteral("c1");
+    j1.designator = QStringLiteral("J1");
+    j1.pinCount = 6;
+    HarnessConnector p1 = j1;
+    p1.id = QStringLiteral("c2");
+    p1.designator = QStringLiteral("P1");
+    p1.side = HarnessSide::Right;
+    def.connectors = {j1, p1};
+    for (int i = 1; i <= 3; ++i) {
+        HarnessWire w;
+        w.id = QStringLiteral("w%1").arg(i);
+        w.fromConn = j1.id;
+        w.toConn = p1.id;
+        w.fromPin = w.toPin = i;
+        def.wires.push_back(w);
+    }
+    wizard.loadDemand(def, QStringLiteral("test"));
+    wizard.setStep(1);
+    QApplication::processEvents();
+    check(!blankIcon(0) && !blankIcon(1) && blankIcon(2),
+          "wizard steps: connectors and wires filled in are ticked; shields with none is not");
+
+    auto* wires = wizard.findChild<QTableWidget*>(QStringLiteral("wizardWireTable"));
+    auto* conns = wizard.findChild<QTableWidget*>(QStringLiteral("wizardConnectorTable"));
+    QStringList headers;
+    int wireRows = 0;
+    for (int r = 0; wires && r < wires->rowCount(); ++r) {
+        if (wires->columnSpan(r, 0) > 1) {
+            if (auto* b = qobject_cast<QToolButton*>(wires->cellWidget(r, 0))) headers << b->text().simplified();
+        } else {
+            ++wireRows;
+        }
+    }
+    std::printf("  wizard: wire groups %s\n", qPrintable(headers.join(QStringLiteral(" | "))));
+    check(headers.size() == 1 && headers.front().contains(QLatin1String("J1")) && headers.front().contains(QLatin1String("P1")) &&
+              wireRows == 3,
+          "wizard wires: three loose wires between J1 and P1 are one group, by their trunk - not a group a wire");
+    auto deleteLast = [](QTableWidget* t) {
+        if (!t) return false;
+        const QTableWidgetItem* heading = t->horizontalHeaderItem(12);
+        return !t->isColumnHidden(12) && t->horizontalHeader()->visualIndex(12) == t->columnCount() - 1 &&
+               (!heading || heading->text().isEmpty());
+    };
+    check(deleteLast(wires) && deleteLast(conns), "wizard tables: the delete button is the last column, with no heading");
+    bool everyRowDeletes = wires != nullptr;
+    for (int r = 0; wires && r < wires->rowCount(); ++r)
+        if (wires->columnSpan(r, 0) == 1) everyRowDeletes = everyRowDeletes && qobject_cast<QToolButton*>(wires->cellWidget(r, 12));
+    check(everyRowDeletes, "wizard wires: every wire row has its delete button");
+
+    // SHORT DETAIL FIELDS, whatever the window's width.
+    int row = -1;
+    for (int r = 0; wires && r < wires->rowCount(); ++r)
+        if (wires->columnSpan(r, 0) == 1) { row = r; break; }
+    if (wires && row >= 0) emit wires->cellClicked(row, 0);
+    QApplication::processEvents();
+    auto fieldWidth = [&] {
+        auto* gauge = wizard.findChild<QLineEdit*>(QStringLiteral("wizardGauge"));
+        return gauge ? gauge->width() : -1;
+    };
+    const int narrow = fieldWidth();
+    wizard.resize(1600, 800);
+    QApplication::processEvents();
+    const int wide = fieldWidth();
+    std::printf("  wizard: gauge field %d px at 1200 wide, %d px at 1600\n", narrow, wide);
+    check(narrow > 0 && narrow == wide && narrow <= 220, "wizard details: a field is short and the same width whatever the window's");
+
+    // THE BOM, attached to the window and back.
+    if (auto* bom = wizard.findChild<QPushButton*>(QStringLiteral("wizardLiveBom"))) bom->click();
+    QApplication::processEvents();
+    auto* dock = wizard.findChild<QComboBox*>(QStringLiteral("wizardBomDock"));
+    auto* panel = wizard.findChild<QWidget*>(QStringLiteral("wizardBomPanel"));
+    auto* split = wizard.findChild<QSplitter*>(QStringLiteral("wizardBomSplit"));
+    if (dock) dock->setCurrentIndex(dock->findData(QStringLiteral("right")));
+    QApplication::processEvents();
+    check(panel && split && panel->parentWidget() == split && split->indexOf(panel) == 1 && split->orientation() == Qt::Horizontal &&
+              panel->isVisible(),
+          "wizard BOM: attached on the right of the wizard");
+    if (dock) dock->setCurrentIndex(dock->findData(QStringLiteral("bottom")));
+    QApplication::processEvents();
+    check(panel && split && panel->parentWidget() == split && split->orientation() == Qt::Vertical,
+          "wizard BOM: attached at the bottom");
+    if (dock) dock->setCurrentIndex(dock->findData(QStringLiteral("window")));
+    QApplication::processEvents();
+    check(panel && split && panel->parentWidget() != split && panel->window() != &wizard,
+          "wizard BOM: back in a window of its own");
+
+    // THE PIN MAP: a dragged pin shows where it will land.
+    bool dropShown = false;
+    for (auto* list : wizard.findChildren<QListWidget*>())
+        if (list->objectName().startsWith(QLatin1String("harnessBuilderPins_")))
+            dropShown = list->showDropIndicator() && list->style() != wizard.style();
+    check(dropShown, "wizard pin map: a dragged pin's place is drawn by the list's own drop line");
+    if (priorDock.isValid()) settings.setValue(uiKey + QStringLiteral("bomDock"), priorDock);
+    else settings.remove(uiKey + QStringLiteral("bomDock"));
+}
+
 int run_harnessbuilder_tests() {
     g_fail = 0;
     std::printf("harness builder tests:\n");
@@ -839,6 +966,7 @@ int run_harnessbuilder_tests() {
     testPreviewTwistsFindTheirWires();
     testFittedPinsGreyTheContacts();
     testHarnessDemand();
+    testWizardTablesAndBom();
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

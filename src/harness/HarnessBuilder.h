@@ -69,6 +69,15 @@ struct HarnessConnector {
     QString drainColor = QStringLiteral("DRAIN");
 };
 
+struct HarnessTermination {
+    // Empty preserves legacy coax/coax-splice behaviour. Explicit choices are
+    // "direct" and "wire" (a separately purchased tail through a splice).
+    QString via;
+    QString wireLibPart, wirePn, wireGauge, wireColor;
+    QString spliceLibPart, splicePn;
+    double lengthMm = 0.0;
+};
+
 struct HarnessWire {
     QString id;
     // Each end names either a CONNECTOR (its id, with the pin below) or a SHIELD - a drain wire
@@ -118,7 +127,14 @@ struct HarnessWire {
     // The library part this conductor is made of - a discrete wire, a cable or a coax. What lets a
     // bill of materials order it by the manufacturer's number, in the unit it is bought in.
     QString libPart;
+    QString partNumber;
+    double cutLengthMm = 0.0; // manufacturing length, never inferred from the schematic
+    QString coaxRole; // "signal" / "shield"; empty accepts legacy colour-based roles
+    HarnessTermination fromTermination, toTermination;
 };
+
+bool harnessTailAt(const HarnessWire& wire, int end);
+bool harnessCoaxShield(const HarnessWire& wire);
 
 struct HarnessLayout {
     double leftX = 100.0;   // x of the left-hand connectors
@@ -175,6 +191,7 @@ struct HarnessLayout {
 };
 
 struct HarnessDef {
+    bool physicalBom = false; // legacy drawings retain geometric BOM behaviour
     std::vector<HarnessConnector> connectors;
     std::vector<HarnessWire> wires;
     HarnessLayout layout;

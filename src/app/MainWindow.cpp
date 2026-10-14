@@ -12019,7 +12019,7 @@ void MainWindow::buildCommands() {
         {{"wirelabel", "wl", "netlabel", "nl"}, "Harness", "Wire label",
          tool(ToolId::NetLabel)},
         {{"harness", "hb", "shb"}, "Harness",
-         "Schematic harness builder: define the harness and generate it",
+         "Schematic build wizzard: define the harness and generate it",
          [this] { showHarnessBuilder(); }},
         {{"bom"}, "Harness", "Bill of materials", [this] { showBomDialog(); }},
         // THE RIBBON'S OTHER TOOLS, typed: each starts the same tool its button does.

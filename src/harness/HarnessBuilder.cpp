@@ -1,4 +1,5 @@
 #include "harness/HarnessBuilder.h"
+#include "harness/HarnessBuilderBom.h"
 
 #include "geometry/Geometry.h"
 
@@ -10,6 +11,34 @@
 #include <numeric>
 
 namespace Loopwire {
+
+namespace {
+QJsonObject terminationJson(const HarnessTermination& t) {
+    return {{"via", t.via}, {"wireLibPart", t.wireLibPart}, {"wirePn", t.wirePn},
+            {"wireGauge", t.wireGauge}, {"wireColor", t.wireColor},
+            {"spliceLibPart", t.spliceLibPart}, {"splicePn", t.splicePn}, {"lengthMm", t.lengthMm}};
+}
+HarnessTermination terminationFromJson(const QJsonObject& o) {
+    HarnessTermination t;
+    t.via = o.value("via").toString();
+    t.wireLibPart = o.value("wireLibPart").toString(); t.wirePn = o.value("wirePn").toString();
+    t.wireGauge = o.value("wireGauge").toString(); t.wireColor = o.value("wireColor").toString();
+    t.spliceLibPart = o.value("spliceLibPart").toString(); t.splicePn = o.value("splicePn").toString();
+    t.lengthMm = std::max(0.0, o.value("lengthMm").toDouble());
+    return t;
+}
+void stampTail(Entity& entity, const HarnessWire& wire, int end, const HarnessLayout& layout) {
+    const auto& t = end == 0 ? wire.fromTermination : wire.toTermination;
+    entity.meta.remove(QStringLiteral("libPart"));
+    if (!t.wireLibPart.isEmpty()) entity.meta["libPart"] = t.wireLibPart;
+    entity.meta["partNumber"] = t.wirePn;
+    entity.meta["sourceWire"] = wire.id;
+    entity.meta["tailEnd"] = end;
+    entity.meta["wireGauge"] = t.wireGauge.isEmpty() ? wire.gauge : t.wireGauge;
+    entity.meta["wireColor"] = t.wireColor.isEmpty() ? wire.color : t.wireColor;
+    if (layout.wireColorMode != QLatin1String("bylayer")) entity.color = wireColorHex(entity.meta["wireColor"].toString());
+}
+}
 
 namespace {
 
@@ -608,6 +637,14 @@ std::vector<HarnessIssue> validateHarness(const HarnessDef& def) {
     // two wires — otherwise the generated drawing cannot be built at all.
     QHash<QString, QString> pinTaken; // "conn/pin" -> wire id
     for (const auto& w : def.wires) {
+        if (def.physicalBom && harnessIsCoaxKind(w.kind) && !w.bundle.isEmpty())
+            for (const auto& other : def.wires)
+                if (other.id != w.id && other.bundle == w.bundle &&
+                    (other.libPart != w.libPart || other.partNumber != w.partNumber)) {
+                    add(QStringLiteral("assemblypart:%1").arg(w.id),
+                        QStringLiteral("%1 conductors must share one cable P/N. Assign separate hook-up wire P/Ns in the end terminations.").arg(w.bundle), {}, w.id);
+                    break;
+                }
         // A coax is a cable of two conductors: one row for the SIGNAL and one for the SHIELD, in
         // the same bundle. With only one of them there is nothing to draw - a signal with no braid
         // is a plain wire, and a braid with no signal has nothing to screen.
@@ -621,7 +658,7 @@ std::vector<HarnessIssue> validateHarness(const HarnessDef& def) {
                 bool haveSignal = false, haveShield = false;
                 for (const auto& o : def.wires) {
                     if (!harnessIsCoaxKind(o.kind) || o.bundle != w.bundle) continue;
-                    if (o.color.startsWith(QLatin1String("SHIELD"))) haveShield = true;
+                    if (harnessCoaxShield(o)) haveShield = true;
                     else haveSignal = true;
                 }
                 if (!haveSignal || !haveShield)
@@ -1188,6 +1225,11 @@ QJsonObject harnessDefToJson(const HarnessDef& def) {
         o["shieldGroup"] = w.shieldGroup;
         o["twistGroup"] = w.twistGroup;
         o["libPart"] = w.libPart;
+        o["partNumber"] = w.partNumber;
+        o["cutLengthMm"] = w.cutLengthMm;
+        o["coaxRole"] = w.coaxRole;
+        o["fromTermination"] = terminationJson(w.fromTermination);
+        o["toTermination"] = terminationJson(w.toTermination);
         wires.append(o);
     }
     QJsonObject lay;
@@ -1219,7 +1261,8 @@ QJsonObject harnessDefToJson(const HarnessDef& def) {
     // written before that was the default, so its stored 2 was nobody's choice - see the loader.
     // Version 3: each row says what it is (a wire, a coax...) and which cable it belongs to - before it, a cable or a
     // coax came back from a file, a preset or Generate's own preset as loose wires.
-    root["version"] = 3;
+    root["version"] = 4;
+    root["physicalBom"] = def.physicalBom;
     root["connectors"] = conns;
     root["wires"] = wires;
     root["layout"] = lay;
@@ -1228,6 +1271,7 @@ QJsonObject harnessDefToJson(const HarnessDef& def) {
 
 HarnessDef harnessDefFromJson(const QJsonObject& root) {
     HarnessDef loaded;
+    loaded.physicalBom = root.value("physicalBom").toBool(false);
     for (const auto& v : root.value("connectors").toArray()) {
         const QJsonObject o = v.toObject();
         HarnessConnector c;
@@ -1279,6 +1323,11 @@ HarnessDef harnessDefFromJson(const QJsonObject& root) {
         w.shieldGroup = o.value("shieldGroup").toString();
         w.twistGroup = o.value("twistGroup").toString();
         w.libPart = o.value("libPart").toString();
+        w.partNumber = o.value("partNumber").toString();
+        w.cutLengthMm = std::max(0.0, o.value("cutLengthMm").toDouble());
+        w.coaxRole = o.value("coaxRole").toString();
+        w.fromTermination = terminationFromJson(o.value("fromTermination").toObject());
+        w.toTermination = terminationFromJson(o.value("toTermination").toObject());
         if (!w.id.isEmpty()) loaded.wires.push_back(w);
     }
     const QJsonObject lay = root.value("layout").toObject();
@@ -1395,7 +1444,7 @@ HarnessBuild buildHarness(const HarnessDef& def) {
     for (const HarnessWire* w : wires) {
         // A coax's SHIELD row is the braid, not a run of its own: it is drawn as a stub into the
         // screen symbol on the signal (see the coax pass below), so it is not routed here.
-        if (harnessIsCoaxKind(w->kind) && w->color.startsWith(QLatin1String("SHIELD")))
+        if (harnessIsCoaxKind(w->kind) && harnessCoaxShield(*w))
             continue;
         Leg L2;
         L2.w = w;
@@ -1918,7 +1967,7 @@ HarnessBuild buildHarness(const HarnessDef& def) {
             const HarnessWire* shield = nullptr;
             for (const auto& w : def.wires) {
                 if (!harnessIsCoaxKind(w.kind) || w.bundle != bundle) continue;
-                if (w.color.startsWith(QLatin1String("SHIELD"))) shield = &w;
+                if (harnessCoaxShield(w)) shield = &w;
                 else signal = &w; // a row that is not the shield is the signal
             }
             if (!signal || !shield) continue; // half a coax cannot be drawn; the validator says so
@@ -1931,12 +1980,14 @@ HarnessBuild buildHarness(const HarnessDef& def) {
             const int coaxNo = harnessCoaxIndex(def, *signal);
             // Only a coax-splice reaches the harness through a splice. A plain coax runs pin to
             // pin as one cable, so nothing is cut and no joint is drawn.
-            const bool splices = harnessCoaxSplices(def, bundle);
             // Where each end's splice landed, so the conductors can be cut there afterwards.
             std::vector<std::pair<int, double>> cutAtEnd; // end index, x
 
             // One braid symbol per END, just inboard of the connector the shield row lands on.
             for (int end = 0; end < 2; ++end) {
+                const bool signalSplice = harnessTailAt(*signal, end);
+                const bool shieldSplice = harnessTailAt(*shield, end);
+                const bool splices = signalSplice || shieldSplice;
                 const QString connId = end == 0 ? shield->fromConn : shield->toConn;
                 const int pin = end == 0 ? shield->fromPin : shield->toPin;
                 const Placed* p = placedById(placed, connId);
@@ -2005,6 +2056,7 @@ HarnessBuild buildHarness(const HarnessDef& def) {
                 sc.meta.insert("showS", false);
                 sc.meta.insert("notConnected", false); // the shield conductor terminates it
                 sc.meta.insert("coaxScreenOf", signal->id);
+                sc.meta.insert("sourceWire", shield->id);
                 if (coaxNo > 0) sc.meta.insert("coaxNumber", coaxNo);
                 extra.push_back(sc);
 
@@ -2021,14 +2073,16 @@ HarnessBuild buildHarness(const HarnessDef& def) {
                 sh.layer = QStringLiteral("Wires");
                 // With a splice, the cable's own shield conductor starts AT the joint - the run
                 // from the pin to the joint is a separate harness wire, added below.
-                const Vec2 shieldStart = splices ? Vec2{spliceX, pinPt.y} : pinPt;
+                const Vec2 shieldStart = shieldSplice ? Vec2{spliceX, pinPt.y} : pinPt;
                 if (std::abs(shieldStart.y - joinPt.y) < 1e-6) sh.points = {shieldStart, joinPt};
                 else sh.points = {shieldStart, {screenX, shieldStart.y}, joinPt};
-                sh.meta.insert("wireColor", coaxNo > 0
+                sh.meta.insert("wireColor", !shield->coaxRole.isEmpty() && !shield->color.startsWith(QLatin1String("SHIELD"))
+                                                ? shield->color : coaxNo > 0
                                                 ? QStringLiteral("SHIELD%1").arg(coaxNo)
                                                 : QStringLiteral("SHIELD"));
                 sh.meta.insert("wireGauge", shield->gauge);
                 sh.meta.insert("wireKind", QStringLiteral("coaxShield"));
+                sh.meta.insert("sourceWire", shield->id);
                 // The cable's shield section IS the shield row, at this end.
                 if (end == 0) sh.meta.insert("defWire", shield->id);
                 sh.meta.insert("coaxScreenOf", signal->id);
@@ -2045,7 +2099,7 @@ HarnessBuild buildHarness(const HarnessDef& def) {
                 if (L.wireColorMode == QLatin1String("bylayer"))
                     sh.meta.insert("wireColorMode", QStringLiteral("bylayer"));
                 else
-                    sh.color = wireColorHex(QStringLiteral("SHIELD"));
+                    sh.color = wireColorHex(shield->color);
                 extra.push_back(sh);
 
                 // Where the cable joins the harness, both of its conductors are spliced - so the
@@ -2075,7 +2129,9 @@ HarnessBuild buildHarness(const HarnessDef& def) {
                         sp.layer = QStringLiteral("Wires");
                         sp.a = {spliceX, spliceY};
                         sp.b = {spliceX, pinPt.y};
-                        sp.meta.insert("pair", true);
+                        sp.meta.insert("pair", signalSplice && shieldSplice);
+                        if (!signalSplice) sp.a = sp.b;
+                        if (!shieldSplice) sp.b = sp.a;
                         // A cable transition is a small joint whatever the general splice size:
                         // two of them plus the housing would swamp the cable at size 3.
                         sp.meta.insert("size", 1.0);
@@ -2088,8 +2144,21 @@ HarnessBuild buildHarness(const HarnessDef& def) {
                         sp.meta.insert("bundle", bundle);
                         sp.meta.insert("coaxScreenOf", signal->id);
                         if (coaxNo > 0) sp.meta.insert("coaxNumber", coaxNo);
-                        extra.push_back(sp);
-                        cutAtEnd.push_back({end, spliceX});
+                        const auto& signalEnd = end == 0 ? signal->fromTermination : signal->toTermination;
+                        const auto& shieldEnd = end == 0 ? shield->fromTermination : shield->toTermination;
+                        const bool legacyPair = signalEnd.via.isEmpty() && shieldEnd.via.isEmpty();
+                        if (legacyPair) extra.push_back(sp);
+                        else {
+                            auto joint = [&](const HarnessWire& wire, const HarnessTermination& term, Vec2 point) {
+                                Entity item = sp; item.a = item.b = point; item.meta["pair"] = false;
+                                item.meta["sourceWire"] = wire.id; item.meta["partNumber"] = term.splicePn;
+                                if (!term.spliceLibPart.isEmpty()) item.meta["libPart"] = term.spliceLibPart;
+                                extra.push_back(item);
+                            };
+                            if (signalSplice) joint(*signal, signalEnd, {spliceX, spliceY});
+                            if (shieldSplice) joint(*shield, shieldEnd, {spliceX, pinPt.y});
+                        }
+                        if (signalSplice) cutAtEnd.push_back({end, spliceX});
 
                         // The pigtail: pin to the joint, on the shield's own level. It is a wire
                         // in its own right - not part of the cable - so it carries no bundle and
@@ -2109,7 +2178,7 @@ HarnessBuild buildHarness(const HarnessDef& def) {
                             tail.meta.insert("wireColorMode", QStringLiteral("bylayer"));
                         else
                             tail.color = wireColorHex(shield->color);
-                        extra.push_back(tail);
+                        if (shieldSplice) { stampTail(tail, *shield, end, L); extra.push_back(tail); }
                     }
                 }
             }
@@ -2144,6 +2213,7 @@ HarnessBuild buildHarness(const HarnessDef& def) {
                 tail.meta.insert("showColorName", false);
                 tail.meta.insert("showGaugeName", false);
                 tail.meta.insert("showWireLabel", false);
+                stampTail(tail, *signal, cut.first, L);
                 extra.push_back(tail);
                 if (head) run[0] = at;
                 else run[run.size() - 1] = at;
@@ -2523,6 +2593,26 @@ HarnessBuild buildHarness(const HarnessDef& def) {
             e.a = j;
             e.meta.insert("size", L.spliceSize);
             out.entities.push_back(std::move(e));
+        }
+    }
+    if (def.physicalBom && !out.entities.empty()) {
+        // Store physical material rows on their own connection/connector, so
+        // the drawing BOM uses exactly the same quantities as the wizard.
+        for (auto& entity : out.entities) entity.meta["wizardPhysicalBom"] = true;
+        for (const auto& line : harnessMaterials(def, PartsLibrary{})) {
+            Entity* owner = &out.entities.front();
+            for (auto& entity : out.entities) {
+                const QString wire = entity.meta.value("defWire").toString();
+                if ((!wire.isEmpty() && line.wireIds.contains(wire)) ||
+                    (line.wireIds.isEmpty() && entity.type == EntityType::Connector &&
+                     connectorSpecFromMeta(entity.meta).designator == line.row.ref)) { owner = &entity; break; }
+            }
+            const auto& row = line.row;
+            const double factor = lengthUnitInMm(row.unit);
+            QJsonArray materials = owner->meta.value("wizardMaterials").toArray();
+            materials.append(QJsonObject{{"partId", row.partId}, {"pn", row.mfrPn}, {"description", row.description},
+                {"quantity", factor > 0 ? row.qty * factor : row.qty}, {"length", factor > 0}, {"ref", row.ref}});
+            owner->meta["wizardMaterials"] = materials;
         }
     }
     return out;

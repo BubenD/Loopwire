@@ -1691,6 +1691,14 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         break;
 
     case EntityType::Wire: {
+        auto stripePath = [&](const QPainterPath& path) {
+            const QString code = e.meta.value("wireColor").toString();
+            if (overrideColor.isValid() || !code.contains(QLatin1Char('-')) || customWireColorCodes().contains(code) ||
+                e.meta.value("wireColorMode").toString() == QLatin1String("bylayer")) return;
+            p.save();
+            QPen stripe = p.pen(); stripe.setColor(QColor(wireColorHex(code.section(QLatin1Char('-'), 1, 1))));
+            stripe.setDashPattern({3.0, 5.0}); p.setPen(stripe); p.drawPath(path); p.restore();
+        };
         if (e.points.size() < 2) break;
         // Per-crossing "bridge" hops (Cross switch tool): points on this wire where it
         // hops OVER a crossing wire with a small semicircle instead of a plain cross.
@@ -1708,6 +1716,10 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             if (poly.size() < 2) continue;
             if (hops.empty()) {
                 p.drawPolyline(toScreenPoly(poly, vt));
+                QPainterPath stripe;
+                stripe.moveTo(vt.toScreen(poly.front()));
+                for (size_t i = 1; i < poly.size(); ++i) stripe.lineTo(vt.toScreen(poly[i]));
+                stripePath(stripe);
                 continue;
             }
             const double r = 5.0 * vt.scale(); // hop radius (≈5 world units)
@@ -1746,6 +1758,7 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 path.lineTo(a1);
             }
             p.drawPath(path);
+            stripePath(path);
         }
         // Net label at the polyline midpoint segment.
         const QString net = e.meta.value("netName").toString();

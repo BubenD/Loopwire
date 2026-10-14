@@ -460,7 +460,7 @@ void MainWindow::buildSchematicBuildTab() {
         hbg->setContentsMargins(0, 0, 0, 0);
         hbg->setSpacing(2);
         auto* hbBtn = new QToolButton(hbW);
-        hbBtn->setText(QStringLiteral("Schematic harness\nbuilder"));
+        hbBtn->setText(QStringLiteral("Schematic build\nwizzard"));
         hbBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         hbBtn->setIconSize(QSize(30, 30));
         hbBtn->setMinimumWidth(112);

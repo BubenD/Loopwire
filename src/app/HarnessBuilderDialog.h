@@ -22,10 +22,13 @@ class QStackedWidget;
 class QTableWidget;
 class QTextBrowser;
 class QVBoxLayout;
+class QHideEvent;
+class QResizeEvent;
 
 namespace Loopwire {
 
 class Editor;
+class WizardFlowLayout;
 struct LibraryPart;
 // Drawn previews used inside the dialog (defined in the .cpp).
 class ConnectorPreview;
@@ -43,6 +46,8 @@ class HarnessWiringPreview;
 // name it, so a twisted wire leaves the gap its twist is drawn in. Screens and their drains left out unless asked.
 std::vector<Entity> harnessPreviewEntities(const HarnessDef& def, bool showShields);
 struct PartsLibrary;
+enum class PartKind;
+const PartsLibrary& harnessBuilderLibrary();
 // For the tests: the parts the builder offers, given rather than read from the libraries on this machine.
 void useHarnessBuilderLibraryForTest(const PartsLibrary& lib);
 
@@ -99,8 +104,37 @@ protected:
     // The libraries are read again every time this window is opened, so a part added since it was
     // last used is there to be picked.
     void showEvent(QShowEvent* e) override;
+    void hideEvent(QHideEvent* e) override;
+    void resizeEvent(QResizeEvent* e) override;
 
 private:
+    void initializeWizardUi();
+    void fitWizardColumns();
+    void saveWizardUi();
+    void setCompactColumns(bool compact);
+    void selectWire(const QString& id);
+    void applyPinHighlights(const QStringList& pins);
+    void highlightWires(const QStringList& wires);
+    void refreshWireDetails();
+    void refreshLiveBom();
+    void openLiveBom();
+    // The BOM in its own window ("window") or attached to the wizard ("left", "right", "bottom"). Remembered.
+    void placeLiveBom(const QString& where);
+    void keepDeleteColumnLast();
+    static constexpr int kDeleteColumn = 12;      // the row's delete button, in both tables
+    static constexpr int kDeleteWidth = 26;
+    static constexpr int kDetailFieldWidth = 200; // a field of the connection details, whatever the window's width
+    QComboBox* wizardPartChoice(QWidget* parent, const std::vector<PartKind>& kinds, const QString& current);
+    QWidget* wireDetails_ = nullptr;
+    QSplitter* wireSplit_ = nullptr;
+    QDialog* bomDialog_ = nullptr;
+    QTableWidget* bomTable_ = nullptr;
+    QWidget* bomPanel_ = nullptr;     // the BOM, wherever it is put
+    QSplitter* bomSplit_ = nullptr;   // the wizard's work and an attached BOM
+    QString bomDock_ = QStringLiteral("window");   // where the BOM goes. Not saved with the harness.
+    bool compactColumns_ = true, wizardUiReady_ = false, wizardUiBuilt_ = false;
+    QString selectedWireId_;
+    QStringList pinnedPins_;
     // --- Sections, in the order they appear ---
     QWidget* buildConnectorsSection();
     QWidget* buildBlockMapSection();
@@ -237,7 +271,7 @@ private:
     QWidget* pinMapHost_ = nullptr;
     // The whole harness drawn small beside the pin tables.
     HarnessWiringPreview* wiringPreview_ = nullptr;
-    QHBoxLayout* pinMapLayout_ = nullptr;
+    WizardFlowLayout* pinMapLayout_ = nullptr;
     QTableWidget* wireTable_ = nullptr;
     // Outlines the picked rows (their cells are widgets, so the selection colour never shows).
     class PickOverlay* pickOverlay_ = nullptr;
@@ -246,11 +280,12 @@ private:
     // with the groups you are not touching collapsed out of the way. The fold state is kept
     // across reloads (every field edit rebuilds the table) so editing never springs a
     // collapsed group back open.
-    enum class WireGrouping { None, Shield, Twist, Connectors };
+    enum class WireGrouping { None, Shield, Twist, Connectors, Assembly };
     // Grouped by the connector pair by default: that is how a harness is read - everything
     // running from P1 to P2, then P1 to P3 - and the groups follow the placement order.
     WireGrouping grouping_ = WireGrouping::Connectors;
     QSet<QString> collapsedGroups_;
+    QSet<QString> seenAssemblyGroups_;
     // The kind of unify waiting for a pick ("" when none is).
     QString pendingUnify_;
     // True while an Add wire is waiting for a group header to be clicked.

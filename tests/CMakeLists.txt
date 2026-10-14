@@ -1,4 +1,5 @@
 add_executable(loopwire_tests
+    test_schematicwizard.cpp
     test_latency.cpp
     test_geometry.cpp
     test_editor.cpp

@@ -79,12 +79,17 @@ void splitCodeNumber(const QString& code, QString& base, QString& number) {
 } // namespace
 
 QString wireColorHex(const QString& code, const QString& fallback) {
+    const QString normalized = code.trimmed().toUpper();
+    if (normalized == QLatin1String("BL")) return wireColorHex(QStringLiteral("BU"), fallback);
     if (code.isEmpty() || code == "BYLAYER") return fallback;
     if (code.startsWith('#')) return code;
     for (const auto& c : kWireColors)
         if (code == QLatin1String(c.code)) return QString::fromLatin1(c.hex);
     for (const auto& e : customColors())
         if (code == e.code) return e.hex;
+    if (normalized != code) return wireColorHex(normalized, fallback);
+    if (normalized.contains(QLatin1Char('-')))
+        return wireColorHex(normalized.section(QLatin1Char('-'), 0, 0), fallback);
     // A numbered conductor of a multi-coax cable: the number does not change the colour.
     QString base, number;
     splitCodeNumber(code, base, number);
@@ -93,10 +98,16 @@ QString wireColorHex(const QString& code, const QString& fallback) {
 }
 
 QString wireColorName(const QString& code) {
+    const QString normalized = code.trimmed().toUpper();
+    if (normalized == QLatin1String("BL")) return QStringLiteral("Blue");
     for (const auto& c : kWireColors)
         if (code == QLatin1String(c.code)) return QString::fromLatin1(c.name);
     for (const auto& e : customColors())
         if (code == e.code) return e.name;
+    if (normalized != code) return wireColorName(normalized);
+    if (normalized.contains(QLatin1Char('-')))
+        return wireColorName(normalized.section(QLatin1Char('-'), 0, 0)) + QLatin1Char('/') +
+               wireColorName(normalized.section(QLatin1Char('-'), 1, 1));
     QString base, number;
     splitCodeNumber(code, base, number);
     if (!number.isEmpty() && base != code) {
@@ -109,6 +120,7 @@ QString wireColorName(const QString& code) {
 QStringList wireColorCodes() {
     QStringList out;
     for (const auto& c : kWireColors) out << QString::fromLatin1(c.code);
+    out << QStringLiteral("WH-BL");
     out << customWireColorCodes();
     return out;
 }

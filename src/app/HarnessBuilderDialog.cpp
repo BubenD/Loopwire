@@ -5,6 +5,8 @@
 #include "app/Editor.h"
 #include "app/DrawingPreview.h"
 #include "app/UiBits.h"
+#include "app/WizardFlowLayout.h"
+#include <QCompleter>
 #include "app/PartViewDialog.h"
 #include "harness/CableSpec.h"
 #include "harness/Harness.h"
@@ -38,6 +40,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPushButton>
+#include <QProxyStyle>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QScreen>
@@ -175,6 +178,7 @@ void guardWheel(QWidget* w) {
 // takes the slack. `bump` widens one column by a fraction of its fitted width.
 void fitColumns(QTableWidget* t, const QHash<int, double>& bump = {}) {
     for (int c = 0; c < t->columnCount(); ++c) {
+        if (t->isColumnHidden(c)) continue;
         int want = t->fontMetrics().horizontalAdvance(
                        t->horizontalHeaderItem(c) ? t->horizontalHeaderItem(c)->text() : QString()) +
                    18;
@@ -311,6 +315,12 @@ QIcon coaxIcon(bool shield) {
 
 // The icon for a colour code: a coax part gets its own picture, everything else a colour dot.
 QIcon codeIcon(const QString& code) {
+    if (code.contains(QLatin1Char('-'))) {
+        QPixmap image(24, 14); image.fill(Qt::transparent); QPainter painter(&image);
+        painter.fillRect(1, 1, 22, 12, QColor(wireColorHex(code)));
+        painter.fillRect(7, 1, 6, 12, QColor(wireColorHex(code.section(QLatin1Char('-'), 1, 1))));
+        return QIcon(image);
+    }
     if (code == QLatin1String("SIGNAL")) return coaxIcon(false);
     if (code == QLatin1String("SHIELD")) return coaxIcon(true);
     return colorSwatch(wireColorHex(code));
@@ -364,6 +374,30 @@ void saveCustomColor(const QString& code, const QString& name, const QString& he
     st.setValue(QLatin1String(kCustomColorsKey),
                 QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact)));
 }
+
+// A PIN LIT ON THE PIN MAP: a light wash of yellow, not a solid block, so the pin's own text still reads.
+const QColor kLitPin(255, 209, 102, 70);
+
+// WHERE A DRAGGED PIN WILL LAND: a white line across the pin list between the two pins it goes between (or a white
+// outline, dropped on a pin), drawn plainly where the platform's own marker is too faint to see on the dark list.
+class PinDropStyle : public QProxyStyle {
+public:
+    void drawPrimitive(PrimitiveElement element, const QStyleOption* option, QPainter* painter,
+                       const QWidget* widget) const override {
+        if (element != PE_IndicatorItemViewItemDrop) {
+            QProxyStyle::drawPrimitive(element, option, painter, widget);
+            return;
+        }
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing, false);
+        painter->setPen(QPen(Qt::white, 2));
+        const QRect r = option->rect;
+        const int right = widget ? widget->width() - 4 : r.right();
+        if (r.height() <= 1) painter->drawLine(QPoint(2, r.top()), QPoint(right, r.top()));
+        else painter->drawRect(r.adjusted(1, 1, -1, -1));
+        painter->restore();
+    }
+};
 
 } // namespace
 
@@ -596,6 +630,7 @@ public:
         lay->setSpacing(2);
         picture_ = new DrawingPreview(QString(), this);
         picture_->setObjectName(QStringLiteral("harnessBuilderPreviewPicture"));
+        picture_->setKeepView(true);
         picture_->setEmptyText(QStringLiteral("Add connectors and wires - the harness is drawn here as Generate will draw it"));
         picture_->setToolTip(QStringLiteral("The harness exactly as Generate will draw it - wheel to zoom, drag to move; "
                                             "Enlarge to see it big"));
@@ -621,18 +656,33 @@ public:
     const HarnessDef& definition() const { return def_; }
     const std::vector<Entity>& entities() const { return picture_->entities(); }
     void setOnActivate(std::function<void()> cb) { onActivate_ = std::move(cb); }
+    void setLitPins(const QStringList& pins) { litPins_ = pins; rebuild(false); }
 
 private:
-    void rebuild() {
-        const std::vector<Entity> shown = harnessPreviewEntities(def_, showShields_);
+    void rebuild(bool fit = true) {
+        std::vector<Entity> shown = harnessPreviewEntities(def_, showShields_);
+        for (auto& entity : shown) {
+            const QString id = entity.meta.value(QStringLiteral("defWire")).toString(entity.meta.value("sourceWire").toString());
+            for (const auto& wire : def_.wires)
+                if (wire.id == id &&
+                    (litPins_.contains(QStringLiteral("%1:%2").arg(wire.fromConn).arg(wire.fromPin)) ||
+                     litPins_.contains(QStringLiteral("%1:%2").arg(wire.toConn).arg(wire.toPin))))
+                {
+                    entity.color = QStringLiteral("#ffd166");
+                    if (entity.type == EntityType::Wire) {
+                        entity.meta["wireColor"] = QStringLiteral("#ffd166"); entity.meta.remove("wireColorMode");
+                    }
+                }
+        }
         picture_->setEntities(shown);
-        picture_->fitToView();
+        if (fit) picture_->fitToView();
     }
 
     DrawingPreview* picture_ = nullptr;
     QToolButton* enlarge_ = nullptr;
     HarnessDef def_;
     bool showShields_ = true;
+    QStringList litPins_;
     std::function<void()> onActivate_;
 };
 
@@ -685,7 +735,7 @@ QWidget* section(const QString& title, QWidget* body, QWidget* parent,
     auto* v = new QVBoxLayout(box);
     v->setContentsMargins(0, 6, 0, 0);
     v->setSpacing(4);
-    auto* head = new QHBoxLayout();
+    auto* head = new WizardFlowLayout();
     head->setContentsMargins(0, 0, 0, 0);
     auto* cap = new QLabel(title.toUpper(), box);
     cap->setStyleSheet(QStringLiteral("color:#4aa8d8;font-weight:700;letter-spacing:1px;"));
@@ -700,18 +750,33 @@ QWidget* section(const QString& title, QWidget* body, QWidget* parent,
 
 } // namespace
 
+const PartsLibrary& harnessBuilderLibrary() { return sharedLibrary(); }
+
+QComboBox* HarnessBuilderDialog::wizardPartChoice(QWidget* parent, const std::vector<PartKind>& kinds,
+                                                 const QString& current) {
+    auto* box = libraryPartBox(parent, kinds, current);
+    box->setEditable(true);
+    box->setInsertPolicy(QComboBox::NoInsert);
+    box->completer()->setFilterMode(Qt::MatchContains);
+    box->completer()->setCompletionMode(QCompleter::PopupCompletion);
+    box->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    box->setMinimumContentsLength(12);
+    return box;
+}
+
 HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
     : QDialog(parent), editor_(editor) {
     loadCustomColors(); // an invented wire colour is still there next session
-    setWindowTitle(QStringLiteral("Schematic harness builder"));
+    setWindowTitle(QStringLiteral("Schematic build wizzard"));
     setModal(false); // the drawing stays usable while a harness is being described
+    setWindowFlag(Qt::WindowMinMaxButtonsHint, true);
     // Wide enough for the connector and wire tables to show every column without scrolling
     // sideways, clamped to whatever the screen can actually hold.
     {
         const QRect avail = QGuiApplication::primaryScreen()
                                 ? QGuiApplication::primaryScreen()->availableGeometry()
                                 : QRect(0, 0, 1440, 900);
-        resize(std::min(1460, avail.width() - 60), std::min(980, avail.height() - 60));
+        resize(std::min(1240, avail.width() - 40), std::min(840, avail.height() - 40));
     }
 
     auto* root = new QVBoxLayout(this);
@@ -728,11 +793,15 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
     mainSplit_->setChildrenCollapsible(false);
     stepList_ = new QListWidget(this);
     stepList_->setObjectName(QStringLiteral("harnessBuilderSteps"));
-    stepList_->setFixedWidth(190);
+    stepList_->setFlow(QListView::LeftToRight);
+    stepList_->setWrapping(false);
+    stepList_->setFixedHeight(44);
+    stepList_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    stepList_->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     stepList_->setSpacing(2);
     stepList_->setStyleSheet(QStringLiteral("QListWidget{font-size:13px;}QListWidget::item{padding:8px 6px;}"
                                             "QListWidget::item:selected{background:#2d5a80;color:white;}"));
-    body->addWidget(stepList_);
+    root->addWidget(stepList_);
     pages_ = new QStackedWidget(this);
     pages_->setObjectName(QStringLiteral("harnessBuilderPages"));
     struct Step { const char* title; const char* help; QWidget* page; };
@@ -792,7 +861,7 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
     root->addLayout(body, 1);
 
     // ---- Footer: validate / minimise on the left, the commit buttons on the right ----
-    auto* footer = new QHBoxLayout();
+    auto* footer = new WizardFlowLayout();
     backBtn_ = new QPushButton(QStringLiteral("\u25C2 Back"), this);
     backBtn_->setObjectName(QStringLiteral("harnessBuilderBack"));
     connect(backBtn_, &QPushButton::clicked, this, [this] { setStep(currentStep() - 1); });
@@ -867,7 +936,7 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
         "Throw this harness away and start again from an empty pair of connectors"));
     connect(clearBtn, &QPushButton::clicked, this, [this] {
         if (QMessageBox::question(
-                this, QStringLiteral("Schematic harness builder"),
+                this, QStringLiteral("Schematic build wizzard"),
                 QStringLiteral("Clear the whole definition and start again?"),
                 QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
             return;
@@ -931,6 +1000,7 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
     reloadAll();
     // Opened at the first step.
     setStep(0);
+    initializeWizardUi();
     calmSpinBoxes();
 }
 
@@ -1360,13 +1430,15 @@ void HarnessBuilderDialog::reloadConnectors() {
     }
     // Every column as wide as what is in it, with Side given a little extra so the drop-down
     // arrow does not crowd the word.
-    fitColumns(connTable_, {{0, 1.15}});
+    if (!wizardUiReady_) fitColumns(connTable_, {{0, 1.15}});
     // The contacts' choice no wider than a P/N needs - its list is read when it is opened.
-    connTable_->setColumnWidth(14, std::min(connTable_->columnWidth(14), 190));
+    if (!wizardUiReady_) connTable_->setColumnWidth(14, std::min(connTable_->columnWidth(14), 190));
     // THE LIBRARY PART HALF AS WIDE as its name would make it: the part is chosen from its list, which is as wide as it
     // needs to be when it is open; closed, the column was taking the room the other columns are read in.
-    connTable_->setColumnWidth(13, std::max(60, connTable_->columnWidth(13) / 2));
-    connTable_->setColumnWidth(15, std::max(connTable_->columnWidth(15), 120));
+    if (!wizardUiReady_) {
+        connTable_->setColumnWidth(13, std::max(60, connTable_->columnWidth(13) / 2));
+        if (!connTable_->isColumnHidden(15)) connTable_->setColumnWidth(15, std::max(connTable_->columnWidth(15), 120));
+    }
 }
 
 // ---- Step 2: the placement block map (drag to reorder) ---------------------
@@ -1488,7 +1560,7 @@ QWidget* HarnessBuilderDialog::buildPinMapSection() {
     tables->setFrameShape(QFrame::NoFrame);
     tables->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     pinMapHost_ = new QWidget(tables);
-    pinMapLayout_ = new QHBoxLayout(pinMapHost_);
+    pinMapLayout_ = new WizardFlowLayout(pinMapHost_);
     pinMapLayout_->setContentsMargins(0, 0, 0, 0);
     pinMapLayout_->setSpacing(14);
     pinMapLayout_->setAlignment(Qt::AlignLeft | Qt::AlignTop);
@@ -1497,8 +1569,8 @@ QWidget* HarnessBuilderDialog::buildPinMapSection() {
 
     // Tall enough for a column's caption, its pin list and its little connector picture, so
     // the inner scroll area never has to cut the designator off at the top.
-    pinMapHost_->setMinimumHeight(250);
-    tables->setMinimumHeight(250);
+    pinMapHost_->setMinimumHeight(0);
+    tables->setMinimumHeight(90);
 
     // THE OPTIMISERS, here where the pins are: each only re-orders pins.
     auto* minBtn = new QPushButton(QStringLiteral("Minimise crossings"), this);
@@ -1584,8 +1656,16 @@ QWidget* HarnessBuilderDialog::buildPreviewColumn() {
     connect(drawingBtn_, &QPushButton::clicked, this, [this] { showPinMap(false); });
     connect(pinMapBtn_, &QPushButton::clicked, this, [this] { showPinMap(true); });
     switchRow->addStretch(1);
+    auto* checks = new QPushButton(QStringLiteral("Checks"), column);
+    checks->setObjectName(QStringLiteral("wizardChecks"));
+    checks->setAutoDefault(false); checks->setCheckable(true);
+    switchRow->addWidget(checks);
     v->addLayout(switchRow);
-    v->addWidget(buildIssuesSection(), 1);
+    auto* issues = buildIssuesSection();
+    issues->setObjectName(QStringLiteral("wizardChecksPanel"));
+    issues->hide();
+    connect(checks, &QPushButton::toggled, issues, &QWidget::setVisible);
+    v->addWidget(issues);
     return column;
 }
 
@@ -1758,11 +1838,13 @@ void HarnessBuilderDialog::reloadShields() {
 
 namespace {
 // A STEP'S MARK, drawn - so it shows whatever the font has: a green tick, or an amber disc with the count of what is wrong.
-QIcon stepMark(int issues) {
+// `done`: the step has something in it. A step nobody has filled in is not ticked - nothing wrong is not the same as done.
+QIcon stepMark(int issues, bool done) {
     QPixmap pm(36, 36);
     pm.fill(Qt::transparent);
     QPainter p(&pm);
     p.setRenderHint(QPainter::Antialiasing, true);
+    if (issues == 0 && !done) return QIcon(pm);
     if (issues == 0) {
         p.setPen(QPen(QColor("#3fbf6f"), 4.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         p.drawPolyline(QPolygonF({QPointF(8, 19), QPointF(15, 26), QPointF(28, 10)}));
@@ -1808,12 +1890,12 @@ void HarnessBuilderDialog::applyStepLayout(int step) {
     // THE WIRES WANT THE WIDTH: on their step the table runs the full width, the drawing (or the pin map) under it.
     const bool wires = step == 1;
     // UNDER THE STEP for the Wires, and wherever it has been asked for on the others.
-    const bool under = wires || previewBottom_;
+    const bool under = previewBottom_ || (width() < 1120) || (wires && !compactColumns_);
     const Qt::Orientation want = under ? Qt::Vertical : Qt::Horizontal;
     if (mainSplit_->orientation() == want) return;
     mainSplit_->setOrientation(want);
     const int room = under ? mainSplit_->height() : mainSplit_->width();
-    mainSplit_->setSizes({room * 3 / 5, room - room * 3 / 5});
+    mainSplit_->setSizes({room * 7 / 10, room - room * 7 / 10});
 }
 
 void HarnessBuilderDialog::calmSpinBoxes() {
@@ -1843,7 +1925,19 @@ void HarnessBuilderDialog::updateSteps() {
         const int n = stepIssueCount(i);
         const QString title = item->data(Qt::UserRole).toString();
         item->setText(QStringLiteral("%1  %2").arg(i + 1).arg(title));
-        item->setIcon(stepMark(n));
+        bool done = false;
+        switch (i) {
+        case 0: done = !def_.connectors.empty(); break;
+        case 1: done = !def_.wires.empty(); break;
+        case 2:
+            done = std::any_of(def_.connectors.begin(), def_.connectors.end(),
+                               [](const HarnessConnector& c) { return c.shieldLeft || c.shieldRight; }) ||
+                   std::any_of(def_.wires.begin(), def_.wires.end(),
+                               [](const HarnessWire& w) { return !w.shieldGroup.isEmpty(); });
+            break;
+        default: done = !def_.connectors.empty() && !def_.wires.empty(); break;   // ready to draw
+        }
+        item->setIcon(stepMark(n, done));
         item->setData(Qt::UserRole + 1, n);
         QStringList said;
         for (const HarnessIssue& issue : liveIssues_)
@@ -1856,6 +1950,8 @@ void HarnessBuilderDialog::updateSteps() {
     for (const HarnessIssue& issue : liveIssues_)
         if (stepOfIssue(issue) == step) here.push_back(issue);
     const int elsewhere = static_cast<int>(liveIssues_.size() - here.size());
+    if (auto* checks = findChild<QPushButton*>(QStringLiteral("wizardChecks")))
+        checks->setText(QStringLiteral("Checks (%1)").arg(here.size()));
     QString html;
     if (here.empty())
         html = QStringLiteral("<span style='color:#7ee0a0'>Nothing wrong in this step.</span>");
@@ -1923,8 +2019,11 @@ void HarnessBuilderDialog::redo() {
 void HarnessBuilderDialog::refreshPreview() {
     noteChange();
     updateSteps();
+    refreshLiveBom();
+    if (!syncing_) refreshWireDetails();
     if (!wiringPreview_) return;
     wiringPreview_->setDefinition(def_);
+    wiringPreview_->setLitPins(litPins_);
     if (shieldPreviewBox_) wiringPreview_->setShowShields(shieldPreviewBox_->isChecked());
 }
 
@@ -1962,10 +2061,25 @@ void HarnessBuilderDialog::reloadPinMap() {
         list->setMouseTracking(true);
         list->viewport()->setMouseTracking(true);
         list->viewport()->installEventFilter(this);
+        connect(list, &QListWidget::itemClicked, this, [this, id = c.id](QListWidgetItem* item) {
+            const int pin = item->data(Qt::UserRole).toInt();
+            for (const auto& wire : def_.wires)
+                if ((wire.fromConn == id && wire.fromPin == pin) || (wire.toConn == id && wire.toPin == pin)) {
+                    selectWire(wire.id); break;
+                }
+            lightPins(id, pin);
+            pinnedPins_ = litPins_;
+        });
         // Dragging a pin chip changes the PIN ORDER — which pin sits at which row — without
         // touching the wiring, so the pinout can be arranged to suit the routing.
         list->setDragDropMode(QAbstractItemView::InternalMove);
         list->setDefaultDropAction(Qt::MoveAction);
+        list->setDragDropOverwriteMode(false);
+        list->setDropIndicatorShown(true);
+        // WHERE THE PIN WILL GO, as a white line between the pins while it is dragged.
+        auto* dropLine = new PinDropStyle;
+        dropLine->setParent(list);
+        list->setStyle(dropLine);
         list->setFixedWidth(120);
         list->setMinimumHeight(120);
         list->setToolTip(QStringLiteral("Drag a pin to change where it sits on the connector"));
@@ -2131,7 +2245,7 @@ QWidget* HarnessBuilderDialog::buildWiresSection() {
         // click did nothing visible while it waited to be told it. With no groups at all there is
         // not even a header to click, so waiting left the list impossible to add to. Both go
         // straight in; the pick is for when the answer is genuinely a choice.
-        if (grouping_ != WireGrouping::None) {
+        if (grouping_ != WireGrouping::None && grouping_ != WireGrouping::Assembly) {
             QStringList groupKeys;
             for (int r = 0; r < wireTable_->rowCount(); ++r)
                 if (QWidget* band = wireTable_->cellWidget(r, 0)) {
@@ -2282,6 +2396,7 @@ QWidget* HarnessBuilderDialog::buildWiresSection() {
     groupByBox_->addItem(QStringLiteral("Shield"), static_cast<int>(WireGrouping::Shield));
     groupByBox_->addItem(QStringLiteral("Twist"), static_cast<int>(WireGrouping::Twist));
     groupByBox_->addItem(QStringLiteral("Connectors"), static_cast<int>(WireGrouping::Connectors));
+    groupByBox_->addItem(QStringLiteral("Cable / coax assembly"), static_cast<int>(WireGrouping::Assembly));
     groupByBox_->setToolTip(QStringLiteral("Gather the wire rows under folding group headers"));
     groupByBox_->setCurrentIndex(groupByBox_->findData(static_cast<int>(grouping_)));
     guardWheel(groupByBox_);
@@ -2317,6 +2432,9 @@ QWidget* HarnessBuilderDialog::buildWiresSection() {
                 key = QStringLiteral("c:%1>%2").arg(w.fromConn, w.toConn);
                 break;
             case WireGrouping::None: break;
+            case WireGrouping::Assembly:
+                key = w.bundle.isEmpty() ? QStringLiteral("c:%1>%2").arg(w.fromConn, w.toConn) : QStringLiteral("a:") + w.bundle;
+                break;
             }
             collapsedGroups_.insert(key);
         }
@@ -2339,7 +2457,7 @@ QWidget* HarnessBuilderDialog::buildWiresSection() {
     // Unify buttons work on. Picking a row does not edit anything.
     wireTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
     // Not selectable until a Unify button asks for a pick (see armUnify).
-    wireTable_->setSelectionMode(QAbstractItemView::NoSelection);
+    wireTable_->setSelectionMode(QAbstractItemView::ExtendedSelection);
     // A picked row cannot be seen through its own cells - every cell is a widget, and a widget
     // paints over the selection colour behind it. So the picked rows are outlined instead, by an
     // overlay that sits above the cells and draws a box round each run of them.
@@ -2366,8 +2484,19 @@ QWidget* HarnessBuilderDialog::buildWiresSection() {
         showWireRowMenu(cell ? cell->property("wireId").toString() : QString(),
                         wireTable_->viewport()->mapToGlobal(at));
     });
-    wireTable_->setMinimumHeight(200);
-    return section(QStringLiteral("Wire connections"), wireTable_, this,
+    wireTable_->setMinimumHeight(100);
+    wireDetails_ = new QWidget(this);
+    wireDetails_->setObjectName(QStringLiteral("wizardConnectionDetails"));
+    auto* detailScroll = new QScrollArea(this);
+    detailScroll->setWidgetResizable(true);
+    detailScroll->setFrameShape(QFrame::NoFrame);
+    detailScroll->setWidget(wireDetails_);
+    wireSplit_ = new QSplitter(Qt::Vertical, this);
+    wireSplit_->setObjectName(QStringLiteral("wizardConnectionSplit"));
+    wireSplit_->addWidget(wireTable_);
+    wireSplit_->addWidget(detailScroll);
+    wireSplit_->setSizes({140, 220});
+    return section(QStringLiteral("Wire connections"), wireSplit_, this,
                    QList<QWidget*>{addBtn, placeCableBtn, fillBtn, cableBtn, coaxBtn, looseBtn,
                                    finishUnifyBtn_,
                                    allGaugeLabel,
@@ -2399,15 +2528,21 @@ void HarnessBuilderDialog::lightPins(const QString& connId, int pin) {
             }
         }
     }
+    applyPinHighlights(lit);
+}
+
+void HarnessBuilderDialog::applyPinHighlights(const QStringList& lit) {
     if (lit == litPins_) return;
     litPins_ = lit;
+    if (wiringPreview_) wiringPreview_->setLitPins(lit);
     for (QListWidget* list : findChildren<QListWidget*>()) {
         const QString conn = list->property("connId").toString();
         if (conn.isEmpty()) continue;
         for (int r = 0; r < list->count(); ++r) {
             QListWidgetItem* item = list->item(r);
             const bool on = lit.contains(QStringLiteral("%1:%2").arg(conn).arg(item->data(Qt::UserRole).toInt()));
-            item->setBackground(on ? QBrush(QColor("#ffd166")) : QBrush());
+            // Lit lightly: the pin's own text and colour still read through it.
+            item->setBackground(on ? QBrush(kLitPin) : QBrush());
             QFont f = item->font();
             f.setBold(on);
             item->setFont(f);
@@ -2416,6 +2551,31 @@ void HarnessBuilderDialog::lightPins(const QString& connId, int pin) {
 }
 
 bool HarnessBuilderDialog::eventFilter(QObject* watched, QEvent* ev) {
+    if (ev->type() == QEvent::KeyPress && watched && watched->property("wizardValueField").toBool()) {
+        const int key = static_cast<QKeyEvent*>(ev)->key();
+        if (key == Qt::Key_Return || key == Qt::Key_Enter) {
+            if (auto* spin = qobject_cast<QAbstractSpinBox*>(watched)) spin->interpretText();
+            if (auto* field = qobject_cast<QWidget*>(watched)) field->clearFocus();
+            ev->accept(); return true;
+        }
+    }
+    if (watched == bomDialog_ && ev->type() == QEvent::Hide && bomDialog_)
+        QSettings().setValue(QStringLiteral("harnessBuilder/ui/v2/bomGeometry"), bomDialog_->saveGeometry());
+    if (ev->type() == QEvent::MouseButtonPress && pendingUnify_.isEmpty() &&
+        !syncing_ && watched && static_cast<QMouseEvent*>(ev)->button() == Qt::LeftButton) {
+        const QString id = watched->property("wizardWireId").toString();
+        if (!id.isEmpty()) {
+            auto* mouse = static_cast<QMouseEvent*>(ev);
+            const bool multiple = mouse->modifiers() & Qt::ControlModifier;
+            if (!multiple) wireTable_->clearSelection();
+            for (int row = 0; row < wireTable_->rowCount(); ++row)
+                if (auto* cell = wireTable_->cellWidget(row, 0); cell && cell->property("wireId").toString() == id)
+                    wireTable_->selectionModel()->select(wireTable_->model()->index(row, 0),
+                        (multiple ? QItemSelectionModel::Toggle : QItemSelectionModel::Select) | QItemSelectionModel::Rows);
+            selectWire(id);
+            if (multiple) { ev->accept(); return true; }
+        }
+    }
     // CTRL+HOVER ON A PIN OF THE PIN MAP: it, and every pin wired to it, lit - until Ctrl is let go or the pointer leaves.
     if (ev->type() == QEvent::MouseMove || ev->type() == QEvent::Leave) {
         if (auto* list = qobject_cast<QListWidget*>(watched ? watched->parent() : nullptr);
@@ -2430,7 +2590,8 @@ bool HarnessBuilderDialog::eventFilter(QObject* watched, QEvent* ev) {
                         pin = item->data(Qt::UserRole).toInt();
                     }
             }
-            lightPins(conn, pin);
+            if (!conn.isEmpty()) lightPins(conn, pin);
+            else if (pinnedPins_.isEmpty()) lightPins(QString(), 0);
         }
     }
     if (wireTable_ && watched == wireTable_->viewport() && !pendingUnify_.isEmpty() &&
@@ -2506,7 +2667,7 @@ void HarnessBuilderDialog::cancelUnify() {
     if (wireTable_) {
         setRowsPickable(false);
         wireTable_->clearSelection();
-        wireTable_->setSelectionMode(QAbstractItemView::NoSelection);
+        wireTable_->setSelectionMode(QAbstractItemView::ExtendedSelection);
     }
     if (finishUnifyBtn_) finishUnifyBtn_->hide();
     if (pickOverlay_) pickOverlay_->refresh();
@@ -2560,7 +2721,7 @@ void HarnessBuilderDialog::applyUnify() {
     if (wireTable_) {
         setRowsPickable(false); // the fields take the mouse again
         wireTable_->clearSelection();
-        wireTable_->setSelectionMode(QAbstractItemView::NoSelection);
+        wireTable_->setSelectionMode(QAbstractItemView::ExtendedSelection);
     }
     if (finishUnifyBtn_) finishUnifyBtn_->hide();
     reloadAll();
@@ -2574,9 +2735,13 @@ void HarnessBuilderDialog::applyUnify() {
 void HarnessBuilderDialog::showEvent(QShowEvent* e) {
     forgetSharedLibrary();   // a part added since this window was last open is pickable now
     QDialog::showEvent(e);
+    if (!wizardUiReady_) initializeWizardUi();
 }
 
 void HarnessBuilderDialog::keyPressEvent(QKeyEvent* e) {
+    if (e->key() == Qt::Key_Escape && !pinnedPins_.isEmpty()) {
+        pinnedPins_.clear(); lightPins(QString(), 0); e->accept(); return;
+    }
     if (pendingAddGroup_ && e->key() == Qt::Key_Escape) {
         pendingAddGroup_ = false;
         syncing_ = true;
@@ -2913,6 +3078,7 @@ void HarnessBuilderDialog::autoFillPins() {
 }
 
 void HarnessBuilderDialog::reloadWires() {
+    const QStringList selected = pendingUnify_.isEmpty() ? pickedWireIds() : QStringList();
     wireTable_->clearSpans();
     wireTable_->setRowCount(0);
     const QStringList conns = connectorChoices();
@@ -2930,6 +3096,25 @@ void HarnessBuilderDialog::reloadWires() {
     auto groupFor = [this](const HarnessWire& w, QString& key, QString& title, bool& leftovers) {
         leftovers = false;
         switch (grouping_) {
+        case WireGrouping::Assembly:
+            // A CABLE OR A COAX IS A GROUP OF ITS OWN; loose wires are grouped by the trunk they run along - the two
+            // connectors they join - not one group a wire.
+            if (w.bundle.isEmpty()) {
+                key = QStringLiteral("c:%1>%2").arg(w.fromConn, w.toConn);
+                const HarnessConnector* a = harnessConnById(def_, w.fromConn);
+                const HarnessConnector* b = harnessConnById(def_, w.toConn);
+                const QString an = a ? (a->designator.isEmpty() ? a->id : a->designator) : QStringLiteral("open");
+                const QString bn = b ? (b->designator.isEmpty() ? b->id : b->designator) : QStringLiteral("open");
+                title = QStringLiteral("Wires %1  →  %2").arg(an, bn);
+            } else {
+                key = QStringLiteral("a:") + w.bundle;
+                title = QStringLiteral("Assembly %1").arg(w.bundle);
+                if (!seenAssemblyGroups_.contains(key)) {
+                    seenAssemblyGroups_.insert(key);
+                    collapsedGroups_.insert(key);
+                }
+            }
+            break;
         case WireGrouping::Shield:
             key = QStringLiteral("s:") + w.shieldGroup;
             leftovers = w.shieldGroup.isEmpty();
@@ -3012,7 +3197,7 @@ void HarnessBuilderDialog::reloadWires() {
     mergeGroupCells();
     // Sized to the widgets, not the header text: a connector name or a gauge must never be
     // clipped to "0.5 mm...".
-    fitColumns(wireTable_);
+    if (!wizardUiReady_) fitColumns(wireTable_);
     // The rows just built their cell widgets on top of the pick overlay; put it back above them.
     if (pickOverlay_) pickOverlay_->refresh();
     // Rows rebuilt during a pick get fresh cell widgets, which would start taking the mouse again.
@@ -3033,8 +3218,11 @@ void HarnessBuilderDialog::reloadWires() {
         }
     }
     // A rebuild must not quietly make the rows pickable again.
-    wireTable_->setSelectionMode(pendingUnify_.isEmpty() ? QAbstractItemView::NoSelection
+    wireTable_->setSelectionMode(pendingUnify_.isEmpty() ? QAbstractItemView::ExtendedSelection
                                                          : QAbstractItemView::MultiSelection);
+    for (int row = 0; row < wireTable_->rowCount(); ++row)
+        if (auto* cell = wireTable_->cellWidget(row, 0); cell && selected.contains(cell->property("wireId").toString()))
+            wireTable_->selectionModel()->select(wireTable_->model()->index(row, 0), QItemSelectionModel::Select | QItemSelectionModel::Rows);
 }
 
 // The columns that describe a GROUP of rows rather than one row, merged. Rows that run together as
@@ -3205,6 +3393,12 @@ void HarnessBuilderDialog::showWireRowMenu(const QString& wireId, const QPoint& 
 
 void HarnessBuilderDialog::armCellMenu(QWidget* cell, const QString& wireId) {
     if (!cell) return;
+    cell->setProperty("wizardWireId", wireId);
+    cell->installEventFilter(this);
+    for (auto* child : cell->findChildren<QWidget*>()) {
+        child->setProperty("wizardWireId", wireId);
+        child->installEventFilter(this);
+    }
     cell->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(cell, &QWidget::customContextMenuRequested, this,
             [this, cell, wireId](const QPoint& at) {
@@ -3228,6 +3422,13 @@ void HarnessBuilderDialog::addWireToGroup(const QString& key) {
         return;
     }
     HarnessWire& w = def_.wires.back();
+    if (key.startsWith(QLatin1String("a:"))) {
+        const QString bundle = key.mid(2);
+        for (const auto& member : def_.wires) if (member.id != w.id && member.bundle == bundle) {
+            w.bundle = bundle; w.libPart = member.libPart; w.partNumber = member.partNumber;
+            w.kind = QStringLiteral("cable"); w.cutLengthMm = member.cutLengthMm; break;
+        }
+    }
     if (key.startsWith(QLatin1String("c:"))) {
         const QString rest = key.mid(2);
         const QString from = rest.section(QLatin1Char('>'), 0, 0);
@@ -3250,6 +3451,12 @@ void HarnessBuilderDialog::buildGroupHeader(int row, const QString& key, const Q
     // One clickable band across the whole width, so the fold target is obvious and large.
     wireTable_->setSpan(row, 0, 1, wireTable_->columnCount());
     auto* btn = new QToolButton(wireTable_);
+    if (key.startsWith(QLatin1String("a:"))) {
+        for (const auto& member : def_.wires)
+            if ((!member.bundle.isEmpty() && key.mid(2) == member.bundle) || key.mid(2) == member.id) {
+                armCellMenu(btn, member.id); break;
+            }
+    }
     // The group this band stands for, readable from outside: Add wire needs to know which groups
     // there are to add to.
     btn->setProperty("groupKey", key);
@@ -3438,6 +3645,8 @@ void HarnessBuilderDialog::buildWireRow(int row, const HarnessWire& wRef,
                            QStringLiteral("Signal") + suffix, QStringLiteral("SIGNAL"));
             color->addItem(codeIcon(QStringLiteral("SHIELD")),
                            QStringLiteral("Shield") + suffix, QStringLiteral("SHIELD"));
+            for (const auto& code : wireColorCodes())
+                if (code != QLatin1String("SIGNAL") && code != QLatin1String("SHIELD")) addCode(code);
         } else {
             for (const QString& code : wireColorCodes()) {
                 // Signal/Shield belong to a coax; the drain colour is offered everywhere.
@@ -3451,6 +3660,7 @@ void HarnessBuilderDialog::buildWireRow(int row, const HarnessWire& wRef,
         // item's own icon appears beside it and the colour is shown twice.
         color->setIconSize(QSize(0, 0));
         centerCombo(color);
+        if (color->findData(w.color) < 0) addCode(w.color);
         {
             const int at = color->findData(w.color);
             if (at >= 0) color->setCurrentIndex(at);
@@ -3465,8 +3675,15 @@ void HarnessBuilderDialog::buildWireRow(int row, const HarnessWire& wRef,
                     const QString data = color->itemData(i).toString();
                     if (data != QLatin1String(kCustomColorItem)) {
                         swatch->setIcon(codeIcon(data));
-                        if (auto* ww = wireById(id)) ww->color = data;
+                        if (auto* ww = wireById(id)) {
+                            if (harnessIsCoaxKind(ww->kind))
+                                ww->coaxRole = data == QLatin1String("SHIELD") ? QStringLiteral("shield") :
+                                               data == QLatin1String("SIGNAL") ? QStringLiteral("signal") :
+                                               harnessCoaxShield(*ww) ? QStringLiteral("shield") : QStringLiteral("signal");
+                            ww->color = data;
+                        }
                         reloadPinMap(); // the pin map shows each wire's colour
+                        refreshPreview();
                         return;
                     }
                     // "Add custom": a name and a colour, remembered for every wire from now on.
@@ -3964,6 +4181,7 @@ void HarnessBuilderDialog::runOptimizeBy(bool shield) {
 }
 
 void HarnessBuilderDialog::generate() {
+    def_.physicalBom = true;
     if (!editor_) return;
     if (def_.connectors.empty() || def_.wires.empty()) {
         showIssues({{QStringLiteral("empty"),
@@ -3975,7 +4193,7 @@ void HarnessBuilderDialog::generate() {
     if (!issues.empty()) {
         showIssues(issues, false);
         const auto answer = QMessageBox::warning(
-            this, QStringLiteral("Schematic harness builder"),
+            this, QStringLiteral("Schematic build wizzard"),
             QStringLiteral("The definition has %1 issue(s). Draw it anyway?").arg(issues.size()),
             QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
         if (answer != QMessageBox::Yes) return;
@@ -4044,7 +4262,7 @@ void HarnessBuilderDialog::saveDefinition() {
         path += QLatin1String(kFileSuffix);
     QFile f(path);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        QMessageBox::warning(this, QStringLiteral("Schematic harness builder"),
+        QMessageBox::warning(this, QStringLiteral("Schematic build wizzard"),
                              QStringLiteral("Could not write %1").arg(path));
         return;
     }
@@ -4118,7 +4336,7 @@ void HarnessBuilderDialog::savePresetToDrawing() {
             .trimmed();
     if (!ok || name.isEmpty()) return;
     if (doc->harnessPresets().contains(name) &&
-        QMessageBox::question(this, QStringLiteral("Schematic harness builder"),
+        QMessageBox::question(this, QStringLiteral("Schematic build wizzard"),
                               QStringLiteral("This drawing already has a preset called \"%1\". "
                                              "Replace it?")
                                   .arg(name),
@@ -4151,7 +4369,7 @@ void HarnessBuilderDialog::loadPresetFromDrawing(const QString& name) {
 void HarnessBuilderDialog::deletePresetFromDrawing(const QString& name) {
     Document* doc = editor_ ? editor_->document() : nullptr;
     if (!doc) return;
-    if (QMessageBox::question(this, QStringLiteral("Schematic harness builder"),
+    if (QMessageBox::question(this, QStringLiteral("Schematic build wizzard"),
                               QStringLiteral("Delete the preset \"%1\" from this drawing?").arg(name),
                               QMessageBox::Yes | QMessageBox::No,
                               QMessageBox::No) != QMessageBox::Yes)
@@ -4173,14 +4391,14 @@ void HarnessBuilderDialog::loadDefinition() {
     if (path.isEmpty()) return;
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly)) {
-        QMessageBox::warning(this, QStringLiteral("Schematic harness builder"),
+        QMessageBox::warning(this, QStringLiteral("Schematic build wizzard"),
                              QStringLiteral("Could not read %1").arg(path));
         return;
     }
     const QJsonObject root = QJsonDocument::fromJson(f.readAll()).object();
     f.close();
     if (root.isEmpty() || !root.contains(QStringLiteral("connectors"))) {
-        QMessageBox::warning(this, QStringLiteral("Schematic harness builder"),
+        QMessageBox::warning(this, QStringLiteral("Schematic build wizzard"),
                              QStringLiteral("%1 is not a builder pattern.")
                                  .arg(QFileInfo(path).fileName()));
         return;
@@ -4211,6 +4429,10 @@ void HarnessBuilderDialog::reloadAll() {
     reloadConnectors();
     reloadBlockMap();
     reloadPinMap();
+    if (!pinnedPins_.isEmpty()) {
+        const QString root = pinnedPins_.first(); const int split = root.lastIndexOf(QLatin1Char(':'));
+        litPins_.clear(); lightPins(root.left(split), root.mid(split + 1).toInt()); pinnedPins_ = litPins_;
+    }
     reloadWires();
     reloadLayout();
     reloadShields();
@@ -4227,6 +4449,8 @@ void HarnessBuilderDialog::reloadAll() {
                                .arg(def_.connectors.size())
                                .arg(def_.wires.size())
                                .arg(crossings));
+    refreshWireDetails();
+    refreshLiveBom();
 }
 
 } // namespace Loopwire

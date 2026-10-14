@@ -1,5 +1,5 @@
 // The harness demand commands on the Harness schematic tab: a workbook for a customer without Loopwire to fill in,
-// the filled one read back into the schematic harness builder, and the demand put on one sheet of paper to confirm.
+// the filled one read back into the schematic build wizzard, and the demand put on one sheet of paper to confirm.
 // The workbook and the reading of it are in harness/HarnessDemand; this is the files and the windows around them.
 
 #include "app/MainWindow.h"
@@ -65,7 +65,7 @@ void MainWindow::exportHarnessDemand(bool fromBuilder) {
     if (fromBuilder) {
         if (!harnessDlg_ || harnessDlg_->definition().connectors.empty()) {
             QMessageBox::information(this, QStringLiteral("Harness demand"),
-                                     QStringLiteral("The schematic harness builder has no connectors yet - describe the "
+                                     QStringLiteral("The schematic build wizzard has no connectors yet - describe the "
                                                     "harness there first, or save a blank template."));
             return;
         }
