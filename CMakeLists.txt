@@ -75,6 +75,8 @@ add_library(loopwire_core STATIC
     src/harness/Harness.cpp
     src/harness/HarnessBuilder.h
     src/harness/HarnessBuilder.cpp
+    src/harness/HarnessDemand.h
+    src/harness/HarnessDemand.cpp
     src/harness/PartsLibrary.h
     src/harness/Datasheet.h
     src/harness/Datasheet.cpp
@@ -122,6 +124,7 @@ add_library(loopwire_core STATIC
     src/app/ribbon/HarnessMechanicalTab.cpp
     src/app/HarnessBuilderDialog.h
     src/app/HarnessBuilderDialog.cpp
+    src/app/HarnessDemandCommands.cpp
     src/app/SplashScreen.h
     src/app/SplashScreen.cpp
     src/app/PartsLibraryDialog.h

@@ -610,6 +610,11 @@ private:
     // The Harness Builder (modeless, one instance): describe a harness, then Generate draws
     // it. Kept alive between openings so a part-built definition is not lost on Close.
     void showHarnessBuilder();
+    // THE HARNESS DEMAND (HarnessDemandCommands.cpp): a workbook for a customer to fill in - blank, or what the
+    // builder holds - the filled one read back into the builder, and one put on paper as a PDF.
+    void exportHarnessDemand(bool fromBuilder);
+    void importHarnessDemand();
+    void harnessDemandOverview();
     // The parts library: the raw materials a harness is built from, with a schematic symbol and a
     // mechanical drawing per part. Modeless and kept alive, like the builder.
     void showPartsLibrary();

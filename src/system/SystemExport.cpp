@@ -1,4 +1,5 @@
 #include "system/SystemExport.h"
+#include "system/SystemImport.h"
 
 #include <QDateTime>
 #include <QFile>
@@ -156,6 +157,13 @@ QByteArray zipStored(const std::vector<ZipEntry>& entries) {
 }
 
 } // namespace
+
+QByteArray writeZip(const std::vector<ZipItem>& items) {
+    std::vector<ZipEntry> entries;
+    entries.reserve(items.size());
+    for (const ZipItem& item : items) entries.push_back({item.name, item.data});
+    return zipStored(entries);
+}
 
 // ---- Where things are -----------------------------------------------------------------------------
 

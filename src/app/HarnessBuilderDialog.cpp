@@ -4190,6 +4190,14 @@ void HarnessBuilderDialog::loadDefinition() {
     summaryLabel_->setText(QStringLiteral("Loaded %1").arg(QFileInfo(path).fileName()));
 }
 
+void HarnessBuilderDialog::loadDemand(const HarnessDef& def, const QString& from) {
+    applyDefinitionJson(harnessDefToJson(def));
+    if (summaryLabel_) summaryLabel_->setText(QStringLiteral("Demand %1: %2 connector(s), %3 wire(s)")
+                                                  .arg(from)
+                                                  .arg(def_.connectors.size())
+                                                  .arg(def_.wires.size()));
+}
+
 void HarnessBuilderDialog::applyDefinitionJson(const QJsonObject& root) {
     def_ = harnessDefFromJson(root);
     // Keep the id sequences ahead of whatever was loaded so new rows never collide.

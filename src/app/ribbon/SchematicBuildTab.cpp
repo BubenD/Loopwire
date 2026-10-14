@@ -490,6 +490,42 @@ void MainWindow::buildSchematicBuildTab() {
         connect(hbBtn, &QToolButton::clicked, this, [this] { showHarnessBuilder(); });
         hbg->addWidget(hbBtn, 0, 0);
         hbg->addWidget(makePartsLibraryButton(hbW), 0, 1);
+        // THE HARNESS DEMAND: a workbook a customer without Loopwire fills in - the pinout, twisted pairs, shields,
+        // coax - read back into the builder, or put on paper to confirm.
+        auto* demandBtn = new QToolButton(hbW);
+        demandBtn->setObjectName(QStringLiteral("harnessDemand"));
+        demandBtn->setText(QStringLiteral("Harness\ndemand"));
+        demandBtn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        demandBtn->setIconSize(QSize(30, 30));
+        demandBtn->setAutoRaise(true);
+        demandBtn->setPopupMode(QToolButton::InstantPopup);
+        demandBtn->setToolTip(QStringLiteral(
+            "A workbook for a customer to describe the harness they need - connectors, pinout, twisted pairs, "
+            "shields, coax - and the filled one read back into the builder"));
+        {
+            // A sheet of rows with a pin-to-pin line across it.
+            QPixmap pm(32, 32);
+            pm.fill(Qt::transparent);
+            QPainter ip(&pm);
+            ip.setRenderHint(QPainter::Antialiasing, true);
+            ip.setPen(QPen(QColor("#8fb7ff"), 1.5));
+            ip.drawRect(QRectF(5.5, 3.5, 21, 25));
+            ip.setPen(QPen(QColor("#5f7fa8"), 1.0));
+            for (int y = 10; y <= 24; y += 5) ip.drawLine(QPointF(6, y), QPointF(26, y));
+            ip.drawLine(QPointF(13, 4), QPointF(13, 28));
+            ip.setPen(QPen(QColor("#7ee0a0"), 1.8));
+            ip.drawLine(QPointF(9, 17), QPointF(23, 17));
+            ip.end();
+            demandBtn->setIcon(QIcon(pm));
+        }
+        auto* dm = new QMenu(demandBtn);
+        dm->addAction(QStringLiteral("New demand template..."), this, [this] { exportHarnessDemand(false); });
+        dm->addAction(QStringLiteral("Demand from the builder..."), this, [this] { exportHarnessDemand(true); });
+        dm->addSeparator();
+        dm->addAction(QStringLiteral("Import demand into the builder..."), this, [this] { importHarnessDemand(); });
+        dm->addAction(QStringLiteral("Demand overview (PDF)..."), this, [this] { harnessDemandOverview(); });
+        demandBtn->setMenu(dm);
+        hbg->addWidget(demandBtn, 0, 2);
         addGroup(lay, QStringLiteral("Harness"), hbW);
     }
     {

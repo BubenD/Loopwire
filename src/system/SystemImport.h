@@ -33,5 +33,7 @@ struct ZipItem {
     QByteArray data;
 };
 std::vector<ZipItem> readZip(const QByteArray& bytes);
+// And one written, each file stored as it is - what an Office package (.xlsx, .vsdx) may be.
+QByteArray writeZip(const std::vector<ZipItem>& items);
 
 } // namespace Loopwire

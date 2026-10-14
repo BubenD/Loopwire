@@ -59,6 +59,9 @@ public:
     // What the builder currently describes. Read-only: everything that changes a harness goes
     // through the dialog's own controls, so the definition and the tables can never disagree.
     const HarnessDef& definition() const { return def_; }
+    // A HARNESS DEMAND READ IN (see HarnessDemand): the builder takes its definition whole, as a loaded pattern is
+    // taken, and says where it came from.
+    void loadDemand(const HarnessDef& def, const QString& from);
 
     // UNDO AND REDO inside the builder: every change to the harness is one step (typing in one field, a step for the
     // burst). Ctrl+Z and Ctrl+Y here too. Whether there is one to take back, or to do again.
