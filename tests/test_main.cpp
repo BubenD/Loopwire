@@ -54,6 +54,7 @@ LONG WINAPI sayCrash(EXCEPTION_POINTERS* info) {
 #endif
 
 int run_geometry_tests();
+int run_latency_tests();
 int run_editor_tests();
 int run_io_tests();
 int run_harness_tests();
@@ -99,7 +100,8 @@ int main(int argc, char** argv) {
     // A window can only be built with an application object behind it, and the step builder is a
     // window. Offscreen, so this runs the same on a machine with no display as on one with a screen -
     // set here rather than left to whoever starts the tests.
-    qputenv("QT_QPA_PLATFORM", "offscreen");
+    qputenv("QT_QPA_PLATFORM", qEnvironmentVariableIsEmpty("LOOPWIRE_TEST_PLATFORM")
+                                 ? QByteArray("offscreen") : qgetenv("LOOPWIRE_TEST_PLATFORM"));
 #ifdef _WIN32
     // THE SYSTEM'S FONTS FOR THE OFFSCREEN PLATFORM. It looks for fonts beside Qt, where there are none, and then
     // draws every letter as an empty box - a PDF written in a test then has no text in it to search.
@@ -128,6 +130,8 @@ int main(int argc, char** argv) {
     const QList<QByteArray> onlySuites = qgetenv("LOOPWIRE_TEST_ONLY").split(',');
     auto only = [&](const char* name) { return qgetenv("LOOPWIRE_TEST_ONLY").isEmpty() || onlySuites.contains(QByteArray(name)); };
     int failures = 0;
+    // Performance measurements are opt-in, so normal correctness runs stay short.
+    if (onlySuites.contains(QByteArray("latency"))) failures += run_latency_tests();
     if (only("geometry")) failures += run_geometry_tests();
     if (only("editor")) failures += run_editor_tests();
     if (only("io")) failures += run_io_tests();

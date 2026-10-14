@@ -77,6 +77,9 @@ private:
 } // namespace
 
 CanvasWidget::CanvasWidget(QWidget* parent) : QWidget(parent) {
+    // Every paint covers its damage with the opaque scene cache. Avoid Qt
+    // painting the parent/style background underneath it on every mouse move.
+    setAttribute(Qt::WA_OpaquePaintEvent);
     drawingDetailsVisible_=QSettings().value(QStringLiteral("canvas/showDrawingDetails"),true).toBool();
     drawingDetailsMinimized_=QSettings().value(QStringLiteral("canvas/minimizeDrawingDetails"),false).toBool();
     drawingDetailsPinned_=QSettings().value(QStringLiteral("canvas/pinDrawingDetails"),false).toBool();
@@ -344,7 +347,7 @@ void CanvasWidget::setEditor(Editor* editor) {
         // Selection changed -> cache must re-include/exclude the selected set.
         connect(editor_, &Editor::selectionChanged, this, [this] { invalidateScene(); });
         // Interactive preview (cursor move / live drag) -> overlay repaint only.
-        connect(editor_, &Editor::overlayChanged, this, QOverload<>::of(&QWidget::update));
+        connect(editor_, &Editor::overlayChanged, this, [this] { requestRepaint(); });
         // Inline value prompt (fillet radius / gap): pop the flying field at the
         // cursor, pre-labelled, so the user types the value and keeps drawing.
         // QUEUED: the prompt is emitted while the previous flying field is still
@@ -895,6 +898,7 @@ bool CanvasWidget::scrollScene(const QPoint& delta) {
 }
 
 void CanvasWidget::paintEvent(QPaintEvent* event) {
+    refreshCrosshairCursor();
     const ViewTransform vt = transform();
     const qreal dpr = devicePixelRatioF();
     const QSize devSize = size() * dpr;
@@ -1047,7 +1051,14 @@ int CanvasWidget::drawDrawingDetails(QPainter& painter) const {
         painter.drawText(drawingDetailsFrame_.adjusted(5,4,-5,-4),Qt::AlignCenter|Qt::TextWordWrap,QStringLiteral("Drawing details"));
         painter.restore();return drawingDetailsFrame_.bottom()+9;
     }
-    const QJsonObject details=effectiveDrawingDetails(*owner);
+    if (detailsOwner_ != owner || detailsRebuild_ != sceneRebuilds_ ||
+        detailsDeclared_ != owner->drawingDetails()) {
+        detailsResolved_ = effectiveDrawingDetails(*owner);
+        detailsDeclared_ = owner->drawingDetails();
+        detailsOwner_ = owner;
+        detailsRebuild_ = sceneRebuilds_;
+    }
+    const QJsonObject& details = detailsResolved_;
     const int panelWidth=std::min(290,width()-24);
     const int valueWidth=panelWidth-98;
     const QString keys[]={QStringLiteral("drawingNo"),QStringLiteral("revision"),QStringLiteral("title")};
@@ -1130,7 +1141,7 @@ QPointF CanvasWidget::crosshairScreenPos() const {
     // The snapped point comes from whatever the editor is working in, so it must be put on the screen the
     // same way: inside a window on a layout that is the MODEL through that window. Mapped as paper, the
     // crosshair jumped away from the cursor the moment a snap caught - which is what it looked like.
-    if (editor_ && editor_->currentSnap().snapped)
+    if (editor_ && (editor_->currentSnap().snapped || editor_->isDrafting()))
         return inputTransform().toScreen(editor_->currentSnap().point);
     return lastMousePos_;
 }
@@ -1152,6 +1163,10 @@ int CanvasWidget::crosshairCursorReach() const {
 // moment the mouse moves - no repaint of the drawing comes between the hand and what is seen - and a crosshair the
 // program painted itself trailed a frame or two behind. Kept until the size, colour, pick box or screen changes.
 QCursor CanvasWidget::crosshairCursor() const {
+    // While drafting, the crosshair and rubber band must come from the same
+    // painted frame. The OS cursor otherwise advances independently of the
+    // preview, visibly separating the two even when input processing is fast.
+    if (editor_ && editor_->isDrafting()) return QCursor(Qt::BlankCursor);
     const double dpr = std::max(1.0, devicePixelRatioF());
     const int reach = crosshairCursorReach();
     const QString key = QStringLiteral("%1/%2/%3/%4").arg(reach).arg(pickboxPx_).arg(crosshairColor_.name()).arg(dpr);
@@ -1177,22 +1192,26 @@ QCursor CanvasWidget::crosshairCursor() const {
 }
 
 void CanvasWidget::refreshCrosshairCursor() {
-    if (cursor().shape() == Qt::BitmapCursor) setCursor(crosshairCursor());
+    if (cursor().shape() == Qt::BitmapCursor || cursor().shape() == Qt::BlankCursor)
+        setCursor(crosshairCursor());
 }
 
 // What the pointer cannot carry: the arms past the largest pointer there is, for a crosshair across the whole
 // view. Drawn at the mouse, where the pointer is; a snap is shown by its marker, not by moving the crosshair.
 void CanvasWidget::drawCrosshair(QPainter& p) const {
+    const bool drafting = editor_ && editor_->isDrafting();
     const double arm = crosshairArm();
-    const double inner = crosshairCursorReach();
-    if (arm <= inner + 0.5) return;
-    const QPointF c = lastMousePos_;
+    const double inner = drafting ? pickboxPx_ + 1.0 : crosshairCursorReach();
+    if (!drafting && arm <= inner + 0.5) return;
+    const QPointF c = drafting ? crosshairScreenPos() : lastMousePos_;
     p.setRenderHint(QPainter::Antialiasing, false);
     QPen pen(crosshairColor_);
     pen.setCosmetic(true);
     pen.setWidth(1);
     p.setPen(pen);
     p.setBrush(Qt::NoBrush);
+    if (drafting)
+        p.drawRect(QRectF(c.x() - pickboxPx_, c.y() - pickboxPx_, 2 * pickboxPx_, 2 * pickboxPx_));
     p.drawLine(QPointF(std::max(0.0, c.x() - arm), c.y()), QPointF(c.x() - inner, c.y()));
     p.drawLine(QPointF(c.x() + inner, c.y()), QPointF(std::min<double>(width(), c.x() + arm), c.y()));
     p.drawLine(QPointF(c.x(), std::max(0.0, c.y() - arm)), QPointF(c.x(), c.y() - inner));
@@ -1585,37 +1604,13 @@ QRegion CanvasWidget::crosshairBands(const QPointF& at) const {
     return r;
 }
 
-// A REPAINT, AT THE RATE A SCREEN CAN SHOW ONE.
-//
-// A mouse reports where it is far more often than a monitor can draw - a thousand times a second on some of them
-// against sixty on the screen - and every report was asking for a full repaint. Most of those were thrown away
-// unseen, and on a drawing heavy enough for a repaint to take a few milliseconds the extra ones are what makes the
-// cursor lag behind the hand: the queue fills with work whose result nobody will ever look at.
-//
-// So repaints are held to one per frame. The trailing one always happens, which is the part that matters: the
-// LAST position the mouse reported is the one the cursor has to be drawn at, or it stops just short of where the
-// hand is and stays there.
-// `cursorOnly`: what has changed is no more than pendingCursorRegion_ - painted alone, unless a whole repaint is
-// asked for before the frame goes out.
+// Schedule immediately: QWidget::update already merges pending paint requests
+// and their damage regions. An extra frame timer delays the object preview by
+// up to its interval, while the native cursor keeps moving independently.
 void CanvasWidget::requestRepaint(bool cursorOnly) {
-    constexpr int kFrameMs = 8;   // about twice a 60 Hz screen: fast enough not to be seen, slow enough to help
-    if (!cursorOnly) wholeRepaintPending_ = true;
-    auto paintNow = [this] {
-        repaintPending_ = false;
-        frameClock_.restart();
-        if (wholeRepaintPending_) update();
-        else if (!pendingCursorRegion_.isEmpty()) update(pendingCursorRegion_);
-        wholeRepaintPending_ = false;
-        pendingCursorRegion_ = QRegion();
-    };
-    if (!frameClock_.isValid()) frameClock_.start();
-    if (frameClock_.elapsed() >= kFrameMs) {
-        paintNow();
-        return;
-    }
-    if (repaintPending_) return;   // one already on its way: this position will be drawn by it
-    repaintPending_ = true;
-    QTimer::singleShot(kFrameMs - static_cast<int>(frameClock_.elapsed()), this, paintNow);
+    if (!cursorOnly) update();
+    else if (!pendingCursorRegion_.isEmpty()) update(pendingCursorRegion_);
+    pendingCursorRegion_ = QRegion();
 }
 
 void CanvasWidget::enterEvent(QEnterEvent* e) {

@@ -22495,6 +22495,9 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
     if (doc_) {
         const SnapSettings& ss = snapSettings();
         if (ss.objectSnap && ss.snapCenter) {
+            // Membership used to scan the entire remembered list for every
+            // circle on every frame: O(circles * remembered centres).
+            const QSet<QString> rememberedCentres(shownCentres_.begin(), shownCentres_.end());
             const double tol = worldTolerance();
             QPen cp(paperInk(QColor("#ffd166")));
             cp.setCosmetic(true);
@@ -22508,8 +22511,7 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 // is not - or pointed at earlier during the command still in hand, in which case the
                 // mark stays so it can be aimed at. See shownCentres_.
                 const bool touching = std::abs(distance(cursor_, e.center) - e.radius) <= tol;
-                const bool remembered =
-                    std::find(shownCentres_.begin(), shownCentres_.end(), e.id) != shownCentres_.end();
+                const bool remembered = rememberedCentres.contains(e.id);
                 if (!touching && !remembered) continue;
                 const QPointF c = vt.toScreen(e.center);
                 const double arm = 4.0;   // screen pixels: a mark on the cursor, not on the drawing

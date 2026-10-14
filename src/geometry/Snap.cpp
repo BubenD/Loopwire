@@ -526,7 +526,10 @@ SnapResult resolveSnap(const Document& doc, const Vec2& raw,
         std::vector<std::pair<Vec2, Vec2>> allSegs;
         for (const auto& e : doc.entities()) {
             if (ignored(e.id)) continue;
-            if (const Layer* l = doc.findLayer(e.layer); l && !l->visible) continue;
+            // A harness run's reach box builds its rendered snap geometry, so
+            // hidden runs must still be rejected before that work.
+            if (e.type == EntityType::TwistedPair)
+                if (const Layer* l = doc.findLayer(e.layer); l && !l->visible) continue;
             // Nothing further away than the pick tolerance can supply a point inside it. Without this,
             // every cursor move built the snap geometry of EVERY object on the drawing: an imported sheet
             // of two thousand objects cost about three and a half milliseconds a move, out of the eight a
@@ -537,6 +540,11 @@ SnapResult resolveSnap(const Document& doc, const Vec2& raw,
                     raw.y < lo.y - tolWorld || raw.y > hi.y + tolWorld)
                     continue;
             }
+            // Only nearby objects need a layer lookup. On a drawing with many
+            // layers, looking each one up before rejecting distant geometry
+            // multiplied the work of every pointer report.
+            if (e.type != EntityType::TwistedPair)
+                if (const Layer* l = doc.findLayer(e.layer); l && !l->visible) continue;
 
             if (s.snapEndpoint) {
                 std::vector<Vec2> pts;
@@ -698,6 +706,14 @@ SnapResult resolveSnap(const Document& doc, const Vec2& raw,
             }
             // And round a ring, which is the same idea on something with no segments.
             for (const auto& e : doc.entities()) {
+                if (e.type != EntityType::Circle && e.type != EntityType::Arc &&
+                    e.type != EntityType::Ellipse) continue;
+                // The nearest fallback was evaluating angles and trigonometry
+                // for every ring on the sheet, including rings nowhere near
+                // the cursor. A conservative box rejects those cheaply.
+                const double radius = std::max(std::abs(e.radius), std::abs(e.radiusY));
+                if (std::abs(raw.x - e.center.x) > radius + best ||
+                    std::abs(raw.y - e.center.y) > radius + best) continue;
                 if (ignored(e.id)) continue;
                 if (const Layer* l = doc.findLayer(e.layer); l && !l->visible) continue;
                 if (e.type == EntityType::Circle || e.type == EntityType::Arc) {

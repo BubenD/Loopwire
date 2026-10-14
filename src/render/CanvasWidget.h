@@ -1,6 +1,5 @@
 #pragma once
 
-#include <QElapsedTimer>
 #include "model/Document.h"
 #include "render/EntityRenderer.h"
 
@@ -283,9 +282,7 @@ public:
     // the drawing LOOKS like - a layer switched off, a layer recoloured - has to say so: a plain
     // update() repaints the cache as it stands and shows no change at all.
     void invalidateScene();
-    // A repaint at the rate a screen can show one. A mouse reports where it is far more often than a monitor can
-    // draw, and every report was asking for a full repaint - most of them thrown away unseen, and on a heavy
-    // drawing the extra ones are what makes the cursor lag behind the hand.
+    // Schedule a repaint without a timer delay; Qt merges pending requests.
     void requestRepaint(bool cursorOnly = false);
     QRegion crosshairBands(const QPointF& at) const;
     double crosshairArm() const;
@@ -294,11 +291,7 @@ public:
     // The crosshair pointer as last drawn, and what it was drawn for. Not saved.
     mutable QCursor crosshairCursor_;
     mutable QString crosshairCursorKey_;
-    // The frame clock and whether one is already on its way. See requestRepaint.
-    QElapsedTimer frameClock_;
-    bool repaintPending_ = false;
-    // What the next frame has to paint: all of it, or only the strips the crosshair has moved through. Not saved.
-    bool wholeRepaintPending_ = false;
+    // Damage from the previous and current cursor positions, merged by Qt.
     QRegion pendingCursorRegion_;
     QPointF lastCrosshairAt_{-1e9, -1e9};
     // How many times the whole drawing has been re-rendered. For a test that panning does not.
@@ -367,6 +360,12 @@ private:
     bool drawingDetailsPressed_ = false;
     mutable QRect drawingDetailsFrame_;
     mutable QRect drawingDetailsMinimize_;
+    // Resolve title-block fields only when the drawing changes, not on every
+    // rubber-band frame. The declared values are cheap to compare directly.
+    mutable const Document* detailsOwner_ = nullptr;
+    mutable int detailsRebuild_ = -1;
+    mutable QJsonObject detailsDeclared_;
+    mutable QJsonObject detailsResolved_;
     QTimer* drawingDetailsExpandTimer_ = nullptr;
     QTimer* drawingDetailsFoldTimer_ = nullptr;
 

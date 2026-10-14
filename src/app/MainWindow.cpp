@@ -153,6 +153,31 @@
 namespace Loopwire {
 
 namespace {
+// QLabel::setText invalidates its size hint. An unconstrained coordinate label
+// therefore relayouts the status bar and main window on every pointer report.
+// Fix BOTH dimensions; fixing width alone still allows those layout requests.
+class CoordinateReadout : public QLabel {
+public:
+    explicit CoordinateReadout(QWidget* parent)
+        : QLabel(QStringLiteral("0.000, 0.000"), parent) {
+        setObjectName(QStringLiteral("cursorCoordinates"));
+        setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        fitFont();
+    }
+protected:
+    void changeEvent(QEvent* event) override {
+        QLabel::changeEvent(event);
+        if (event->type() == QEvent::FontChange || event->type() == QEvent::StyleChange)
+            fitFont();
+    }
+private:
+    void fitFont() {
+        setFixedSize(fontMetrics().horizontalAdvance(
+                         QStringLiteral("-999999999.999, -999999999.999")) + 8,
+                     fontMetrics().height() + 2 * margin());
+    }
+};
+
 
 // A thin ruler bar above the on-canvas text editor (AutoCAD MTEXT style): a tick
 // scale with a left indent marker and a right WIDTH handle (diamond) you can drag
@@ -2367,7 +2392,7 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
     note(QStringLiteral("Document tabs"));
     buildDocumentArea(); // tab bar + canvas as the central widget
 
-    coordLabel_ = new QLabel(QStringLiteral("0.000, 0.000"), this);
+    coordLabel_ = new CoordinateReadout(this);
     statusBar()->addPermanentWidget(coordLabel_);
     statusBar()->showMessage(QStringLiteral("Ready"));
 

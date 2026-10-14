@@ -44,10 +44,43 @@ void check(bool ok, const char* what) {
 
 bool near(double a, double b, double eps = 1e-6) { return std::abs(a - b) < eps; }
 
+class PaintCountingCanvas : public CanvasWidget {
+public:
+    int paints = 0;
+protected:
+    void paintEvent(QPaintEvent* event) override {
+        ++paints;
+        CanvasWidget::paintEvent(event);
+    }
+};
+
 } // namespace
 
 int run_mechmodelcanvas_tests() {
     std::printf("model canvas tests:\n");
+    // A preview must be eligible for the very next event-loop paint, without
+    // waiting for a frame timer. Qt still coalesces a burst into one paint.
+    {
+        Document doc;
+        Editor editor;
+        editor.setDocument(&doc);
+        PaintCountingCanvas canvas;
+        canvas.setDocument(&doc);
+        canvas.setEditor(&editor);
+        canvas.resize(640, 480);
+        canvas.setPlainCanvas(true);
+        canvas.show();
+        QApplication::processEvents();
+        canvas.paints = 0;
+        for (int i = 0; i < 100; ++i) emit editor.overlayChanged();
+        check(canvas.paints == 0, "frames: preview requests do not paint synchronously");
+        canvas.pendingCursorRegion_ += QRect(10, 10, 30, 30);
+        canvas.requestRepaint(true);
+        QApplication::processEvents();
+        check(canvas.paints == 1,
+              "frames: a burst of previews paints once on the next event-loop pass");
+        check(canvas.pendingCursorRegion_.isEmpty(), "frames: cursor damage is handed to Qt");
+    }
 
     // A boot, with its taper already decided, opened to be drawn.
     MechModel m;
