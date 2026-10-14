@@ -17541,6 +17541,19 @@ void MainWindow::restorePanelLayout() {
     // Then which sides are folded away. A side left unpinned comes back unpinned, as a strip - and opens
     // to the width it was left at, because that is what was read back above.
     AutoHideDock::restorePinned(s.value(QStringLiteral("panels/pinned")).toStringList());
+    // A NEW BUILD OPENS WITH PROPERTIES AND PARTS ON: open and pinned at their sides, whatever the last session
+    // left. Told apart by the executable's own timestamp, the one the title shows.
+    const QDateTime built = QFileInfo(QCoreApplication::applicationFilePath()).lastModified();
+    const QString buildKey = built.isValid() ? built.toString(Qt::ISODate) : QString();
+    if (!buildKey.isEmpty() && s.value(QStringLiteral("panels/build")).toString() != buildKey) {
+        s.setValue(QStringLiteral("panels/build"), buildKey);
+        for (QDockWidget* dock : {propsDock_, partsDock_}) {
+            if (!dock) continue;
+            if (dock->isFloating()) dock->setFloating(false);
+            dock->show();
+            if (auto* hide = dynamic_cast<AutoHideDock*>(dock)) hide->setPinned(true);
+        }
+    }
     AutoHideDock::refreshPinButtons();
     syncViewPanelButtons();   // the View tab says what is actually on the screen
 }

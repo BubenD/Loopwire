@@ -8,6 +8,7 @@
 #include <QImage>
 #include <QPixmap>
 #include <QPoint>
+#include <QRegion>
 #include <QStringList>
 #include <QWidget>
 
@@ -282,10 +283,15 @@ public:
     // A repaint at the rate a screen can show one. A mouse reports where it is far more often than a monitor can
     // draw, and every report was asking for a full repaint - most of them thrown away unseen, and on a heavy
     // drawing the extra ones are what makes the cursor lag behind the hand.
-    void requestRepaint();
+    void requestRepaint(bool cursorOnly = false);
+    QRegion crosshairBands(const QPointF& at) const;
     // The frame clock and whether one is already on its way. See requestRepaint.
     QElapsedTimer frameClock_;
     bool repaintPending_ = false;
+    // What the next frame has to paint: all of it, or only the strips the crosshair has moved through. Not saved.
+    bool wholeRepaintPending_ = false;
+    QRegion pendingCursorRegion_;
+    QPointF lastCrosshairAt_{-1e9, -1e9};
     // How many times the whole drawing has been re-rendered. For a test that panning does not.
     int sceneRebuildsForTest() const { return sceneRebuilds_; }
     // What the drawing currently looks like, without the overlay. For a test that a pan leaves the
@@ -399,6 +405,11 @@ private:
     QPoint pendingScroll_;
     QPointF scrollResidual_;
     int sceneRebuilds_ = 0;
+    // The DRC badges as last worked out, and what they were worked out for (see paintEvent). Not saved.
+    const Document* badgeOwner_ = nullptr;
+    int badgeRebuild_ = -1;
+    QJsonObject badgeStamps_;
+    QStringList badgePassed_;
 
     bool panning_ = false;
     QPoint lastPanPos_;

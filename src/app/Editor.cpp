@@ -4588,6 +4588,12 @@ std::optional<Vec2> Editor::trackingAnchor() const {
     return std::nullopt;
 }
 
+bool Editor::pointerOnlyMovesCursor() const {
+    return tool_ == ToolId::Select && !pressed_ && !editing_ && !gripGrab_ && !markGrab_ && !drafting_ &&
+           modifyPts_.empty() && regionMode_ == RegionMode::None && !pastePlacing_ && !harnessPlacing_ &&
+           !trackingAnchor();
+}
+
 void Editor::onPointerMove(const Vec2& raw) {
     if (!doc_) return;
     // Hatch Pick Points: what was shown belongs to where the cursor WAS. It goes, and comes back for
@@ -21708,9 +21714,20 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             p.drawPolygon(poly);
         } else if ((tool_ == ToolId::Balloon || tool_ == ToolId::TextLeader || tool_ == ToolId::Arrow) &&
                    pts.size() >= 2) {
-            // Preview the leader from the arrow tip to the cursor; a Balloon also shows
-            // its circle, or a note mark its outline (a text leader or an arrow shows just the line).
-            p.drawLine(vt.toScreen(pts[0]), vt.toScreen(pts[1]));
+            // Preview the leader from the arrow tip to the cursor, ARROWHEAD AND ALL - drawn as the leader it will
+            // be; a Balloon also shows its circle, or a note mark its outline.
+            {
+                Entity ghost;
+                ghost.type = EntityType::Leader;
+                ghost.points = {pts[0], pts[1]};
+                ghost.meta.insert("text", QString());
+                ghost.meta.insert("size", 10.0);
+                ghost.meta.insert("arrowSize", 3.3);
+                ghost.meta.insert("landing", 0.0);
+                p.save();
+                EntityRenderer::draw(p, ghost, *doc_, vt, paperInk(QColor("#ffffff")));
+                p.restore();
+            }
             if (tool_ == ToolId::Balloon) {
                 Entity mark;
                 mark.center = pts[1];

@@ -430,6 +430,9 @@ public:
 
     // Input from the canvas (all in world coordinates).
     void onPointerMove(const Vec2& raw);
+    // Nothing in hand and nothing being drawn: a move of the pointer changes only what is around the cursor (the
+    // crosshair, the snap mark, a handle lit under it). Anything further off is changed through overlayChanged.
+    bool pointerOnlyMovesCursor() const;
     void onPointerPress(const Vec2& raw, Qt::MouseButton button,
                         Qt::KeyboardModifiers mods);
     void onPointerRelease(const Vec2& raw, Qt::MouseButton button);

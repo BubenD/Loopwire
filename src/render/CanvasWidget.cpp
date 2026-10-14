@@ -894,7 +894,7 @@ bool CanvasWidget::scrollScene(const QPoint& delta) {
     return true;
 }
 
-void CanvasWidget::paintEvent(QPaintEvent*) {
+void CanvasWidget::paintEvent(QPaintEvent* event) {
     const ViewTransform vt = transform();
     const qreal dpr = devicePixelRatioF();
     const QSize devSize = size() * dpr;
@@ -974,10 +974,20 @@ void CanvasWidget::paintEvent(QPaintEvent*) {
     if(editor_ && editor_->drawingOwner()) {
         p.save();
         p.setBrush(Qt::NoBrush);
-        Document* owner=editor_->drawingOwner();owner->invalidateValidation();
+        // WHICH CHECKS STILL HOLD is asked again only when the drawing may have changed - the scene rebuilt, another
+        // drawing, or the stamps themselves changed. Asking means writing the whole drawing out and hashing it, and
+        // done on every paint it was done on every movement of the cursor.
+        Document* owner=editor_->drawingOwner();
+        if(owner!=badgeOwner_||sceneRebuilds_!=badgeRebuild_||owner->validationStamps()!=badgeStamps_){
+            owner->invalidateValidation();
+            badgePassed_.clear();
+            for(const auto& kind:{QStringLiteral("schematic"),QStringLiteral("mechanical")})
+                if(owner->validationPassed(kind))badgePassed_<<kind;
+            badgeOwner_=owner;badgeRebuild_=sceneRebuilds_;badgeStamps_=owner->validationStamps();
+        }
         int top=badgeTop;
         for(const auto& kind:{QStringLiteral("schematic"),QStringLiteral("mechanical")}) {
-            if(!owner->validationPassed(kind))continue;
+            if(!badgePassed_.contains(kind))continue;
             const QString label=kind+QStringLiteral(" DRC");
             const int w=p.fontMetrics().horizontalAdvance(label)+24;
             const QRect badge(width()-w-12,top,w,25);
@@ -988,7 +998,7 @@ void CanvasWidget::paintEvent(QPaintEvent*) {
     }
     // The crosshair is painted by the always-on-top `crosshairTop_` overlay (so it
     // stays visible above the inline text editor), not here.
-    if (crosshairTop_) crosshairTop_->update();
+    if (crosshairTop_) crosshairTop_->update(event->region());
 }
 
 void CanvasWidget::setDrawingDetailsVisible(bool visible) {
@@ -1502,7 +1512,29 @@ void CanvasWidget::mouseMoveEvent(QMouseEvent* e) {
     // so it follows the snapped crosshair).
     if (dynInput_ && dynInput_->isVisible()) positionDynInput();
     emit cursorWorldMoved(world);
-    requestRepaint();   // the crosshair follows the cursor, at the rate a screen can show it
+    // The crosshair follows the cursor, at the rate a screen can show it - and when nothing but the cursor has
+    // moved, only the strips its lines cross are painted again, where it was and where it is now.
+    if (editor_ && editor_->pointerOnlyMovesCursor() && !rightDown_) {
+        const QPointF at = crosshairScreenPos();
+        pendingCursorRegion_ += crosshairBands(lastCrosshairAt_);
+        pendingCursorRegion_ += crosshairBands(at);
+        lastCrosshairAt_ = at;
+        requestRepaint(true);
+    } else {
+        lastCrosshairAt_ = crosshairScreenPos();
+        requestRepaint();
+    }
+}
+
+// THE STRIPS A CROSSHAIR AT `at` TOUCHES: across the canvas through it and down the canvas through it, wide
+// enough for the pick box and for the snap mark and lit handle beside it.
+QRegion CanvasWidget::crosshairBands(const QPointF& at) const {
+    if (at.x() < -1e8) return {};
+    const int reach = pickboxPx_ + 40;
+    const int x = int(std::lround(at.x())), y = int(std::lround(at.y()));
+    QRegion r(QRect(0, y - reach, width(), 2 * reach + 1));
+    r += QRect(x - reach, 0, 2 * reach + 1, height());
+    return r;
 }
 
 // A REPAINT, AT THE RATE A SCREEN CAN SHOW ONE.
@@ -1515,22 +1547,27 @@ void CanvasWidget::mouseMoveEvent(QMouseEvent* e) {
 // So repaints are held to one per frame. The trailing one always happens, which is the part that matters: the
 // LAST position the mouse reported is the one the cursor has to be drawn at, or it stops just short of where the
 // hand is and stays there.
-void CanvasWidget::requestRepaint() {
+// `cursorOnly`: what has changed is no more than pendingCursorRegion_ - painted alone, unless a whole repaint is
+// asked for before the frame goes out.
+void CanvasWidget::requestRepaint(bool cursorOnly) {
     constexpr int kFrameMs = 8;   // about twice a 60 Hz screen: fast enough not to be seen, slow enough to help
+    if (!cursorOnly) wholeRepaintPending_ = true;
+    auto paintNow = [this] {
+        repaintPending_ = false;
+        frameClock_.restart();
+        if (wholeRepaintPending_) update();
+        else if (!pendingCursorRegion_.isEmpty()) update(pendingCursorRegion_);
+        wholeRepaintPending_ = false;
+        pendingCursorRegion_ = QRegion();
+    };
     if (!frameClock_.isValid()) frameClock_.start();
     if (frameClock_.elapsed() >= kFrameMs) {
-        frameClock_.restart();
-        repaintPending_ = false;
-        update();
+        paintNow();
         return;
     }
     if (repaintPending_) return;   // one already on its way: this position will be drawn by it
     repaintPending_ = true;
-    QTimer::singleShot(kFrameMs - static_cast<int>(frameClock_.elapsed()), this, [this] {
-        repaintPending_ = false;
-        frameClock_.restart();
-        update();
-    });
+    QTimer::singleShot(kFrameMs - static_cast<int>(frameClock_.elapsed()), this, paintNow);
 }
 
 void CanvasWidget::enterEvent(QEnterEvent* e) {
