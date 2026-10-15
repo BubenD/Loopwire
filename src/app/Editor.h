@@ -1054,6 +1054,7 @@ public:
     // A label already on the drawing, taken up so the ribbon and the properties act on it - read off the
     // label's own meta, so one placed last week resizes the same as one placed a second ago.
     bool adoptLabelFromSelection();
+    void setLabelText(const QString& text);
     // THE NOTE READ BACK OFF THE DRAWING. The fit in hand is a copy of what the objects carry, and
     // anything that moves them - the Move tool, a nudge, an array - moves the objects and the note
     // they carry while leaving that copy behind. The joints are drawn off the copy, so they stayed
@@ -2178,6 +2179,7 @@ private:
     // both come down to on a bent one: reading a point's place on the run back off its geometry is ambiguous on
     // the inside of a bend, and doing it on every change compounded the error until the label crumpled.
     bool relayPlacedLabel();
+    bool takeLabelCaptionForLeader(Entity& leader);
     // The label being fitted: its objects, its mask and its group key, so a size typed on the ribbon or a
     // slide along the runs acts on THAT label rather than making another one.
     std::vector<QString> labelLiveIds_;

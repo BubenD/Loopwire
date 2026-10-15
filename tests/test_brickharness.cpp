@@ -19,6 +19,7 @@
 #include "app/PartsLibraryDialog.h"
 #include "app/View3DHelpDialog.h"
 #include "io/GifWriter.h"
+#include "io/Dwx.h"
 #include "geometry/Environment3D.h"
 #include "geometry/Mesh3D.h"
 #include "harness/Harness3D.h"
@@ -8509,8 +8510,8 @@ void testRoundFiftySeven() {
     auto* connector = mw.findChild<QToolButton*>(QStringLiteral("preview3dConnector"));
     auto* selectB = mw.findChild<QToolButton*>(QStringLiteral("preview3dSelect"));
     auto* harness = mw.findChild<QToolButton*>(QStringLiteral("preview3dHarness"));
-    check(measure && measure->toolButtonStyle() == Qt::ToolButtonTextUnderIcon && measure->menu() && measure->menu()->actions().size() == 2,
-          "ribbon: Measure large, its arrow - point to point or surface to surface");
+    check(measure && measure->toolButtonStyle() == Qt::ToolButtonTextUnderIcon && measure->menu() && measure->menu()->actions().size() == 3,
+          "ribbon: Measure offers point, surface and bend-radius measurements");
     check(connector && connector->menu() && connector->menu()->actions().size() == 5, "ribbon: Connector's arrow - the five forms");
     check(selectB && harness && selectB->mapTo(&mw, QPoint()).x() < harness->mapTo(&mw, QPoint()).x(), "ribbon: Route next to View, before Show");
     check(mw.findChild<QToolButton*>(QStringLiteral("preview3dDisplay")) && mw.findChild<QToolButton*>(QStringLiteral("preview3dHelp")),
@@ -9009,7 +9010,7 @@ void testRoundSixtyOne() {
     check(pane.route().segment(s)->tension < 0.0, "tension: undone");
     // THE ROUTE'S, from the row: Taut - it hardly sags.
     auto* routeTension = pane.findChild<QComboBox*>(QStringLiteral("view3dTension"));
-    if (routeTension) routeTension->setCurrentIndex(4);
+    if (routeTension) routeTension->setCurrentIndex(routeTension->findData(50.0));
     QApplication::processEvents();
     check(routeTension && std::abs(pane.route().tension - 50.0) < 1e-9 && !pane.sags().empty() && pane.sags().front().falls.empty(),
           "tension: the route's set Taut - its bundles hardly sag, none shown falling");
@@ -9480,6 +9481,53 @@ void testRoundSixtyFour() {
 // says; A CABLE'S OWN in the Cable box - its length typed, its wires and their colours, its tension; WHAT THE POINTER IS ON
 // said under the wheel; HOW IT WAS SHOWN saved with the route and put back.
 void testRoundSixtyFive() {
+    {
+        BrickDesign design;
+        const QString a = design.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString b = design.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        const QString cable = design.addBrick(BrickType::Run, PartKind::Wire, 1, 0);
+        design.connect(a, cable); design.connect(cable, b);
+        design.brick(cable)->run.lengthMm = 300.0;
+        Route3D route;
+        const int count = addHarnessToRoute(route, design, [&](const QString& brick, V3& at) {
+            at = brick == a ? V3{0, 0, 0} : V3{100, 0, 0};
+            return true;
+        }, true);
+        check(count == 1 && route.segments.size() == 1 &&
+              std::abs(route.length(route.segments.front()) - 300.0) < 0.1,
+              "finished cable: attaching keeps the specified cut length, including slack");
+        if (!route.segments.empty()) {
+            const auto saved = Route3D::fromJson(route.toJson());
+            check(saved.segments.front().fixedLength == 300.0 && saved.segments.front().designCable == cable,
+                  "finished cable: fixed length and design link survive saving");
+            route.node(routeNodeOfPart(route, b))->at = {120, 20, 0};
+            check(route.fitFixedLengths() && std::abs(route.length(route.segments.front()) - 300.0) < 0.1,
+                  "finished cable: moving a connector reshapes the slack and keeps its length");
+            route.node(routeNodeOfPart(route, b))->at = {500, 0, 0};
+            check(!route.fitFixedLengths(), "finished cable: a cable cannot be stretched beyond its cut length");
+            check(routeLengthsFor(design, saved).changes.empty(),
+                  "finished cable: route cannot overwrite the finished harness design lengths");
+        }
+        Route3D shortRoute;
+        design.brick(cable)->run.lengthMm = 30.0;
+        const int shortCount = addHarnessToRoute(shortRoute, design, [&](const QString& brick, V3& at) {
+            at = brick == a ? V3{0, 0, 0} : V3{100, 0, 0}; return true;
+        }, true);
+        check(shortCount == -2 && shortRoute.empty(),
+              "finished cable: an unreachable attachment is refused without leaving partial nodes or cables");
+        const QString c = design.addBrick(BrickType::End, PartKind::Connector, 2, 1);
+        design.connect(cable, c);
+        design.brick(cable)->run.lengthMm = 300.0;
+        design.link(cable, c)->lengthMm = 240.0;
+        Route3D branched;
+        const int branchedCount = addHarnessToRoute(branched, design, [&](const QString& brick, V3& at) {
+            at = brick == a ? V3{0, 0, 0} : brick == b ? V3{100, 0, 0} : V3{80, 20, 0}; return true;
+        }, true);
+        check(branchedCount == 1 &&
+              std::abs(routeDistance(branched, routeNodeOfPart(branched, a), routeNodeOfPart(branched, b)) - 300.0) < 0.3 &&
+              std::abs(routeDistance(branched, routeNodeOfPart(branched, a), routeNodeOfPart(branched, c)) - 240.0) < 0.3,
+              "finished cable: a shorter branch retains its own designed length");
+    }
     // ---- ROUTE FROM HARNESS ----
     {
         BrickDesign d;
@@ -9552,14 +9600,16 @@ void testRoundSixtyFive() {
         emit canvas->selectionChanged(seg);
         QApplication::processEvents();
         auto* box = pane.findChild<QWidget*>(QStringLiteral("view3dCableBox"));
-        auto* length = pane.findChild<QDoubleSpinBox*>(QStringLiteral("view3dCableLength"));
+        auto* length = pane.findChild<QLabel*>(QStringLiteral("view3dCableLength"));
         auto* tension = pane.findChild<QComboBox*>(QStringLiteral("view3dCableTension"));
         check(box && box->isVisibleTo(&pane) && length && tension && box->isAncestorOf(tension),
               "cable box: the cable selected's own, its tension among them");
-        if (length) length->setValue(260.0);
+        auto* lengths = pane.findChild<QTableWidget*>(QStringLiteral("view3dRoutes"));
+        if (lengths) lengths->item(0, 1)->setText(QStringLiteral("260"));
+        QApplication::processEvents();
         const double now = pane.route().length(*pane.route().segment(seg));
         std::printf("  cable box: length typed 260, laid %.1f\n", now);
-        check(std::abs(now - 260.0) < 1.0, "cable box: a length typed - the cable laid so long");
+        check(std::abs(now - 260.0) < 1.0, "cable table: a length typed - the cable laid so long");
         // What the pointer is on, under the wheel.
         const RouteNode3D* n = pane.route().node(x1);
         QPointF over;
@@ -9905,6 +9955,290 @@ void testRoundSeventy() {
     }
 }
 
+void testFreestyleRouting() {
+    Entity cable;
+    cable.id = QStringLiteral("freestyle-cable");
+    cable.type = EntityType::TwistedPair;
+    cable.a = {0, 0}; cable.b = {150, 0};
+    cable.points = {cable.a, cable.b};
+    cable.meta = QJsonObject{{"twistBody", "heatshrink"}, {"twistWidth", 9.0},
+        {"twistWires", 4}, {"twistTrunkWires", 2}, {"twistStraight", true},
+        {"twistSpread", "start"}, {"twistEnds", 15.0}, {"twistLane", 3.0}};
+    const TwistFigures figures = twistedPairFigures(cable);
+    const auto scene = buildHarness3D({cable}, {});
+    int sleeves = 0;
+    for (const auto& item : scene.items) if (item.what == QLatin1String("sleeve")) {
+        V3 lo, hi; item.mesh.bounds(lo, hi);
+        ++sleeves;
+        check(std::abs(std::max(hi.y - lo.y, hi.z - lo.z) - figures.bodyWidth) < 0.05 && item.texture == Texture3D::Matte,
+              "freestyle: Auto heatshrink body has its drawn width and matte material in 3D");
+        check(std::abs(hi.x - 150.0) < 0.05 && lo.x >= 14.9,
+              "freestyle: only the specified end fans out of the shrink body");
+    }
+    check(sleeves == 1, "freestyle: heatshrink is drawn even when twistBodyWidth is on Auto");
+    {
+        Entity bent = cable;
+        bent.points = {{0, 0}, {80, 0}, {80, 80}};
+        bent.b = {80, 80};
+        Route3D route;
+        const int laid = addDrawingToRoute(route, {bent}, true);
+        check(laid == 1 && std::abs(route.length(route.segments.front()) - 160.0) <= 0.1,
+              "freestyle: a bent cable retains its drawn length when its 3D bends are rounded");
+    }
+    std::vector<Entity> drawing{cable};
+    for (int i = 0; i < 2; ++i) {
+        Entity part;
+        part.id = QStringLiteral("part-%1").arg(i);
+        part.type = EntityType::Rect;
+        const double x = i ? 150.0 : -10.0;
+        part.points = {{x, -5}, {x + 10, -5}, {x + 10, 5}, {x, 5}};
+        part.meta.insert(QStringLiteral("blockInst"), part.id);
+        part.meta.insert(QStringLiteral("partName"), QStringLiteral("X%1").arg(i + 1));
+        drawing.push_back(part);
+    }
+    const auto source = mechanicalDrawingSource(drawing);
+    check(source.paths.size() == 1 && source.positions.contains(QStringLiteral("drawing:part-0")) &&
+          source.positions.contains(QStringLiteral("drawing:part-1")),
+          "freestyle: cable ends link to inserted parts without a wizard design");
+    QJsonObject stored;
+    View3DPane pane;
+    pane.setSources([&] { return drawing; }, {});
+    pane.setRoutingStore([&] { return stored; }, [&](const QJsonObject& state) { stored = state; });
+    pane.rebuild(false);
+    check(pane.routeFromHarness(true) == 1 && pane.route().segments.size() == 1,
+          "freestyle: Route from harness attaches the mechanical drawing");
+    if (!pane.route().segments.empty()) {
+        const auto& s = pane.route().segments.front();
+        check(s.covering == QLatin1String("heatshrink") && s.fixedLength > 0.0 && s.coverFinish == 0.0,
+              "freestyle: routing retains the heatshrink body, fan end and fixed cable length");
+        const Route3D saved = Route3D::fromJson(stored);
+        check(saved.segments.front().covering == s.covering, "freestyle: cable covering survives saving");
+        Route3D moved = saved;
+        const V3 offset{20, 30, 40};
+        for (auto& n : moved.nodes) n.at = n.at + offset;
+        for (auto& segment : moved.segments) for (auto& v : segment.via) v.at = v.at + offset;
+        QJsonObject changed = moved.toJson();
+        changed.insert(QStringLiteral("initialHarnessRoute"), stored.value(QStringLiteral("initialHarnessRoute")));
+        stored = changed;
+        pane.reloadRouting(true);
+        auto* home = pane.findChild<QToolButton*>(QStringLiteral("view3dResetHarness"));
+        check(home && home->isEnabled(), "3D home: the return button is available after reopening a routed drawing");
+        if (home) home->click();
+        check((pane.route().nodes.front().at - saved.nodes.front().at).length() < 1e-6,
+              "3D home: the button returns the harness to its initial position");
+        pane.undoRoute();
+        check((pane.route().nodes.front().at - moved.nodes.front().at).length() < 1e-6,
+              "3D home: Undo restores the moved position");
+    }
+    // A normal selection drag moves the complete taut cable without changing its length.
+    pane.resize(1100, 750); pane.show(); QApplication::processEvents();
+    auto* canvas = pane.canvas();
+    canvas->setUseGpu(false);
+    canvas->viewFrom(QStringLiteral("top"));
+    canvas->camera().fit({-30, -50, -20}, {200, 100, 50}, double(canvas->width()) / canvas->height());
+    pane.setRouteTool(RouteTool::Select);
+    pane.resetHarnessPosition();
+    const Route3D before = pane.route();
+    const auto& segment = before.segments.front();
+    QPointF grip;
+    canvas->toScreen({75, 0, 0}, grip);
+    const QPointF end = grip + QPointF(35, -25);
+    QMouseEvent press(QEvent::MouseButtonPress, grip, canvas->mapToGlobal(grip), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(canvas, &press);
+    for (int i = 1; i <= 5; ++i) {
+        const QPointF at = grip + (end - grip) * (i / 5.0);
+        QMouseEvent move(QEvent::MouseMove, at, canvas->mapToGlobal(at), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &move);
+    }
+    QMouseEvent release(QEvent::MouseButtonRelease, end, canvas->mapToGlobal(end), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(canvas, &release);
+    const V3 delta = pane.route().nodes.front().at - before.nodes.front().at;
+    check(delta.length() > 1, "freestyle drag: the default Select tool moves the cable body");
+    for (size_t i = 0; i < before.nodes.size(); ++i)
+        check((pane.route().nodes[i].at - before.nodes[i].at - delta).length() < 1e-6,
+              "freestyle drag: connectors translate together without stretching the cable");
+    check(std::abs(pane.route().length(pane.route().segments.front()) - segment.fixedLength) <= 0.1,
+          "freestyle drag: a taut fixed-length cable remains its designed length");
+    pane.undoRoute();
+    check((pane.route().nodes.front().at - before.nodes.front().at).length() < 1e-6,
+          "freestyle drag: one Undo restores the entire drag");
+    auto* keep = pane.findChild<QCheckBox*>(QStringLiteral("view3dKeepConnectors"));
+    check(keep && keep->isChecked() && canvas->keepsOriginalConnectors(),
+          "original connectors: retained by default");
+    const QImage originalImage = canvas->render(QSize(700, 400));
+    if (keep) keep->setChecked(false);
+    check(!canvas->keepsOriginalConnectors() && originalImage != canvas->render(QSize(700, 400)),
+          "original connectors: the option switches between original and generic geometry");
+    pane.reloadRouting(true);
+    check(keep && !keep->isChecked() && !canvas->keepsOriginalConnectors(),
+          "original connectors: the option persists with the routed drawing");
+    if (keep) keep->setChecked(true);
+    const QString path = qEnvironmentVariable("LOOPWIRE_3D_TEST_DRAWING");
+    if (!path.isEmpty()) {
+        Document document;
+        QString error;
+        check(dwx::load(document, path, &error), "test2: the user's drawing loads without changes");
+        const auto actual = buildHarness3D(document.entities(), {});
+        bool heatshrink = false;
+        for (const auto& item : actual.items) heatshrink |= item.what == QLatin1String("sleeve");
+        check(heatshrink, "test2: the drawn shrink body is visible in 3D");
+        Route3D route;
+        check(addDrawingToRoute(route, document.entities(), true) > 0,
+              "test2: the freestyle mechanical harness attaches to the 3D route");
+        const QString output = qEnvironmentVariable("LOOPWIRE_3D_TEST_IMAGE");
+        if (!output.isEmpty()) {
+            V3 lo, hi; bool first = true;
+            std::vector<DrawItem3D> items;
+            for (const auto& item : actual.items) {
+                V3 a, b;
+                if (!item.mesh.bounds(a, b)) continue;
+                lo = first ? a : V3{std::min(lo.x, a.x), std::min(lo.y, a.y), std::min(lo.z, a.z)};
+                hi = first ? b : V3{std::max(hi.x, b.x), std::max(hi.y, b.y), std::max(hi.z, b.z)};
+                first = false;
+                items.push_back({&item.mesh, item.color, item.alpha, false, item.texture});
+            }
+            Camera3D camera; camera.fit(lo, hi, 2.0);
+            QImage image(1200, 600, QImage::Format_ARGB32);
+            renderScene3D(image, items, camera, false, QColor(35, 42, 52));
+            check(image.save(output), "test2: the 3D verification image is saved");
+        }
+    }
+}
+
+
+void testRoutingEnhancements() {
+    Entity cable; cable.id = QStringLiteral("labelled-cable"); cable.type = EntityType::TwistedPair;
+    cable.a = {0, 0}; cable.b = {150, 0}; cable.points = {cable.a, cable.b};
+    cable.meta = QJsonObject{{"twistBody", "heatshrink"}, {"twistBodyWidth", 6.0}, {"twistWidth", 8.0},
+        {"twistWires", 2}, {"twistStraight", true}, {"twistEnds", 0.0}};
+    Entity mask; mask.id = QStringLiteral("label-mask"); mask.type = EntityType::Wipeout;
+    mask.points = {{50, -3}, {70, -3}, {70, 3}, {50, 3}};
+    mask.meta = QJsonObject{{"labelMask", true}, {"labelGroup", "label-A"}};
+    Entity copy = mask; copy.id = QStringLiteral("duplicate-mask");
+    Entity text; text.type = EntityType::Text;
+    text.meta = QJsonObject{{"labelGroup", "label-A"}, {"text", "Cable A"}};
+    std::vector<Entity> drawing{cable, mask, copy, text};
+    Route3D route;
+    check(addDrawingToRoute(route, drawing, true) == 1 && route.segments.front().labels.size() == 1,
+          "routing labels: attached once per physical group, even with duplicate masks");
+    const auto& attached = route.segments.front();
+    check(attached.labels.front().text == QLatin1String("Cable A") && std::abs(attached.labels.front().position - 0.4) < 1e-6,
+          "routing labels: retain caption and position along the drawn cable");
+    route.segments.front().bodyDiameter = 9;
+    route.segments.front().labels.front().flexible = false;
+    route.segments.front().labels.front().stiffness = 0.7;
+    const Route3D read = Route3D::fromJson(route.toJson());
+    check(read.segments.front().designLength == 150 && read.segments.front().bodyDiameter == 9 &&
+          !read.segments.front().labels.front().flexible && read.segments.front().labels.front().stiffness == 0.7,
+          "routing labels: body diameter, design length and label rigidity survive saving");
+    check(route.labelDiameterOf(route.segments.front(), route.segments.front().labels.front()) == 9,
+          "routing labels: sleeve diameter follows the outer heatshrink diameter");
+    RouteLabel3D wireLabel = route.segments.front().labels.front(); wireLabel.wire = 0;
+    check(route.labelDiameterOf(route.segments.front(), wireLabel) == route.wireDOf(route.segments.front()),
+          "routing labels: an individual-wire label follows wire diameter");
+    {
+        RouteSegment3D s; RouteLabel3D l; l.position = 0.5; l.length = 100; l.flexible = false;
+        s.labels.push_back(l);
+        const std::vector<V3> bowed{{0,0,0}, {50,20,0}, {100,0,0}};
+        const auto stiff = route.stiffenedPath(s, bowed);
+        double stiffY = 0; for (const auto& p : stiff) stiffY = std::max(stiffY, p.y);
+        s.labels.front().stiffness = 0.5;
+        const auto half = route.stiffenedPath(s, bowed);
+        double halfY = 0; for (const auto& p : half) halfY = std::max(halfY, p.y);
+        s.labels.front().flexible = true;
+        const auto flexible = route.stiffenedPath(s, bowed);
+        check(stiffY < halfY && halfY < 20 && flexible.size() == bowed.size() && flexible[1].y == 20,
+              "routing labels: stiffness slider progressively straightens the supporting cable; flexible follows its bend");
+    }
+    check(std::any_of(cableTensions().begin(), cableTensions().end(), [](const auto& t) { return t.newtons == 5.0; }),
+          "routing tension: 5 N is available wherever tensions are offered");
+    QJsonObject stored;
+    View3DPane pane;
+    pane.setSources([&] { return drawing; }, {});
+    pane.setRoutingStore([&] { return stored; }, [&](const QJsonObject& o) { stored = o; });
+    pane.rebuild(false); pane.routeFromHarness(true);
+    const QString id = pane.route().segments.front().id;
+    auto* fixed = pane.findChild<QCheckBox*>(QStringLiteral("view3dFixedHarnessLength"));
+    auto* table = pane.findChild<QTableWidget*>(QStringLiteral("view3dRoutes"));
+    check(fixed && table && !(table->item(0,1)->flags() & Qt::ItemIsEditable), "routing length: fixed lengths cannot be edited in the table");
+    if (fixed) fixed->setChecked(false);
+    check(pane.route().segment(id)->fixedLength == 0 && table && (table->item(0,1)->flags() & Qt::ItemIsEditable),
+          "routing length: unchecking Fixed design lengths unlocks an existing cable");
+    if (table) table->item(0,1)->setText(QStringLiteral("220 mm"));
+    QApplication::processEvents();
+    check(std::abs(pane.route().length(*pane.route().segment(id)) - 220) < 0.1, "routing length: table edits reshape the cable to its new length");
+    pane.canvas()->selectSegment(id); emit pane.canvas()->selectionChanged(id);
+    check(pane.findChild<QLabel*>(QStringLiteral("view3dCableLength")) && !pane.findChild<QDoubleSpinBox*>(QStringLiteral("view3dCableLength")),
+          "routing length: the side panel only displays length");
+    pane.undoRoute();
+    check(std::abs(pane.route().length(*pane.route().segment(id)) - 150) < 0.1, "routing length: one Undo restores a table edit");
+    const double before = pane.route().length(*pane.route().segment(id));
+    check(!pane.setSegmentLength(id, 50) && std::abs(pane.route().length(*pane.route().segment(id)) - before) < 0.1,
+          "routing length: a length shorter than connector separation is refused without changing the route");
+    if (fixed) fixed->setChecked(true);
+    check(pane.route().segment(id)->fixedLength == 150 && std::abs(pane.route().length(*pane.route().segment(id)) - 150) < 0.1,
+          "routing length: rechecking restores the original designed length");
+    pane.canvas()->selectSegment(id); emit pane.canvas()->selectionChanged(id);
+    auto* body = pane.findChild<QDoubleSpinBox*>(QStringLiteral("view3dCableBodyDia"));
+    if (body) body->setValue(8.0);
+    check(pane.route().segment(id)->bodyDiameter == 8.0, "routing body: its own diameter can be changed from cable modification");
+    auto* flex = pane.findChild<QComboBox*>(QStringLiteral("view3dLabelFlex"));
+    if (flex) { flex->setCurrentIndex(1); emit flex->activated(1); }
+    auto* slider = pane.findChild<QSlider*>(QStringLiteral("view3dLabelStiffness"));
+    if (slider) slider->setValue(40);
+    check(!pane.route().segment(id)->labels.front().flexible && pane.route().segment(id)->labels.front().stiffness == 0.4,
+          "routing labels: stiffness controls update the selected label");
+    {
+        Route3D r; r.bendRadius = 100; r.diameter = 2;
+        const auto a = r.addNode(RouteNodeKind::Branch, {0,0,0}, {0,0,1});
+        const auto b = r.addNode(RouteNodeKind::Branch, {100,100,0}, {0,0,1});
+        const auto seg = r.addSegment(a,b, {{{100,0,0},{0,0,1}}});
+        QJsonObject saved = r.toJson();
+        View3DPane measure;
+        measure.setRoutingStore([&] { return saved; }, [&](const QJsonObject& o) { saved = o; });
+        measure.resize(1000,700); measure.show(); QApplication::processEvents(); measure.reloadRouting(true);
+        auto* c = measure.canvas(); c->setUseGpu(false); c->viewFrom(QStringLiteral("top"));
+        c->camera().fit({-20,-20,0}, {120,120,10}, double(c->width())/c->height());
+        const auto line = measure.route().centreline(*measure.route().segment(seg));
+        QPointF at; double expected = 0; V3 centre;
+        for (size_t i = 2; i+2 < line.size(); ++i) {
+            double radius;
+            if (Route3D::bendCircle(line[i-1],line[i],line[i+1],centre,radius) && radius < 90) {
+                c->toScreen(line[i],at); expected = radius; break;
+            }
+        }
+        measure.setMeasureMode(2); measure.setRouteTool(RouteTool::Measure);
+        QMouseEvent down(QEvent::MouseButtonPress, at, c->mapToGlobal(at), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent up(QEvent::MouseButtonRelease, at, c->mapToGlobal(at), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(c,&down); QApplication::sendEvent(c,&up);
+        check(expected > 0 && expected < r.bendRadius && c->measureCount() == 1 && std::abs(c->measures().back().radius - expected) < 0.01,
+              "bend ruler: clicking a tight bend measures its actual radius, not the configured minimum");
+        emit c->cameraChanged(); measure.reloadRouting(true);
+        check(c->measureCount() == 1 && c->measures().back().radius > 0, "bend ruler: radius annotation survives reopening");
+        V3 centre2; double radius2;
+        check(!Route3D::bendCircle({0,0,0},{1,0,0},{2,0,0},centre2,radius2), "bend ruler: straight cable has no finite radius");
+    }
+    {
+        LibraryPart part; part.id = QStringLiteral("auto-test"); part.kind = PartKind::Connector;
+        part.params.insert(QStringLiteral("pins"),QStringLiteral("4"));
+        Entity outline; outline.type = EntityType::Polygon; outline.points = {{0,-6},{40,-6},{40,6},{0,6}};
+        part.mechanical = partDrawingFromEntities({outline});
+        Entity face; face.type = EntityType::Polygon;
+        face.points = {{-5,-5},{5,-5},{5,5},{1,5},{1,2},{-1,2},{-1,5},{-5,5}};
+        part.fanout = partDrawingFromEntities({face});
+        Part3DEditorDialog editor(part, {});
+        const auto original = editor.model().toJson();
+        check(editor.autoCreateFromDrawings() && editor.model().bodies.size() == 2 && editor.model().bodies[0].shape == BodyShape::Extruded,
+              "library auto 3D: housing follows the pinout cross-section and mechanical outline, with contacts");
+        bool recess = false;
+        for (const auto& p : editor.model().bodies.front().made.v)
+            if (std::abs(p.x) < 1 && p.y > 1 && p.y < 4 && std::abs(p.z) < 2) recess = true;
+        check(recess, "library auto 3D: a keyed concave pinout recess is preserved rather than convex-hulled");
+        editor.moveSelected({3,4,5}); editor.undo(); editor.undo();
+        check(editor.model().toJson() == original, "library auto 3D: generated model is editable and undo restores the prior model");
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -9999,6 +10333,8 @@ int run_brickharness_tests() {
     ROUND(testRoundSixtyEight);
     ROUND(testRoundSixtyNine);
     ROUND(testRoundSeventy);
+    ROUND(testFreestyleRouting);
+    ROUND(testRoutingEnhancements);
 #undef ROUND
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;

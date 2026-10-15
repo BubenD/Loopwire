@@ -33,6 +33,8 @@ struct Harness3DScene {
 };
 
 struct LibraryPart;
+// Stable picking/link key for wizard parts and parts inserted in a freestyle drawing.
+QString harness3DPartKey(const Entity& entity);
 
 // HOW A PART WITH NO 3D MODEL IS SHOWN: a box as big as it is drawn, or a solid made from its 2D drawing - its outline
 // turned round the way it goes into the harness (a round connector), or given depth across (a square one).

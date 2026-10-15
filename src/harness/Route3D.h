@@ -55,10 +55,28 @@ struct RouteNode3D {
     bool back = false;
 };
 
+struct RouteLabel3D {
+    QString id, text;
+    double position = 0.5;       // fraction of the cable's length, measured from a
+    double length = 12.0;        // axial size in mm; diameter follows its supporting body/wire
+    int wire = -1;
+    bool clearShrink = false;
+    bool flexible = true;
+    double stiffness = 1.0;      // 0 follows the cable, 1 keeps this span straight
+};
+
 // A BUNDLE between two nodes, through the points it was laid along. Its diameter, or the route's where it has none.
 struct RouteSegment3D {
     QString id;
     QString a, b;
+    // A finished cable's cut length; zero leaves the route freely editable as before.
+    double fixedLength = 0.0;
+    double designLength = 0.0;
+    double bodyDiameter = 0.0;   // 0 follows the bundle; independent outer covering diameter
+    std::vector<RouteLabel3D> labels;
+    QString designCable;
+    QString covering;          // the outer layer of the designed cable, empty for bare wires
+    double coverStart = 0.0, coverFinish = 0.0; // exposed fan lengths, mm
     std::vector<RouteVia3D> via;
     double diameter = 0.0;
     // Its colour - none: as bundles are.
@@ -140,6 +158,12 @@ struct Route3D {
     // How many bundles meet at a node.
     int degree(const QString& id) const;
     double diameterOf(const RouteSegment3D& s) const;
+    std::vector<V3> labelPath(const RouteSegment3D& s, const RouteLabel3D& label) const;
+    double labelDiameterOf(const RouteSegment3D& s, const RouteLabel3D& label) const;
+    // Keep a stiff label's supporting cable straight over its occupied span, including under gravity.
+    std::vector<V3> stiffenedPath(const RouteSegment3D& s, const std::vector<V3>& path) const;
+    // Actual circular radius through three centreline points; false for a straight/degenerate triplet.
+    static bool bendCircle(const V3& a, const V3& b, const V3& c, V3& centre, double& radius);
     // HOW MANY WIRES A BUNDLE IS DRAWN AS, and how thick each - its own, or the route's (none for a bundle given its own
     // diameter). Nought: a plain bundle.
     int wiresOf(const RouteSegment3D& s) const;
@@ -170,6 +194,8 @@ struct Route3D {
     std::vector<V3> centreline(const RouteSegment3D& s, int* tight = nullptr) const;
     // Its length along that middle, in mm.
     double length(const RouteSegment3D& s) const;
+    // Refit slack with the endpoints held; false if a fixed cable cannot reach its route.
+    bool fitFixedLengths();
     // The corners the path turns before arcs are put in - where the middle goes, point by point.
     std::vector<V3> corners(const RouteSegment3D& s) const;
 

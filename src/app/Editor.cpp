@@ -7,6 +7,7 @@
 #include "render/EntityRenderer.h"
 
 #include "harness/MechModels.h"   // kMechModelGroup: a default model is one object on its own canvas
+#include "harness/LabelCaption.h"
 #include "model/Block.h"
 #include "model/DrawingTemplate.h"
 #include "model/Picture.h"
@@ -2509,6 +2510,12 @@ void Editor::handleSelectPress(const Vec2& p, const Vec2& raw, Qt::KeyboardModif
         if (editRole_ == static_cast<int>(GripRole::ShieldRy)) commitShieldResize(editEntityId_);
         // What the placed joint LANDED ON decides whether it is now connected to something.
         if (editRole_ == static_cast<int>(GripRole::Vertex)) {
+            if (const Entity* placed = entityById(editEntityId_);
+                placed && placed->type == EntityType::Leader && editIndex_ == 0) {
+                Entity callout = *placed;
+                if (takeLabelCaptionForLeader(callout))
+                    if (Entity* target = entityById(editEntityId_)) *target = callout;
+            }
             if (Entity* pe = entityById(editEntityId_)) {
                 const int k = std::min(pe->meta.value("catch").toInt(
                                            static_cast<int>(pe->points.size())),
@@ -3999,6 +4006,16 @@ void Editor::stampLabelFit(Entity& e, const QString& group, const LabelFit& fit,
     e.meta.insert(labelDirYKey(), fit.runDir.y);
     e.meta.insert(labelMidXKey(), fit.mid.x);
     e.meta.insert(labelMidYKey(), fit.mid.y);
+    if (e.meta.value(QStringLiteral("labelCaptionEntity")).toBool()) {
+        Vec2 dir = fit.runDir;
+        if (dir.x < 0 || (std::abs(dir.x) < 1e-9 && dir.y < 0)) dir = dir * -1.0;
+        QJsonArray boundary;
+        for (const Vec2& point : labelMaskQuad(fit)) {
+            boundary.append(0.5 + dot(point - fit.mid, dir) / fit.alongMm);
+            boundary.append(0.5 - dot(point - fit.mid, dir.perp()) / fit.acrossMm);
+        }
+        e.meta.insert(QStringLiteral("labelCaptionBoundary"), boundary);
+    }
     // The run it was laid along, when it was laid along a bent one. Without it, resizing a label bent round a
     // knee straightens it out - the points would be scaled about the middle along two straight axes, which is
     // the very thing the bend was there to avoid.
@@ -4226,9 +4243,78 @@ void Editor::commitLabel(bool withBreak, const Vec2& strokeEnd) {
     emit changed();
 }
 
-// A label already on the drawing, taken up so that the ribbon and the properties act on it. Read off the
-// label's own meta rather than out of a session, so a label placed last week resizes the same as one placed
-// a second ago. False when the selection is not a label.
+// The text source stays on the physical label even when its printing is called out by a leader.
+void Editor::setLabelText(const QString& text) {
+    if (!adoptLabelFromSelection()) return;
+    QString leaderId;
+    Entity caption;
+    for (const Entity& part : doc_->entities())
+        if (part.meta.value(labelGroupKey()).toString() == labelGroup_) {
+            caption.layer = part.layer;
+            leaderId = part.meta.value(QStringLiteral("labelLeaderId")).toString();
+            break;
+        }
+    pushUndo();
+    auto& entities = doc_->entities();
+    entities.erase(std::remove_if(entities.begin(), entities.end(), [&](const Entity& part) {
+        return part.meta.value(labelGroupKey()).toString() == labelGroup_ &&
+               part.meta.value(QStringLiteral("labelCaptionEntity")).toBool();
+    }), entities.end());
+    Entity* leader = leaderId.isEmpty() ? nullptr : entityById(leaderId);
+    for (Entity& part : entities) {
+        if (part.meta.value(labelGroupKey()).toString() != labelGroup_) continue;
+        part.meta.insert(QStringLiteral("labelCaption"), text);
+        if (!leader) part.meta.remove(QStringLiteral("labelLeaderId"));
+    }
+    if (leader) leader->meta.insert(QStringLiteral("text"), text);
+    else if (!text.isEmpty()) {
+        caption.id = uid();
+        caption.meta.insert(QStringLiteral("labelCaption"), text);
+        caption.meta.insert(QStringLiteral("labelCaptionEntity"), true);
+        stampLabelFit(caption, labelGroup_, labelFit_);
+        layoutLabelCaption(caption);
+        entities.push_back(caption);
+    }
+    selected_.erase(std::remove_if(selected_.begin(), selected_.end(), [&](const QString& id) {
+        return !entityById(id);
+    }), selected_.end());
+    doc_->setDirty(true);
+    emit changed();
+    emit selectionChanged();
+}
+
+bool Editor::takeLabelCaptionForLeader(Entity& leader) {
+    if (!doc_ || leader.type != EntityType::Leader || leader.points.empty()) return false;
+    const Vec2 tip = leader.points.front();
+    QString group, text;
+    // Hit only the opaque label, never the clear sleeve outside it.
+    for (const Entity& part : doc_->entities()) {
+        if (!part.meta.value(QStringLiteral("labelMask")).toBool()) continue;
+        bool hit = pointInPolygon(part.points, tip);
+        for (size_t i = 0; !hit && i < part.points.size(); ++i)
+            hit = closestPointOnSegment(tip, part.points[i], part.points[(i + 1) % part.points.size()]).distance < 1e-5;
+        if (!hit || !part.meta.value(QStringLiteral("labelLeaderId")).toString().isEmpty()) continue;
+        text = part.meta.value(QStringLiteral("labelCaption")).toString();
+        if (text.isEmpty()) continue;
+        group = part.meta.value(labelGroupKey()).toString();
+        break;
+    }
+    if (group.isEmpty()) return false;
+    if (leader.id.isEmpty()) leader.id = uid();
+    leader.meta.insert(QStringLiteral("text"), text);
+    leader.meta.insert(QStringLiteral("labelSourceGroup"), group);
+    for (Entity& part : doc_->entities())
+        if (part.meta.value(labelGroupKey()).toString() == group)
+            part.meta.insert(QStringLiteral("labelLeaderId"), leader.id);
+    auto& entities = doc_->entities();
+    entities.erase(std::remove_if(entities.begin(), entities.end(), [&](const Entity& part) {
+        return part.meta.value(labelGroupKey()).toString() == group &&
+               part.meta.value(QStringLiteral("labelCaptionEntity")).toBool();
+    }), entities.end());
+    return true;
+}
+
+// Recover the placed label's own fit so its properties survive closing and reopening the drawing.
 bool Editor::adoptLabelFromSelection() {
     if (!doc_ || selected_.empty()) return false;
     QString group;
@@ -4249,7 +4335,7 @@ bool Editor::adoptLabelFromSelection() {
         if (e.meta.value(labelGroupKey()).toString() != group) continue;
         if (e.meta.value(QStringLiteral("labelMask")).toBool()) {
             labelMaskId_ = e.id;
-        } else {
+        } else if (!e.meta.value(QStringLiteral("labelCaptionEntity")).toBool()) {
             labelLiveIds_.push_back(e.id);
         }
         if (!labelFit_.ok) {
@@ -4318,6 +4404,11 @@ bool Editor::relayPlacedLabel() {
     if (laid.size() != labelLiveIds_.size()) return false;
     for (Entity& e : doc_->entities()) {
         if (e.meta.value(labelGroupKey()).toString() != labelGroup_) continue;
+        if (e.meta.value(QStringLiteral("labelCaptionEntity")).toBool()) {
+            stampLabelFit(e, labelGroup_, labelFit_);
+            layoutLabelCaption(e);
+            continue;
+        }
         if (e.meta.value(QStringLiteral("labelMask")).toBool()) {
             if (covers.size() >= 3) e.points = covers;
             e.meta.insert(labelAlongKey(), labelFit_.alongMm);
@@ -4404,6 +4495,7 @@ bool Editor::scalePlacedLabel(double alongMm, double acrossMm) {
         }
         e.meta.insert(labelAlongKey(), alongMm);
         e.meta.insert(labelAcrossKey(), acrossMm);
+        if (e.meta.value(QStringLiteral("labelCaptionEntity")).toBool()) layoutLabelCaption(e);
     }
     doc_->setDirty(true);
     emit labelChanged();
@@ -4509,7 +4601,7 @@ std::vector<Vec2> Editor::labelJoints() const {
 bool Editor::slideLiveLabel(const Vec2& delta) {
     if (labelLiveIds_.empty() || !labelFit_.ok || selected_.empty()) return false;
     for (const QString& id : selected_)
-        if (id != labelMaskId_ &&
+        if (id != labelMaskId_ && !(entityById(id) && entityById(id)->meta.value(labelGroupKey()).toString() == labelGroup_) &&
             std::find(labelLiveIds_.begin(), labelLiveIds_.end(), id) == labelLiveIds_.end())
             return false;   // something else is in the selection: an ordinary move
     const double travel = dot(delta, labelFit_.runDir);
@@ -12227,6 +12319,7 @@ void Editor::finishDraw() {
 
     const bool keepWire = (tool_ == ToolId::Wire); // wire placement is continuous until Esc
     pushUndo();
+    if (tool_ == ToolId::TextLeader) takeLabelCaptionForLeader(e);
     const bool isWire = (e.type == EntityType::Wire);
     const Vec2 wireStart = isWire && !e.points.empty() ? e.points.front() : Vec2{0, 0};
     const Vec2 wireEnd = isWire && !e.points.empty() ? e.points.back() : Vec2{0, 0};

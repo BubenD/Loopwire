@@ -6,6 +6,7 @@
 #include <QJsonObject>
 #include <QList>
 #include <QSet>
+#include <QMap>
 #include <QString>
 
 class QCheckBox;
@@ -176,6 +177,8 @@ private:
     // Right-clicking anything that names a library part: look at it, or open the library at it. The
     // same menu wherever a part is named, because the question is the same.
     void showPartMenu(const QString& libPartId, const QPoint& at, const QString& what);
+    void updatePartFromLibrary(const QString& libPartId);
+    QMap<int, QByteArray> checkedSteps_;
     void addWire();
     // The lowest pin of a connector no wire has taken yet - what a new row, or each conductor of a
     // placed cable, lands on.

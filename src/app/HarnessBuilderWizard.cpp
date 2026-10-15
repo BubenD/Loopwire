@@ -2,6 +2,8 @@
 #include "harness/HarnessBuilderBom.h"
 #include "harness/PartsLibrary.h"
 #include "app/WizardFlowLayout.h"
+#include "app/WizardFlowSplitter.h"
+#include <QScrollArea>
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
@@ -76,8 +78,11 @@ void HarnessBuilderDialog::initializeWizardUi() {
         button(QStringLiteral("Live BOM"), QStringLiteral("wizardLiveBom"), [this] { openLiveBom(); });
         button(QStringLiteral("Fit columns"), QStringLiteral("wizardFitColumns"), [this] { fitWizardColumns(); saveWizardUi(); });
         button(QStringLiteral("Reset layout"), QStringLiteral("wizardResetLayout"), [this, fields] {
+            static_cast<WizardFlowSplitter*>(mainSplit_)->releasePanes();
+            static_cast<WizardFlowSplitter*>(wireSplit_)->releasePanes();
             QSettings s; s.remove(uiKey); fields->setChecked(false);
             for (auto* section : findChildren<QWidget*>()) {
+                if (section->property("wizardSectionFrame").toBool()) { section->setMinimumHeight(0); section->setMaximumHeight(QWIDGETSIZE_MAX); }
                 const auto defaultMin = section->property("wizardSectionDefaultMin");
                 if (!defaultMin.isValid()) continue;
                 section->setMaximumHeight(QWIDGETSIZE_MAX); section->setMinimumHeight(defaultMin.toInt());
@@ -90,7 +95,9 @@ void HarnessBuilderDialog::initializeWizardUi() {
             previewBottom_ = width() < 1120; applyStepLayout(currentStep());
             if (auto* position = findChild<QComboBox*>(QStringLiteral("harnessBuilderPreviewWhere")))
                 position->setCurrentIndex(previewBottom_ ? 1 : 0);
-            mainSplit_->setSizes({width() * 2 / 3, width() / 3}); fitWizardColumns(); saveWizardUi();
+            mainSplit_->setSizes({width() * 2 / 3, width() / 3});
+            WizardFlowSplitter::fitNaturalColumn(mainSplit_, pages_);
+            fitWizardColumns(); saveWizardUi();
         });
         button(QStringLiteral("Add coax"), QStringLiteral("wizardAddCoax"), [this] {
             if (def_.connectors.size() < 2) { summaryLabel_->setText(QStringLiteral("Add two connectors first")); return; }
@@ -166,7 +173,11 @@ void HarnessBuilderDialog::initializeWizardUi() {
         bomSplit_->setObjectName(QStringLiteral("wizardBomSplit"));
         bomSplit_->setChildrenCollapsible(false);
         layout()->replaceWidget(mainSplit_, bomSplit_);
-        bomSplit_->addWidget(mainSplit_);
+        auto* workScroll = new QScrollArea(bomSplit_);
+        workScroll->setObjectName(QStringLiteral("wizardWorkScroll"));
+        workScroll->setFrameShape(QFrame::NoFrame); workScroll->setWidgetResizable(true);
+        workScroll->setLayoutDirection(Qt::RightToLeft); mainSplit_->setLayoutDirection(Qt::LeftToRight);
+        workScroll->setWidget(mainSplit_); bomSplit_->addWidget(workScroll);
         bomDock_ = settings.value(uiKey + "bomDock", QStringLiteral("window")).toString();
         connect(mainSplit_, &QSplitter::splitterMoved, this, [this] { saveWizardUi(); });
         connect(wireSplit_, &QSplitter::splitterMoved, this, [this] { saveWizardUi(); });
@@ -196,6 +207,16 @@ void HarnessBuilderDialog::initializeWizardUi() {
         if (wireSplit_->sizes().value(0) < 100) wireSplit_->setSizes({180, 220});
         applyStepLayout(currentStep());
         fitWizardColumns();
+        if (mainSplit_->orientation() == Qt::Vertical) {
+            const auto saved = s.value(uiKey + "flowSplit").value<QList<int>>();
+            if (!saved.isEmpty()) static_cast<WizardFlowSplitter*>(mainSplit_)->restoreFlowHeights(saved);
+            else WizardFlowSplitter::fitNaturalColumn(mainSplit_, pages_);
+        }
+        const auto wireHeights = s.value(uiKey + "flowWires").value<QList<int>>();
+        if (!wireHeights.isEmpty()) {
+            static_cast<WizardFlowSplitter*>(wireSplit_)->restoreFlowHeights(wireHeights);
+            wireSplit_->setProperty("flowUserResized", true);
+        }
         if (s.contains(uiKey + "connectors")) connTable_->horizontalHeader()->restoreState(s.value(uiKey + "connectors").toByteArray());
         if (s.contains(uiKey + "wires")) wireTable_->horizontalHeader()->restoreState(s.value(uiKey + "wires").toByteArray());
         keepDeleteColumnLast();
@@ -276,6 +297,10 @@ void HarnessBuilderDialog::saveWizardUi() {
     QSettings s; s.setValue(uiKey + "geometry", saveGeometry());
     s.setValue(uiKey + "windowWidth", width());
     s.setValue(uiKey + "split", mainSplit_->saveState()); s.setValue(uiKey + "wireSplit", wireSplit_->saveState());
+    for (auto entry : {std::make_pair(mainSplit_, QStringLiteral("flowSplit")), std::make_pair(wireSplit_, QStringLiteral("flowWires"))}) {
+        const auto heights = static_cast<WizardFlowSplitter*>(entry.first)->flowHeights();
+        if (!heights.isEmpty()) s.setValue(uiKey + entry.second, QVariant::fromValue(heights));
+    }
     s.setValue(uiKey + "connectors", connTable_->horizontalHeader()->saveState());
     s.setValue(uiKey + "wires", wireTable_->horizontalHeader()->saveState());
     s.setValue(uiKey + "compact", compactColumns_);
@@ -494,6 +519,12 @@ void HarnessBuilderDialog::refreshWireDetails() {
         }
     }
     for (auto* group : wireDetails_->findChildren<QGroupBox*>()) group->setMaximumWidth(kDetailFieldWidth + 200);
+    wireDetails_->layout()->activate();
+    auto* flow = static_cast<WizardFlowSplitter*>(wireSplit_);
+    if (!flow->property("flowUserResized").toBool()) {
+        const int height = std::max(180, std::max(wireDetails_->sizeHint().height(), wireDetails_->minimumSizeHint().height()));
+        flow->restoreFlowHeights({std::max(100, wireTable_->height()), height});
+    }
     calmSpinBoxes();
 }
 

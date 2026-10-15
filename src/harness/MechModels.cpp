@@ -109,6 +109,7 @@ std::vector<Entity> builtInLabel(bool underShrink) {
         e.a = a;
         e.b = b;
         if (dashed) e.meta.insert(QStringLiteral("linetype"), QStringLiteral("HIDDEN"));
+        if (QByteArray(id).startsWith("text")) e.meta.insert(QStringLiteral("labelPlaceholder"), true);
         es.push_back(e);
     };
     // The label itself: a rectangle wrapped round the run. It is drawn as a closed rectangle rather than as

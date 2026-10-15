@@ -4,11 +4,13 @@
 // ends that must NOT stretch, and everything between them makes up the difference. That is the whole
 // difficulty with scaling a drawing, so it is measured here rather than eyeballed.
 #include "harness/MechModels.h"
+#include "harness/LabelCaption.h"
 #include "model/Document.h"
 #include "app/DrawingPreview.h"
 #include "app/MechModelsDialog.h"
 #include "app/MainWindow.h"
 #include "app/Editor.h"
+#include "app/LabelCaptionEdit.h"
 #include "harness/PartsLibrary.h"
 #include "model/Block.h"
 
@@ -3543,6 +3545,87 @@ int run_mechmodels_tests() {
         std::printf("  face snap: (30.0,6.2) went to (%.2f,%.2f)\n", free.x, free.y);
         check(std::abs(free.x - 20.0) > 1e-6 || std::abs(free.y - 12.0) > 1e-6,
               "face snap: and out in the open it is not dragged onto a corner");
+    }
+
+    {
+        LabelCaptionEdit edit;
+        int commits = 0;
+        edit.commit = [&](const QString&) { ++commits; };
+        edit.setPlainText(QStringLiteral("ABC"));
+        edit.moveCursor(QTextCursor::End);
+        QKeyEvent newline(QEvent::KeyPress, Qt::Key_Return, Qt::ShiftModifier);
+        QApplication::sendEvent(&edit, &newline);
+        check(edit.toPlainText() == QLatin1String("ABC\n") && commits == 0,
+              "label property: Shift+Enter inserts a newline without applying the field");
+        QKeyEvent apply(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        QApplication::sendEvent(&edit, &apply);
+        check(commits == 1, "label property: Enter applies the multiline text");
+    }
+    {
+        MainWindow window;
+        check(!window.findChild<QPlainTextEdit*>(QStringLiteral("specialLabelText")),
+              "label property: no label field appears without a label selection");
+    }
+    {
+        Document document;
+        Entity wire;
+        wire.id = QStringLiteral("caption-run");
+        wire.type = EntityType::Line;
+        wire.a = {0, 0}; wire.b = {100, 0};
+        document.entities().push_back(wire);
+        Editor editor;
+        editor.setDocument(&document);
+        noSnap(editor);
+        const auto model = builtInMechModel(MechModelKind::LabelUnderHeatshrink);
+        editor.beginLabelPlacement(partDrawingEntities(model.drawing));
+        editor.onPointerPress({50, -4}, Qt::LeftButton, Qt::NoModifier);
+        editor.onPointerMove({50, 4});
+        editor.onPointerPress({50, 4}, Qt::LeftButton, Qt::NoModifier);
+        editor.setLabelWidth(18);
+        editor.setLabelHeight(8);
+        editor.setLabelText(QStringLiteral("Harness identification ABCDEFGHIJKLMNOPQRSTUVWXYZ 123456789"));
+        auto caption = [&]() -> const Entity* {
+            for (const Entity& part : document.entities())
+                if (part.meta.value(QStringLiteral("labelCaptionEntity")).toBool()) return &part;
+            return nullptr;
+        };
+        check(caption() && caption()->meta.value(QStringLiteral("text")).toString().contains(QLatin1Char('\n')),
+              "label text: long words wrap inside the physical label");
+        const double small = caption() ? caption()->meta.value(QStringLiteral("size")).toDouble() : 0;
+        editor.setLabelWidth(40);
+        editor.setLabelHeight(12);
+        editor.setLabelText(QStringLiteral("ABC\nDEF"));
+        check(caption() && caption()->meta.value(QStringLiteral("size")).toDouble() > small &&
+              caption()->meta.value(QStringLiteral("text")).toString() == QLatin1String("ABC\nDEF"),
+              "label text: explicit newline keeps both lines and recovers normal font size");
+        if (caption()) {
+            const Entity saved = Entity::fromJson(caption()->toJson());
+            check(saved.meta.value(QStringLiteral("labelCaption")).toString() == QLatin1String("ABC\nDEF"),
+                  "label text: multiline source survives saving");
+        }
+        DrawingPreview preview(QStringLiteral("Label with clear sleeve"));
+        preview.resize(900, 400);
+        preview.setEntities(document.entities());
+        preview.show();
+        QApplication::processEvents();
+        if (qEnvironmentVariableIsSet("LOOPWIRE_LABEL_SCREENSHOT"))
+            preview.grab().save(qEnvironmentVariable("LOOPWIRE_LABEL_SCREENSHOT"));
+        editor.setTool(ToolId::TextLeader);
+        editor.onPointerPress({50, 0}, Qt::LeftButton, Qt::NoModifier);
+        editor.onPointerMove({75, 30});
+        editor.onPointerPress({75, 30}, Qt::LeftButton, Qt::NoModifier);
+        bool transferred = false;
+        for (const Entity& part : document.entities())
+            transferred |= part.type == EntityType::Leader && part.meta.value(QStringLiteral("text")).toString() == QLatin1String("ABC\nDEF");
+        check(transferred && !caption(), "label text: a leader on the label takes its text off the physical label");
+        editor.undo();
+        check(caption() != nullptr, "label text: undo restores the physical text and removes the leader together");
+        // This point is on the clear sleeve beyond the opaque label's 40 mm length.
+        editor.setTool(ToolId::TextLeader);
+        editor.onPointerPress({74, 0}, Qt::LeftButton, Qt::NoModifier);
+        editor.onPointerMove({90, 30});
+        editor.onPointerPress({90, 30}, Qt::LeftButton, Qt::NoModifier);
+        check(caption() != nullptr, "label text: a leader on the clear sleeve does not take the opaque label's printing");
     }
 
     if (failures == 0) std::printf("  -> ok\n");

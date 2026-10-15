@@ -1,4 +1,6 @@
 #include "app/UiBits.h"
+#include "app/ResizeScrollAnchor.h"
+#include "app/WizardFlowSplitter.h"
 
 #include "harness/Harness.h"
 #include "app/Chrome.h"
@@ -41,11 +43,13 @@ public:
     SectionGripWidget(QWidget* section, QWidget* parent, std::function<void()> onPress, std::function<void()> onReset)
         : QWidget(parent), section_(section), onPress_(std::move(onPress)), onReset_(std::move(onReset)) {
         setFixedHeight(8);
+        setObjectName(QStringLiteral("sectionResizeGrip"));
         setCursor(Qt::SizeVerCursor);
         setToolTip(QStringLiteral("Drag to make the section above taller or shorter - the rest move with it. "
                                   "Double-click to let every section size itself again."));
         setVisible(section->isVisibleTo(section->parentWidget()));
         section->installEventFilter(this);
+        ResizeScrollAnchor::install(this);
     }
 
 protected:
@@ -66,27 +70,55 @@ protected:
         p.drawLine(c - 16, height() - 3, c + 16, height() - 3);
     }
     void mousePressEvent(QMouseEvent* e) override {
+        if (e->button() != Qt::LeftButton) return;
         if (onPress_) onPress_();
+        WizardFlowSplitter::freezeAncestors(section_);
+        if (auto* flow = dynamic_cast<WizardFlowSplitter*>(section_)) { flow->setProperty("flowUserResized", true); flow->freezePanes(); }
         from_ = e->globalPosition().y();
         start_ = section_->height();
+        frameStart_ = parentWidget()->height();
+        // Fix sibling section heights before changing this one. Free space
+        // must stay below the column instead of stretching a lower section.
+        QWidget* container = parentWidget()->property("wizardSectionFrame").toBool() ? parentWidget()->parentWidget() : parentWidget();
+        if (container && container->layout()) for (int i = 0; i < container->layout()->count(); ++i)
+            if (auto* sibling = container->layout()->itemAt(i)->widget(); sibling && sibling->isVisible() && sibling != section_)
+                sibling->setFixedHeight(sibling->height());
     }
     void mouseMoveEvent(QMouseEvent* e) override {
         if (!(e->buttons() & Qt::LeftButton)) return;
-        const int floor = std::max(section_->minimumSizeHint().height() > 0 ? 40 : 20,
-                                   section_->property("sectionGripMinimum").toInt());
+        const int floor = WizardFlowSplitter::readableMinimum(section_);
         const int want = std::max(floor, int(start_ + e->globalPosition().y() - from_));
-        section_->setFixedHeight(want);
+        int delta = want - section_->height();
+        section_->setProperty("clipHeightManual", true);
+        if (auto* flow = dynamic_cast<WizardFlowSplitter*>(section_); flow && flow->orientation() == Qt::Vertical)
+            delta = flow->growPane(flow->count() - 1, delta);
+        else section_->setFixedHeight(want);
+        if (parentWidget()->property("wizardSectionFrame").toBool())
+            parentWidget()->setFixedHeight(frameStart_ + section_->height() - start_);
+        WizardFlowSplitter::growAncestors(section_, delta);
         if (QWidget* column = parentWidget()) {
             if (column->layout()) {
                 column->layout()->invalidate();
                 column->layout()->activate();
             }
             column->updateGeometry();
-            column->adjustSize();
         }
     }
     void mouseDoubleClickEvent(QMouseEvent*) override {
-        if (onReset_) onReset_();
+        if (!onReset_) return;
+        section_->setProperty("clipHeightManual", false);
+        QWidget* container = parentWidget()->property("wizardSectionFrame").toBool() ? parentWidget()->parentWidget() : parentWidget();
+        if (container && container->layout()) for (int i = 0; i < container->layout()->count(); ++i)
+            if (auto* sibling = container->layout()->itemAt(i)->widget()) {
+                sibling->setMaximumHeight(QWIDGETSIZE_MAX);
+                sibling->setMinimumHeight(sibling->property("wizardSectionDefaultMin").toInt());
+            }
+        for (auto* p = section_->parentWidget(); p; p = p->parentWidget())
+            if (auto* split = dynamic_cast<WizardFlowSplitter*>(p)) split->releasePanes();
+        onReset_();
+        for (auto* p = section_->parentWidget(); p; p = p->parentWidget())
+            if (auto* split = dynamic_cast<WizardFlowSplitter*>(p); split && split->objectName() == QLatin1String("harnessBuilderSplit"))
+                if (auto* pages = split->findChild<QStackedWidget*>(QStringLiteral("harnessBuilderPages"))) WizardFlowSplitter::fitNaturalColumn(split, pages);
     }
 
 private:
@@ -94,6 +126,7 @@ private:
     std::function<void()> onPress_, onReset_;
     double from_ = 0.0;
     int start_ = 0;
+    int frameStart_ = 0;
 };
 } // namespace
 

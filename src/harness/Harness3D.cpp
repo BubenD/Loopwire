@@ -16,6 +16,18 @@
 
 namespace Loopwire {
 
+QString harness3DPartKey(const Entity& e) {
+    for (const char* key : {"brickId", "harnessBrick"}) {
+        const QString id = e.meta.value(QLatin1String(key)).toString();
+        if (!id.isEmpty()) return id;
+    }
+    for (const char* key : {"partCopy", "blockInst"}) {
+        const QString id = e.meta.value(QLatin1String(key)).toString();
+        if (!id.isEmpty()) return QStringLiteral("drawing:") + id;
+    }
+    return e.type == EntityType::Connector ? QStringLiteral("drawing:") + e.id : QString();
+}
+
 namespace {
 
 struct Cached {
@@ -537,21 +549,18 @@ bool pinoutFace(const LibraryPart& part, int count, std::vector<Vec2>& face, dou
         }
     }
     if (pts.size() < 3) return false;
-    // The hull round them: the outside of the face, whatever is drawn inside it (the pins, their numbers).
-    std::sort(pts.begin(), pts.end(), [](const Vec2& a, const Vec2& b) { return a.x < b.x || (a.x == b.x && a.y < b.y); });
-    auto cross = [](const Vec2& o, const Vec2& a, const Vec2& b) { return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x); };
-    std::vector<Vec2> hull(2 * pts.size());
-    size_t k = 0;
-    for (size_t i = 0; i < pts.size(); ++i) {
-        while (k >= 2 && cross(hull[k - 2], hull[k - 1], pts[i]) <= 0) --k;
-        hull[k++] = pts[i];
-    }
-    for (size_t i = pts.size() - 1, t = k + 1; i > 0; --i) {
-        while (k >= t && cross(hull[k - 2], hull[k - 1], pts[i - 1]) <= 0) --k;
-        hull[k++] = pts[i - 1];
-    }
-    hull.resize(k > 0 ? k - 1 : 0);
+    // The ordered contour preserves keyed recesses; a convex hull would fill them in.
+    std::vector<Vec2> hull;
+    for (const auto& point : pts)
+        if (hull.empty() || distance(hull.back(), point) > 1e-9) hull.push_back(point);
+    if (hull.size() > 2 && distance(hull.front(), hull.back()) < 1e-9) hull.pop_back();
     if (hull.size() < 3) return false;
+    double signedArea = 0.0;
+    for (size_t i = 0; i < hull.size(); ++i) {
+        const auto& a = hull[i]; const auto& b = hull[(i+1)%hull.size()];
+        signedArea += a.x*b.y - b.x*a.y;
+    }
+    if (signedArea < 0.0) std::reverse(hull.begin(), hull.end());
     Bounds b;
     for (const Vec2& p : hull) b.expand(p);
     tall = b.height();
@@ -600,19 +609,15 @@ Mesh3D solidFromFace(const std::vector<Vec2>& pts, const Vec2& c, double lo, dou
             m.addTri(a, b, d);
             m.addTri(a, d, cc);
         }
-    // Its two ends closed, each on its own middle.
-    auto capAt = [&](int ring, bool far) {
-        V3 mid{0, 0, 0};
-        for (int k = 0; k < sides; ++k) mid = mid + m.v[static_cast<size_t>(ring * sides + k)];
-        const int centre = m.addVertex(mid * (1.0 / sides));
-        for (int k = 0; k < sides; ++k) {
-            const int a = ring * sides + k, b = ring * sides + (k + 1) % sides;
-            if (far) m.addTri(centre, a, b);
-            else m.addTri(centre, b, a);
-        }
-    };
-    capAt(0, false);
-    capAt(n, true);
+    // Ear-clipped caps retain the face's concave recesses instead of filling them with a centre fan.
+    std::vector<std::pair<double, double>> profile;
+    for (const auto& p : face) profile.emplace_back(p.x, p.y);
+    const Mesh3D cap = prismMesh(profile, 1.0);
+    for (const auto& triangle : cap.f) {
+        if (triangle[0] >= sides || triangle[1] >= sides || triangle[2] >= sides) continue;
+        m.addTri(triangle[0], triangle[1], triangle[2]);
+        m.addTri(n*sides + triangle[0], n*sides + triangle[2], n*sides + triangle[1]);
+    }
     return m;
 }
 } // namespace
@@ -713,8 +718,7 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
         return QString();
     };
     auto brickOf = [](const Entity& e) {
-        const QString id = e.meta.value(QStringLiteral("brickId")).toString();
-        return !id.isEmpty() ? id : e.meta.value(QStringLiteral("harnessBrick")).toString();
+        return harness3DPartKey(e);
     };
     // A wire's colour: the one the run carries for it, else the general colours.
     auto colourOf = [](const Entity& e, int k) {
@@ -769,6 +773,21 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
             sl.what = QStringLiteral("sleeve");
             sl.brick = brickOf(e);
             scene.items.push_back(std::move(sl));
+            continue;
+        }
+        if ((e.type == EntityType::DoubleLine || e.type == EntityType::Wire) && groupOf(e).isEmpty()) {
+            const auto path2 = routeOf(e);
+            if (path2.size() < 2 || pathLength(path2) < 1e-6) continue;
+            std::vector<V3> path;
+            for (const Vec2& point : path2) path.push_back(at3(point));
+            Harness3DItem wire;
+            wire.mesh = tubeMesh(path, std::max(0.2, e.meta.value(QStringLiteral("gap")).toDouble(1.0)) / 2.0, 10, true);
+            wire.what = QStringLiteral("wire");
+            wire.color = colourOf(e, 0);
+            scene.items.push_back(std::move(wire));
+            ++scene.runs;
+            runEnds.push_back(path2.front());
+            runEnds.push_back(path2.back());
             continue;
         }
         // A RUN OF ONE WIRE is drawn as a wire - a double line, not a bundle: one tube along it. A HEATSHRINK SLEEVE drawn
@@ -857,18 +876,19 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
         runEnds.push_back(route.front());
         runEnds.push_back(route.back());
         const double total = pathLength(route);
-        const double ww = std::max(0.2, e.meta.value(QStringLiteral("twistWireWidth")).toDouble(1.0));
+        const TwistFigures figures = twistedPairFigures(e);
+        const double ww = std::max(0.2, figures.ok ? figures.wireWidth : e.meta.value(QStringLiteral("twistWireWidth")).toDouble(1.0));
         const QString body = e.meta.value(QStringLiteral("twistBody")).toString();
-        const double bodyW = e.meta.value(QStringLiteral("twistBodyWidth")).toDouble(0.0);
-        const double fanA = std::max(0.0, e.meta.value(QStringLiteral("twistEnds")).toDouble(0.0));
-        const double fanB = std::max(0.0, e.meta.value(QStringLiteral("twistEndsFinish")).toDouble(fanA));
+        const double bodyW = figures.ok ? figures.bodyWidth : e.meta.value(QStringLiteral("twistBodyWidth")).toDouble(0.0);
+        const double fanA = figures.spreadStart ? std::max(0.0, figures.fanLen) : 0.0;
+        const double fanB = figures.spreadFinish ? std::max(0.0, figures.fanLenFinish) : 0.0;
         const bool covered = !body.isEmpty() && bodyW > 1e-6;
         // ITS BODY: a cable, or heatshrink over the wires, between where it fans out at each end.
         if (covered && total > fanA + fanB + 0.5) {
             Harness3DItem it;
             it.mesh = tubeMesh(stretch(route, fanA, total - fanB), bodyW / 2.0, 18, true);
             it.color = body == QLatin1String("heatshrink") ? QColor(42, 42, 46) : QColor(70, 74, 82);
-            it.what = QStringLiteral("run");
+            it.what = body == QLatin1String("heatshrink") ? QStringLiteral("sleeve") : QStringLiteral("run");
             it.brick = brickOf(e);
             scene.items.push_back(std::move(it));
             // ITS TRANSITION SLEEVES, on the body at the ends it says.

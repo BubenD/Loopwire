@@ -1281,6 +1281,8 @@ QString EntityRenderer::dimensionText(const Entity& e) {
 
 void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                           const ViewTransform& vt, const QColor& overrideColor) {
+    if (e.meta.value(QStringLiteral("labelPlaceholder")).toBool() &&
+        !e.meta.value(QStringLiteral("labelCaption")).toString().isEmpty()) return;
     // The line a part is attached to the harness by shows ORANGE WHILE THE PART IS SELECTED, and is an
     // ordinary line the rest of the time. It is a note about the part, not a feature of the drawing:
     // orange at all times would put a coloured line through every connector on a finished sheet, and
@@ -2365,6 +2367,23 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         }
         const QPointF at = turned ? QPointF(0.0, 0.0) : anchor;
 
+        const bool clipCaption = e.meta.value(QStringLiteral("labelCaptionEntity")).toBool();
+        if (clipCaption) {
+            p.save();
+            p.setClipRect(QRectF(at.x(), at.y(), boxWpx, boxHpx), Qt::IntersectClip);
+            const QJsonArray boundary = e.meta.value(QStringLiteral("labelCaptionBoundary")).toArray();
+            if (boundary.size() >= 6) {
+                QPainterPath mask;
+                for (int i = 0; i + 1 < boundary.size(); i += 2) {
+                    const QPointF point(at.x() + (boundary[i].toDouble() - 0.05) * boxWpx / 0.9,
+                                        at.y() + (boundary[i + 1].toDouble() - 0.075) * boxHpx / 0.85);
+                    if (i == 0) mask.moveTo(point); else mask.lineTo(point);
+                }
+                mask.closeSubpath();
+                p.setClipPath(mask, Qt::IntersectClip);
+            }
+        }
+
         double blockTop = at.y();
         if (vJust == QLatin1Char('M')) blockTop += (availH - totalH) / 2.0;
         else if (vJust == QLatin1Char('B')) blockTop += availH - totalH;
@@ -2378,6 +2397,7 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             p.drawText(QPointF(x, y), ln);
             y += lineH;
         }
+        if (clipCaption) p.restore();
         if (turned) p.restore();
         break;
     }

@@ -13,6 +13,38 @@
 namespace Loopwire {
 
 namespace {
+void simplifyWireRoute(std::vector<Vec2>& points) {
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (size_t i = 1; i < points.size(); ++i) {
+            if (distance(points[i - 1], points[i]) < 1e-8) {
+                points.erase(points.begin() + i); changed = true; break;
+            }
+            if (i + 1 < points.size()) {
+                const Vec2 a = points[i - 1], b = points[i], c = points[i + 1];
+                if (std::abs((b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x)) < 1e-8) {
+                    points.erase(points.begin() + i); changed = true; break;
+                }
+            }
+        }
+        if (changed) continue;
+        for (size_t i = 0; i + 1 < points.size() && !changed; ++i)
+            for (size_t j = i + 2; j + 1 < points.size(); ++j) {
+                auto crossing = segmentSegmentIntersection(points[i], points[i + 1], points[j], points[j + 1]);
+                if (!crossing) {
+                    auto on = [](Vec2 p, Vec2 a, Vec2 b) { return std::abs(distance(a, p) + distance(p, b) - distance(a, b)) < 1e-8; };
+                    for (const Vec2 p : {points[j], points[j + 1], points[i], points[i + 1]})
+                        if (on(p, points[i], points[i + 1]) && on(p, points[j], points[j + 1])) { crossing = p; break; }
+                }
+                if (!crossing) continue;
+                std::vector<Vec2> simple(points.begin(), points.begin() + i + 1);
+                simple.push_back(*crossing);
+                simple.insert(simple.end(), points.begin() + j + 1, points.end());
+                points = std::move(simple); changed = true; break;
+            }
+    }
+}
 QJsonObject terminationJson(const HarnessTermination& t) {
     return {{"via", t.via}, {"wireLibPart", t.wireLibPart}, {"wirePn", t.wirePn},
             {"wireGauge", t.wireGauge}, {"wireColor", t.wireColor},
@@ -36,6 +68,10 @@ void stampTail(Entity& entity, const HarnessWire& wire, int end, const HarnessLa
     entity.meta["tailEnd"] = end;
     entity.meta["wireGauge"] = t.wireGauge.isEmpty() ? wire.gauge : t.wireGauge;
     entity.meta["wireColor"] = t.wireColor.isEmpty() ? wire.color : t.wireColor;
+    if (t.via == QLatin1String("wire")) {
+        entity.meta["showGaugeName"] = true; entity.meta["showColorName"] = true;
+        entity.meta["annCount"] = 1;
+    }
     if (layout.wireColorMode != QLatin1String("bylayer")) entity.color = wireColorHex(entity.meta["wireColor"].toString());
 }
 }
@@ -1412,7 +1448,16 @@ void harnessSyncDrains(HarnessDef& def) {
     }
 }
 
-HarnessBuild buildHarness(const HarnessDef& def) {
+HarnessBuild buildHarness(const HarnessDef& input) {
+    HarnessDef def = input;
+    if (std::any_of(def.connectors.begin(), def.connectors.end(), [](const auto& c) { return !c.drainTo.isEmpty(); })) {
+        harnessSyncDrains(def);
+        // Old patterns encode body bonds directly, without a drainTo setting.
+        for (size_t i = 0; i < def.connectors.size(); ++i) if (input.connectors[i].drainTo.isEmpty()) {
+            def.connectors[i].bodyBondLeft = input.connectors[i].bodyBondLeft;
+            def.connectors[i].bodyBondRight = input.connectors[i].bodyBondRight;
+        }
+    }
     HarnessBuild out;
     out.issues = validateHarness(def);
     const HarnessLayout& L = def.layout;
@@ -1515,8 +1560,12 @@ HarnessBuild buildHarness(const HarnessDef& def) {
         e.layer = QStringLiteral("Wires");
         // Lanes are spaced by the CONNECTOR PITCH, so the turns sit as far apart as the pins
         // they come from, and all of them are measured from the same start line.
-        const double midX = laneBase + L2.lane * laneStep;
         const Vec2 pa = L2.pa, pb = L2.pb;
+        double midX = laneBase + L2.lane * laneStep;
+        if (L2.a->conn->side != L2.b->conn->side) {
+            const double margin = std::min(laneStep, std::abs(pb.x - pa.x) * .25);
+            midX = std::clamp(midX, std::min(pa.x, pb.x) + margin, std::max(pa.x, pb.x) - margin);
+        }
         if (!L2.needsKnee) {
             e.points = {pa, pb}; // straight across: no knee needed
         } else {
@@ -1665,8 +1714,21 @@ HarnessBuild buildHarness(const HarnessDef& def) {
         // the bond that follows it runs entirely in the empty space beside the connector
         // instead of over the other pins' stubs.
         const double legLenHere = terminated ? legLen : kOpenLegLength;
-        const bool up = body && ((yMin + yMax) * 0.5) >=
+        bool up = body && ((yMin + yMax) * 0.5) >=
                                     (body->geom.rectMin.y + body->geom.rectMax.y) * 0.5;
+        // A drain to a pin leaves towards that pin, rather than towards the
+        // nearest body edge and then doubling back around the shield.
+        double targetY = 0.0; int targets = 0;
+        const QString endpoint = overall && body ? harnessOverallShieldKey(body->conn->id, body->conn->side)
+                                                 : harnessInternalShieldKey(key);
+        for (const auto& wire : def.wires) {
+            const bool from = wire.fromConn == endpoint, to = wire.toConn == endpoint;
+            if (!from && !to) continue;
+            const auto* target = placedById(placed, from ? wire.toConn : wire.fromConn);
+            Vec2 point;
+            if (target && pinEndOf(*target, from ? wire.toPin : wire.fromPin, point)) { targetY += point.y; ++targets; }
+        }
+        if (targets) up = targetY / targets > (yMin + yMax) * .5;
         if (up) {
             double y = yMax + pad + legLenHere;
             // A leg that goes somewhere is carried clear of the connector body on its way; a stub
@@ -1729,6 +1791,9 @@ HarnessBuild buildHarness(const HarnessDef& def) {
         bond.meta.insert("wireColor", colour);
         bond.meta.insert("wireGauge", viaWire ? p.conn->drainGauge : QStringLiteral("0.5"));
         bond.meta.insert("drainVia", viaWire ? QStringLiteral("wire") : QStringLiteral("direct"));
+        if (viaWire) {
+            bond.meta["showGaugeName"] = true; bond.meta["showColorName"] = true; bond.meta["annCount"] = 1;
+        }
         if (viaWire && !p.conn->drainLibPart.isEmpty()) bond.meta.insert("libPart", p.conn->drainLibPart);
         if (L.wireColorMode == QLatin1String("bylayer"))
             bond.meta.insert("wireColorMode", QStringLiteral("bylayer"));
@@ -2310,6 +2375,9 @@ HarnessBuild buildHarness(const HarnessDef& def) {
         e.meta.insert("showWireLabel", w.showLabel);
         e.meta.insert("showColorName", w.showColor);
         e.meta.insert("showGaugeName", w.showGauge);
+        if (harnessIsDrainRow(w) && wantC && wantC->drainVia == QLatin1String("wire")) {
+            e.meta["showColorName"] = true; e.meta["showGaugeName"] = true; e.meta["annCount"] = 1;
+        }
         if (w.showColor || w.showGauge) e.meta.insert("annCount", 1);
         if (L.textGap > 0.0) e.meta.insert("textGap", L.textGap);
         // Each marking's own height above the wire, 10 apart: the cross-section nearest it, then
@@ -2332,6 +2400,10 @@ HarnessBuild buildHarness(const HarnessDef& def) {
                 sc.meta.insert("notConnected", false);
         }
     }
+
+    // Tail cuts and shield joins can introduce redundant reversals. A routed
+    // conductor is a simple path: remove retraced segments and closed detours.
+    for (auto& entity : out.entities) if (entity.type == EntityType::Wire) simplifyWireRoute(entity.points);
 
     // ---- Twisted groups (items 4, 9) ----
     for (const QString& key : groupKeys(/*shield=*/false)) {
@@ -2617,7 +2689,7 @@ HarnessBuild buildHarness(const HarnessDef& def) {
             e.type = EntityType::Splice;
             e.layer = QStringLiteral("Wires");
             e.a = j;
-            e.meta.insert("size", L.spliceSize);
+            e.meta.insert("size", L.spliceSize * .5);
             out.entities.push_back(std::move(e));
         }
     }

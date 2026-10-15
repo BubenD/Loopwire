@@ -2,6 +2,8 @@
 #include "app/MainWindow.h"
 #include "app/HarnessBuilderDialog.h"
 #include "app/DrawingPreview.h"
+#include "app/UiBits.h"
+#include <QVBoxLayout>
 #include "harness/HarnessBuilderBom.h"
 #include "harness/CableSpec.h"
 #include "harness/Harness3D.h"
@@ -25,8 +27,15 @@
 #include <QScrollArea>
 #include <QSettings>
 #include <QSplitter>
+#include <QSplitterHandle>
 #include <QTableWidget>
 #include <QToolButton>
+#include <QMenu>
+#include <QTimer>
+#include <QContextMenuEvent>
+#include <QTemporaryDir>
+#include <QWheelEvent>
+#include "geometry/Geometry.h"
 #include <cmath>
 #include <cstdio>
 
@@ -68,12 +77,109 @@ double quantity(const std::vector<BomRow>& rows, const QString& id) {
     double sum = 0; for (const auto& row : rows) if (row.partId == id) sum += convertQuantity(row.qty, row.unit, id == "tail" || id == "coax" ? "m" : "each");
     return sum;
 }
+HarnessDef shieldFixture() {
+    HarnessDef d;
+    HarnessConnector a; a.id = "p1"; a.designator = "P1"; a.pinCount = 8; a.shieldLeft = true;
+    HarnessConnector b; b.id = "p2"; b.designator = "P2"; b.side = HarnessSide::Right; b.pinCount = 4;
+    HarnessConnector c = b; c.id = "p3"; c.designator = "P3"; c.order = 1; c.pinCount = 3;
+    c.shieldRight = true; c.drainTo = "pin:p3:3"; c.drainVia = "wire"; c.drainGauge = "0.5"; c.drainColor = "WH-BL";
+    d.connectors = {a, b, c}; d.layout.terminateUnconnected = true;
+    int n = 0;
+    for (auto pins : std::vector<std::pair<int,int>>{{1,1}, {2,2}, {3,3}, {5,4}, {4,1}, {8,2}, {6,7}}) {
+        HarnessWire w; w.id = QString::number(++n); w.fromConn = "p1"; w.fromPin = pins.first;
+        w.toConn = n <= 4 ? "p2" : n <= 6 ? "p3" : "p1"; w.toPin = pins.second;
+        d.wires.push_back(w);
+    }
+    return d;
+}
+bool simpleRoute(const Entity& e) {
+    if (e.type != EntityType::Wire) return true;
+    for (size_t i = 1; i + 1 < e.points.size(); ++i) {
+        const auto a = e.points[i] - e.points[i - 1], b = e.points[i + 1] - e.points[i];
+        if (std::abs(a.x * b.y - a.y * b.x) < 1e-8 && a.x * b.x + a.y * b.y < -1e-8) return false;
+    }
+    for (size_t i = 0; i + 1 < e.points.size(); ++i)
+        for (size_t j = i + 2; j + 1 < e.points.size(); ++j) {
+            if (segmentSegmentIntersection(e.points[i], e.points[i + 1], e.points[j], e.points[j + 1])) return false;
+            for (const Vec2 p : {e.points[j], e.points[j + 1]}) {
+                const auto a = e.points[i], b = e.points[i + 1];
+                if (std::abs(distance(a,p) + distance(p,b) - distance(a,b)) < 1e-8) return false;
+            }
+        }
+    return true;
+}
 }
 int run_schematicwizard_tests() {
     failures = 0; std::printf("schematic wizard tests:\n");
     const QString oldStyle = qApp->styleSheet();
     if (QFile style(QStringLiteral(":/loopwire.qss")); style.open(QIODevice::ReadOnly)) qApp->setStyleSheet(QString::fromUtf8(style.readAll()));
     const auto lib = library(); auto d = fixture();
+    {
+        QScrollArea page; page.resize(500, 300); page.setWidgetResizable(true);
+        auto* column = new QWidget; auto* layout = new QVBoxLayout(column);
+        auto* upper = new QWidget(column); upper->setFixedHeight(400); layout->addWidget(upper);
+        auto* grip = makeSectionGrip(upper, column); layout->addWidget(grip);
+        auto* lower = new QWidget(column); lower->setFixedHeight(700); layout->addWidget(lower);
+        auto* field = new QLineEdit(column); layout->addWidget(field);
+        page.setWidget(column); page.show(); events();
+        field->setFocus(); events();
+        page.verticalScrollBar()->setValue(300); events();
+        const int anchor = page.verticalScrollBar()->value();
+        const QPointF local(4,4), global = grip->mapToGlobal(QPoint(4,4));
+        QMouseEvent press(QEvent::MouseButtonPress, local, global, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(grip, &press);
+        for (int dy : {-20, -40, -60}) {
+            QMouseEvent move(QEvent::MouseMove, local + QPointF(0,dy), global + QPointF(0,dy), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(grip, &move); events();
+            check(page.verticalScrollBar()->value() == anchor, "pulling a separator up resizes its section without scrolling the page");
+        }
+        QMouseEvent release(QEvent::MouseButtonRelease, local, global + QPointF(0,-60), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(grip, &release); events();
+        check(upper->height() == 340 && page.verticalScrollBar()->value() == anchor, "separator drag preserves scroll position after release and deferred layout");
+    }
+    const auto shieldCase = shieldFixture(); const auto shieldBuild = buildHarness(shieldCase);
+    bool labelled = false, exitsDown = false, halfJoint = false, connectedMarked = false;
+    Vec2 pinOne; bool foundPin = false;
+    for (const auto& entity : shieldBuild.entities) if (entity.type == EntityType::Connector) {
+        const auto spec = connectorSpecFromMeta(entity.meta);
+        if (spec.designator == "P3") { pinOne = connectorGeometry(entity.a, spec).pinEnd[0]; foundPin = true; }
+    }
+    for (const auto& entity : shieldBuild.entities) {
+        if (entity.type == EntityType::Wire && entity.meta.value("shieldLeg").toString() == harnessOverallShieldKey("p3", HarnessSide::Right))
+            labelled |= entity.meta.value("showGaugeName").toBool() && entity.meta.value("showColorName").toBool() &&
+                        entity.meta.value("wireGauge") == QJsonValue("0.5") && entity.meta.value("wireColor") == QJsonValue("WH-BL");
+        if (entity.type == EntityType::Screen && entity.meta.value("overallShield") == QJsonValue("P3"))
+            exitsDown |= entity.meta.value("legDir") == QJsonValue("bottom");
+        if (entity.type == EntityType::NotConnected && distance(entity.a, pinOne) < 1e-6) connectedMarked = true;
+        if (entity.type == EntityType::Splice) halfJoint |= entity.meta.value("size").toDouble() == shieldCase.layout.spliceSize * .5;
+        check(simpleRoute(entity), "shield example conductor never retraces or intersects itself");
+    }
+    check(labelled && exitsDown, "P3 hook-up drain shows gauge/colour and exits towards its lower pin");
+    check(foundPin && !connectedMarked, "connected P3 pin 1 is never marked unconnected");
+    int p3Unconnected = 0;
+    for (const auto& entity : shieldBuild.entities) if (entity.type == EntityType::NotConnected)
+        for (const auto& connector : shieldBuild.entities) if (connector.type == EntityType::Connector) {
+            const auto spec = connectorSpecFromMeta(connector.meta);
+            if (spec.designator == "P3") for (const auto& pin : connectorGeometry(connector.a, spec).pinEnd)
+                if (distance(pin, entity.a) < 1e-6) ++p3Unconnected;
+        }
+    check(p3Unconnected == 0, "derived hook-up drain pin is connected even when its wire row was absent in the saved definition");
+    check(halfJoint, "connection dots use half the previous size");
+    {
+        DrawingPreview preview(QString(), nullptr); preview.resize(1200, 600);
+        preview.setEntities(harnessPreviewEntities(shieldCase, true)); preview.show(); events(); preview.fitToView(); events();
+        preview.setKeepView(true); preview.grab();
+        const auto beforeA = preview.screenAt({100,300}), beforeB = preview.screenAt({700,200});
+        preview.resize(1200, 700); events(); preview.grab();
+        check((preview.screenAt({100,300}) - beforeA).manhattanLength() < .01 &&
+              (preview.screenAt({700,200}) - beforeB).manhattanLength() < .01,
+              "resizing a kept drawing preview preserves drawing position and scale");
+        QDir().mkpath("build/wizard-review"); preview.grab().save("build/wizard-review/p3-shield-routing.png");
+    }
+    for (double right : {160., 300., 700.}) for (int pitch : {5, 15, 40}) {
+        auto narrow = fixture(); narrow.layout.rightX = right; narrow.layout.pinPitch = pitch;
+        for (const auto& entity : buildHarness(narrow).entities) check(simpleRoute(entity), "coax routes remain simple in narrow and wide corridors");
+    }
     Entity labelMask; labelMask.type = EntityType::Wipeout;
     labelMask.points = {{-12, -4}, {12, -4}, {12, 4}, {-12, 4}};
     labelMask.meta["labelMask"] = true; labelMask.meta["labelGroup"] = "label-1";
@@ -188,6 +294,16 @@ int run_schematicwizard_tests() {
         HarnessBuilderDialog wizard(&editor); wizard.show(); events(); useHarnessBuilderLibraryForTest(lib);
         wizard.loadDemand(fixture(), "test"); wizard.setStep(1); events();
         check(wizard.windowTitle() == "Schematic build wizzard", "wizard name is consistent");
+        auto* steps = wizard.findChild<QListWidget*>("harnessBuilderSteps");
+        auto* checks = wizard.findChild<QPushButton*>("wizardChecks");
+        check(steps && !steps->item(1)->data(Qt::UserRole + 2).toBool(), "populating a step does not mark it checked");
+        if (checks) checks->click(); events();
+        check(steps && steps->item(1)->data(Qt::UserRole + 2).toBool() && !steps->item(0)->data(Qt::UserRole + 2).toBool(),
+              "Checks approves only the current clean step");
+        auto* stepScroll = wizard.findChild<QScrollArea*>("wizardStepScroll1");
+        check(stepScroll && stepScroll->layoutDirection() == Qt::RightToLeft &&
+              stepScroll->widget()->layoutDirection() == Qt::LeftToRight,
+              "overall scrollbar is on the left while form contents remain left-to-right");
         auto* wireTable = wizard.findChild<QTableWidget*>("wizardWireTable");
         if (!wireTable) for (auto* table : wizard.findChildren<QTableWidget*>()) if (table->columnCount() == 14) wireTable = table;
         check(wireTable && (wireTable->horizontalScrollBar()->maximum() == 0 ||
@@ -221,6 +337,8 @@ int run_schematicwizard_tests() {
             check(!wizard.litPins().isEmpty(), "pin selection remains highlighted after pointer leaves");
         }
         auto* materialPn = wizard.findChild<QLineEdit*>("wizardMaterialPn");
+        auto* material = wizard.findChild<QComboBox*>("wizardMaterial");
+        check(material && material->toolTip() == material->currentText(), "library field hover exposes the entire selected text");
         check(materialPn && materialPn->text() == "COAX-PN", "wire details show library part P/N");
         if (materialPn) emit materialPn->editingFinished(); events();
         check(wizard.definition().wires[0].libPart == "coax", "leaving an unchanged library P/N keeps the library assignment");
@@ -238,11 +356,31 @@ int run_schematicwizard_tests() {
         if (stripeBox) { stripeBox->setCurrentIndex(0); events(); }
         check(wizard.definition().wires[0].color == "WH" && !harnessCoaxShield(wizard.definition().wires[0]),
               "colour control changes stripe without changing coax conductor role");
+        check(steps && !steps->item(1)->data(Qt::UserRole + 2).toBool(), "editing invalidates a previous step checkmark");
         wizard.undo(); events();
         auto* tailPart = wizard.findChild<QComboBox*>("wizardFromWirePart");
         check(tailPart && tailPart->findData("tail") >= 0, "termination hook-up wire offers parts-list selection");
         auto* splicePart = wizard.findChild<QComboBox*>("wizardFromSplicePart");
         check(splicePart && splicePart->findData("joint") >= 0, "termination splice offers its own parts-list selection");
+        auto* details = wizard.findChild<QWidget*>("wizardConnectionDetails");
+        check(details && !wizard.findChild<QScrollArea*>("wizardWireDetailsScroll"), "wire details have no independent nested scrolling area");
+        if (details && stepScroll) {
+            auto* scroll = wizard.findChild<QScrollArea*>("wizardWorkScroll");
+            if (!scroll || scroll->verticalScrollBar()->maximum() == 0) scroll = stepScroll;
+            scroll->verticalScrollBar()->setValue(0); events();
+            const int tableY = wireTable->mapTo(&wizard, QPoint()).y();
+            const int detailsY = details->mapTo(&wizard, QPoint()).y();
+            QWheelEvent wheel(QPointF(2,2), QPointF(scroll->viewport()->mapToGlobal(QPoint(2,2))), QPoint(), QPoint(0,-120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+            QApplication::sendEvent(scroll->viewport(), &wheel); events();
+            const int moved = tableY - wireTable->mapTo(&wizard, QPoint()).y();
+            check(scroll->verticalScrollBar()->value() > 0 && moved > 0 &&
+                  detailsY - details->mapTo(&wizard, QPoint()).y() == moved,
+                  "scrolling the wires page moves the table and details together");
+            scroll->verticalScrollBar()->setValue(0); events();
+            QApplication::sendEvent(wireTable->viewport(), &wheel); events();
+            check(scroll->verticalScrollBar()->value() > 0, "wheel over the connection table scrolls the whole wires section");
+            scroll->verticalScrollBar()->setValue(0); events();
+        }
         if (auto* pn = wizard.findChild<QLineEdit*>("wizardFromWirePn")) {
             pn->setText("MANUAL-TAIL"); emit pn->editingFinished(); events();
             check(wizard.definition().wires[0].fromTermination.wireLibPart.isEmpty() &&
@@ -270,6 +408,21 @@ int run_schematicwizard_tests() {
         wizard.grab().save("build/wizard-review/side-more-fields.png");
         if (previewChoice) previewChoice->setCurrentIndex(1); events();
         check(split && split->orientation() == Qt::Vertical, "preview menu selects the bottom position");
+        if (split && stepScroll) {
+            const auto savedSplit = split->saveState();
+            stepScroll->verticalScrollBar()->setValue(std::min(40, stepScroll->verticalScrollBar()->maximum())); events();
+            const int anchor = stepScroll->verticalScrollBar()->value();
+            auto* divider = split->handle(1);
+            const QPointF local(4,4), global = divider->mapToGlobal(QPoint(4,4));
+            QMouseEvent press(QEvent::MouseButtonPress, local, global, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(divider, &press);
+            QMouseEvent move(QEvent::MouseMove, local + QPointF(0,-40), global + QPointF(0,-40), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(divider, &move); events();
+            QMouseEvent release(QEvent::MouseButtonRelease, local, global + QPointF(0,-40), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(divider, &release); events();
+            check(stepScroll->verticalScrollBar()->value() == anchor, "pulling the editor/preview divider upward preserves the section scroll position");
+            split->restoreState(savedSplit); stepScroll->verticalScrollBar()->setValue(0); events();
+        }
         auto* grip = wizard.findChild<QWidget*>("wizardPreviewGrip");
         auto* previewScroll = wizard.findChild<QScrollArea*>("wizardPreviewScroll");
         if (grip && picture) {
@@ -279,7 +432,9 @@ int run_schematicwizard_tests() {
             QApplication::sendEvent(grip, &press);
             QMouseEvent move(QEvent::MouseMove, local + QPointF(0, 400), global + QPointF(0, 400), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
             QApplication::sendEvent(grip, &move); events();
-            check(picture->height() >= oldHeight + 350 && previewScroll && previewScroll->verticalScrollBar()->maximum() > 0,
+            auto* workScroll = wizard.findChild<QScrollArea*>("wizardWorkScroll");
+            check(picture->height() >= oldHeight + 350 && previewScroll &&
+                  (previewScroll->verticalScrollBar()->maximum() > 0 || (workScroll && workScroll->verticalScrollBar()->maximum() > 0)),
                   "dragging the preview edge enlarges it and scrolls the overflowing sections");
             QMouseEvent reset(QEvent::MouseButtonDblClick, local, global, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
             QApplication::sendEvent(grip, &reset); events();
@@ -307,6 +462,115 @@ int run_schematicwizard_tests() {
         QTableWidget* wireTable = nullptr; for (auto* table : reopened.findChildren<QTableWidget*>()) if (table->columnCount() == 14) wireTable = table;
         check(wireTable && wireTable->columnWidth(0) == customWidth, "column sizing is restored on a future wizard opening");
         reopened.hide();
+    }
+    {
+        HarnessBuilderDialog wizard(&editor); wizard.show(); events(); useHarnessBuilderLibraryForTest(lib);
+        wizard.loadDemand(shieldFixture(), "section flow"); wizard.setStep(0);
+        if (auto* choice = wizard.findChild<QComboBox*>("harnessBuilderPreviewWhere")) choice->setCurrentIndex(1);
+        events();
+        auto drag = [&](QWidget* handle, int dy) {
+            const QPointF local(4,4), global = handle->mapToGlobal(QPoint(4,4));
+            QMouseEvent press(QEvent::MouseButtonPress, local, global, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(handle, &press);
+            QMouseEvent move(QEvent::MouseMove, local + QPointF(0,dy), global + QPointF(0,dy), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(handle, &move); events();
+            QMouseEvent release(QEvent::MouseButtonRelease, local, global + QPointF(0,dy), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(handle, &release); events();
+        };
+        auto* table = wizard.findChild<QTableWidget*>("wizardConnectorTable");
+        auto* split = wizard.findChild<QSplitter*>("harnessBuilderSplit");
+        auto* work = wizard.findChild<QScrollArea*>("wizardWorkScroll");
+        auto* frame = table ? table->parentWidget() : nullptr;
+        auto* grip = frame ? frame->findChild<QWidget*>("sectionResizeGrip") : nullptr;
+        auto* map = frame && frame->parentWidget()->layout() ? frame->parentWidget()->layout()->itemAt(1)->widget() : nullptr;
+        check(table && split && work && grip && map, "connector resize scenario exposes all real section dividers");
+        if (table && split && work && grip && map) {
+            wizard.grab().save("build/wizard-review/section-flow-initial.png");
+            work->verticalScrollBar()->setValue(0); events();
+            const int tableY = table->mapTo(&wizard, QPoint()).y(), tableHeight = table->height();
+            const int mapY = map->mapTo(&wizard, QPoint()).y(), mapHeight = map->height();
+            auto* preview = split->widget(1);
+            const int previewY = preview->mapTo(&wizard, QPoint()).y(), previewHeight = preview->height();
+            drag(grip, 60);
+            check(table->height() == tableHeight + 60 && table->mapTo(&wizard, QPoint()).y() == tableY,
+                  "first divider enlarges the connector table downwards without shifting its content");
+            check(map->height() == mapHeight && map->mapTo(&wizard, QPoint()).y() == mapY + 60 &&
+                  preview->height() == previewHeight && preview->mapTo(&wizard, QPoint()).y() == previewY + 60,
+                  "enlarging the first section pushes both placement and preview down without resizing them");
+            drag(grip, -30);
+            check(table->height() == tableHeight + 30 && table->mapTo(&wizard, QPoint()).y() == tableY &&
+                  map->height() == mapHeight && map->mapTo(&wizard, QPoint()).y() == mapY + 30 &&
+                  preview->height() == previewHeight && preview->mapTo(&wizard, QPoint()).y() == previewY + 30,
+                  "shrinking the first section pulls all following sections up without scrolling their contents");
+            const int upperHeight = split->widget(0)->height(), lowerHeight = preview->height();
+            const int lowerY = preview->mapTo(&wizard, QPoint()).y();
+            const int protectedTableHeight = table->height(), protectedTableY = table->mapTo(&wizard, QPoint()).y();
+            const int protectedMapY = map->mapTo(&wizard, QPoint()).y(), oldMapHeight = map->height();
+            drag(split->handle(1), -40);
+            check(split->widget(0)->height() == upperHeight - 40 && preview->height() == lowerHeight &&
+                  preview->mapTo(&wizard, QPoint()).y() == lowerY - 40,
+                  "before-last divider shrinks the upper pane and moves the preview up without enlarging it");
+            check(table->height() == protectedTableHeight && table->mapTo(&wizard, QPoint()).y() == protectedTableY &&
+                  map->mapTo(&wizard, QPoint()).y() == protectedMapY && map->height() == oldMapHeight - 40,
+                  "the editor bottom divider resizes only Placement Map and leaves the connector section boundary fixed");
+            drag(split->handle(1), -5000);
+            const int minimumMapHeight = map->height();
+            drag(split->handle(1), -5000);
+            auto* mapClip = map->findChild<QWidget*>("clipBox");
+            check(table->height() == protectedTableHeight && table->mapTo(&wizard, QPoint()).y() == protectedTableY &&
+                  map->mapTo(&wizard, QPoint()).y() == protectedMapY && map->height() == minimumMapHeight && mapClip && mapClip->height() >= 80,
+                  "repeated extreme lower-divider drags stop at a usable Placement Map minimum without collapsing the top section");
+            table->setCurrentCell(2,0); table->verticalScrollBar()->setValue(0); events();
+            drag(grip, -5000);
+            check(table->verticalScrollBar()->value() == 0,
+                  "shrinking a table section keeps its first row in place even when a lower row is selected");
+            check(table->height() >= table->horizontalHeader()->height() + 2 * table->rowHeight(0),
+                  "the table minimum leaves the header and two complete editable rows visible");
+            wizard.grab().save("build/wizard-review/section-flow-connectors.png");
+        }
+        wizard.hide(); events();
+    }
+    {
+        const QString catalogKey = QStringLiteral("partsLibrary/connected");
+        const bool hadCatalog = settings.contains(catalogKey); const auto priorCatalog = settings.value(catalogKey);
+        QTemporaryDir folder; const QString path = folder.filePath("wizard-parts.plb");
+        auto diskLibrary = library();
+        for (auto& part : diskLibrary.parts) if (part.id == "tail") { part.params["gauge"] = "0.5"; part.params["colour"] = "WH"; }
+        check(diskLibrary.save(path), "library refresh fixture is saved"); settings.setValue(catalogKey, QStringList{path});
+        HarnessBuilderDialog wizard(&editor); wizard.show(); events();
+        auto plain = fixture(); plain.wires.resize(1); auto& wire = plain.wires[0];
+        wire.libPart = "tail"; wire.bundle.clear(); wire.kind = "wire"; wire.gauge = "0.5"; wire.color = "WH";
+        wire.fromTermination = {}; wire.toTermination = {};
+        wizard.loadDemand(plain, "library refresh"); wizard.setStep(1); events();
+        for (auto* list : wizard.findChildren<QListWidget*>()) if (list->property("connId") == QVariant("c1")) { emit list->itemClicked(list->item(0)); break; }
+        events();
+        QString opened; QObject::connect(&wizard, &HarnessBuilderDialog::openLibraryAt, &wizard, [&](const QString& id) { opened = id; });
+        auto invokeMenu = [&](const QString& caption) {
+            auto* field = wizard.findChild<QComboBox*>("wizardMaterial");
+            check(field, "library context menu field exists"); if (!field) return;
+            bool actionFound = false;
+            QTimer::singleShot(0, &wizard, [&] {
+                auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+                if (!menu) { if (auto* active = QApplication::activeModalWidget()) active->close(); return; }
+                for (auto* action : menu->actions()) if (action->text() == caption) { actionFound = true; action->trigger(); break; }
+                menu->close();
+            });
+            QContextMenuEvent context(QContextMenuEvent::Mouse, QPoint(2,2), field->mapToGlobal(QPoint(2,2)));
+            QApplication::sendEvent(field, &context); events();
+            check(actionFound, "library field context menu contains requested action");
+        };
+        invokeMenu("Open in library"); check(opened == "tail", "Open in library opens the selected library part");
+        for (auto& part : diskLibrary.parts) if (part.id == "tail") {
+            part.params["gauge"] = "1.5"; part.params["colour"] = "RD"; part.mfrPn = "UPDATED-TAIL-PN";
+        }
+        check(diskLibrary.save(path), "changed library is saved independently of the open wizard");
+        invokeMenu("Update from library");
+        check(wizard.definition().wires[0].gauge == "1.5" && wizard.definition().wires[0].color == "RD",
+              "Update from library re-reads disk and updates physical part properties");
+        wizard.undo(); events();
+        check(wizard.definition().wires[0].gauge == "0.5", "library refresh can be undone");
+        wizard.hide();
+        if (hadCatalog) settings.setValue(catalogKey, priorCatalog); else settings.remove(catalogKey);
     }
     settings.remove(key); settings.beginGroup(key); for (auto it = prior.cbegin(); it != prior.cend(); ++it) settings.setValue(it.key(), it.value()); settings.endGroup();
     useHarnessBuilderLibraryForTest(PartsLibrary{});

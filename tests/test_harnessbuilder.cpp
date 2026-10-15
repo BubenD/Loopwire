@@ -888,8 +888,12 @@ void testWizardTablesAndBom() {
     wizard.loadDemand(def, QStringLiteral("test"));
     wizard.setStep(1);
     QApplication::processEvents();
-    check(!blankIcon(0) && !blankIcon(1) && blankIcon(2),
-          "wizard steps: connectors and wires filled in are ticked; shields with none is not");
+    check(blankIcon(0) && blankIcon(1) && blankIcon(2),
+          "wizard steps: populated steps wait for explicit checks");
+    auto* checks = wizard.findChild<QPushButton*>(QStringLiteral("wizardChecks"));
+    if (checks) checks->click();
+    check(blankIcon(0) && !blankIcon(1) && blankIcon(2),
+          "wizard steps: checking wires approves only wires");
 
     auto* wires = wizard.findChild<QTableWidget*>(QStringLiteral("wizardWireTable"));
     auto* conns = wizard.findChild<QTableWidget*>(QStringLiteral("wizardConnectorTable"));

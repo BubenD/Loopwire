@@ -1144,13 +1144,18 @@ void PartsLibraryDialog::buildUi() {
         rl->addWidget(model3dLabel_, 1);
         // BUILT HERE: its solids put together in a 3D window of their own - from its drawing, its pinout, and simple
         // solids - when there is no CAD model of it to attach.
-        auto* build = new QPushButton(QStringLiteral("Build 3D…"), row);
+        auto* build = new QPushButton(QStringLiteral("View / edit 3D..."), row);
         build->setObjectName(QStringLiteral("partModel3dBuild"));
         build->setToolTip(QStringLiteral("Build the part's 3D model: from its drawing (turned or extruded), its pins from its "
                                          "pinout, and boxes, cylinders, tubes, cones, spheres, rings and hexagons - moved, "
                                          "turned, scaled, mirrored, arrayed, coloured, or cut out as holes"));
         connect(build, &QPushButton::clicked, this, [this] { buildModel3D(); });
         rl->addWidget(build);
+        auto* automatic = new QPushButton(QStringLiteral("Auto create 3D"), row);
+        automatic->setObjectName(QStringLiteral("partModel3dAuto"));
+        automatic->setToolTip(QStringLiteral("Create an editable preview from the pinout cutout extruded along the mechanical outline. Save to part applies it."));
+        connect(automatic, &QPushButton::clicked, this, [this] { buildModel3D(true); });
+        rl->addWidget(automatic);
         model3dAttach_ = new QPushButton(QStringLiteral("Attach 3D…"), row);
         model3dAttach_->setObjectName(QStringLiteral("partModel3dAttach"));
         model3dAttach_->setToolTip(QStringLiteral("Attach a 3D model of the part (.stp, .step, .stl, .obj) - it is shown "
@@ -2695,19 +2700,27 @@ bool PartsLibraryDialog::saveBuiltModel3D(const PartModel3D& model) {
     return true;
 }
 
-void PartsLibraryDialog::buildModel3D() {
+void PartsLibraryDialog::buildModel3D(bool automatic) {
     LibraryPart* p = current();
     if (!p) return;
     // THE ONE IT HAS, when it was built here; otherwise a new one, from its drawing.
     PartModel3D start;
     const QString stored = p->value(QStringLiteral("model3d"));
     if (!stored.isEmpty() && isPartModelFile(DatasheetStore::pathOf(stored))) PartModel3D::load(DatasheetStore::pathOf(stored), start);
-    else if (!stored.isEmpty() &&
-             QMessageBox::question(this, QStringLiteral("Build 3D"),
-                                   QStringLiteral("The part has a 3D model attached. Build one here instead? Saving it puts it "
-                                                  "in place of the attached one.")) != QMessageBox::Yes)
-        return;
+    else if (!stored.isEmpty()) {
+        // Imported models are editable mesh bodies; the original file remains until Save to part.
+        Body3D imported;
+        imported.id = QStringLiteral("imported-model"); imported.name = DatasheetStore::originalName(stored);
+        imported.shape = BodyShape::Extruded;
+        QString error;
+        imported.made = loadMesh3D(DatasheetStore::pathOf(stored), &error);
+        if (imported.made.empty() && !automatic) {
+            QMessageBox::warning(this, QStringLiteral("3D model"), error); return;
+        }
+        if (!imported.made.empty()) start.bodies.push_back(std::move(imported));
+    }
     Part3DEditorDialog dlg(*p, start, this);
+    if (automatic) dlg.autoCreateFromDrawings();
     bool save = false;
     connect(&dlg, &Part3DEditorDialog::saveRequested, this, [&save] { save = true; });
     dlg.exec();

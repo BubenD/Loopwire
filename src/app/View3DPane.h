@@ -64,6 +64,7 @@ struct RouteHarness {
     QString name;
     BrickDesign design;
     bool ok = false;
+    bool freestyle = false;
 };
 
 // THE 3D VIEW OF THE HARNESS: the harness drawn on the sheet - or the one open in the harness wizard - in 3D, its runs
@@ -169,7 +170,8 @@ public:
     void storeNow() { saveRouting(); }
     // THE HARNESS PUT IN AS A ROUTE: its parts and its cables between them, where it is drawn in 3D - to be moved into the
     // model. How many cables were laid.
-    int routeFromHarness();
+    int routeFromHarness(bool fixedLengths = false);
+    bool resetHarnessPosition();
     // THE CABLE SELECTED made so long along its path - its ends where they are; as near as it will go. False where none.
     bool setSegmentLength(const QString& seg, double mm);
     // A cable's wires' colours: all one, or each its own (`colours` as far as given).
@@ -376,6 +378,11 @@ private:
     void takeDownOptionsPanel();
     // The harness the route is for.
     std::function<RouteHarness()> harness_;
+    RouteHarness currentRouteHarness() const;
+    QJsonObject initialHarnessRoute_;
+    QCheckBox* fixedHarness_ = nullptr;
+    QCheckBox* keepConnectors_ = nullptr;
+    QToolButton* resetHarness_ = nullptr;
     std::function<void(const QString&, const BrickDesign&)> applyHarness_;
     QLabel* harnessSaid_ = nullptr;
     QListWidget* parts_ = nullptr;
@@ -404,7 +411,12 @@ private:
     // THE CABLE SELECTED: its own length, diameter, wires and their colours, tension and colour.
     QWidget* cableBox_ = nullptr;
     QLabel* cableSaid_ = nullptr;
-    QDoubleSpinBox* cableLength_ = nullptr;
+    QLabel* cableLength_ = nullptr;
+    QDoubleSpinBox* cableBodyDia_ = nullptr;
+    QComboBox* cableLabels_ = nullptr;
+    QComboBox* labelFlex_ = nullptr;
+    QSlider* labelStiffness_ = nullptr;
+    QLabel* labelSize_ = nullptr;
     QDoubleSpinBox* cableDia_ = nullptr;
     QToolButton* cableDiaAuto_ = nullptr;
     QSpinBox* cableWires_ = nullptr;
@@ -503,6 +515,8 @@ public:
 
     // THE ROUTE it shows and edits in place - none in the wizard's view.
     void setRoute(Route3D* route);
+    void setOriginalConnectors(const QJsonObject& initial, bool keep);
+    bool keepsOriginalConnectors() const { return keepOriginalConnectors_; }
     void setRouteTool(RouteTool tool);
     RouteTool routeTool() const { return tool_; }
     // The route changed from outside: drawn again.
@@ -550,6 +564,7 @@ public:
         bool faces = false;
         // SURFACE TO SURFACE: the two faces measured between, to light them.
         Mesh3D faceA, faceB;
+        double radius = 0.0;
     };
     bool measured() const { return !measures_.empty(); }
     V3 measureFrom() const { return measures_.empty() ? V3{} : measures_.back().a; }
@@ -590,6 +605,8 @@ public:
     }
     void setMeasureFaces(bool on) { measureFaces_ = on; }
     bool measureFaces() const { return measureFaces_; }
+    void setMeasureRadius(bool on) { measureRadius_ = on; clearMeasure(); }
+    bool measureRadius() const { return measureRadius_; }
     // THE FACE OF A SOLID round a point of it: the triangles it is meshed in that run on from the one there without a
     // corner between - a flat face, or a round one - lifted a little off it, to be lit.
     Mesh3D faceAround(int part, const V3& point, const V3& normal) const;
@@ -718,9 +735,13 @@ private:
         int texture = Texture3D::None;
         QString node;   // the node it is the body of - clicked anywhere on it, it is that node
         QString segment;   // the bundle it is (or a wire of) - clicked anywhere on it, it is that bundle
+        double alpha = 1.0;
     };
     // The bundle whose drawn body the ray through a point of the picture meets first (empty: none), and where.
     QString segmentUnder(const QPointF& at, V3* hit = nullptr) const;
+    Route3D originalRoute_;
+    bool keepOriginalConnectors_ = true;
+    QSet<QString> dragNodes_;
     mutable std::vector<Drawn> routeMeshes_;
     mutable bool routeDirty_ = true;
     Mesh3D layMesh_;
@@ -753,6 +774,7 @@ private:
     std::vector<Measure3D> measures_;
     int selMeasure_ = -1;
     bool measureFaces_ = false;
+    bool measureRadius_ = false;
     mutable Mesh3D measureMesh_, measureLitMesh_;
     mutable bool measureDirty_ = true;
     // The ruler near a point of the picture - its line or its label - or -1.

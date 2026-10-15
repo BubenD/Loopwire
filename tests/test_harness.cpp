@@ -4103,8 +4103,8 @@ int run_harness_tests() {
         for (const auto& e : buildHarness(sized).entities)
             if (e.type == EntityType::Splice) {
                 ++sizedDots;
-                check(near(e.meta.value("size").toDouble(), 7.5),
-                      "rules: the joint is drawn at the size the layout sets");
+                check(near(e.meta.value("size").toDouble(), 3.75),
+                      "rules: connection dots use half the layout scale");
             }
         check(sizedDots > 0, "rules: the sized case really produced a joint");
         check(!HarnessLayout().terminateUnconnectedWires,

@@ -4,6 +4,7 @@
 #include "harness/Route3D.h"
 
 #include <QStringList>
+#include <QHash>
 
 #include <functional>
 
@@ -46,7 +47,16 @@ RouteLengths routeLengthsFor(const BrickDesign& design, const Route3D& route);
 // is drawn in 3D), linked to it - and each cable laid between the parts it joins: straight where it has one part at each
 // end, through a branch near the parts where it goes to several, each as long as the design says where that is longer
 // than the way between them. A cable already joining its parts is left as it is. How many cables were laid.
-int addHarnessToRoute(Route3D& route, const BrickDesign& design, const std::function<bool(const QString& brick, V3& at)>& placeOf);
+int addHarnessToRoute(Route3D& route, const BrickDesign& design, const std::function<bool(const QString& brick, V3& at)>& placeOf,
+                      bool fixedLengths = false);
 void applyRouteLengths(BrickDesign& design, const RouteLengths& lengths);
+
+struct DrawingHarnessSource {
+    BrickDesign design;
+    QHash<QString, std::vector<Vec2>> paths;
+    QHash<QString, Vec2> positions;
+};
+DrawingHarnessSource mechanicalDrawingSource(const std::vector<Entity>& entities);
+int addDrawingToRoute(Route3D& route, const std::vector<Entity>& entities, bool fixedLengths);
 
 } // namespace Loopwire

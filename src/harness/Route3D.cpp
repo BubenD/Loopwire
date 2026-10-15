@@ -160,6 +160,8 @@ void Route3D::removeNode(const QString& id) {
 QString Route3D::splitSegment(const QString& id, const V3& at, const V3& normal, int afterVia, RouteNodeKind kind) {
     RouteSegment3D* s = segment(id);
     if (!s) return QString();
+    const Route3D before = *this;
+    const RouteSegment3D original = *s;
     const QString b = s->b;
     const double dia = s->diameter;
     afterVia = std::clamp(afterVia, 0, static_cast<int>(s->via.size()));
@@ -169,7 +171,49 @@ QString Route3D::splitSegment(const QString& id, const V3& at, const V3& normal,
     // `s` may have moved: nodes and segments are separate lists, but take it again to be sure.
     s = segment(id);
     s->b = mid;
-    addSegment(mid, b, std::move(after), dia);
+    const QString next = addSegment(mid, b, std::move(after), dia);
+    if (RouteSegment3D* second = segment(next)) {
+        second->bodyDiameter = original.bodyDiameter;
+        second->designCable = original.designCable;
+        second->covering = original.covering;
+        second->wires = original.wires;
+        second->wireD = original.wireD;
+        second->wireColors = original.wireColors;
+        second->wireSame = original.wireSame;
+        second->color = original.color;
+        const double one = length(*segment(id)), two = length(*second);
+        segment(id)->coverStart = std::min(original.coverStart, one);
+        segment(id)->coverFinish = std::max(0.0, original.coverFinish - two);
+        second->coverStart = std::max(0.0, original.coverStart - one);
+        second->coverFinish = std::min(original.coverFinish, two);
+    }
+    {
+        auto* first = segment(id); auto* second = segment(next);
+        const double one = length(*first), two = length(*second), total = one + two;
+        first->labels.clear(); second->labels.clear();
+        first->designLength = original.designLength * one / std::max(1e-9, total);
+        second->designLength = original.designLength - first->designLength;
+        for (auto label : original.labels) {
+            const double at = label.position * total;
+            if (at <= one) { label.position = at / std::max(1e-9, one); first->labels.push_back(label); }
+            else { label.position = (at - one) / std::max(1e-9, two); second->labels.push_back(label); }
+        }
+    }
+    if (original.fixedLength > 0.0) {
+        RouteSegment3D* first = segment(id);
+        RouteSegment3D* second = segment(next);
+        if (!first || !second) { *this = before; return QString(); }
+        const double one = length(*first), two = length(*second);
+        first->fixedLength = original.fixedLength * one / std::max(1e-9, one + two);
+        second->fixedLength = original.fixedLength - first->fixedLength;
+        second->designCable = original.designCable;
+        second->covering = original.covering;
+        first->coverStart = std::min(original.coverStart, one);
+        first->coverFinish = std::max(0.0, original.coverFinish - two);
+        second->coverStart = std::max(0.0, original.coverStart - one);
+        second->coverFinish = std::min(original.coverFinish, two);
+        if (!fitFixedLengths()) { *this = before; return QString(); }
+    }
     return mid;
 }
 
@@ -248,6 +292,21 @@ bool Route3D::lengthen(const QString& id, double target) {
     return true;
 }
 
+bool Route3D::fitFixedLengths() {
+    const auto before = segments;
+    for (RouteSegment3D& s : segments) {
+        if (s.fixedLength <= 0.0 || std::abs(length(s) - s.fixedLength) <= 0.1) continue;
+        const RouteNode3D* from = node(s.a);
+        const RouteNode3D* to = node(s.b);
+        if (!from || !to || (to->at - from->at).length() > s.fixedLength + 0.1 ||
+            !lengthen(s.id, s.fixedLength) || std::abs(length(s) - s.fixedLength) > 0.1) {
+            segments = before;
+            return false;
+        }
+    }
+    return true;
+}
+
 int Route3D::degree(const QString& id) const {
     int n = 0;
     for (const RouteSegment3D& s : segments) n += (s.a == id ? 1 : 0) + (s.b == id ? 1 : 0);
@@ -255,9 +314,107 @@ int Route3D::degree(const QString& id) const {
 }
 
 double Route3D::diameterOf(const RouteSegment3D& s) const {
+    if (!s.covering.isEmpty() && s.bodyDiameter > 0.0) return s.bodyDiameter;
     if (s.diameter > 0.0) return s.diameter;
     if (const int n = wiresOf(s); n > 0) return packedDiameter(n, wireDOf(s));
     return std::max(0.1, diameter);
+}
+
+bool Route3D::bendCircle(const V3& a, const V3& b, const V3& c, V3& centre, double& radius) {
+    const V3 u = b - a, v = c - a, n = cross3(u, v);
+    const double nn = dot3(n, n);
+    if (nn <= 1e-12 * std::max(1.0, dot3(u, u) * dot3(v, v))) return false;
+    centre = a + (cross3(v, n) * dot3(u, u) + cross3(n, u) * dot3(v, v)) / (2.0 * nn);
+    radius = (centre - a).length();
+    return std::isfinite(radius) && radius > 1e-6;
+}
+
+std::vector<V3> Route3D::labelPath(const RouteSegment3D& s, const RouteLabel3D& label) const {
+    const auto path = centreline(s);
+    double total = 0.0;
+    for (size_t i = 1; i < path.size(); ++i) total += (path[i] - path[i-1]).length();
+    const double lo = std::max(0.0, label.position * total - label.length / 2.0);
+    const double hi = std::min(total, label.position * total + label.length / 2.0);
+    double along = 0.0;
+    std::vector<V3> result;
+    const auto wires = wireLayout(wiresOf(s), wireDOf(s));
+    std::vector<V3> supported = path;
+    if (label.wire >= 0 && label.wire < int(wires.size())) {
+        double packing = 1.0;
+        if (!s.covering.isEmpty()) {
+            const double inside = diameterOf(s) * 0.5 * 0.97;
+            const double radius = std::min(wireDOf(s) * 0.48, inside * 0.4);
+            double reach = 0.0;
+            for (const auto& p : wires) reach = std::max(reach, std::hypot(p.first, p.second));
+            if (reach > 1e-9) packing = std::min(1.0, std::max(0.0, inside - radius) / reach);
+        }
+        V3 u, v;
+        for (size_t i = 0; i < path.size(); ++i) {
+            const V3 t = (path[std::min(i+1,path.size()-1)] - path[i > 0 ? i-1 : 0]).normalized();
+            if (i == 0) {
+                u = cross3(t, V3{0,0,1});
+                if (u.length() < 1e-6) u = cross3(t, V3{1,0,0});
+            } else {
+                u = u - t * dot3(u,t);
+                if (u.length() < 1e-9) u = cross3(t,v);
+            }
+            u = u.normalized(); v = cross3(t,u).normalized();
+            supported[i] = path[i] + u * (wires[size_t(label.wire)].first * packing) + v * (wires[size_t(label.wire)].second * packing);
+        }
+    }
+    for (size_t i = 1; i < path.size(); ++i) {
+        const double length = (path[i] - path[i-1]).length();
+        const V3 d = supported[i] - supported[i-1];
+        const double a = std::max(lo, along), b = std::min(hi, along + length);
+        if (b > a && length > 1e-9) {
+            if (result.empty()) result.push_back(supported[i-1] + d * ((a - along) / length));
+            result.push_back(supported[i-1] + d * ((b - along) / length));
+        }
+        along += length;
+    }
+    return result;
+}
+
+double Route3D::labelDiameterOf(const RouteSegment3D& s, const RouteLabel3D& label) const {
+    if (label.wire >= 0) return wireDOf(s);
+    return diameterOf(s);
+}
+
+std::vector<V3> Route3D::stiffenedPath(const RouteSegment3D& s, const std::vector<V3>& path) const {
+    if (path.size() < 2) return path;
+    std::vector<double> along{0.0};
+    for (size_t i = 1; i < path.size(); ++i) along.push_back(along.back() + (path[i] - path[i - 1]).length());
+    const double total = along.back();
+    auto point = [&](double at) {
+        at = std::clamp(at, 0.0, total);
+        auto it = std::lower_bound(along.begin() + 1, along.end(), at);
+        const size_t k = std::min<size_t>(it - along.begin(), path.size() - 1);
+        const double f = (at - along[k - 1]) / std::max(1e-9, along[k] - along[k - 1]);
+        return path[k - 1] + (path[k] - path[k - 1]) * f;
+    };
+    std::vector<double> samples = along;
+    for (const auto& label : s.labels) if (!label.flexible && label.stiffness > 0.0) {
+        const double lo = std::max(0.0, label.position * total - label.length / 2.0);
+        const double hi = std::min(total, label.position * total + label.length / 2.0);
+        samples.push_back(lo); samples.push_back(hi);
+        for (int i = 1; i < 8; ++i) samples.push_back(lo + (hi - lo) * i / 8.0);
+    }
+    std::sort(samples.begin(), samples.end());
+    samples.erase(std::unique(samples.begin(), samples.end()), samples.end());
+    std::vector<V3> out;
+    for (double at : samples) {
+        V3 p = point(at);
+        for (const auto& label : s.labels) if (!label.flexible && label.stiffness > 0.0) {
+            const double lo = std::max(0.0, label.position * total - label.length / 2.0);
+            const double hi = std::min(total, label.position * total + label.length / 2.0);
+            if (at < lo || at > hi || hi <= lo + 1e-9) continue;
+            const V3 straight = point(lo) + (point(hi) - point(lo)) * ((at - lo) / (hi - lo));
+            const double weight = std::clamp(label.stiffness, 0.0, 1.0);
+            p = p * (1.0 - weight) + straight * weight;
+        }
+        out.push_back(p);
+    }
+    return out;
 }
 
 int Route3D::wiresOf(const RouteSegment3D& s) const {
@@ -585,7 +742,7 @@ std::vector<V3> Route3D::centreline(const RouteSegment3D& s, int* tight) const {
         out.insert(out.end(), arc.begin(), arc.end());
     }
     out.push_back(p.back());
-    return out;
+    return stiffenedPath(s, out);
 }
 
 double Route3D::length(const RouteSegment3D& s) const {
@@ -640,6 +797,20 @@ QJsonObject Route3D::toJson() const {
         if (s.tension >= 0.0) j[QStringLiteral("tension")] = s.tension;
         if (s.wires > 0) j[QStringLiteral("wires")] = s.wires;
         if (s.wireD > 0.0) j[QStringLiteral("wireD")] = s.wireD;
+        if (s.fixedLength > 0.0) j[QStringLiteral("fixedLength")] = s.fixedLength;
+        if (s.designLength > 0.0) j[QStringLiteral("designLength")] = s.designLength;
+        if (s.bodyDiameter > 0.0) j[QStringLiteral("bodyDiameter")] = s.bodyDiameter;
+        QJsonArray labels;
+        for (const auto& l : s.labels) labels.append(QJsonObject{{"id", l.id}, {"text", l.text},
+            {"position", l.position}, {"length", l.length}, {"wire", l.wire}, {"clearShrink", l.clearShrink},
+            {"flexible", l.flexible}, {"stiffness", l.stiffness}});
+        if (!labels.isEmpty()) j[QStringLiteral("labels")] = labels;
+        if (!s.designCable.isEmpty()) j[QStringLiteral("designCable")] = s.designCable;
+        if (!s.covering.isEmpty()) {
+            j[QStringLiteral("covering")] = s.covering;
+            j[QStringLiteral("coverStart")] = s.coverStart;
+            j[QStringLiteral("coverFinish")] = s.coverFinish;
+        }
         if (s.wireSame) j[QStringLiteral("wireSame")] = true;
         if (!s.wireColors.empty()) {
             QJsonArray colours;
@@ -712,6 +883,23 @@ Route3D Route3D::fromJson(const QJsonObject& o) {
         s.tension = j.value(QStringLiteral("tension")).toDouble(-1.0);
         s.wires = j.value(QStringLiteral("wires")).toInt(0);
         s.wireD = j.value(QStringLiteral("wireD")).toDouble(0.0);
+        s.fixedLength = std::max(0.0, j.value(QStringLiteral("fixedLength")).toDouble());
+        s.designLength = std::max(0.0, j.value(QStringLiteral("designLength")).toDouble(s.fixedLength));
+        s.bodyDiameter = std::max(0.0, j.value(QStringLiteral("bodyDiameter")).toDouble());
+        for (const auto& value : j.value(QStringLiteral("labels")).toArray()) {
+            const QJsonObject o = value.toObject();
+            RouteLabel3D l;
+            l.id = o.value("id").toString(); l.text = o.value("text").toString();
+            l.position = std::clamp(o.value("position").toDouble(0.5), 0.0, 1.0);
+            l.length = std::max(0.1, o.value("length").toDouble(12.0)); l.wire = o.value("wire").toInt(-1);
+            l.clearShrink = o.value("clearShrink").toBool(); l.flexible = o.value("flexible").toBool(true);
+            l.stiffness = std::clamp(o.value("stiffness").toDouble(1.0), 0.0, 1.0);
+            s.labels.push_back(l);
+        }
+        s.designCable = j.value(QStringLiteral("designCable")).toString();
+        s.covering = j.value(QStringLiteral("covering")).toString();
+        s.coverStart = std::max(0.0, j.value(QStringLiteral("coverStart")).toDouble());
+        s.coverFinish = std::max(0.0, j.value(QStringLiteral("coverFinish")).toDouble());
         s.wireSame = j.value(QStringLiteral("wireSame")).toBool(false);
         for (const QJsonValue& c : j.value(QStringLiteral("wireColors")).toArray())
             s.wireColors.push_back(c.toString().isEmpty() ? QColor() : QColor(c.toString()));

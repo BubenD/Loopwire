@@ -284,6 +284,7 @@ bool runRouteCarries(const std::vector<Vec2>& route, double bundleWidth, double 
 // second time beside it, so what a field shows and what the drawing did cannot disagree.
 struct TwistFigures {
     bool ok = false;
+    bool spreadStart = true, spreadFinish = true;
     double lane = 0.0;        // between the wires where they are spread
     double fanLen = 0.0;      // and how long the fan is
     double fanLenFinish = 0.0; // ...at the finish end

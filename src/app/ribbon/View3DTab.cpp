@@ -228,7 +228,8 @@ void MainWindow::buildView3DTab() {
         popup("preview3dConnector", forms, 0);
         popup("preview3dMeasure",
               {{QStringLiteral("Point to point"), [this] { if (view3dPane_) view3dPane_->setMeasureMode(0); }},
-               {QStringLiteral("Surface to surface"), [this] { if (view3dPane_) view3dPane_->setMeasureMode(1); }}},
+               {QStringLiteral("Surface to surface"), [this] { if (view3dPane_) view3dPane_->setMeasureMode(1); }},
+               {QStringLiteral("Bend radius"), [this] { if (view3dPane_) { view3dPane_->setMeasureMode(2); view3dPane_->setRouteTool(RouteTool::Measure); } }}},
               0);
     });
     group(QStringLiteral("Route to land"), [&](QWidget* w, QHBoxLayout* row) {
@@ -478,8 +479,8 @@ void MainWindow::buildView3DTab() {
         auto* row = qobject_cast<QHBoxLayout*>(loose->parentWidget()->layout());
         auto* more = new QToolButton(loose->parentWidget());
         more->setObjectName(QStringLiteral("preview3dAddLength"));
-        more->setText(QStringLiteral("Add length"));
-        more->setToolTip(QStringLiteral("The bundle selected made longer by so much - laid looser, its ends where they are"));
+        more->setText(QStringLiteral("Edit length"));
+        more->setToolTip(QStringLiteral("Edit the selected cable or branch length in the routing table"));
         more->setIcon(icon3D(QStringLiteral("loose"), Chrome::ink()));
         more->setAutoRaise(true);
         more->setFocusPolicy(Qt::NoFocus);

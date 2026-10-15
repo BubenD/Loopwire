@@ -38,6 +38,7 @@ public:
     const PartModel3D& model() const { return model_; }
     // A NEW BODY of a shape, put in the middle - or, made from the part, as the part has it - and selected.
     void addBody(BodyShape shape);
+    bool autoCreateFromDrawings();
     // The one selected (-1 none), and selecting one.
     int selected() const { return selected_; }
     void select(int index);

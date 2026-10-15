@@ -104,6 +104,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QPlainTextEdit>
+#include "app/LabelCaptionEdit.h"
 #include <QPushButton>
 #include <QStatusBar>
 #include <QScrollBar>
@@ -9693,7 +9694,7 @@ void MainWindow::refreshProperties() {
     if (!applyingPropEdit_) {
         QWidget* f = QApplication::focusWidget();
         if (f && propsTable_->isAncestorOf(f) &&
-            (qobject_cast<QLineEdit*>(f) || qobject_cast<QDoubleSpinBox*>(f)))
+            (qobject_cast<QLineEdit*>(f) || qobject_cast<QDoubleSpinBox*>(f) || qobject_cast<QPlainTextEdit*>(f)))
             return;
     }
     refreshing_ = true;
@@ -11433,6 +11434,25 @@ void MainWindow::refreshProperties() {
         addRow(QStringLiteral("Center Y"), QStringLiteral("0"));
         addRow(QStringLiteral("Width"), QStringLiteral("0"));
         addRow(QStringLiteral("Height"), QStringLiteral("0"));
+    }
+
+    if (gen && gen->meta.contains(QStringLiteral("labelAlong")) &&
+        !mv(QStringLiteral("labelGroup")).isVaries() && !mv(QStringLiteral("labelGroup")).toString().isEmpty()) {
+        addHeader(QStringLiteral("Label"));
+        const int row = propsTable_->rowCount();
+        propsTable_->insertRow(row);
+        putKey(row, QStringLiteral("Text"), QStringLiteral("Enter applies; Shift+Enter starts a new line. Text wraps and fits inside the label."));
+        auto* edit = new LabelCaptionEdit(propsTable_);
+        edit->setObjectName(QStringLiteral("specialLabelText"));
+        const QString value = mv(QStringLiteral("labelCaption")).toString();
+        edit->setPlainText(value);
+        edit->setMinimumHeight(70);
+        edit->commit = [this, value](const QString& text) {
+            if (refreshing_ || applyingPropEdit_ || text == value) return;
+            deferredPropApply([this, text] { editor_->setLabelText(text); });
+        };
+        propsTable_->setCellWidget(row, 1, edit);
+        propsTable_->setRowHeight(row, 78);
     }
 
     // --- Picture section: what it is, how big it was, and how big it is now. ---

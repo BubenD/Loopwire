@@ -240,6 +240,8 @@ add_library(loopwire_core STATIC
     src/app/PartViewDialog.cpp
     src/app/PictureInsert.cpp
     src/app/UiBits.h
+    src/app/ResizeScrollAnchor.h
+    src/app/WizardFlowSplitter.h
     src/app/UiBits.cpp
     src/app/VoltageDropDialog.cpp
 )

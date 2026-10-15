@@ -92,6 +92,11 @@ Part3DEditorDialog::Part3DEditorDialog(const LibraryPart& part, const PartModel3
             pinButtons_[kind - 1] = b;
         }
     }
+    auto* automatic = cadButton(QStringLiteral("Auto create 3D"));
+    automatic->setObjectName(QStringLiteral("part3dAutoCreate"));
+    automatic->setToolTip(QStringLiteral("Use the pinout outline as the cross-section, following the mechanical outline along its length, with pins and sockets."));
+    connect(automatic, &QToolButton::clicked, this, [this] { autoCreateFromDrawings(); });
+    addRow->addWidget(automatic);
     addRow->addStretch(1);
     lay->addLayout(addRow);
 
@@ -425,6 +430,30 @@ Part3DEditorDialog::Part3DEditorDialog(const LibraryPart& part, const PartModel3
     rebuild(true);
     fillList();
     select(model_.bodies.empty() ? -1 : 0);
+}
+
+bool Part3DEditorDialog::autoCreateFromDrawings() {
+    Body3D housing;
+    housing.id = QStringLiteral("auto-housing"); housing.name = QStringLiteral("Housing from pinout / mechanical outline");
+    housing.shape = BodyShape::Extruded; housing.made = partDrawingSolid(part_, false);
+    V3 lo, hi;
+    if (!housing.made.bounds(lo, hi)) {
+        said_->setText(QStringLiteral("Add a mechanical outline to the part first. A closed pinout outline defines the cross-section."));
+        return false;
+    }
+    housing.color = QColor(150, 158, 170); housing.texture = Texture3D::Plastic;
+    PartModel3D made; made.bodies.push_back(housing);
+    Body3D contacts;
+    contacts.id = QStringLiteral("auto-contacts"); contacts.name = QStringLiteral("Pins and sockets from pinout");
+    contacts.shape = BodyShape::Pins; contacts.texture = Texture3D::Metal;
+    const double faceDiameter = std::max(0.2, std::min(hi.y - lo.y, hi.z - lo.z));
+    partPinMeshes(part_, faceDiameter, std::max(1.0, faceDiameter * 0.3), contacts.made, contacts.madeSockets);
+    contacts.at = {hi.x, (lo.y + hi.y)/2.0, (lo.z + hi.z)/2.0};
+    if (!contacts.made.empty() || !contacts.madeSockets.empty()) made.bodies.push_back(contacts);
+    remember(); model_ = std::move(made); selected_ = 0;
+    changed(); rebuild(true);
+    said_->setText(QStringLiteral("Auto-created from the pinout cross-section and mechanical outline. Review, modify, then Save to part."));
+    return true;
 }
 
 void Part3DEditorDialog::remember() {

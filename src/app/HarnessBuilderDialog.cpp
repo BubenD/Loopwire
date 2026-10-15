@@ -5,8 +5,13 @@
 #include "app/Editor.h"
 #include "app/DrawingPreview.h"
 #include "app/UiBits.h"
+#include "app/ResizeScrollAnchor.h"
+#include "app/WizardFlowSplitter.h"
 #include "app/WizardFlowLayout.h"
 #include <QCompleter>
+#include <QContextMenuEvent>
+#include <QHelpEvent>
+#include <QToolTip>
 #include "app/PartViewDialog.h"
 #include "harness/CableSpec.h"
 #include "harness/Harness.h"
@@ -54,6 +59,7 @@
 #include <QShortcut>
 #include <QSpinBox>
 #include <QSplitter>
+#include <QSplitterHandle>
 #include <QTableWidget>
 #include <QTextBrowser>
 #include <QTimer>
@@ -106,6 +112,7 @@ void forgetSharedLibrary() { sharedLibraryLoaded() = false; }
 QComboBox* libraryPartBox(QWidget* parent, const std::vector<PartKind>& kinds,
                           const QString& current) {
     auto* box = new QComboBox(parent);
+    box->setProperty("wizardLibraryPart", true);
     box->addItem(QStringLiteral("—"), QString());
     for (PartKind k : kinds)
         for (const LibraryPart* p : sharedLibrary().ofKind(k))
@@ -123,9 +130,12 @@ QComboBox* libraryPartBox(QWidget* parent, const std::vector<PartKind>& kinds,
         at = box->count() - 1;
     }
     box->setCurrentIndex(at >= 0 ? at : 0);
-    box->setToolTip(QStringLiteral(
-        "The library part this row is made of. What the bill of materials orders: its "
-        "manufacturer's number, and the unit it is bought in."));
+    auto tooltip = [box] {
+        box->setToolTip(box->currentData().toString().isEmpty() ? QString() : box->currentText());
+        for (int i = 1; i < box->count(); ++i) box->setItemData(i, box->itemText(i), Qt::ToolTipRole);
+    };
+    tooltip();
+    QObject::connect(box, &QComboBox::currentTextChanged, box, tooltip);
     return box;
 }
 
@@ -159,12 +169,24 @@ protected:
         if (ev->type() != QEvent::Wheel) return QObject::eventFilter(watched, ev);
         auto* w = qobject_cast<QWidget*>(watched);
         const int dy = static_cast<QWheelEvent*>(ev)->angleDelta().y();
-        for (QWidget* up = w; up; up = up->parentWidget())
+        for (auto* up = w; up; up = up->parentWidget())
+            if (auto* area = qobject_cast<QScrollArea*>(up); area && area->objectName() == QLatin1String("wizardWorkScroll") && area->verticalScrollBar()->maximum() > 0) {
+                auto* bar = area->verticalScrollBar(); bar->setValue(bar->value() - dy); return true;
+            }
+        for (QWidget* up = w; up; up = up->parentWidget()) {
+            if (auto* table = qobject_cast<QTableWidget*>(up)) {
+                QScrollArea* page = nullptr;
+                for (auto* ancestor = table->parentWidget(); ancestor; ancestor = ancestor->parentWidget())
+                    if (ancestor->objectName() == QLatin1String("wizardStepScroll1")) { page = qobject_cast<QScrollArea*>(ancestor); break; }
+                if (page) { auto* bar = page->verticalScrollBar(); bar->setValue(bar->value() - dy); break; }
+                auto* bar = table->verticalScrollBar(); bar->setValue(bar->value() - dy); break;
+            }
             if (auto* area = qobject_cast<QScrollArea*>(up)) {
                 if (QScrollBar* bar = area->verticalScrollBar())
                     bar->setValue(bar->value() - dy);
                 break;
             }
+        }
         return true; // never reaches the field
     }
 };
@@ -528,10 +550,11 @@ public:
         // fields inside, leaving them with no background - which paints them white.
         setStyleSheet(QStringLiteral("#clipBox { background: transparent; }"));
         body_->setParent(this);
+        body_->installEventFilter(this);
         body_->move(0, 0);
         setMinimumHeight(0);
         setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-        setFixedHeight(body_->sizeHint().height());
+        setFixedHeight(std::max(0, naturalHeight()));
     }
     // The natural height, so a section opens showing all of itself.
     int naturalHeight() const { return std::max(body_->sizeHint().height(), body_->minimumSizeHint().height()); }
@@ -540,7 +563,15 @@ public:
 protected:
     void resizeEvent(QResizeEvent*) override {
         // Full width, own height: the body never learns that it has less room than it wants.
-        body_->resize(width(), std::max(naturalHeight(), height()));
+        body_->resize(width(), naturalHeight());
+    }
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (watched == body_ && event->type() == QEvent::LayoutRequest) {
+            if (!property("clipHeightManual").toBool())
+                setFixedHeight(std::max(property("sectionGripMinimum").toInt(), naturalHeight()));
+            body_->resize(width(), std::max(0, naturalHeight()));
+        }
+        return false;
     }
 
 private:
@@ -796,7 +827,10 @@ void showPreviewPopup(QWidget* parent, const QString& title, QWidget* big) {
 QWidget* section(const QString& title, QWidget* body, QWidget* parent,
                  const QList<QWidget*>& headerWidgets = {}, bool clipBody = false) {
     auto* box = new QWidget(parent);
+    box->setProperty("wizardSectionFrame", true);
+    box->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     auto* v = new QVBoxLayout(box);
+    v->setAlignment(Qt::AlignTop);
     v->setContentsMargins(0, 6, 0, 0);
     v->setSpacing(4);
     auto* head = new WizardFlowLayout();
@@ -829,6 +863,8 @@ QComboBox* HarnessBuilderDialog::wizardPartChoice(QWidget* parent, const std::ve
     box->completer()->setCompletionMode(QCompleter::PopupCompletion);
     box->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     box->setMinimumContentsLength(12);
+    box->installEventFilter(this);
+    box->lineEdit()->installEventFilter(this);
     return box;
 }
 
@@ -856,7 +892,7 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
     // opened by clicking it, or with Back and Next.
     auto* body = new QHBoxLayout();
     body->setSpacing(10);
-    mainSplit_ = new QSplitter(Qt::Horizontal, this);
+    mainSplit_ = new WizardFlowSplitter(Qt::Horizontal, this);
     mainSplit_->setObjectName(QStringLiteral("harnessBuilderSplit"));
     mainSplit_->setChildrenCollapsible(false);
     mainSplit_->setHandleWidth(8);
@@ -880,8 +916,9 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
         auto* cv = new QVBoxLayout(connectorsPage);
         cv->setContentsMargins(0, 0, 0, 0);
         cv->setSpacing(10);
-        cv->addWidget(buildConnectorsSection(), 3);
-        cv->addWidget(buildBlockMapSection(), 2);
+        cv->setAlignment(Qt::AlignTop);
+        cv->addWidget(buildConnectorsSection());
+        cv->addWidget(buildBlockMapSection());
     }
     const Step steps[] = {
         {"Connectors", "Add the connectors at each end - from the library, or typed in - with their P/N, pins and contacts; "
@@ -909,6 +946,9 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
         pv->addWidget(title);
         pv->addWidget(help);
         auto* scroll = new QScrollArea(page);
+        scroll->setObjectName(QStringLiteral("wizardStepScroll%1").arg(i));
+        scroll->setLayoutDirection(Qt::RightToLeft);
+        steps[i].page->setLayoutDirection(Qt::LeftToRight);
         scroll->setWidgetResizable(true);
         scroll->setFrameShape(QFrame::NoFrame);
         scroll->setWidget(steps[i].page);
@@ -1577,7 +1617,9 @@ QWidget* HarnessBuilderDialog::buildBlockMapSection() {
             if (syncing_) return;
             QTimer::singleShot(0, this, [this] { applyBlockOrder(); });
         });
-    return section(QStringLiteral("Placement map"), host, this);
+    auto* result = section(QStringLiteral("Placement map"), host, this, {}, true);
+    if (auto* clip = result->findChild<QWidget*>(QStringLiteral("clipBox"))) clip->setProperty("sectionGripMinimum", 80);
+    return result;
 }
 
 void HarnessBuilderDialog::reloadBlockMap() {
@@ -1768,11 +1810,19 @@ QWidget* HarnessBuilderDialog::buildPreviewColumn() {
     issues->setObjectName(QStringLiteral("wizardChecksPanel"));
     issues->hide();
     connect(checks, &QPushButton::toggled, issues, &QWidget::setVisible);
+    connect(checks, &QPushButton::clicked, this, [this, checks, issues] {
+        updateSteps();
+        if (stepIssueCount(currentStep()) == 0)
+            checkedSteps_[currentStep()] = QJsonDocument(harnessDefToJson(def_)).toJson(QJsonDocument::Compact);
+        checks->setChecked(true); issues->show(); updateSteps();
+    });
     v->addWidget(issues);
     auto* scroll = new QScrollArea(this);
     scroll->setObjectName(QStringLiteral("wizardPreviewScroll"));
     scroll->setWidgetResizable(true); scroll->setFrameShape(QFrame::NoFrame);
     scroll->setWidget(column);
+    scroll->setLayoutDirection(Qt::RightToLeft);
+    column->setLayoutDirection(Qt::LeftToRight);
     return scroll;
 }
 
@@ -1999,15 +2049,24 @@ void HarnessBuilderDialog::applyStepLayout(int step) {
     const bool under = previewBottom_;
     const Qt::Orientation want = under ? Qt::Vertical : Qt::Horizontal;
     if (mainSplit_->orientation() == want) return;
+    static_cast<WizardFlowSplitter*>(mainSplit_)->releasePanes();
     mainSplit_->setOrientation(want);
     const int room = under ? mainSplit_->height() : mainSplit_->width();
     mainSplit_->setSizes({room * 7 / 10, room - room * 7 / 10});
+    if (under && wizardUiReady_) WizardFlowSplitter::fitNaturalColumn(mainSplit_, pages_);
 }
 
 void HarnessBuilderDialog::calmSpinBoxes() {
+    for (auto* splitter : findChildren<QSplitter*>())
+        for (int i = 1; i < splitter->count(); ++i) ResizeScrollAnchor::install(splitter->handle(i));
     // A NUMBER IS TAKEN WHEN IT IS FINISHED - Enter, or leaving the field - not at each digit: typing 10 into Pins used to
     // take the 1, rebuild the table and lose the field before the 0 could be typed.
-    for (QAbstractSpinBox* box : findChildren<QAbstractSpinBox*>()) box->setKeyboardTracking(false);
+    for (QAbstractSpinBox* box : findChildren<QAbstractSpinBox*>()) { box->setKeyboardTracking(false); guardWheel(box); }
+    for (auto* box : findChildren<QComboBox*>()) guardWheel(box);
+    for (auto* box : findChildren<QComboBox*>()) if (box->property("wizardLibraryPart").toBool()) {
+        box->installEventFilter(this);
+        if (box->lineEdit()) box->lineEdit()->installEventFilter(this);
+    }
 }
 
 void HarnessBuilderDialog::setStep(int step) {
@@ -2031,24 +2090,15 @@ void HarnessBuilderDialog::updateSteps() {
         const int n = stepIssueCount(i);
         const QString title = item->data(Qt::UserRole).toString();
         item->setText(QStringLiteral("%1  %2").arg(i + 1).arg(title));
-        bool done = false;
-        switch (i) {
-        case 0: done = !def_.connectors.empty(); break;
-        case 1: done = !def_.wires.empty(); break;
-        case 2:
-            done = std::any_of(def_.connectors.begin(), def_.connectors.end(),
-                               [](const HarnessConnector& c) { return c.shieldLeft || c.shieldRight; }) ||
-                   std::any_of(def_.wires.begin(), def_.wires.end(),
-                               [](const HarnessWire& w) { return !w.shieldGroup.isEmpty(); });
-            break;
-        default: done = !def_.connectors.empty() && !def_.wires.empty(); break;   // ready to draw
-        }
+        const bool done = checkedSteps_.contains(i) && checkedSteps_.value(i) ==
+            QJsonDocument(harnessDefToJson(def_)).toJson(QJsonDocument::Compact);
         item->setIcon(stepMark(n, done));
         item->setData(Qt::UserRole + 1, n);
+        item->setData(Qt::UserRole + 2, done && n == 0);
         QStringList said;
         for (const HarnessIssue& issue : liveIssues_)
             if (stepOfIssue(issue) == i) said << issue.message;
-        item->setToolTip(said.isEmpty() ? QStringLiteral("Nothing wrong in this step") : said.join(QLatin1Char('\n')));
+        item->setToolTip(said.isEmpty() ? (done ? QStringLiteral("Checked") : QStringLiteral("Press Checks to review this step")) : said.join(QLatin1Char('\n')));
     }
     if (!issueView_) return;
     const int step = currentStep();
@@ -2640,17 +2690,19 @@ QWidget* HarnessBuilderDialog::buildWiresSection() {
     wireTable_->setMinimumHeight(100);
     wireDetails_ = new QWidget(this);
     wireDetails_->setObjectName(QStringLiteral("wizardConnectionDetails"));
-    auto* detailScroll = new QScrollArea(this);
-    detailScroll->setWidgetResizable(true);
-    detailScroll->setFrameShape(QFrame::NoFrame);
-    detailScroll->setWidget(wireDetails_);
-    wireSplit_ = new QSplitter(Qt::Vertical, this);
+    wireDetails_->setLayoutDirection(Qt::LeftToRight);
+    wireSplit_ = new WizardFlowSplitter(Qt::Vertical, this);
     wireSplit_->setObjectName(QStringLiteral("wizardConnectionSplit"));
     wireSplit_->setChildrenCollapsible(false);
     wireSplit_->setHandleWidth(8);
     wireSplit_->setProperty("sectionGripMinimum", 180);
     wireSplit_->addWidget(wireTable_);
-    wireSplit_->addWidget(detailScroll);
+    // Let the page's single scrollbar move the table and full inspector
+    // together instead of nesting another scrolling area below the table.
+    auto* detailsClip = new ClipBox(wireDetails_, wireSplit_);
+    detailsClip->setObjectName(QStringLiteral("wizardConnectionDetailsClip"));
+    detailsClip->setProperty("sectionGripMinimum", 180);
+    wireSplit_->addWidget(detailsClip);
     wireSplit_->setSizes({140, 220});
     return section(QStringLiteral("Wire connections"), wireSplit_, this,
                    QList<QWidget*>{addBtn, placeCableBtn, fillBtn, cableBtn, coaxBtn, looseBtn,
@@ -2707,6 +2759,30 @@ void HarnessBuilderDialog::applyPinHighlights(const QStringList& lit) {
 }
 
 bool HarnessBuilderDialog::eventFilter(QObject* watched, QEvent* ev) {
+    if (ev->type() == QEvent::Wheel && wireTable_ && watched == wireTable_->viewport()) {
+        auto* area = findChild<QScrollArea*>(QStringLiteral("wizardWorkScroll"));
+        if (!area || area->verticalScrollBar()->maximum() == 0) area = findChild<QScrollArea*>(QStringLiteral("wizardStepScroll1"));
+        if (area) {
+            const auto* wheel = static_cast<QWheelEvent*>(ev);
+            auto* bar = area->verticalScrollBar();
+            const int delta = wheel->pixelDelta().isNull() ? wheel->angleDelta().y() : wheel->pixelDelta().y();
+            bar->setValue(bar->value() - delta);
+            ev->accept(); return true;
+        }
+    }
+    if (ev->type() == QEvent::ToolTip || ev->type() == QEvent::ContextMenu) {
+        auto* box = qobject_cast<QComboBox*>(watched);
+        if (!box && watched) box = qobject_cast<QComboBox*>(watched->parent());
+        if (box && box->property("wizardLibraryPart").toBool()) {
+            const QString id = box->currentData().toString();
+            if (ev->type() == QEvent::ToolTip) {
+                if (!id.isEmpty()) QToolTip::showText(static_cast<QHelpEvent*>(ev)->globalPos(), box->currentText(), box);
+                ev->accept(); return true;
+            }
+            showPartMenu(id, static_cast<QContextMenuEvent*>(ev)->globalPos(), QString());
+            ev->accept(); return true;
+        }
+    }
     if (ev->type() == QEvent::KeyPress && watched && watched->property("wizardValueField").toBool()) {
         const int key = static_cast<QKeyEvent*>(ev)->key();
         if (key == Qt::Key_Return || key == Qt::Key_Enter) {
@@ -2989,9 +3065,51 @@ void HarnessBuilderDialog::showPartMenu(const QString& libPartId, const QPoint& 
         PartViewDialog::showPart(*part, PartViewDialog::Show::Data, this);
     });
     menu.addSeparator();
-    menu.addAction(QStringLiteral("See the %1 in the library").arg(noun), this,
+    menu.addAction(QStringLiteral("Open in library"), this,
                    [this, libPartId] { emit openLibraryAt(libPartId); });
+    menu.addAction(QStringLiteral("Update from library"), this, [this, libPartId] { updatePartFromLibrary(libPartId); });
     menu.exec(at);
+}
+
+void HarnessBuilderDialog::updatePartFromLibrary(const QString& id) {
+    forgetSharedLibrary();
+    const auto* found = sharedLibrary().byId(id);
+    if (!found) { summaryLabel_->setText(QStringLiteral("Part is no longer in a connected library")); return; }
+    const LibraryPart part = *found;
+    for (auto& c : def_.connectors) {
+        if (c.libPart == id) {
+            c.partNumber = part.mfrPn;
+            const int pins = part.value(QStringLiteral("pins")).toInt();
+            if (pins > 0) {
+                c.pinCount = pins;
+                c.pinOrder.erase(std::remove_if(c.pinOrder.begin(), c.pinOrder.end(), [pins](int p) { return p < 1 || p > pins; }), c.pinOrder.end());
+            }
+            if (partIncludesPins(part)) {
+                c.contactsIncluded = true; c.contactLibPart.clear(); c.contactPn.clear();
+            } else if (const auto* contact = sharedLibrary().byId(part.contactId())) {
+                c.contactsIncluded = false; c.contactLibPart = contact->id; c.contactPn = contact->mfrPn;
+            }
+        }
+        if (c.contactLibPart == id) c.contactPn = part.mfrPn;
+        if (c.drainLibPart == id) {
+            HarnessWire properties; applyHarnessWirePart(properties, part);
+            c.drainGauge = properties.gauge; c.drainColor = properties.color;
+        }
+    }
+    QHash<QString, int> conductors;
+    for (auto& wire : def_.wires) {
+        if (wire.libPart == id) applyHarnessWirePart(wire, part, conductors[wire.bundle]++);
+        for (auto* end : {&wire.fromTermination, &wire.toTermination}) {
+            if (end->wireLibPart == id) {
+                HarnessWire properties; applyHarnessWirePart(properties, part);
+                end->wirePn.clear(); end->wireGauge = properties.gauge; end->wireColor = properties.color;
+            }
+            if (end->spliceLibPart == id) end->splicePn.clear();
+        }
+    }
+    harnessSyncDrains(def_);
+    reloadAll();
+    summaryLabel_->setText(QStringLiteral("Updated %1 from library").arg(part.title()));
 }
 
 // The lowest pin of `c` nobody has taken, or 0 when the connector is FULL.

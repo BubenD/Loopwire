@@ -125,6 +125,8 @@ void DrawingPreview::fitToView() {
     zoom_ = 1.0;
     pan_ = QPointF(0.0, 0.0);
     holdView_ = false;
+    // A deferred resize must not restore the transform that Fit just discarded.
+    lastVtValid_ = false;
     update();
 }
 
@@ -210,6 +212,7 @@ void DrawingPreview::setMinimap(bool on) {
 
 void DrawingPreview::resizeEvent(QResizeEvent* e) {
     QWidget::resizeEvent(e);
+    if (keepView_ && lastVtValid_) holdView_ = true;
     placeCornerButtons();
 }
 

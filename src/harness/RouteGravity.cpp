@@ -10,6 +10,7 @@ const std::vector<CableTension>& cableTensions() {
         {QStringLiteral("Slack"), 0.0},
         {QStringLiteral("Loose 0.5 N"), 0.5},
         {QStringLiteral("Normal 2 N"), 2.0},
+        {QStringLiteral("Medium 5 N"), 5.0},
         {QStringLiteral("Firm 10 N"), 10.0},
         {QStringLiteral("Taut 50 N"), 50.0},
     };
@@ -199,6 +200,20 @@ CableSag3D hangCable(const Route3D& r, const RouteSegment3D& s, const V3& downIn
             for (size_t i = 0; i < span.size(); ++i) hung[a0 + i] = span[i];
         }
         a0 = b0;
+    }
+    // The same local label stiffness is applied to the cable that hangs through it.
+    const auto labelled = r.stiffenedPath(s, hung);
+    // Preserve the original gravity sampling when reporting drops.
+    if (!s.labels.empty() && labelled.size() >= 2) {
+        std::vector<double> ss{0.0};
+        for (size_t i = 1; i < labelled.size(); ++i) ss.push_back(ss.back() + (labelled[i] - labelled[i-1]).length());
+        size_t k = 1;
+        for (size_t i = 0; i < hung.size(); ++i) {
+            const double target = ss.back() * along[i] / std::max(1e-9, along.back());
+            while (k + 1 < ss.size() && ss[k] < target) ++k;
+            const double f = (target - ss[k-1]) / std::max(1e-9, ss[k] - ss[k-1]);
+            hung[i] = labelled[k-1] + (labelled[k] - labelled[k-1]) * f;
+        }
     }
     out.down = down;
     out.hung = hung;

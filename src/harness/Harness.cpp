@@ -1958,6 +1958,8 @@ TwistFigures twistedPairFigures(const Entity& pair) {
     if (!c) return out;
     const TwistFrames& f = c->frames;
     out.ok = true;
+    out.spreadStart = f.spreadStart;
+    out.spreadFinish = f.spreadEnd;
     out.lane = f.lane;
     out.fanLen = f.lead;
     out.fanLenFinish = f.leadB;

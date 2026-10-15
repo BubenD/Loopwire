@@ -110,7 +110,7 @@ public:
     // none; `path` gives it outright.
     void drawFromPdf(const QString& path = QString());
     // BUILD ITS 3D MODEL in a window of its own; and the model built, kept as the part's 3D model.
-    void buildModel3D();
+    void buildModel3D(bool automatic = false);
     bool saveBuiltModel3D(const PartModel3D& model);
     // What that takes, put into the part showing: the drawing as its mechanical drawing, the pinout as its
     // pin count and labels, and a connector's symbol built again from them. `ask` asks before replacing a
