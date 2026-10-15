@@ -48,6 +48,7 @@ std::vector<Entity> harnessPreviewEntities(const HarnessDef& def, bool showShiel
 struct PartsLibrary;
 enum class PartKind;
 const PartsLibrary& harnessBuilderLibrary();
+void applyHarnessWirePart(HarnessWire& wire, const LibraryPart& part, int conductor = 0);
 // For the tests: the parts the builder offers, given rather than read from the libraries on this machine.
 void useHarnessBuilderLibraryForTest(const PartsLibrary& lib);
 

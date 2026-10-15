@@ -1,5 +1,6 @@
 #include "app/HarnessBuilderDialog.h"
 #include "harness/HarnessBuilderBom.h"
+#include "harness/PartsLibrary.h"
 #include "app/WizardFlowLayout.h"
 #include <QApplication>
 #include <QCheckBox>
@@ -76,6 +77,11 @@ void HarnessBuilderDialog::initializeWizardUi() {
         button(QStringLiteral("Fit columns"), QStringLiteral("wizardFitColumns"), [this] { fitWizardColumns(); saveWizardUi(); });
         button(QStringLiteral("Reset layout"), QStringLiteral("wizardResetLayout"), [this, fields] {
             QSettings s; s.remove(uiKey); fields->setChecked(false);
+            for (auto* section : findChildren<QWidget*>()) {
+                const auto defaultMin = section->property("wizardSectionDefaultMin");
+                if (!defaultMin.isValid()) continue;
+                section->setMaximumHeight(QWIDGETSIZE_MAX); section->setMinimumHeight(defaultMin.toInt());
+            }
             setCompactColumns(true);
             if (auto* display = screen()) {
                 const auto area = display->availableGeometry();
@@ -184,6 +190,11 @@ void HarnessBuilderDialog::initializeWizardUi() {
         if (s.contains(uiKey + "split")) mainSplit_->restoreState(s.value(uiKey + "split").toByteArray());
         else mainSplit_->setSizes({width() * 2 / 3, width() / 3});
         if (s.contains(uiKey + "wireSplit")) wireSplit_->restoreState(s.value(uiKey + "wireSplit").toByteArray());
+        wireSplit_->setChildrenCollapsible(false);
+        wireSplit_->setCollapsible(0, false);
+        wireTable_->show();
+        if (wireSplit_->sizes().value(0) < 100) wireSplit_->setSizes({180, 220});
+        applyStepLayout(currentStep());
         fitWizardColumns();
         if (s.contains(uiKey + "connectors")) connTable_->horizontalHeader()->restoreState(s.value(uiKey + "connectors").toByteArray());
         if (s.contains(uiKey + "wires")) wireTable_->horizontalHeader()->restoreState(s.value(uiKey + "wires").toByteArray());
@@ -233,19 +244,27 @@ void HarnessBuilderDialog::fitWizardColumns() {
     const bool wasReady = wizardUiReady_; wizardUiReady_ = false;
     for (auto* table : {connTable_, wireTable_}) {
         table->horizontalHeader()->setStretchLastSection(false);
-        int visible = 0;
-        for (int c = 0; c < table->columnCount(); ++c)
-            if (!table->isColumnHidden(c) && c != kDeleteColumn) ++visible;
         const int reserve = table->verticalScrollBar()->isVisible() ? 0 : table->style()->pixelMetric(QStyle::PM_ScrollBarExtent);
         // A hidden step has not been laid out yet; its viewport still has the
         // constructor's tiny size. Fit it to the actual page instead.
         const int available = (table->isVisible() ? table->viewport()->width() - reserve - 4 : pages_->width() - reserve - 32) -
                               kDeleteWidth;
-        int remaining = std::max(visible * 28, available);
+        auto isPin = [table, this](int column) {
+            return (table == wireTable_ && (column == 1 || column == 3)) || (table == connTable_ && column == 4);
+        };
+        int textColumns = 0, minimum = 0;
         for (int c = 0; c < table->columnCount(); ++c) if (!table->isColumnHidden(c) && c != kDeleteColumn) {
-            const bool pin = (table == wireTable_ && (c == 1 || c == 3)) || (table == connTable_ && c == 4);
-            const int width = visible == 1 ? remaining : (pin ? std::min(60, remaining / visible) : remaining / visible);
-            table->setColumnWidth(c, width); remaining -= width; --visible;
+            minimum += isPin(c) ? 40 : 80;
+            if (!isPin(c)) ++textColumns;
+        }
+        int extra = std::max(0, available - minimum);
+        for (int c = 0; c < table->columnCount(); ++c) if (!table->isColumnHidden(c) && c != kDeleteColumn) {
+            int width = 40;
+            if (!isPin(c)) {
+                const int share = textColumns > 0 ? extra / textColumns : 0;
+                width = 80 + share; extra -= share; --textColumns;
+            }
+            table->setColumnWidth(c, width);
         }
     }
     keepDeleteColumnLast();
@@ -307,7 +326,11 @@ void HarnessBuilderDialog::refreshWireDetails() {
         auto* edit = new QLineEdit(value, wireDetails_); edit->setObjectName(name);
         edit->setProperty("wizardValueField", true); edit->installEventFilter(this);
         createdFields.insert(name, edit);
-        connect(edit, &QLineEdit::editingFinished, this, [commit, edit, setter] { const QString value = edit->text().trimmed(); commit([setter, value](auto& current) { setter(current, value); }); });
+        connect(edit, &QLineEdit::editingFinished, this, [commit, edit, setter, original = value.trimmed()] {
+            const QString value = edit->text().trimmed();
+            if (value == original) return;
+            commit([setter, value](auto& current) { setter(current, value); });
+        });
         f->addRow(caption, edit);
     };
     auto length = [&](QFormLayout* f, const QString& caption, const QString& name, double value, auto setter) {
@@ -368,14 +391,24 @@ void HarnessBuilderDialog::refreshWireDetails() {
     kind->setCurrentIndex(kind->findData(w.kind));
     connect(kind, &QComboBox::currentIndexChanged, this, [commit, kind](int index) { const QString value = kind->itemData(index).toString(); commit([value](auto& current) { current.kind = value; }); });
     form->addRow(QStringLiteral("Construction"), kind);
-    part(form, QStringLiteral("Material from parts list"), QStringLiteral("wizardMaterial"), w.libPart,
+    part(form, QStringLiteral("Part description from part list"), QStringLiteral("wizardMaterial"), w.libPart,
          harnessIsCoaxKind(w.kind) ? std::vector<PartKind>{PartKind::Cable} : std::vector<PartKind>{PartKind::Wire, PartKind::Cable},
-         [this](auto& current, const QString& value) { current.libPart = value; current.partNumber.clear(); for (auto& member : def_.wires) if (!current.bundle.isEmpty() && member.bundle == current.bundle) { member.libPart = value; member.partNumber.clear(); } });
-    text(form, QStringLiteral("Or enter P/N"), QStringLiteral("wizardMaterialPn"), w.partNumber,
+         [this](auto& current, const QString& value) {
+             const auto* selected = harnessBuilderLibrary().byId(value);
+             int conductor = 0;
+             const QString bundle = current.bundle;
+             for (auto& member : def_.wires) if (member.id == current.id || (!bundle.isEmpty() && member.bundle == bundle)) {
+                 member.libPart = value; member.partNumber.clear();
+                 if (selected) applyHarnessWirePart(member, *selected, conductor++);
+             }
+         });
+    const auto* selectedPart = harnessBuilderLibrary().byId(w.libPart);
+    text(form, QStringLiteral("Part P/N"), QStringLiteral("wizardMaterialPn"),
+         selectedPart ? (selectedPart->mfrPn.isEmpty() ? selectedPart->internalPn : selectedPart->mfrPn) : w.partNumber,
          [this](auto& current, const QString& value) { current.partNumber = value; current.libPart.clear(); for (auto& member : def_.wires) if (!current.bundle.isEmpty() && member.bundle == current.bundle) { member.partNumber = value; member.libPart.clear(); } });
     length(form, QStringLiteral("Cut length (cable / wire)"), QStringLiteral("wizardCutLength"), w.cutLengthMm,
          [this](auto& current, double value) { current.cutLengthMm = value; for (auto& member : def_.wires) if (!current.bundle.isEmpty() && member.bundle == current.bundle) member.cutLengthMm = value; });
-    gauge(form, QStringLiteral("Gauge"), QStringLiteral("wizardGauge"), w.gauge, [](auto& current, const QString& value) { current.gauge = value; });
+    gauge(form, QStringLiteral("Cross section"), QStringLiteral("wizardGauge"), w.gauge, [](auto& current, const QString& value) { current.gauge = value; });
     text(form, QStringLiteral("Bundle"), QStringLiteral("wizardBundle"), w.bundle, [](auto& current, const QString& value) { current.bundle = value; });
     text(form, QStringLiteral("Label"), QStringLiteral("wizardLabel"), w.label, [](auto& current, const QString& value) { current.label = value; });
     auto* colors = new QWidget(wireDetails_); auto* colorRow = new QHBoxLayout(colors); colorRow->setContentsMargins(0, 0, 0, 0);
@@ -398,12 +431,12 @@ void HarnessBuilderDialog::refreshWireDetails() {
         commit([value](auto& current) { if (harnessIsCoaxKind(current.kind)) current.coaxRole = harnessCoaxShield(current) ? QStringLiteral("shield") : QStringLiteral("signal"); current.color = value; });
     };
     connect(base, &QComboBox::currentIndexChanged, this, changeColor); connect(stripe, &QComboBox::currentIndexChanged, this, changeColor);
-    colorRow->addWidget(base); colorRow->addWidget(stripe); form->addRow(QStringLiteral("Base + stripe"), colors);
+    colorRow->addWidget(base); colorRow->addWidget(stripe); form->addRow(QStringLiteral("Color"), colors);
     text(form, QStringLiteral("Internal shield group"), QStringLiteral("wizardShieldGroup"), w.shieldGroup, [](auto& current, const QString& value) { current.shieldGroup = value; });
     text(form, QStringLiteral("Twisted group"), QStringLiteral("wizardTwistGroup"), w.twistGroup, [](auto& current, const QString& value) { current.twistGroup = value; });
     auto* markings = new QWidget(wireDetails_); auto* markRow = new QHBoxLayout(markings); markRow->setContentsMargins(0, 0, 0, 0);
     for (int i = 0; i < 3; ++i) {
-        auto* tick = new QCheckBox(QStringList{QStringLiteral("Colour"), QStringLiteral("Gauge"), QStringLiteral("Label")}[i], markings);
+        auto* tick = new QCheckBox(QStringList{QStringLiteral("Color"), QStringLiteral("Cross section"), QStringLiteral("Label")}[i], markings);
         tick->setChecked(i == 0 ? w.showColor : i == 1 ? w.showGauge : w.showLabel);
         connect(tick, &QCheckBox::toggled, this, [commit, i](bool on) { commit([i, on](auto& current) { if (i == 0) current.showColor = on; else if (i == 1) current.showGauge = on; else current.showLabel = on; }); }); markRow->addWidget(tick);
     }
@@ -413,9 +446,9 @@ void HarnessBuilderDialog::refreshWireDetails() {
     advanced->setObjectName(QStringLiteral("wizardAdvancedSettings"));
     form->addRow(advanced);
     auto setAdvanced = [form, createdFields, markings](bool on) {
-        for (const auto& name : {"wizardGauge", "wizardBundle", "wizardLabel", "wizardShieldGroup", "wizardTwistGroup"})
+        for (const auto& name : {"wizardBundle", "wizardShieldGroup", "wizardTwistGroup"})
             if (auto* field = createdFields.value(QLatin1String(name))) form->setRowVisible(field, on);
-        form->setRowVisible(markings, on);
+        markings->setVisible(true);
     };
     advanced->setChecked(wireDetails_->property("showAdvanced").toBool());
     setAdvanced(advanced->isChecked());
@@ -433,7 +466,14 @@ void HarnessBuilderDialog::refreshWireDetails() {
         connect(via, &QComboBox::currentIndexChanged, this, [commit, via, end](int index) { const QString value = via->itemData(index).toString(); commit([end, value](auto& current) { (end == 0 ? current.fromTermination : current.toTermination).via = value; }); });
         f->addRow(QStringLiteral("Termination"), via);
         if (!harnessTailAt(w, end)) continue;
-        part(f, QStringLiteral("Hook-up wire"), prefix + "WirePart", t.wireLibPart, {PartKind::Wire}, [end](auto& current, const QString& value) { auto& t = end == 0 ? current.fromTermination : current.toTermination; t.wireLibPart = value; t.wirePn.clear(); });
+        part(f, QStringLiteral("Hook-up wire"), prefix + "WirePart", t.wireLibPart, {PartKind::Wire}, [end](auto& current, const QString& value) {
+            auto& termination = end == 0 ? current.fromTermination : current.toTermination;
+            termination.wireLibPart = value; termination.wirePn.clear();
+            if (const auto* selected = harnessBuilderLibrary().byId(value)) {
+                HarnessWire imported; applyHarnessWirePart(imported, *selected);
+                termination.wireGauge = imported.gauge; termination.wireColor = imported.color;
+            }
+        });
         text(f, QStringLiteral("Or wire P/N"), prefix + "WirePn", t.wirePn, [end](auto& current, const QString& value) { auto& t = end == 0 ? current.fromTermination : current.toTermination; t.wirePn = value; t.wireLibPart.clear(); });
         gauge(f, QStringLiteral("Tail gauge"), prefix + "Gauge", t.wireGauge, [end](auto& current, const QString& value) { (end == 0 ? current.fromTermination : current.toTermination).wireGauge = value; });
         text(f, QStringLiteral("Tail colour (e.g. WH-BL)"), prefix + "Color", t.wireColor, [end](auto& current, const QString& value) { (end == 0 ? current.fromTermination : current.toTermination).wireColor = value.toUpper(); });

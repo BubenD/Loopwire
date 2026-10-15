@@ -1,7 +1,12 @@
 #include "app/Editor.h"
+#include "app/MainWindow.h"
 #include "app/HarnessBuilderDialog.h"
 #include "app/DrawingPreview.h"
 #include "harness/HarnessBuilderBom.h"
+#include "harness/CableSpec.h"
+#include "harness/Harness3D.h"
+#include "render/Render3D.h"
+#include <QCheckBox>
 #include "model/Document.h"
 #include "render/EntityRenderer.h"
 #include <QApplication>
@@ -13,9 +18,11 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMouseEvent>
+#include <QKeyEvent>
 #include <QPainter>
 #include <QPushButton>
 #include <QScrollBar>
+#include <QScrollArea>
 #include <QSettings>
 #include <QSplitter>
 #include <QTableWidget>
@@ -32,6 +39,9 @@ PartsLibrary library() {
     PartsLibrary lib;
     for (const auto& entry : std::vector<std::pair<QString, PartKind>>{{"connector", PartKind::Connector}, {"coax", PartKind::Cable}, {"tail", PartKind::Wire}, {"joint", PartKind::Splice}}) {
         LibraryPart p; p.id = entry.first; p.kind = entry.second; p.mfrPn = entry.first.toUpper() + QStringLiteral("-PN");
+        if (p.kind == PartKind::Wire) {
+            p.params["gaugeMode"] = "AWG"; p.params["gauge"] = "24"; p.params["colour"] = "RD-WH";
+        }
         p.description = entry.first; p.unit = p.kind == PartKind::Cable || p.kind == PartKind::Wire ? "m" : "each";
         lib.parts.push_back(p);
     }
@@ -64,6 +74,75 @@ int run_schematicwizard_tests() {
     const QString oldStyle = qApp->styleSheet();
     if (QFile style(QStringLiteral(":/loopwire.qss")); style.open(QIODevice::ReadOnly)) qApp->setStyleSheet(QString::fromUtf8(style.readAll()));
     const auto lib = library(); auto d = fixture();
+    Entity labelMask; labelMask.type = EntityType::Wipeout;
+    labelMask.points = {{-12, -4}, {12, -4}, {12, 4}, {-12, 4}};
+    labelMask.meta["labelMask"] = true; labelMask.meta["labelGroup"] = "label-1";
+    Entity clear; clear.type = EntityType::Line; clear.a = {-14, -5}; clear.b = {14, -5};
+    clear.meta["labelGroup"] = "label-1"; clear.meta["linetype"] = "HIDDEN";
+    Document tieDoc; Editor tieEditor; tieEditor.setDocument(&tieDoc);
+    for (double y : {-2.0, 0.0, 2.0}) { Entity wire; wire.type = EntityType::Wire; wire.a = {-40, y}; wire.b = {40, y}; wire.points = {wire.a, wire.b}; tieDoc.entities().push_back(wire); }
+    auto physical = tieDoc.entities();
+    for (auto& wire : physical) { wire.type = EntityType::Polyline; wire.meta["double"] = true; wire.meta["gap"] = 1.2; }
+    auto tie = tieEditor.lacingTieFromBand({25, -6}, {25, 6});
+    physical.insert(physical.end(), tie.begin(), tie.end()); physical.push_back(labelMask); physical.push_back(clear);
+    const auto scene = buildHarness3D(physical, {});
+    bool yellow = false, transparent = false, wrapped = false;
+    std::vector<DrawItem3D> draw;
+    for (const auto& item : scene.items) {
+        yellow |= item.what == "Label" && item.color.red() > 240 && item.color.green() > 180;
+        transparent |= item.what == "Clear label sleeve" && item.alpha < 0.3;
+        V3 lo, hi; if (item.what == "Lacing tie" && item.mesh.bounds(lo, hi)) wrapped |= lo.z < -0.5 && hi.z > 0.5;
+        draw.push_back({&item.mesh, item.color, item.alpha});
+    }
+    check(yellow && transparent && wrapped, "3D fittings: yellow label, clear sleeve and cord wrapped round the bundle");
+    QImage model(900, 500, QImage::Format_ARGB32_Premultiplied);
+    Camera3D camera; camera.fit({-40, -7, -7}, {40, 7, 7}, 1.8);
+    renderScene3D(model, draw, camera, false, QColor(32, 36, 42));
+    QDir().mkpath("build/wizard-review"); model.save("build/wizard-review/label-tie-3d.png");
+    tieEditor.beginLabelPlacement({labelMask}, 1.0); tieEditor.onKey(Qt::Key_Escape, Qt::NoModifier);
+    tieEditor.onKey(Qt::Key_Space, Qt::NoModifier);
+    check(tieEditor.placingLabel(), "Space repeats the last label placement function");
+    {
+        MainWindow window; window.show(); events();
+        auto* activeEditor = window.findChild<Editor*>();
+        auto* button = window.findChild<QToolButton*>();
+        check(activeEditor && button, "Space repeat test has a connected editor and ribbon control");
+        if (activeEditor && button) {
+            activeEditor->setTool(ToolId::Circle); activeEditor->setTool(ToolId::Select);
+            QKeyEvent key(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier, " ");
+            QApplication::sendEvent(button, &key);
+            check(activeEditor->tool() == ToolId::Circle, "Space repeats the last function while a ribbon control has focus");
+            activeEditor->setTool(ToolId::Select);
+            QLineEdit text(&window); text.show(); text.setFocus();
+            QKeyEvent space(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier, " ");
+            QApplication::sendEvent(&text, &space);
+            check(text.text() == " " && activeEditor->tool() == ToolId::Select, "Space still enters text in an input field");
+            QLineEdit* command = nullptr;
+            for (auto* input : window.findChildren<QLineEdit*>()) if (input->property("spaceRepeatWhenEmpty").toBool()) command = input;
+            check(command, "the command bar supports empty-field Space repeat");
+            if (command) {
+                command->clear(); QKeyEvent repeat(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier, " ");
+                QApplication::sendEvent(command, &repeat);
+                check(activeEditor->tool() == ToolId::Circle && command->text().isEmpty(), "Space in the empty command bar repeats the last function");
+            }
+            activeEditor->beginLabelPlacement({labelMask}, 1.0);
+            auto* repeatButton = window.findChild<QToolButton*>("repeatLastFunction");
+            check(repeatButton && repeatButton->isEnabled() && repeatButton->text().contains("Label"),
+                  "Repeat button names and enables the last label placement function");
+        }
+    }
+    HarnessWire imported;
+    imported.gauge = "1.5"; imported.color = "BK"; imported.partNumber = "OLD";
+    applyHarnessWirePart(imported, *lib.byId("tail"));
+    check(imported.gauge == "0.25" && imported.color == "RD-WH" && imported.partNumber.isEmpty(),
+          "library wire selection imports cross section with units and both colours, replacing manual P/N");
+    LibraryPart cable; cable.id = "pair"; cable.kind = PartKind::Cable;
+    setCableSpecOn(cable, cableSpecFromText("FTP 1x2x24AWG"));
+    HarnessWire firstCore, secondCore; firstCore.bundle = secondCore.bundle = "CB1";
+    applyHarnessWirePart(firstCore, cable, 0); applyHarnessWirePart(secondCore, cable, 1);
+    check(firstCore.gauge == "0.25" && firstCore.twistGroup == secondCore.twistGroup &&
+          !firstCore.twistGroup.isEmpty() && !firstCore.shieldGroup.isEmpty(),
+          "library cable selection imports conductor cross section, twist and shield groups");
     const auto saved = harnessDefToJson(d); const auto loaded = harnessDefFromJson(saved);
     check(harnessDefToJson(loaded) == saved, "pattern round-trip retains physical lengths, per-end parts and explicit conductor roles");
     auto old = saved; old.remove("physicalBom"); old["version"] = 3;
@@ -111,7 +190,8 @@ int run_schematicwizard_tests() {
         check(wizard.windowTitle() == "Schematic build wizzard", "wizard name is consistent");
         auto* wireTable = wizard.findChild<QTableWidget*>("wizardWireTable");
         if (!wireTable) for (auto* table : wizard.findChildren<QTableWidget*>()) if (table->columnCount() == 14) wireTable = table;
-        check(wireTable && wireTable->horizontalScrollBar()->maximum() == 0, "initial compact wire columns fit without horizontal scrolling");
+        check(wireTable && (wireTable->horizontalScrollBar()->maximum() == 0 ||
+              wireTable->columnWidth(2) >= 80), "compact columns stay readable, with scrolling when the side preview leaves too little room");
         if (wireTable) {
             int visible = 0; for (int c = 0; c < 14; ++c) if (!wireTable->isColumnHidden(c)) ++visible;
             check(visible == 7, "six essential columns and the delete button are shown; original advanced fields remain available");
@@ -130,6 +210,8 @@ int run_schematicwizard_tests() {
         auto* bomTable = wizard.findChild<QTableWidget*>("wizardBomTable"); check(bomTable && bomTable->rowCount() == 4, "live BOM has connectors, one cable, tails and splices");
         if (bomTable) { QDir().mkpath("build/wizard-review"); bomTable->window()->grab().save("build/wizard-review/bom.png"); }
         wizard.showPinMap(true); events();
+        auto* picture = wizard.findChild<QWidget*>("harnessBuilderPreviewPicture");
+        check(picture && picture->isVisible(), "drawing preview stays visible while the pin map is open");
         QListWidget* pins = nullptr; for (auto* list : wizard.findChildren<QListWidget*>()) if (list->property("connId") == QVariant("c1")) pins = list;
         check(pins, "pin map exposes connector pins");
         if (pins) {
@@ -138,6 +220,10 @@ int run_schematicwizard_tests() {
             QEvent leave(QEvent::Leave); QApplication::sendEvent(pins->viewport(), &leave);
             check(!wizard.litPins().isEmpty(), "pin selection remains highlighted after pointer leaves");
         }
+        auto* materialPn = wizard.findChild<QLineEdit*>("wizardMaterialPn");
+        check(materialPn && materialPn->text() == "COAX-PN", "wire details show library part P/N");
+        if (materialPn) emit materialPn->editingFinished(); events();
+        check(wizard.definition().wires[0].libPart == "coax", "leaving an unchanged library P/N keeps the library assignment");
         auto* via = wizard.findChild<QComboBox*>("wizardFromVia");
         check(via, "selected coax exposes independent end termination controls");
         if (via) {
@@ -166,11 +252,45 @@ int run_schematicwizard_tests() {
             check(wizard.definition().wires[0].fromTermination.wireLibPart == "tail" &&
                   wizard.definition().wires[0].fromTermination.wirePn.isEmpty(), "library selection replaces stale manual tail P/N");
         }
+        wizard.grab().save("build/wizard-review/pin-map.png");
         wizard.showPinMap(false); events();
         int visibleWidth = 0;
         for (int c = 0; c < 14; ++c) if (!wireTable->isColumnHidden(c)) visibleWidth += wireTable->columnWidth(c);
         check(wireTable->horizontalHeader()->length() == visibleWidth, "hidden advanced columns occupy no space after editing and undo");
         QDir().mkpath("build/wizard-review"); wizard.grab().save("build/wizard-review/connections.png");
+        auto* previewChoice = wizard.findChild<QComboBox*>("harnessBuilderPreviewWhere");
+        auto* more = wizard.findChild<QCheckBox*>("wizardMoreFields");
+        auto* split = wizard.findChild<QSplitter*>("harnessBuilderSplit");
+        if (more) more->setChecked(true);
+        if (previewChoice) previewChoice->setCurrentIndex(0); events();
+        check(split && split->orientation() == Qt::Horizontal, "preview menu keeps the side position with More fields enabled");
+        auto* sideScroll = wizard.findChild<QScrollArea*>("wizardPreviewScroll");
+        check(sideScroll && sideScroll->horizontalScrollBar()->maximum() == 0,
+              "the side preview fits its visible width without horizontal clipping");
+        wizard.grab().save("build/wizard-review/side-more-fields.png");
+        if (previewChoice) previewChoice->setCurrentIndex(1); events();
+        check(split && split->orientation() == Qt::Vertical, "preview menu selects the bottom position");
+        auto* grip = wizard.findChild<QWidget*>("wizardPreviewGrip");
+        auto* previewScroll = wizard.findChild<QScrollArea*>("wizardPreviewScroll");
+        if (grip && picture) {
+            const int oldHeight = picture->height();
+            const QPointF local(4, 4), global = grip->mapToGlobal(QPoint(4, 4));
+            QMouseEvent press(QEvent::MouseButtonPress, local, global, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(grip, &press);
+            QMouseEvent move(QEvent::MouseMove, local + QPointF(0, 400), global + QPointF(0, 400), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(grip, &move); events();
+            check(picture->height() >= oldHeight + 350 && previewScroll && previewScroll->verticalScrollBar()->maximum() > 0,
+                  "dragging the preview edge enlarges it and scrolls the overflowing sections");
+            QMouseEvent reset(QEvent::MouseButtonDblClick, local, global, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(grip, &reset); events();
+        }
+        auto* connectionSplit = wizard.findChild<QSplitter*>("wizardConnectionSplit");
+        if (connectionSplit) connectionSplit->setSizes({0, 400}); events();
+        wizard.loadDemand(fixture(), "loaded"); events();
+        check(wireTable->rowCount() > 0 && wireTable->isVisible() && wireTable->height() >= 100,
+              "loaded wizard keeps the populated wire table visible after splitter resizing");
+        wizard.grab().save("build/wizard-review/loaded-bottom.png");
+        if (more) more->setChecked(false);
         wizard.setStep(0); events(); wizard.grab().save("build/wizard-review/connectors.png");
         const QSize originalSize = wizard.size();
         wizard.resize(1240, 840); wizard.setStep(1); events(); wizard.grab().save("build/wizard-review/connections-wide.png");
@@ -179,6 +299,7 @@ int run_schematicwizard_tests() {
         check(wizard.definition().wires.size() == 4 && harnessCoaxShield(wizard.definition().wires.back()),
               "Add coax creates paired signal and shield conductors");
         wizard.undo(); events();
+        customWidth = wireTable->columnWidth(0);
         wizard.hide(); events();
     }
     {

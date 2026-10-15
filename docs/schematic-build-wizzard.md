@@ -2,8 +2,9 @@
 
 Open the wizzard from Schematic Build. The compact connection table shows six
 columns instead of fourteen. **More fields** exposes the original controls.
-The drawing preview stays alongside the editor on wide windows and moves below
-it on narrow windows. **Checks** expands the validation list.
+The preview menu chooses the side or bottom position, including with More fields
+enabled. Drag the splitter edges and section grips to resize the editors and
+preview. Each column scrolls when its sections need more room. **Checks** expands the validation list.
 
 Window geometry, table column widths and splitter positions are saved for the
 next opening. **Fit columns** fits the current columns to the editor;
@@ -30,7 +31,7 @@ the schematic. A paired coax assembly counts as one cable. Generated drawings
 carry the same physical materials for their drawing BOM. Existing patterns
 keep their previous BOM behavior until generated with the updated wizzard.
 
-Use **Base + stripe** for two-colour wire definitions; `WH-BL` means White/Blue.
+Use **Color** for two-colour wire definitions; `WH-BL` means White/Blue.
 Actual-colour drawing mode displays the stripe. Choosing colours does not
 change a coax conductor's signal/shield role.
 
@@ -38,6 +39,16 @@ change a coax conductor's signal/shield role.
 **Swap ends** also swaps its end-specific termination parts. Ctrl-click
 connection rows and use **Apply to selected** to copy material, gauge, colour
 and marking choices. Undo/Redo includes these edits.
+
+Pin map shows each wire's cross section in the selected mm2/AWG notation and its
+label when **Print on wire: Label** is enabled. The drawing remains visible while
+the map is open. The three small circular optimisation switches turn green when
+enabled; **Apply optimisation** applies all enabled criteria together.
+
+Wire details show Construction, Part description from part list, Part P/N,
+Cross section and Color. Selecting a library wire imports its size and colours;
+selecting a cable imports the corresponding conductor's construction, size,
+colours, label, shield and twist groups.
 
 ## Further simplification plan
 

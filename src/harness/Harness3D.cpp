@@ -1186,6 +1186,105 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
             }
         }
     }
+    // LABELS AND LACING ARE FITTINGS ON A RUN, rather than grey solids made from their 2D lines.
+    auto sleeve = [](const V3& centre, const V3& axis, double length, double radius, double wall) {
+        Mesh3D mesh;
+        const V3 across{-axis.y, axis.x, 0};
+        const int sides = 32;
+        for (int end = 0; end < 2; ++end) for (int skin = 0; skin < 2; ++skin)
+            for (int k = 0; k < sides; ++k) {
+                const double angle = 2 * M_PI * k / sides;
+                const double r = radius + (skin ? wall : 0.0);
+                mesh.v.push_back(centre + axis * ((end ? 0.5 : -0.5) * length) +
+                                 across * (r * std::cos(angle)) + V3{0, 0, r * std::sin(angle)});
+            }
+        for (int k = 0; k < sides; ++k) {
+            const int next = (k + 1) % sides;
+            for (int skin = 0; skin < 2; ++skin) {
+                const int a = skin * sides + k, b = skin * sides + next;
+                const int c = a + 2 * sides, d = b + 2 * sides;
+                if (skin) { mesh.addTri(a, b, c); mesh.addTri(b, d, c); }
+                else { mesh.addTri(a, c, b); mesh.addTri(b, c, d); }
+            }
+            for (int end = 0; end < 2; ++end) {
+                const int a = end * 2 * sides + k, b = end * 2 * sides + next;
+                const int c = a + sides, d = b + sides;
+                if (end) { mesh.addTri(a, c, b); mesh.addTri(b, c, d); }
+                else { mesh.addTri(a, b, c); mesh.addTri(b, d, c); }
+            }
+        }
+        return mesh;
+    };
+    for (const auto& mask : ents) {
+        if (!mask.meta.value(QStringLiteral("labelMask")).toBool() || mask.points.size() < 4) continue;
+        const Vec2 centre2 = (mask.points[0] + mask.points[2]) * 0.5;
+        const Vec2 axis2 = (mask.points[1] - mask.points[0]).normalized();
+        const double length = distance(mask.points[0], mask.points[1]);
+        const double radius = distance(mask.points[1], mask.points[2]) * 0.5;
+        if (length < 1e-6 || radius < 1e-6) continue;
+        Harness3DItem label;
+        label.mesh = sleeve({centre2.x, centre2.y, 0}, {axis2.x, axis2.y, 0}, length, radius, 0.12);
+        label.color = QColor(255, 215, 45); label.what = QStringLiteral("Label");
+        label.ownLook = true; label.brick = brickOf(mask); scene.items.push_back(label);
+        bool clear = false;
+        const QString group = mask.meta.value(QStringLiteral("labelGroup")).toString();
+        for (const auto& e : ents) {
+            if (e.meta.value(QStringLiteral("linetype")).toString() != QLatin1String("HIDDEN")) continue;
+            const bool same = !group.isEmpty() && e.meta.value(QStringLiteral("labelGroup")).toString() == group;
+            const Bounds bounds = e.bounds();
+            const Vec2 mid = bounds.valid ? (bounds.min + bounds.max) * 0.5 : Vec2{};
+            bool nearestLabel = false;
+            if (group.isEmpty() && e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("label")) {
+                const Entity* closest = nullptr; double bestDistance = 1e300;
+                for (const auto& candidate : ents) if (candidate.meta.value(QStringLiteral("labelMask")).toBool() && candidate.points.size() >= 4) {
+                    const double d = distance(mid, (candidate.points[0] + candidate.points[2]) * 0.5);
+                    if (d < bestDistance) { closest = &candidate; bestDistance = d; }
+                }
+                nearestLabel = closest == &mask && bestDistance < length + radius;
+            }
+            if (same || nearestLabel) { clear = true; break; }
+        }
+        if (clear) {
+            Harness3DItem cover;
+            cover.mesh = sleeve({centre2.x, centre2.y, 0}, {axis2.x, axis2.y, 0}, length + 3.2, radius + 0.3, 0.18);
+            cover.color = QColor(220, 240, 250); cover.alpha = 0.22; cover.ownLook = true;
+            cover.what = QStringLiteral("Clear label sleeve"); cover.brick = label.brick;
+            scene.items.push_back(cover);
+        }
+    }
+    std::vector<const Entity*> tieMasks;
+    for (const auto& e : ents) if (e.type == EntityType::Wipeout && e.meta.value(QStringLiteral("lacingTie")).toBool()) tieMasks.push_back(&e);
+    for (const auto& e : ents) {
+        if (e.type != EntityType::Polyline || !e.meta.value(QStringLiteral("lacingTie")).toBool() || e.points.size() < 2) continue;
+        const Entity* mask = nullptr; double nearest = 1e300;
+        for (const auto* candidate : tieMasks) {
+            const Bounds box = candidate->bounds();
+            const double d = distance(e.points.front(), (box.min + box.max) * 0.5);
+            if (d < nearest) { nearest = d; mask = candidate; }
+        }
+        if (!mask || mask->points.size() < 4) continue;
+        const Vec2 centre2 = (mask->points[0] + mask->points[2]) * 0.5;
+        const Vec2 along = (mask->points[1] - mask->points[0]).normalized(), across = along.perp();
+        const double radius = std::max(0.4, distance(mask->points[1], mask->points[2]) * 0.5);
+        const double cord = std::clamp(radius * 0.06, 0.25, 0.8);
+        std::vector<V3> path;
+        if (e.points.size() == 2) {
+            const double x0 = dot(e.points[0] - centre2, along), x1 = dot(e.points[1] - centre2, along);
+            const bool turn = std::abs(dot(e.points[1] - e.points[0], across)) > radius;
+            if (turn) for (int k = 0; k <= 48; ++k) {
+                const double t = k / 48.0, angle = 2 * M_PI * t;
+                const Vec2 xy = centre2 + along * (x0 + (x1 - x0) * t) + across * ((radius + cord) * std::cos(angle));
+                path.push_back({xy.x, xy.y, (radius + cord) * std::sin(angle)});
+            }
+        }
+        if (path.empty()) for (const Vec2& q : e.points) {
+            const double offset = dot(q - centre2, across);
+            path.push_back({q.x, q.y, std::sqrt(std::max(0.0, radius * radius - offset * offset)) + cord});
+        }
+        Harness3DItem tie; tie.mesh = tubeMesh(path, cord, 10, true);
+        tie.color = QColor(225, 215, 185); tie.what = QStringLiteral("Lacing tie"); tie.ownLook = true;
+        tie.brick = brickOf(e); scene.items.push_back(tie);
+    }
     // ---- THE PARTS ---------------------------------------------------------------------------------
     struct Part {
         Bounds box;
@@ -1197,6 +1296,10 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
     QStringList order;
     for (const Entity& e : ents) {
         const QString g = groupOf(e);
+        if (e.meta.value(QStringLiteral("labelMask")).toBool() ||
+            !e.meta.value(QStringLiteral("labelGroup")).toString().isEmpty() ||
+            e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("label") ||
+            e.meta.value(QStringLiteral("lacingTie")).toBool()) continue;
         if (g.isEmpty() || isRun.value(g) || e.type == EntityType::TwistedPair) continue;
         // A run's own marks (a stripped end, a label) are the run's, not a part.
         if (e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("strip")) continue;

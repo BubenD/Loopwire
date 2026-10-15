@@ -153,6 +153,36 @@
 namespace Loopwire {
 
 namespace {
+// SPACE REACHES THE EDITOR from ribbon controls, while text fields keep their spaces.
+class SpaceRepeatFilter : public QObject {
+public:
+    SpaceRepeatFilter(QWidget* window, Editor* editor, QWidget* canvas)
+        : QObject(window), window_(window), canvas_(canvas), editor_(editor) { qApp->installEventFilter(this); }
+    ~SpaceRepeatFilter() override { if (qApp) qApp->removeEventFilter(this); }
+protected:
+    bool eventFilter(QObject* object, QEvent* event) override {
+        if (event->type() != QEvent::KeyPress || !window_ || !editor_ || !canvas_) return false;
+        auto* key = static_cast<QKeyEvent*>(event);
+        auto* widget = qobject_cast<QWidget*>(object);
+        if (key->key() != Qt::Key_Space || key->modifiers() != Qt::NoModifier ||
+            !widget || widget->window() != window_ || widget == canvas_) return false;
+        for (QWidget* field = widget; field && field != window_; field = field->parentWidget()) {
+            if (auto* input = qobject_cast<QLineEdit*>(field)) {
+                if (input->property("spaceRepeatWhenEmpty").toBool() && input->text().isEmpty()) continue;
+                return false;
+            }
+            if (qobject_cast<QTextEdit*>(field) || qobject_cast<QAbstractSpinBox*>(field) ||
+                qobject_cast<QComboBox*>(field) || field->inherits("QPlainTextEdit") ||
+                qobject_cast<QMenu*>(field)) return false;
+        }
+        if (!key->isAutoRepeat()) editor_->onKey(Qt::Key_Space, Qt::NoModifier);
+        canvas_->setFocus(); key->accept(); return true;
+    }
+private:
+    QPointer<QWidget> window_, canvas_;
+    QPointer<Editor> editor_;
+};
+
 // QLabel::setText invalidates its size hint. An unconstrained coordinate label
 // therefore relayouts the status bar and main window on every pointer report.
 // Fix BOTH dimensions; fixing width alone still allows those layout requests.
@@ -2379,6 +2409,7 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
     note(QStringLiteral("Drawing canvas"));
     canvas_ = new CanvasWidget(this);
     editor_ = new Editor(this);
+    new SpaceRepeatFilter(this, editor_, canvas_);
     connect(editor_,&Editor::drawingDetailsChanged,this,[this]{
         Document* owner=editor_->drawingOwner();if(!owner)return;
         for(auto& entry:paperDocs_)if(entry.first.first==owner&&entry.second.get()!=editor_->document()){
@@ -6961,6 +6992,7 @@ void MainWindow::buildStatusControls() {
     // app returns to Select after each object; this button — like Space/Enter — starts
     // the last tool again). Its label tracks whatever that tool is.
     repeatBtn_ = new QToolButton(this);
+    repeatBtn_->setObjectName(QStringLiteral("repeatLastFunction"));
     repeatBtn_->setToolButtonStyle(Qt::ToolButtonTextOnly);
     repeatBtn_->setText(QStringLiteral("↻ Repeat"));
     repeatBtn_->setToolTip(QStringLiteral("Repeat the last command (also Enter / Space)"));
@@ -6970,11 +7002,20 @@ void MainWindow::buildStatusControls() {
         QStringLiteral("QToolButton{padding:2px 8px;border:none;color:#c9ccd1;}"
                        "QToolButton:hover{background:#243245;}"));
     connect(repeatBtn_, &QToolButton::clicked, this, [this] { editor_->repeatLastTool(); });
-    connect(editor_, &Editor::toolChanged, this, [this](ToolId) {
+    auto updateRepeat = [this] {
         const ToolId lt = editor_->lastTool();
-        repeatBtn_->setText(lt == ToolId::Select ? QStringLiteral("↻ Repeat")
-                                                 : QStringLiteral("↻ %1").arg(toolLabel(lt)));
-        repeatBtn_->setEnabled(lt != ToolId::Select);
+        const bool repeatLabel = repeatBtn_->property("repeatLabel").toBool();
+        repeatBtn_->setText(repeatLabel ? QStringLiteral("\u21bb Label") :
+            lt == ToolId::Select ? QStringLiteral("\u21bb Repeat") : QStringLiteral("\u21bb %1").arg(toolLabel(lt)));
+        repeatBtn_->setEnabled(repeatLabel || lt != ToolId::Select);
+    };
+    connect(editor_, &Editor::toolChanged, this, [this, updateRepeat](ToolId tool) {
+        if (tool != ToolId::Select) repeatBtn_->setProperty("repeatLabel", false);
+        updateRepeat();
+    });
+    connect(editor_, &Editor::labelChanged, this, [this, updateRepeat] {
+        if (editor_->placingLabel()) repeatBtn_->setProperty("repeatLabel", true);
+        updateRepeat();
     });
     repeatBtn_->setEnabled(false);
     statusBar()->addPermanentWidget(repeatBtn_);
@@ -7408,6 +7449,7 @@ void MainWindow::buildCommandBar() {
     cmdHintLabel_->setStyleSheet(QStringLiteral("color:#8fb0d6;padding:0 10px;font-weight:600;"));
     auto* label = new QLabel(QStringLiteral("  Command: "), bar);
     commandEdit_ = new QLineEdit(bar);
+    commandEdit_->setProperty("spaceRepeatWhenEmpty", true);
     commandEdit_->setPlaceholderText(QStringLiteral("command (line, rect, circle...) — or, while drawing, a distance / x,y / @dx,dy + Enter"));
     bar->addWidget(cmdHintLabel_);
     bar->addWidget(label);
@@ -9474,7 +9516,11 @@ void MainWindow::showOptions(const QString& page) {
     // Every cross-section shown anywhere follows this: the wire markings, the harness
     // builder's gauge list and the bill of materials.
     setWireGaugeNotationAwg(crossSectionAwg_);
+    updateMechanicalRibbonGroups();
+    updateSchematicRibbonGroups();
+    normaliseRibbonPages();
     saveSettings();
+    canvas_->invalidateScene();
     canvas_->update();
 }
 
@@ -12856,7 +12902,7 @@ void MainWindow::buildConnectorBuildTab(QWidget* page, QHBoxLayout* lay) {
                                             "body, text) to the defaults"));
         connect(resetBtn, &QToolButton::clicked, this, [this] {
             ConnectorSpec s = editor_->connectorSpec();
-            const ConnectorSpec d = defaultConnectorSpec(std::max(1, s.pinCount));
+            const ConnectorSpec d = defaultConnectorSpec(std::max(1, s.pinCount), 0.4);
             s.pitch = d.pitch; s.pinLength = d.pinLength;
             s.rectMode = d.rectMode; s.rectWidth = d.rectWidth; s.rectHeight = d.rectHeight;
             s.textSize = d.textSize; s.pinSize = d.pinSize; s.desSize = d.desSize; s.pnSize = d.pnSize;

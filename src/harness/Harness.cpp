@@ -2577,9 +2577,18 @@ void regenPinLabels(ConnectorSpec& spec) {
     for (int i = 0; i < spec.pinCount; ++i) spec.pins << connectorPinLabel(i, spec);
 }
 
-ConnectorSpec defaultConnectorSpec(int pinCount) {
+ConnectorSpec defaultConnectorSpec(int pinCount, double scale) {
     ConnectorSpec s;
     s.pinCount = std::clamp(pinCount, 1, 128);
+    // Scale new placement defaults together, including their text.
+    s.pitch *= scale;
+    s.pinLength *= scale;
+    s.rectWidth *= scale;
+    s.rectHeight *= scale;
+    s.textSize *= scale;
+    s.pinSize *= scale;
+    s.desSize *= scale;
+    s.pnSize *= scale;
     regenPinLabels(s);
     return s;
 }
@@ -2639,6 +2648,8 @@ void writeConnectorSpec(QJsonObject& meta, const ConnectorSpec& spec) {
     meta["pitch"] = spec.pitch;
     meta["pinLength"] = spec.pinLength;
     meta["rectWidth"] = spec.rectWidth;
+    if (!meta.contains(QStringLiteral("cupScale")))
+        meta["cupScale"] = std::clamp(spec.rectWidth / 40.0, 0.025, 1.0);
     meta["rectHeight"] = spec.rectHeight;
     meta["textSize"] = spec.textSize;
     meta["mirrorX"] = spec.mirrorX;
@@ -2720,7 +2731,7 @@ ConnectorGeometry connectorGeometry(const Vec2& origin, const ConnectorSpec& spe
     const double pitch = dynamic ? std::max(spec.pitch, spec.pinSize) : spec.pitch;
     const double autoH = std::max(pitch * (spec.pinCount + 1),
                                   pitch * std::max(1, spec.pinCount - 1) + spec.textSize * 2.4);
-    const double dynW = std::max(40.0, spec.textSize * 2.6); // wide enough for big pin text
+    const double dynW = std::max(std::clamp(spec.rectWidth, 1.0, 40.0), spec.textSize * 2.6); // wide enough for big pin text
     const double w = dynamic ? dynW : std::max(1.0, spec.rectWidth);
     const double h = dynamic ? autoH : (spec.rectHeight > 0.0 ? spec.rectHeight : autoH);
     g.effectiveHeight = h;

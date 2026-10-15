@@ -1903,6 +1903,9 @@ private:
     Document* drawingOwner_=nullptr;
     QString drawingFieldPending_;
     ToolId tool_ = ToolId::Select;
+    bool lastWasLabel_ = false;
+    std::vector<Entity> lastLabelDrawing_;
+    double lastLabelExceed_ = 1.0;
     ToolId lastTool_ = ToolId::Select; // last non-Select tool, for repeat
     SnapSettings snap_;
     UndoStack undo_;
@@ -2428,7 +2431,7 @@ private:
     Vec2 trimFenceStart_;
 
     // Harness defaults.
-    ConnectorSpec connectorSpec_ = defaultConnectorSpec(4);
+    ConnectorSpec connectorSpec_ = defaultConnectorSpec(4, 0.4);
     QString wireColor_ = "WH";
     QString wireGauge_ = "0.5";
     QString wireNet_;

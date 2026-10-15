@@ -54,6 +54,26 @@ int run_harness_tests() {
         check(gm.pinEnd[0].x < gm.pinTip[0].x, "connector: mirrored exit left");
     }
 
+    // Placement defaults scale the actual dynamic geometry, not just its controls.
+    {
+        Editor editor;
+        const ConnectorSpec small = editor.connectorSpec();
+        const ConnectorGeometry original = connectorGeometry({0, 0}, defaultConnectorSpec(4));
+        const ConnectorGeometry placed = connectorGeometry({0, 0}, small);
+        check(near(placed.effectiveWidth, original.effectiveWidth * 0.4) &&
+                  near(placed.effectiveHeight, original.effectiveHeight * 0.4),
+              "connector: placement body defaults to 40 percent");
+        for (size_t i = 0; i < placed.pinEnd.size(); ++i)
+            check(near(placed.pinEnd[i].x, original.pinEnd[i].x * 0.4) &&
+                      near(placed.pinEnd[i].y, original.pinEnd[i].y * 0.4),
+                  "connector: placement pin geometry keeps its proportions");
+        QJsonObject meta;
+        writeConnectorSpec(meta, small);
+        const ConnectorSpec restored = connectorSpecFromMeta(meta);
+        check(near(restored.rectWidth, small.rectWidth) && near(restored.pinSize, small.pinSize),
+              "connector: smaller placement size survives saving");
+    }
+
     // Meta round-trip.
     {
         ConnectorSpec s = defaultConnectorSpec(3);

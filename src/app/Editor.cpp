@@ -1739,7 +1739,7 @@ void Editor::setTool(ToolId t) {
     trimFenceActive_ = false;
     if (t == ToolId::Trim || t == ToolId::Extend) trimRefIds_ = selected_;
     tool_ = t;
-    if (t != ToolId::Select) lastTool_ = t; // remember for repeat (Space/Enter)
+    if (t != ToolId::Select) { lastTool_ = t; lastWasLabel_ = false; } // remember for repeat (Space/Enter)
     emit toolChanged(t);
     emit message(toolLabel(t));
     emit changed();
@@ -1760,7 +1760,10 @@ void Editor::setTool(ToolId t) {
 }
 
 void Editor::repeatLastTool() {
-    if (lastTool_ != ToolId::Select) setTool(lastTool_);
+    if (lastWasLabel_ && !lastLabelDrawing_.empty()) {
+        const auto drawing = lastLabelDrawing_;
+        beginLabelPlacement(drawing, lastLabelExceed_);
+    } else if (lastTool_ != ToolId::Select) setTool(lastTool_);
 }
 
 double Editor::worldTolerance() const {
@@ -3549,6 +3552,9 @@ void Editor::beginLabelPlacement(const std::vector<Entity>& drawing, double exce
     endLabelEdit();          // one label being fitted at a time
     labelExceedMm_ = std::max(0.0, exceedMm);
     labelProto_ = drawing;
+    lastWasLabel_ = true;
+    lastLabelDrawing_ = drawing;
+    lastLabelExceed_ = exceedMm;
     labelPlacing_ = true;
     labelStrokeHasStart_ = false;
     labelWithBreak_ = false;

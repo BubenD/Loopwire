@@ -216,6 +216,7 @@ int run_connectorparts_tests() {
         e.type = EntityType::Connector;
         e.layer = QStringLiteral("0");
         e.a = Vec2{0.0, 0.0};
+        e.color = QStringLiteral("#000000"); // visible against inkOf's white background
         ConnectorSpec spec = defaultConnectorSpec(4);
         spec.designator = QStringLiteral("X12");
         spec.partNumber = QStringLiteral("CONN-12");

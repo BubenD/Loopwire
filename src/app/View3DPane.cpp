@@ -4587,7 +4587,7 @@ std::vector<DrawItem3D> View3DCanvas::drawItems() const {
             QColor c = it.color;
             if (!it.brick.isEmpty() && lit_.contains(it.brick))
                 c = QColor((c.red() + 2 * 43) / 3, (c.green() + 2 * 208) / 3, (c.blue() + 2 * 255) / 3);
-            items.push_back({&it.mesh, c, it.brick.isEmpty() ? 1.0 : brickAlpha_.value(it.brick, 1.0), false, it.texture});
+            items.push_back({&it.mesh, c, it.alpha * (it.brick.isEmpty() ? 1.0 : brickAlpha_.value(it.brick, 1.0)), false, it.texture});
         }
     if (env_ && envShown_)
         for (size_t i = 0; i < env_->parts.size(); ++i) {

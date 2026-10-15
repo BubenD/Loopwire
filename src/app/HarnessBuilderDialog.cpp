@@ -661,14 +661,14 @@ public:
     // made by the same generator Generate uses, shown fitted to the picture. Not a sketch of it that could differ.
     HarnessWiringPreview(QWidget* parent = nullptr) : QWidget(parent) {
         setObjectName(QStringLiteral("harnessBuilderPreview"));
-        setMinimumWidth(320);
+        setMinimumWidth(190);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         auto* lay = new QVBoxLayout(this);
         lay->setContentsMargins(0, 0, 0, 0);
         lay->setSpacing(2);
         picture_ = new DrawingPreview(QString(), this);
         picture_->setObjectName(QStringLiteral("harnessBuilderPreviewPicture"));
-        picture_->setKeepView(true);
+        picture_->setKeepView(false);
         picture_->setEmptyText(QStringLiteral("Add connectors and wires - the harness is drawn here as Generate will draw it"));
         picture_->setToolTip(QStringLiteral("The harness exactly as Generate will draw it - wheel to zoom, drag to move; "
                                             "Enlarge to see it big"));
@@ -694,7 +694,9 @@ public:
         placeFit();
     }
     bool eventFilter(QObject* watched, QEvent* ev) override {
-        if (watched == picture_ && (ev->type() == QEvent::Resize || ev->type() == QEvent::Show)) placeFit();
+        if (watched == picture_ && (ev->type() == QEvent::Resize || ev->type() == QEvent::Show)) {
+            placeFit(); picture_->fitToView();
+        }
         return QWidget::eventFilter(watched, ev);
     }
     void setDefinition(const HarnessDef& def) {
@@ -805,8 +807,12 @@ QWidget* section(const QString& title, QWidget* body, QWidget* parent,
     for (QWidget* w : headerWidgets) head->addWidget(w);
     head->addStretch(1);
     v->addLayout(head);
-    if (clipBody) v->addWidget(new ClipBox(body, box));
-    else v->addWidget(body);
+    QWidget* content = clipBody ? static_cast<QWidget*>(new ClipBox(body, box)) : body;
+    content->setProperty("wizardSectionDefaultMin", content->minimumHeight());
+    v->addWidget(content);
+    v->addWidget(makeSectionGrip(content, box, {}, [content] {
+        content->setMinimumHeight(0); content->setMaximumHeight(QWIDGETSIZE_MAX); content->updateGeometry();
+    }));
     return box;
 }
 
@@ -853,6 +859,7 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
     mainSplit_ = new QSplitter(Qt::Horizontal, this);
     mainSplit_->setObjectName(QStringLiteral("harnessBuilderSplit"));
     mainSplit_->setChildrenCollapsible(false);
+    mainSplit_->setHandleWidth(8);
     stepList_ = new QListWidget(this);
     stepList_->setObjectName(QStringLiteral("harnessBuilderSteps"));
     stepList_->setFlow(QListView::LeftToRight);
@@ -1653,16 +1660,31 @@ QWidget* HarnessBuilderDialog::buildPinMapSection() {
     for (QPushButton* b : {minBtn, shieldBtn, twistBtn}) {
         b->setCheckable(true);
         b->setAutoDefault(false);
-        b->setStyleSheet(QStringLiteral("QPushButton:checked{background:#2d5a80;color:white;}"));
-        connect(b, &QPushButton::toggled, this, [this, minBtn, shieldBtn, twistBtn] {
-            runCombinedOptimise(minBtn->isChecked(), shieldBtn->isChecked(), twistBtn->isChecked());
-        });
+        b->setAccessibleName(b->text());
+        b->setProperty("optimisationCaption", b->text());
+        b->setText(QString());
+        b->setFixedSize(20, 20);
+        b->setStyleSheet(QStringLiteral("QPushButton{border:1px solid #667580;border-radius:10px;background:#667580;padding:0;}"
+                                       "QPushButton:checked{background:#3fbf6f;border-color:#3fbf6f;}"));
     }
     auto* box = new QWidget(this);
     auto* bv = new QVBoxLayout(box);
     bv->setContentsMargins(0, 0, 0, 0);
-    auto* tools = new QHBoxLayout();
-    for (QPushButton* b : {minBtn, shieldBtn, twistBtn}) tools->addWidget(b);
+    auto* tools = new WizardFlowLayout;
+    for (QPushButton* b : {minBtn, shieldBtn, twistBtn}) {
+        auto* criterion = new QWidget(box);
+        auto* criterionRow = new QHBoxLayout(criterion); criterionRow->setContentsMargins(0, 0, 0, 0);
+        criterionRow->addWidget(b);
+        criterionRow->addWidget(new QLabel(b->property("optimisationCaption").toString(), criterion));
+        tools->addWidget(criterion);
+    }
+    auto* apply = new QPushButton(QStringLiteral("Apply optimisation"), box);
+    apply->setObjectName(QStringLiteral("harnessBuilderApplyOptimisation"));
+    apply->setAutoDefault(false);
+    connect(apply, &QPushButton::clicked, this, [this, minBtn, shieldBtn, twistBtn] {
+        runCombinedOptimise(minBtn->isChecked(), shieldBtn->isChecked(), twistBtn->isChecked());
+    });
+    tools->addWidget(apply);
     tools->addStretch(1);
     bv->addLayout(tools);
     bv->addWidget(host, 1);
@@ -1677,7 +1699,7 @@ QWidget* HarnessBuilderDialog::buildPreviewColumn() {
     auto* v = new QVBoxLayout(column);
     v->setContentsMargins(0, 0, 0, 0);
     v->setSpacing(6);
-    auto* head = new QHBoxLayout();
+    auto* head = new WizardFlowLayout;
     viewCaption_ = new QLabel(QStringLiteral("AS IT WILL BE DRAWN"), column);
     viewCaption_->setStyleSheet(QStringLiteral("color:#4aa8d8;font-weight:700;letter-spacing:1px;"));
     head->addWidget(viewCaption_);
@@ -1701,12 +1723,30 @@ QWidget* HarnessBuilderDialog::buildPreviewColumn() {
         big->setShowShields(shieldPreviewBox_ && shieldPreviewBox_->isChecked());
         showPreviewPopup(this, QStringLiteral("Harness wiring"), big);
     });
-    // THE DRAWING OR THE PIN MAP, one at a time in the same place - and the switch between them right under it.
+    // THE DRAWING STAYS IN VIEW while the pin map is opened underneath it.
     viewStack_ = new QStackedWidget(column);
     viewStack_->setObjectName(QStringLiteral("harnessBuilderView"));
-    viewStack_->addWidget(wiringPreview_);
+    wiringPreview_->setMinimumHeight(160);
+    wiringPreview_->setProperty("sectionGripMinimum", 160);
+    wiringPreview_->setProperty("wizardSectionDefaultMin", 160);
+    v->addWidget(wiringPreview_, 3);
+    auto* pictureGrip = makeSectionGrip(wiringPreview_, column, {}, [this] {
+        wiringPreview_->setMinimumHeight(160); wiringPreview_->setMaximumHeight(QWIDGETSIZE_MAX);
+    });
+    pictureGrip->setObjectName(QStringLiteral("wizardPreviewGrip"));
+    v->addWidget(pictureGrip);
+    viewStack_->addWidget(new QWidget(column));
     viewStack_->addWidget(buildPinMapSection());
-    v->addWidget(viewStack_, 3);
+    viewStack_->setMinimumHeight(140);
+    viewStack_->setProperty("sectionGripMinimum", 140);
+    viewStack_->setProperty("wizardSectionDefaultMin", 140);
+    v->addWidget(viewStack_, 2);
+    auto* mapGrip = makeSectionGrip(viewStack_, column, {}, [this] {
+        viewStack_->setMinimumHeight(140); viewStack_->setMaximumHeight(QWIDGETSIZE_MAX);
+    }); mapGrip->hide();
+    v->addWidget(mapGrip);
+    connect(viewStack_, &QStackedWidget::currentChanged, mapGrip, [mapGrip](int index) { mapGrip->setVisible(index == 1); });
+    viewStack_->hide();
     auto* switchRow = new QHBoxLayout();
     switchRow->setSpacing(4);
     // ONE BUTTON FOR THE TWO VIEWS: it says what it will show - the pin map while the drawing is up, the drawing while
@@ -1729,7 +1769,11 @@ QWidget* HarnessBuilderDialog::buildPreviewColumn() {
     issues->hide();
     connect(checks, &QPushButton::toggled, issues, &QWidget::setVisible);
     v->addWidget(issues);
-    return column;
+    auto* scroll = new QScrollArea(this);
+    scroll->setObjectName(QStringLiteral("wizardPreviewScroll"));
+    scroll->setWidgetResizable(true); scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setWidget(column);
+    return scroll;
 }
 
 // ---- The Shields step ----------------------------------------------------------------------------------------------
@@ -1942,17 +1986,17 @@ bool HarnessBuilderDialog::showingPinMap() const { return viewStack_ && viewStac
 void HarnessBuilderDialog::showPinMap(bool on) {
     if (!viewStack_) return;
     viewStack_->setCurrentIndex(on ? 1 : 0);
+    viewStack_->setVisible(on);
     if (pinMapBtn_) pinMapBtn_->setText(on ? QStringLiteral("Drawing") : QStringLiteral("Pin map"));
     if (viewCaption_) viewCaption_->setText(on ? QStringLiteral("PIN MAP") : QStringLiteral("AS IT WILL BE DRAWN"));
-    if (shieldPreviewBox_) shieldPreviewBox_->setVisible(!on);
+    if (shieldPreviewBox_) shieldPreviewBox_->show();
 }
 
 void HarnessBuilderDialog::applyStepLayout(int step) {
     if (!mainSplit_) return;
-    // THE WIRES WANT THE WIDTH: on their step the table runs the full width, the drawing (or the pin map) under it.
-    const bool wires = step == 1;
-    // UNDER THE STEP for the Wires, and wherever it has been asked for on the others.
-    const bool under = previewBottom_ || (width() < 1120) || (wires && !compactColumns_);
+    Q_UNUSED(step);
+    // THE MENU IS THE CHOICE, including on the Wires step with every field shown.
+    const bool under = previewBottom_;
     const Qt::Orientation want = under ? Qt::Vertical : Qt::Horizontal;
     if (mainSplit_->orientation() == want) return;
     mainSplit_->setOrientation(want);
@@ -2074,6 +2118,42 @@ void HarnessBuilderDialog::redo() {
     summaryLabel_->setText(QStringLiteral("Done again"));
 }
 
+// THE LIBRARY MATERIAL supplies the physical conductor values wherever it is selected.
+void applyHarnessWirePart(HarnessWire& wire, const LibraryPart& part, int conductor) {
+    wire.libPart = part.id;
+    wire.partNumber.clear();
+    if (part.kind == PartKind::Cable) {
+        const auto cores = cableConductors(cableSpecOf(part), wire.bundle);
+        if (conductor >= 0 && conductor < int(cores.size())) {
+            const auto& core = cores[size_t(conductor)];
+            wire.gauge = core.gauge;
+            wire.color = core.colour;
+            wire.kind = core.kind;
+            wire.twistGroup = core.twistGroup;
+            wire.shieldGroup = core.shieldGroup;
+            wire.label = core.label;
+            wire.coaxRole = harnessIsCoaxKind(core.kind) ?
+                (core.isScreen ? QStringLiteral("shield") : QStringLiteral("signal")) : QString();
+        }
+    } else if (part.kind == PartKind::Wire) {
+        wire.kind = QStringLiteral("wire");
+        wire.coaxRole.clear();
+        wire.twistGroup.clear();
+        wire.shieldGroup.clear();
+        QString gauge = part.value(QStringLiteral("gauge"));
+        const bool awg = part.value(QStringLiteral("gaugeMode")) == QLatin1String("AWG") ||
+                         gauge.contains(QLatin1String("AWG"), Qt::CaseInsensitive);
+        if (awg) {
+            QString size = gauge; size.remove(QStringLiteral("AWG"), Qt::CaseInsensitive);
+            for (const auto& area : wireGaugeChoices()) if (wireGaugeAwg(area) == size.trimmed()) {
+                gauge = area; break;
+            }
+        }
+        wire.gauge = gauge;
+        wire.color = part.value(QStringLiteral("colour"));
+    }
+}
+
 // Push the definition into the wiring preview and redraw it. A layout field - the shield
 // amounts, the pin pitch, the wire colours - changes what the preview shows without changing a
 // row, so those handlers call this rather than rebuilding the whole pin map: the picture keeps up
@@ -2142,7 +2222,7 @@ void HarnessBuilderDialog::reloadPinMap() {
         auto* dropLine = new PinDropStyle;
         dropLine->setParent(list);
         list->setStyle(dropLine);
-        list->setFixedWidth(120);
+        list->setMinimumWidth(180);
         list->setMinimumHeight(120);
         list->setToolTip(QStringLiteral("Drag a pin to change where it sits on the connector"));
         const QString connId = c.id;
@@ -2151,8 +2231,15 @@ void HarnessBuilderDialog::reloadPinMap() {
             QString detail = QStringLiteral("free");
             QString colorCode;
             for (const auto& w : def_.wires) {
-                if (w.fromConn == connId && w.fromPin == pin) { detail = w.color; colorCode = w.color; break; }
-                if (w.toConn == connId && w.toPin == pin) { detail = w.color; colorCode = w.color; break; }
+                if ((w.fromConn == connId && w.fromPin == pin) || (w.toConn == connId && w.toPin == pin)) {
+                    QStringList fields;
+                    if (w.showColor && !w.color.isEmpty()) fields << w.color;
+                    if (!w.gauge.isEmpty()) fields << gaugeLabelFor(w.gauge);
+                    if (w.showLabel && !w.label.isEmpty()) fields << w.label;
+                    detail = fields.join(QStringLiteral(" \u00b7 "));
+                    colorCode = w.color;
+                    break;
+                }
             }
             auto* item = new QListWidgetItem(
                 QStringLiteral("%1  %2").arg(harnessPinLabel(c, pin), detail), list);
@@ -2559,6 +2646,9 @@ QWidget* HarnessBuilderDialog::buildWiresSection() {
     detailScroll->setWidget(wireDetails_);
     wireSplit_ = new QSplitter(Qt::Vertical, this);
     wireSplit_->setObjectName(QStringLiteral("wizardConnectionSplit"));
+    wireSplit_->setChildrenCollapsible(false);
+    wireSplit_->setHandleWidth(8);
+    wireSplit_->setProperty("sectionGripMinimum", 180);
     wireSplit_->addWidget(wireTable_);
     wireSplit_->addWidget(detailScroll);
     wireSplit_->setSizes({140, 220});
@@ -3384,11 +3474,12 @@ void HarnessBuilderDialog::mergeGroupCells() {
                     if (syncing_ || i < 0) return;
                     const QString part = box->itemData(i).toString();
                     const LibraryPart* p = sharedLibrary().byId(part);
-                    const QString gauge = p ? p->value(QStringLiteral("gauge")) : QString();
+                    int conductor = 0;
                     for (auto& w : def_.wires)
                         if (ids.contains(w.id)) {
                             w.libPart = part;
-                            if (!gauge.isEmpty()) w.gauge = gauge;
+                            w.partNumber.clear();
+                            if (p) applyHarnessWirePart(w, *p, conductor++);
                         }
                     reloadWires();
                     refreshPreview();
@@ -3912,8 +4003,12 @@ void HarnessBuilderDialog::buildWireRow(int row, const HarnessWire& wRef,
                     // The library's own gauge and colour, when it gives them: a row made of a real
                     // wire is drawn as that wire.
                     if (const LibraryPart* p = sharedLibrary().byId(ww->libPart)) {
-                        const QString g = p->value(QStringLiteral("gauge"));
-                        if (!g.isEmpty()) ww->gauge = g;
+                        int conductor = 0;
+                        if (!ww->bundle.isEmpty()) for (const auto& member : def_.wires) {
+                            if (member.id == ww->id) break;
+                            if (member.bundle == ww->bundle) ++conductor;
+                        }
+                        applyHarnessWirePart(*ww, *p, conductor);
                     }
                 }
                 reloadWires();
@@ -4547,6 +4642,10 @@ void HarnessBuilderDialog::reloadAll() {
         litPins_.clear(); lightPins(root.left(split), root.mid(split + 1).toInt()); pinnedPins_ = litPins_;
     }
     reloadWires();
+    wireTable_->show();
+    wireSplit_->setChildrenCollapsible(false);
+    wireSplit_->setCollapsible(0, false);
+    if (wireSplit_->sizes().value(0) < 100) wireSplit_->setSizes({180, 220});
     reloadLayout();
     reloadShields();
     calmSpinBoxes();

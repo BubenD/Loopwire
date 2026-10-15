@@ -341,7 +341,10 @@ void testStepsRefined() {
         for (QLabel* l : view->widget(1)->findChildren<QLabel*>())
             for (const HarnessConnector& c : dialog.definition().connectors)
                 if (l->text() == c.designator && l->isVisible()) captions << l;
-        std::sort(captions.begin(), captions.end(), [](QLabel* a, QLabel* b) { return a->mapToGlobal(QPoint()).x() < b->mapToGlobal(QPoint()).x(); });
+        std::sort(captions.begin(), captions.end(), [](QLabel* a, QLabel* b) {
+            const QPoint at = a->mapToGlobal(QPoint()), bt = b->mapToGlobal(QPoint());
+            return at.y() == bt.y() ? at.x() < bt.x() : at.y() < bt.y();
+        });
         for (QLabel* l : captions) order << l->text();
     }
     QStringList want;
@@ -361,11 +364,13 @@ void testStepsRefined() {
     check(order == want, "pin map: the connectors in the order they are placed - each side top to bottom");
     // ---- THE WIRES STEP: THE TABLE FULL WIDTH, THE DRAWING UNDER IT ----
     auto* split = dialog.findChild<QSplitter*>(QStringLiteral("harnessBuilderSplit"));
-    const bool under = split && split->orientation() == (dialog.width() < 1120 ? Qt::Vertical : Qt::Horizontal);
+    auto* previewChoice = dialog.findChild<QComboBox*>(QStringLiteral("harnessBuilderPreviewWhere"));
+    const Qt::Orientation chosen = previewChoice && previewChoice->currentIndex() == 1 ? Qt::Vertical : Qt::Horizontal;
+    const bool under = split && split->orientation() == chosen;
     dialog.setStep(0);
     QApplication::processEvents();
-    check(under && split->orientation() == (dialog.width() < 1120 ? Qt::Vertical : Qt::Horizontal),
-          "compact steps: preview is beside the editor on wide windows and below it on narrow windows");
+    check(under && split->orientation() == chosen,
+          "compact steps: preview position follows its menu across every step");
     // ---- DRAINS: to the body or a pin, direct or through a hook-up wire ----
     dialog.setStep(1);   // Wires
     QPushButton* addWire = nullptr;
@@ -1021,6 +1026,11 @@ void testWizardSecondRound() {
     const int splitBefore = harnessBundleBreaks(wizard.definition(), false);
     if (twist) twist->click();
     if (cross) cross->click();
+    check(harnessBundleBreaks(wizard.definition(), false) == splitBefore,
+          "wizard optimisers: toggling criteria leaves the pin order unchanged");
+    auto* applyOptimisation = wizard.findChild<QPushButton*>(QStringLiteral("harnessBuilderApplyOptimisation"));
+    check(applyOptimisation, "wizard optimisers: a separate apply button is available");
+    if (applyOptimisation) applyOptimisation->click();
     QApplication::processEvents();
     std::printf("  wizard optimisers: split twists %d -> %d, crossings %d\n", splitBefore,
                 harnessBundleBreaks(wizard.definition(), false), harnessCrossings(wizard.definition()));

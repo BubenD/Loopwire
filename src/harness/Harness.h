@@ -385,7 +385,7 @@ struct ConnectorSpec {
     bool showPartNumber = true;
 };
 
-ConnectorSpec defaultConnectorSpec(int pinCount = 4);
+ConnectorSpec defaultConnectorSpec(int pinCount = 4, double scale = 1.0);
 ConnectorSpec connectorSpecFromMeta(const QJsonObject& meta);
 void writeConnectorSpec(QJsonObject& meta, const ConnectorSpec& spec);
 

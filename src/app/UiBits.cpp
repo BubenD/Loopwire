@@ -72,8 +72,9 @@ protected:
     }
     void mouseMoveEvent(QMouseEvent* e) override {
         if (!(e->buttons() & Qt::LeftButton)) return;
-        const int want = std::max(section_->minimumSizeHint().height() > 0 ? 40 : 20,
-                                  int(start_ + e->globalPosition().y() - from_));
+        const int floor = std::max(section_->minimumSizeHint().height() > 0 ? 40 : 20,
+                                   section_->property("sectionGripMinimum").toInt());
+        const int want = std::max(floor, int(start_ + e->globalPosition().y() - from_));
         section_->setFixedHeight(want);
         if (QWidget* column = parentWidget()) {
             if (column->layout()) {

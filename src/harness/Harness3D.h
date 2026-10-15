@@ -21,6 +21,7 @@ struct Harness3DItem {
     bool model = false;    // a part shown by its own 3D model
     bool cube = false;     // a part shown as a box, having none
     int texture = 0;       // what it looks made of: a Texture3D
+    double alpha = 1.0;
     bool ownLook = false;  // its colour and texture its own model's, not set by what it is
     QString brick;         // the wizard brick it is (on the sheet: the brick it was placed from)
 };
