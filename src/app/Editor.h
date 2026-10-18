@@ -50,7 +50,15 @@ struct ValidationIssue {
 // Which sort of sleeve the Heatshrink tool makes. Sleeve is recovered at both ends; Cable is one
 // square-cut width for the whole run; CableEnds leaves the cable visible in the middle and puts an
 // editable sleeve over each end; Transition is fitted by crossing the parallel lines it covers.
-enum class ShrinkRouteMode { Sleeve, Cable, CableEnds, Transition };
+// BRAID: a braided sleeve over the run, square at its ends like a cable, its body woven; BRAIDENDS, with heatshrink over
+// its two ends.
+enum class ShrinkRouteMode { Sleeve, Cable, CableEnds, Transition, Braid, BraidEnds };
+inline bool shrinkModeHasEndSleeves(ShrinkRouteMode m) { return m == ShrinkRouteMode::CableEnds || m == ShrinkRouteMode::BraidEnds; }
+inline bool shrinkModeIsBraid(ShrinkRouteMode m) { return m == ShrinkRouteMode::Braid || m == ShrinkRouteMode::BraidEnds; }
+// A cable or a braid over the run - what can have heatshrink on its ends.
+inline bool shrinkModeIsOverRun(ShrinkRouteMode m) {
+    return m == ShrinkRouteMode::Cable || m == ShrinkRouteMode::CableEnds || shrinkModeIsBraid(m);
+}
 
 // The interaction brain: owns the active tool, snapping, selection, undo stack,
 // and in-progress geometry. The CanvasWidget forwards input here and asks it to
@@ -389,6 +397,19 @@ public:
     // compatibility spelling for callers and tests written before there was a third sort.
     void setShrinkRouteMode(ShrinkRouteMode mode) { shrinkMode_ = mode; }
     ShrinkRouteMode shrinkRouteMode() const { return shrinkMode_; }
+    // HEATSHRINK ON THE ENDS of a cable or a braid over the run: the next one drawn with a sleeve over each end, or not.
+    void setShrinkEndSleeves(bool on) {
+        if (shrinkMode_ == ShrinkRouteMode::Cable || shrinkMode_ == ShrinkRouteMode::CableEnds)
+            shrinkMode_ = on ? ShrinkRouteMode::CableEnds : ShrinkRouteMode::Cable;
+        else if (shrinkModeIsBraid(shrinkMode_))
+            shrinkMode_ = on ? ShrinkRouteMode::BraidEnds : ShrinkRouteMode::Braid;
+        emit overlayChanged();
+    }
+    bool shrinkEndSleeves() const { return shrinkModeHasEndSleeves(shrinkMode_); }
+    // THE SELECTED CABLES OR BRAIDS OVER THE RUN given heatshrink on their ends, or theirs taken off - one change, to
+    // undo; and made braided or plain cable.
+    void setSelectionEndSleeves(bool on);
+    void setSelectionBraided(bool on);
     // HOW WIDE A SLEEVE IS DRAWN, which the tool asks for as "Across" while one is being drawn.
     // Readable and settable so a drawing can be set up without typing into the canvas.
     // ENTRY FACES - the line a part is marked as connecting by (its connection line). Shift and a
@@ -1055,6 +1076,8 @@ public:
     // label's own meta, so one placed last week resizes the same as one placed a second ago.
     bool adoptLabelFromSelection();
     void setLabelText(const QString& text);
+    void setLabelTextHeight(double mm);
+    void setLabelTextAlwaysVisible(bool on);
     // THE NOTE READ BACK OFF THE DRAWING. The fit in hand is a copy of what the objects carry, and
     // anything that moves them - the Move tool, a nudge, an array - moves the objects and the note
     // they carry while leaving that copy behind. The joints are drawn off the copy, so they stayed

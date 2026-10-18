@@ -1871,11 +1871,13 @@ int run_drawingspace_tests() {
                 glyphs << a->icon().pixmap(QSize(24, 24)).cacheKey();
             }
             const QString allLabels = labels.join(QStringLiteral(" | "));
+            // HEATSHRINK ON THE ENDS of a cable is a switch on the ribbon now, not a choice of its own; the braided
+            // sleeve over the run took its place.
             check(acts.size() == 4 &&
-                      allLabels.contains(
-                          QStringLiteral("Cable over the run with heatshrink on ends")) &&
+                      allLabels.contains(QStringLiteral("Braided sleeve over the run")) &&
+                      !allLabels.contains(QStringLiteral("with heatshrink on ends")) &&
                       allLabels.contains(QStringLiteral("Transition heatshrink")),
-                  "special: cable-end and transition sleeves are both on the heatshrink menu");
+                  "special: braided sleeve and transition sleeves are both on the heatshrink menu");
             // AND THE WHOLE-RUN CABLE IS CALLED WHAT IT IS. It was "cable over the run with
             // heatshrink", which is the NEXT choice down - the one with heatshrink on its ends -
             // and having the two of them share most of a name meant picking between them by
@@ -1888,10 +1890,22 @@ int run_drawingspace_tests() {
                     distinctGlyphs = glyphs[i] != glyphs[j];
             check(distinctGlyphs, "special: each sleeve choice wears its own picture");
             if (acts.size() == 4 && win.editorForTest()) {
-                acts[2]->trigger();
+                acts[1]->trigger();
+                auto* ends = win.findChild<QCheckBox*>(QStringLiteral("shrinkRouteEndSleeves"));
+                check(ends && !ends->isHidden() && !ends->isChecked() &&
+                          win.editorForTest()->shrinkRouteMode() == ShrinkRouteMode::Cable,
+                      "special: cable over the run - Heatshrink on ends offered beside it, off");
+                if (ends) ends->setChecked(true);
                 check(win.editorForTest()->shrinkRouteMode() == ShrinkRouteMode::CableEnds,
-                      "special: choosing it sets the tool to cable with heatshrink ends");
+                      "special: Heatshrink on ends switched on - the tool draws cable with heatshrink ends");
+                acts[2]->trigger();
+                check(win.editorForTest()->shrinkRouteMode() == ShrinkRouteMode::BraidEnds,
+                      "special: a braided sleeve chosen with the ends switched on - heatshrink on its ends too");
+                if (ends) ends->setChecked(false);
+                check(win.editorForTest()->shrinkRouteMode() == ShrinkRouteMode::Braid,
+                      "special: switched off - the braid cut square at its ends");
                 acts[3]->trigger();
+                check(!ends || ends->isHidden(), "special: a transition has no ends to switch");
                 check(win.editorForTest()->shrinkRouteMode() == ShrinkRouteMode::Transition,
                       "special: choosing Transition heatshrink sets its crossing-line mode");
                 acts[0]->trigger();

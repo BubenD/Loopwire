@@ -1,7 +1,9 @@
 #pragma once
 
 #include <QWidget>
+#include <QTimer>
 
+#include <array>
 #include <functional>
 #include <vector>
 
@@ -28,6 +30,16 @@ public:
     // WHAT THE MIDDLE SAYS, AND DOES when clicked (at the point of the click, for a menu there) - "Move" and nothing,
     // unless set.
     void setMiddle(const QString& label, std::function<void(const QPoint& global)> act);
+    // THE MOVE WHEEL: an arrow along each axis, in the segment on the side that axis runs to on the screen and drawn
+    // that way (`screen`: each axis's share of the view's right and up), and the turns round each axis in the segments
+    // left. Twelve segments.
+    static std::vector<Item> axisItems(const std::array<std::pair<double, double>, 3>& screen,
+                                       const std::function<void(int axis, int sign)>& move,
+                                       const std::function<void(int axis, int sign)>& turn);
+    static void setGlobalAppearance(int sizePercent, bool enlargeOnHover, double hoverScale);
+    static int globalSizePercent();
+    static bool globalEnlargeOnHover();
+    static double globalHoverScale();
     int count() const { return static_cast<int>(items_.size()); }
     const std::vector<Item>& items() const { return items_; }
     double angleOf(int i) const;   // the middle of segment i, degrees counter-clockwise from three o'clock
@@ -36,12 +48,16 @@ public:
     QPointF segmentCentre(int i) const;
     QSize sizeHint() const override;
 
+signals:
+    void geometryChanged();
+
 protected:
     void paintEvent(QPaintEvent*) override;
     void mouseMoveEvent(QMouseEvent* e) override;
     void mousePressEvent(QMouseEvent* e) override;
     void mouseReleaseEvent(QMouseEvent* e) override;
     void leaveEvent(QEvent*) override;
+    void enterEvent(QEnterEvent*) override;
     void resizeEvent(QResizeEvent*) override;
 
 private:
@@ -50,6 +66,10 @@ private:
     std::function<void(const QPoint&)> middleAct_;
     int hover_ = -1;
     int pressed_ = -1;
+    bool pointerOver_ = false;
+    QTimer shrinkTimer_;
+    double drawingScale() const;
+    void updateDrawingSize();
     // A twentieth bigger than first drawn, so the middle has room for its longest word.
     static constexpr double kOuter = 58.8;
     static constexpr double kInner = 24.15;

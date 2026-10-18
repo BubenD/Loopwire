@@ -18,6 +18,25 @@ QString titleOf(const Brick* b) {
     return b->name.isEmpty() ? brickTypeKey(b->type) : b->name;
 }
 
+void constructionFromDrawing(RouteSegment3D& segment,const Entity& entity) {
+    for(const char* key:{"crossSectionMm2","areaMm2"}) {
+        const auto value=entity.meta.value(QLatin1String(key));
+        const double area=value.isDouble() ? value.toDouble() : value.toString().toDouble();
+        if(area>0)segment.conductorAreaMm2=area;
+    }
+    const auto awg=entity.meta.value(QStringLiteral("awg"));
+    if(!awg.isUndefined()) {
+        bool ok=false; const double gauge=awg.isDouble() ? awg.toDouble() : awg.toString().toDouble(&ok);
+        if(awg.isDouble() || ok) {
+            const double d=0.127*std::pow(92.0,(36.0-gauge)/39.0);
+            segment.conductorAreaMm2=3.14159265358979323846*d*d/4.0;
+        }
+    }
+    if(entity.meta.contains(QStringLiteral("minimumBendRadius")))
+        segment.minimumBendRadius=entity.meta.value(QStringLiteral("minimumBendRadius")).toDouble();
+    if(entity.meta.value(QStringLiteral("twistBodyOverCable")).toBool())segment.jacket=true;
+}
+
 } // namespace
 
 QString routeNodeOfPart(const Route3D& route, const QString& brick) {
@@ -73,6 +92,8 @@ DrawingHarnessSource mechanicalDrawingSource(const std::vector<Entity>& entities
         const QString added = source.design.addBrick(BrickType::Run, PartKind::Wire, 1, 0);
         Brick* run = source.design.brick(added);
         run->id = QStringLiteral("drawing:run:") + e.id;
+        // addBrick(Run) starts with a cable jacket. The drawing owns its body type.
+        run->run.stack = {QStringLiteral("wires")};
         const QString id = run->id;
         run->name = QStringLiteral("Drawn cable %1").arg(source.paths.size() + 1);
         run->run.lengthMm = length;
@@ -85,9 +106,11 @@ DrawingHarnessSource mechanicalDrawingSource(const std::vector<Entity>& entities
             run->run.fanStartMm = f.spreadStart ? f.fanLen : 0.0;
             run->run.fanFinishMm = f.spreadFinish ? f.fanLenFinish : 0.0;
             const QString body = e.meta.value(QStringLiteral("twistBody")).toString();
-            if (!body.isEmpty() && body != QLatin1String("none")) run->run.stack << body;
+            // A BRAID OVER IT is drawn as a cable is, and routed as a braid.
+            if (!body.isEmpty() && body != QLatin1String("none"))
+                run->run.stack << (e.meta.value(QStringLiteral("twistBodyBraid")).toBool() ? QStringLiteral("braid") : body);
         } else if (e.meta.value(QStringLiteral("shrunkEnds")).toBool()) {
-            run->run.stack << QStringLiteral("heatshrink");
+            run->run.stack << (sleeveIsBraid(e) ? QStringLiteral("braid") : QStringLiteral("heatshrink"));
             run->run.bodyWidthMm = e.meta.value(QStringLiteral("shrinkWidth")).toDouble(run->run.wireWidthMm);
         }
         source.design.connect(a, id, nullptr, 0, kPortLeft);
@@ -97,12 +120,22 @@ DrawingHarnessSource mechanicalDrawingSource(const std::vector<Entity>& entities
     return source;
 }
 
-int addDrawingToRoute(Route3D& route, const std::vector<Entity>& entities, bool fixedLengths) {
+int addDrawingToRoute(Route3D& route, const std::vector<Entity>& entities, bool fixedLengths, bool labelsOnly) {
     const Route3D before = route;
     const DrawingHarnessSource source = mechanicalDrawingSource(entities);
     int laid = 0;
     for (const Brick& run : source.design.bricks) {
         if (!brickIsSpecial(run.type)) continue;
+        // Refresh older saved routes too, without changing their routed path or cut length.
+        for (auto& segment : route.segments) if (segment.designCable == run.id) {
+            for(const auto& entity:entities) if(QStringLiteral("drawing:run:")+entity.id==run.id)constructionFromDrawing(segment,entity);
+            segment.covering = run.run.stack.size() > 1 ? run.run.stack.last() : QString();
+            segment.coverStart = std::max(0.0, run.run.fanStartMm);
+            segment.coverFinish = std::max(0.0, run.run.fanFinishMm);
+            segment.wires = run.run.wires;
+            segment.wireD = run.run.wireWidthMm;
+        }
+        if (labelsOnly) continue;
         const QStringList starts = source.design.startsOf(run.id), finishes = source.design.finishesOf(run.id);
         if (starts.isEmpty() || finishes.isEmpty()) continue;
         bool exists = false;
@@ -130,6 +163,7 @@ int addDrawingToRoute(Route3D& route, const std::vector<Entity>& entities, bool 
         RouteSegment3D* s = route.segment(id);
         if (!s) continue;
         s->designCable = run.id;
+        for(const auto& entity:entities) if(QStringLiteral("drawing:run:")+entity.id==run.id)constructionFromDrawing(*s,entity);
         s->wires = run.run.wires;
         s->wireD = run.run.wireWidthMm;
         s->covering = run.run.stack.size() > 1 ? run.run.stack.last() : QString();
@@ -166,22 +200,57 @@ int addDrawingToRoute(Route3D& route, const std::vector<Entity>& entities, bool 
             if (segment.designCable != runId || nearest > std::max(20.0, route.diameterOf(segment) * 2.0)) continue;
             const QString group = mask.meta.value(QStringLiteral("labelGroup")).toString();
             const QString labelId = group.isEmpty() ? mask.id : group;
-            if (std::any_of(segment.labels.begin(), segment.labels.end(), [&](const auto& l) { return l.id == labelId; })) break;
+            // A routed cable may have been split at a branch. Update the segment already carrying
+            // this label instead of adding a second copy to the first piece of that cable.
+            const auto carrier = std::find_if(route.segments.begin(), route.segments.end(), [&](const RouteSegment3D& piece) {
+                return piece.designCable == runId && std::any_of(piece.labels.begin(), piece.labels.end(),
+                    [&](const RouteLabel3D& saved) { return saved.id == labelId; });
+            });
+            if (carrier != route.segments.end() && &segment != &*carrier) continue;
             RouteLabel3D label;
             label.id = labelId;
+            label.brick = harness3DPartKey(mask);
+            if (label.brick.isEmpty()) label.brick = QStringLiteral("drawing:special:") + mask.id;
             label.position = bestAlong / std::max(1e-9, bestTotal);
-            label.length = distance(mask.points[0], mask.points[1]);
+            label.length = mask.meta.value(QStringLiteral("labelAlong")).toDouble(distance(mask.points[0], mask.points[1]));
             label.flexible = mask.meta.value(QStringLiteral("labelFlexible")).toBool(true);
             label.stiffness = mask.meta.value(QStringLiteral("labelStiffness")).toDouble(1.0);
-            const double width = distance(mask.points[1], mask.points[2]);
-            if (width < route.diameterOf(segment) * 0.65) label.wire = 0;
+            label.text = mask.meta.value(QStringLiteral("labelCaption")).toString();
+            label.clearShrink = mask.meta.value(QStringLiteral("labelClearShrink")).toBool();
+            label.textAlwaysVisible = mask.meta.value(QStringLiteral("labelTextAlwaysVisible")).toBool(true);
+            label.wire = mask.meta.value(QStringLiteral("labelWire")).toInt(-1);
+            int sleeveMasks = 0;
             for (const auto& e : entities) {
                 const bool same = !group.isEmpty() && e.meta.value(QStringLiteral("labelGroup")).toString() == group;
                 if (!same) continue;
-                if (e.type == EntityType::Text) label.text = e.meta.value(QStringLiteral("text")).toString();
+                if (e.type == EntityType::Wipeout) ++sleeveMasks;
+                if (e.type == EntityType::Text) {
+                    label.text = e.meta.value(QStringLiteral("text")).toString();
+                    label.textHeight = std::max(0.0, e.meta.value(QStringLiteral("height")).toDouble());
+                }
                 if (e.meta.value(QStringLiteral("linetype")).toString() == QLatin1String("HIDDEN")) label.clearShrink = true;
             }
-            segment.labels.push_back(label);
+            // Older drawings did not mark the clear sleeve explicitly; its second mask identifies it.
+            if (sleeveMasks > 1) label.clearShrink = true;
+            auto old = std::find_if(segment.labels.begin(), segment.labels.end(),
+                                    [&](const RouteLabel3D& saved) { return saved.id == labelId; });
+            if (old == segment.labels.end()) segment.labels.push_back(label);
+            else {
+                label.color = old->color;
+                label.textColor = old->textColor;
+                if (old->textVisibilityOverride) {
+                    label.textAlwaysVisible = old->textAlwaysVisible;
+                    label.textVisibilityOverride = true;
+                }
+                if (carrier != route.segments.end() &&
+                    std::count_if(route.segments.begin(), route.segments.end(), [&](const RouteSegment3D& piece) {
+                        return piece.designCable == runId;
+                    }) > 1) label.position = old->position;
+                if (!mask.meta.contains(QStringLiteral("labelFlexible"))) label.flexible = old->flexible;
+                if (!mask.meta.contains(QStringLiteral("labelStiffness"))) label.stiffness = old->stiffness;
+                if(old->stiffnessOverride){label.flexible=old->flexible;label.stiffness=old->stiffness;label.stiffnessOverride=true;}
+                *old = label;
+            }
             break;
         }
     }
@@ -278,6 +347,27 @@ int addHarnessToRoute(Route3D& route, const BrickDesign& design, const std::func
             for (const Leg& leg : sideLegs) fixedLegs.push_back({leg.id, longest - leg.length});
             legs += longest;
         }
+        // ITS CONSTRUCTION FIRST - its wires, what covers it, how thick: they set how it bends, and so how long it is
+        // drawn; fitted to its length before it had them, it would be drawn shorter or longer once it did.
+        for (const QString& id : [&] {
+            QStringList ids{trunk};
+            for (const Leg& leg : fixedLegs) if (!ids.contains(leg.id)) ids << leg.id;
+            return ids;
+        }()) {
+            if (RouteSegment3D* segment = route.segment(id)) {
+                segment->designCable = s.id;
+                if (s.run.stack.size() > 1) segment->covering = s.run.stack.last();
+                segment->braidedShield=s.run.stack.contains(QStringLiteral("braid"));
+                segment->heatshrink=s.run.stack.contains(QStringLiteral("heatshrink"));
+                segment->jacket=s.run.stack.contains(QStringLiteral("cable"));
+                segment->wires = s.run.wires;
+                segment->wireD = s.run.wireWidthMm;
+                segment->coverStart = std::max(0.0, s.run.fanStartMm);
+                segment->coverFinish = std::max(0.0, s.run.fanFinishMm);
+                if (!segment->covering.isEmpty()) segment->diameter = s.run.bodyWidthMm > 0.0 ? s.run.bodyWidthMm
+                    : Route3D::packedDiameter(s.run.wires, s.run.wireWidthMm);
+            }
+        }
         // AS LONG AS THE DESIGN SAYS, where that is longer than the way between them.
         if (const RouteSegment3D* t = route.segment(trunk); t && s.run.lengthMm - legs > route.length(*t) + 1.0)
             route.lengthen(trunk, s.run.lengthMm - legs);
@@ -291,24 +381,6 @@ int addHarnessToRoute(Route3D& route, const BrickDesign& design, const std::func
                 segment->fixedLength = leg.length;
             }
             if (!route.fitFixedLengths()) { route = before; return -2; }
-        }
-        for (const QString& id : [&] {
-            QStringList ids{trunk};
-            for (const Leg& leg : fixedLegs) if (!ids.contains(leg.id)) ids << leg.id;
-            return ids;
-        }()) {
-            if (RouteSegment3D* segment = route.segment(id)) {
-                segment->designCable = s.id;
-                if (s.run.stack.size() > 1) segment->covering = s.run.stack.last();
-                if (!segment->covering.isEmpty()) {
-                    segment->wires = s.run.wires;
-                    segment->wireD = s.run.wireWidthMm;
-                }
-                segment->coverStart = std::max(0.0, s.run.fanStartMm);
-                segment->coverFinish = std::max(0.0, s.run.fanFinishMm);
-                if (!segment->covering.isEmpty()) segment->diameter = s.run.bodyWidthMm > 0.0 ? s.run.bodyWidthMm
-                    : Route3D::packedDiameter(s.run.wires, s.run.wireWidthMm);
-            }
         }
         // Labels defined by the wizard remain on their cable, with diameter derived at draw time.
         if (auto* segment = route.segment(trunk)) {

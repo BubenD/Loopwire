@@ -3642,6 +3642,8 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                                     outer == QLatin1String("heatshrink") && !transitionAsked ? QStringLiteral("heatshrink")
                                                                                              : QStringLiteral("cable"));
                     run.meta.insert(QStringLiteral("twistBodyWidth"), bodyWidth);
+                    // A BRAID OVER IT: drawn as a cable is, hatched as a braid; woven in 3D.
+                    if (outer == QLatin1String("braid")) run.meta.insert(QStringLiteral("twistBodyBraid"), true);
                     // AT AN END THAT DOES NOT FAN - joined to a fanout, or where it splits - the
                     // transition is the end boot, so one asked for at both ends is at both.
                     // IN THE SPECIAL'S OWN TERMS: its start is where its brick says, even where the run was built from

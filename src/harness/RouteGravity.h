@@ -24,6 +24,7 @@ struct CableTension {
 const std::vector<CableTension>& cableTensions();
 // The name of a pull - one of the choices, or so many newtons.
 QString cableTensionName(double newtons);
+std::vector<CableTension> cableTensionsFor(const Route3D& route, const RouteSegment3D& segment);
 // A cable's weight: a bundle of wires is about this dense, in g/cm3.
 constexpr double kCableDensity = 1.8;
 

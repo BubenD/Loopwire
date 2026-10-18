@@ -23,6 +23,18 @@ QString cableTensionName(double newtons) {
     return QStringLiteral("%1 N").arg(newtons, 0, 'g', 4);
 }
 
+std::vector<CableTension> cableTensionsFor(const Route3D& route, const RouteSegment3D& segment) {
+    const double scale=route.tensionReferenceOf(segment)/2.0;
+    if(std::abs(scale-1.0)<1e-9) return cableTensions();
+    std::vector<CableTension> result;
+    for(const auto& choice:cableTensions()) {
+        const double force=choice.newtons*scale;
+        result.push_back({force<=0 ? QStringLiteral("Slack") : QStringLiteral("%1 %2 N")
+            .arg(choice.name.section(QLatin1Char(' '),0,0)).arg(force,0,'g',4),force});
+    }
+    return result;
+}
+
 double tensionOf(const Route3D& r, const RouteSegment3D& s) { return s.tension >= 0.0 ? s.tension : std::max(0.0, r.tension); }
 
 double fallShown(double diameter) { return std::max(1.0, diameter * 0.25); }

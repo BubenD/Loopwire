@@ -1539,6 +1539,16 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         // is worked out here - so pulling a knee re-lays the sleeve instead of dragging one corner of a
         // shape that has forgotten what it is. See shrunkSleeveOutline.
         if (e.meta.value("shrunkEnds").toBool() && e.points.size() >= 2) {
+            // A BRAID OVER THE RUN: its weave on its body, in a finer line than its outline.
+            auto weave = [&] {
+                if (!sleeveIsBraid(e)) return;
+                const QPen was = p.pen();
+                QPen fine = was;
+                fine.setWidthF(std::max(0.0, was.widthF() * 0.6));
+                p.setPen(fine);
+                for (const auto& [from, to] : sleeveBraidStrokes(e)) p.drawLine(vt.toScreen(from), vt.toScreen(to));
+                p.setPen(was);
+            };
             if (e.meta.value(QStringLiteral("shrinkEndsOnly")).toBool()) {
                 // Cable in the middle, a sleeve section over each end, and a transverse face where
                 // each sleeve stops. The model has already worked out every run - including rounded
@@ -1552,6 +1562,7 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                         p.drawPolyline(toScreenPoly(run, vt));
                     }
                 }
+                weave();
                 break;
             }
             // The five numbers on the object, applied to the route in its points - see sleeveOutline,
@@ -1600,6 +1611,7 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                 } else {
                     p.drawPolygon(toScreenPoly(outline, vt));
                 }
+                weave();
                 break;
             }
         }

@@ -64,8 +64,17 @@ void main() {
         } else if (tex < 2.5) {
             scale = 0.95 + 0.07 * hash3(floor(vW * 5.0));
             shine = 0.18 * pow(facing, 10.0);
-        } else {
+        } else if (tex < 3.5) {
             scale = 0.96 + 0.06 * hash3(floor(vW * 3.0));
+        } else {
+            // WOVEN, as braidAt: two sets of strands crossing, one over the other by turns.
+            float a = (vW.x + vW.y + vW.z) * 0.57735 * 0.8;
+            float b = (vW.x - vW.y + vW.z) * 0.57735 * 0.8;
+            float ridgeA = sin(3.14159265 * fract(a));
+            float ridgeB = sin(3.14159265 * fract(b));
+            float top = mod(floor(a) + floor(b), 2.0) > 0.5 ? ridgeA : ridgeB;
+            scale = 0.5 + 0.55 * top;
+            shine = 0.35 * pow(facing, 16.0) * top;
         }
         rgb = clamp(rgb * scale + vec3(shine), 0.0, 1.0);
     }

@@ -57,6 +57,7 @@ struct DrawingHarnessSource {
     QHash<QString, Vec2> positions;
 };
 DrawingHarnessSource mechanicalDrawingSource(const std::vector<Entity>& entities);
-int addDrawingToRoute(Route3D& route, const std::vector<Entity>& entities, bool fixedLengths);
+int addDrawingToRoute(Route3D& route, const std::vector<Entity>& entities, bool fixedLengths,
+                      bool labelsOnly = false);
 
 } // namespace Loopwire

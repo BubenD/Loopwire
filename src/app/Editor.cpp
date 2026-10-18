@@ -110,12 +110,15 @@ Entity heatshrinkFromRoute(const std::vector<Vec2>& route, double width,
     // is nothing - rather than with a flag of its own, so every end that reads a sleeve keeps reading
     // one: the properties panel still offers both ends, and either can be pulled back into a taper
     // afterwards without the object having to change what it is.
-    if (mode == ShrinkRouteMode::Cable) {
+    // A BRAID OVER THE RUN is drawn as a cable is - one width, square at its ends, or with heatshrink over them - and
+    // its body woven.
+    if (shrinkModeIsBraid(mode)) e.meta.insert(QStringLiteral("shrinkBraid"), true);
+    if (mode == ShrinkRouteMode::Cable || mode == ShrinkRouteMode::Braid) {
         e.meta.insert(QStringLiteral("shrinkFaceStart"), width);
         e.meta.insert(QStringLiteral("shrinkFaceEnd"), width);
         e.meta.insert(QStringLiteral("shrinkTaperStart"), 0.0);
         e.meta.insert(QStringLiteral("shrinkTaperEnd"), 0.0);
-    } else if (mode == ShrinkRouteMode::CableEnds) {
+    } else if (mode == ShrinkRouteMode::CableEnds || mode == ShrinkRouteMode::BraidEnds) {
         // A cable with sleeve only over its ends. The route is still the object's points; the cable
         // itself is the narrower pair of rails between the two cover lengths, and each sleeve section
         // keeps the same recovered face and shrunk length the properties panel and end joints edit.
@@ -1785,11 +1788,12 @@ QJsonObject Editor::drawingContext() const {
     auto collect=[&](const std::vector<Entity>& entities,int layout){for(const Entity& e:entities)if(!drawingFieldKey(e.meta.value(QStringLiteral("field")).toString()).isEmpty())
         fields.append(QJsonObject{{QStringLiteral("layout"),layout},{QStringLiteral("id"),e.id},{QStringLiteral("text"),e.meta.value(QStringLiteral("text"))}});};
     collect(owner->entities(),-1);for(int i=0;i<static_cast<int>(owner->layouts().size());++i)collect(owner->layouts()[static_cast<size_t>(i)].paperEntities,i);
-    return {{QStringLiteral("drawingDetails"),owner->drawingDetails()},{QStringLiteral("fields"),fields}};
+    return {{QStringLiteral("drawingDetails"),owner->drawingDetails()},{QStringLiteral("fields"),fields},{QStringLiteral("routing3d"),owner->routing3d()}};
 }
 void Editor::restoreDrawingContext(const QJsonObject& context) {
     Document* owner=drawingOwner();if(!owner||!context.contains(QStringLiteral("drawingDetails")))return;
     owner->drawingDetails()=context.value(QStringLiteral("drawingDetails")).toObject();
+    if(context.contains(QStringLiteral("routing3d")))owner->routing3d()=context.value(QStringLiteral("routing3d")).toObject();
     for(const QJsonValue& value:context.value(QStringLiteral("fields")).toArray()){
         const QJsonObject field=value.toObject();const int layout=field.value(QStringLiteral("layout")).toInt(-1);
         std::vector<Entity>* entities=layout<0?&owner->entities():layout<static_cast<int>(owner->layouts().size())?&owner->layouts()[static_cast<size_t>(layout)].paperEntities:nullptr;
@@ -4248,10 +4252,12 @@ void Editor::setLabelText(const QString& text) {
     if (!adoptLabelFromSelection()) return;
     QString leaderId;
     Entity caption;
+    double textHeight = 0.0;
     for (const Entity& part : doc_->entities())
         if (part.meta.value(labelGroupKey()).toString() == labelGroup_) {
             caption.layer = part.layer;
             leaderId = part.meta.value(QStringLiteral("labelLeaderId")).toString();
+            textHeight = part.meta.value(QStringLiteral("labelTextHeight")).toDouble();
             break;
         }
     pushUndo();
@@ -4271,6 +4277,7 @@ void Editor::setLabelText(const QString& text) {
         caption.id = uid();
         caption.meta.insert(QStringLiteral("labelCaption"), text);
         caption.meta.insert(QStringLiteral("labelCaptionEntity"), true);
+        if (textHeight > 0.0) caption.meta.insert(QStringLiteral("labelTextHeight"), textHeight);
         stampLabelFit(caption, labelGroup_, labelFit_);
         layoutLabelCaption(caption);
         entities.push_back(caption);
@@ -4283,26 +4290,78 @@ void Editor::setLabelText(const QString& text) {
     emit selectionChanged();
 }
 
+void Editor::setLabelTextAlwaysVisible(bool on) {
+    if (!doc_ || selected_.empty()) return;
+    QString group;
+    for (const QString& id : selected_) {
+        const Entity* part = entityById(id);
+        if (!part) return;
+        const QString ownGroup = part->meta.value(labelGroupKey()).toString();
+        if (ownGroup.isEmpty() || (!group.isEmpty() && ownGroup != group)) return;
+        group = ownGroup;
+    }
+    // Text orientation changes metadata only; it must not require a recovered resize fit.
+    pushUndo();
+    for (Entity& part : doc_->entities())
+        if (part.meta.value(labelGroupKey()).toString() == group)
+            part.meta.insert(QStringLiteral("labelTextAlwaysVisible"), on);
+    doc_->setDirty(true);
+    emit changed();
+    emit selectionChanged();
+}
+
+void Editor::setLabelTextHeight(double mm) {
+    if (!adoptLabelFromSelection() || mm <= 0.0) return;
+    pushUndo();
+    QString leaderId;
+    for (Entity& part : doc_->entities()) {
+        if (part.meta.value(labelGroupKey()).toString() != labelGroup_) continue;
+        part.meta.insert(QStringLiteral("labelTextHeight"), mm);
+        if (leaderId.isEmpty()) leaderId = part.meta.value(QStringLiteral("labelLeaderId")).toString();
+        if (part.meta.value(QStringLiteral("labelCaptionEntity")).toBool()) layoutLabelCaption(part);
+    }
+    if (Entity* leader = entityById(leaderId)) leader->meta.insert(QStringLiteral("size"), mm);
+    doc_->setDirty(true);
+    emit changed();
+    emit selectionChanged();
+}
+
 bool Editor::takeLabelCaptionForLeader(Entity& leader) {
     if (!doc_ || leader.type != EntityType::Leader || leader.points.empty()) return false;
     const Vec2 tip = leader.points.front();
     QString group, text;
-    // Hit only the opaque label, never the clear sleeve outside it.
+    double textHeight = 0.0;
+    // The leader may land on the printed label or on its clear shrink sleeve.
     for (const Entity& part : doc_->entities()) {
-        if (!part.meta.value(QStringLiteral("labelMask")).toBool()) continue;
+        const QString candidate = part.meta.value(labelGroupKey()).toString();
+        if (candidate.isEmpty() || part.points.size() < 3 ||
+            (!part.meta.value(QStringLiteral("labelMask")).toBool() &&
+             part.type != EntityType::Wipeout && part.type != EntityType::Rect)) continue;
         bool hit = pointInPolygon(part.points, tip);
         for (size_t i = 0; !hit && i < part.points.size(); ++i)
-            hit = closestPointOnSegment(tip, part.points[i], part.points[(i + 1) % part.points.size()]).distance < 1e-5;
+            hit = closestPointOnSegment(tip, part.points[i], part.points[(i + 1) % part.points.size()]).distance <= 1.0;
         if (!hit || !part.meta.value(QStringLiteral("labelLeaderId")).toString().isEmpty()) continue;
-        text = part.meta.value(QStringLiteral("labelCaption")).toString();
-        if (text.isEmpty()) continue;
-        group = part.meta.value(labelGroupKey()).toString();
+        group = candidate;
+        for (const Entity& labelPart : doc_->entities()) {
+            if (labelPart.meta.value(labelGroupKey()).toString() != group) continue;
+            if (text.isEmpty()) text = labelPart.meta.value(QStringLiteral("labelCaption")).toString();
+            if (textHeight <= 0.0) textHeight = labelPart.meta.value(QStringLiteral("labelTextHeight")).toDouble();
+        }
+        if (text.isEmpty()) { group.clear(); continue; }
         break;
     }
     if (group.isEmpty()) return false;
     if (leader.id.isEmpty()) leader.id = uid();
     leader.meta.insert(QStringLiteral("text"), text);
     leader.meta.insert(QStringLiteral("labelSourceGroup"), group);
+    if (textHeight <= 0.0)
+        for (const Entity& part : doc_->entities())
+            if (part.meta.value(labelGroupKey()).toString() == group &&
+                part.meta.value(QStringLiteral("labelCaptionEntity")).toBool()) {
+                textHeight = part.meta.value(QStringLiteral("height")).toDouble();
+                break;
+            }
+    if (textHeight > 0.0) leader.meta.insert(QStringLiteral("size"), textHeight);
     for (Entity& part : doc_->entities())
         if (part.meta.value(labelGroupKey()).toString() == group)
             part.meta.insert(QStringLiteral("labelLeaderId"), leader.id);
@@ -18431,12 +18490,12 @@ Entity Editor::shrinkDraftEntity(const std::vector<Vec2>& route) const {
         radii[route.size() - 2] = cornerRadius_;
     }
     Entity e = heatshrinkFromRoute(route, draftShrinkWidth(), radii, shrinkMode_);
-    if (shrinkMode_ != ShrinkRouteMode::Cable) {
+    if (shrinkMode_ != ShrinkRouteMode::Cable && shrinkMode_ != ShrinkRouteMode::Braid) {
         for (int end = 0; end < 2; ++end) {
             const QString suffix = end ? QStringLiteral("End") : QStringLiteral("Start");
             if (shrinkFaces_[end] > 0.0) e.meta.insert(QStringLiteral("shrinkFace") + suffix, shrinkFaces_[end]);
             if (shrinkRecover_[end] >= 0.0) e.meta.insert(QStringLiteral("shrinkTaper") + suffix, shrinkRecover_[end]);
-            if (shrinkMode_ == ShrinkRouteMode::CableEnds && shrinkCover_ > 0.0)
+            if (shrinkModeHasEndSleeves(shrinkMode_) && shrinkCover_ > 0.0)
                 e.meta.insert(QStringLiteral("shrinkCover") + suffix, shrinkCover_);
         }
     }
@@ -19553,6 +19612,53 @@ void Editor::setSelectedShieldLegLength(double length) {
         e->points.back() = edge + dir.normalized() * length;
     }
     if (!any) return;
+    doc_->setDirty(true);
+    emit changed();
+}
+
+void Editor::setSelectionEndSleeves(bool on) {
+    std::vector<Entity*> sleeves;
+    for (Entity* e : selectedEntities())
+        if (e->type == EntityType::Polyline && e->meta.value(QStringLiteral("shrunkEnds")).toBool() &&
+            !e->meta.value(QStringLiteral("shrinkTransition")).toBool() &&
+            e->meta.value(QStringLiteral("shrinkEndsOnly")).toBool() != on)
+            sleeves.push_back(e);
+    if (sleeves.empty()) return;
+    pushUndo();
+    for (Entity* e : sleeves) {
+        const double across = e->meta.value(QStringLiteral("gap")).toDouble(e->meta.value(QStringLiteral("shrinkWidth")).toDouble(6.0));
+        for (const char* key : {"shrinkFaceStart", "shrinkFaceEnd", "shrinkTaperStart", "shrinkTaperEnd"}) e->meta.remove(QLatin1String(key));
+        if (on) {
+            // A SLEEVE OVER EACH END, recovered onto the cable as a new one is drawn: the cable shows between them.
+            e->meta.insert(QStringLiteral("shrinkEndsOnly"), true);
+            e->meta.insert(QStringLiteral("shrinkCoverStart"), 20.0);
+            e->meta.insert(QStringLiteral("shrinkCoverEnd"), 20.0);
+            e->meta.insert(QStringLiteral("shrinkCableWidth"), across * 0.82);
+        } else {
+            // TAKEN OFF: the cable, or the braid, one width, square at its ends.
+            for (const char* key : {"shrinkEndsOnly", "shrinkCoverStart", "shrinkCoverEnd", "shrinkCableWidth"}) e->meta.remove(QLatin1String(key));
+            e->meta.insert(QStringLiteral("shrinkFaceStart"), across);
+            e->meta.insert(QStringLiteral("shrinkFaceEnd"), across);
+            e->meta.insert(QStringLiteral("shrinkTaperStart"), 0.0);
+            e->meta.insert(QStringLiteral("shrinkTaperEnd"), 0.0);
+        }
+    }
+    doc_->setDirty(true);
+    emit changed();
+}
+
+void Editor::setSelectionBraided(bool on) {
+    std::vector<Entity*> sleeves;
+    for (Entity* e : selectedEntities())
+        if (e->type == EntityType::Polyline && e->meta.value(QStringLiteral("shrunkEnds")).toBool() &&
+            !e->meta.value(QStringLiteral("shrinkTransition")).toBool() && e->meta.value(QStringLiteral("shrinkBraid")).toBool() != on)
+            sleeves.push_back(e);
+    if (sleeves.empty()) return;
+    pushUndo();
+    for (Entity* e : sleeves) {
+        if (on) e->meta.insert(QStringLiteral("shrinkBraid"), true);
+        else e->meta.remove(QStringLiteral("shrinkBraid"));
+    }
     doc_->setDirty(true);
     emit changed();
 }

@@ -46,8 +46,9 @@ struct Section3D {
 // One mesh to draw, in its colour; see-through below an alpha of one, and cut by the section or not.
 // WHAT A SURFACE LOOKS MADE OF: brushed metal (fine streaks and a shine), plastic (a fine grain and a soft shine), matte
 // (a grain and no shine) - laid on in the picture, from where each point is, so nothing has to be unwrapped.
+// BRAID: a woven sleeve - two sets of strands crossing, each over then under the other, a shine along each strand.
 namespace Texture3D {
-enum : int { None = 0, Metal = 1, Plastic = 2, Matte = 3 };
+enum : int { None = 0, Metal = 1, Plastic = 2, Matte = 3, Braid = 4 };
 }
 
 struct DrawItem3D {
@@ -60,6 +61,8 @@ struct DrawItem3D {
 
 // The shade a texture gives a point: its colour scaled by this, and white added by shine.
 void textureAt(int texture, const V3& at, const V3& normal, const V3& light, const V3& toEye, double& scale, double& shine);
+// THE WEAVE AT A POINT: how high each of the two strands there stands (0 to 1), and which lies over the other.
+void braidAt(const V3& at, double& ridgeA, double& ridgeB, int& over);
 
 // THE PICTURE: every triangle of every item, nearest in front (a depth buffer), each lit by how squarely it faces the
 // light - or, as wireframe, its edges alone. See-through items over the rest. Software throughout: the same picture

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "app/NavWheel.h"
+#include "app/Sketch2DDialog.h"
 #include "geometry/Environment3D.h"
 #include "geometry/PartModel3D.h"
 #include "harness/Harness3D.h"
@@ -24,7 +26,6 @@ class QToolButton;
 namespace Loopwire {
 
 class View3DCanvas;
-class NavWheel;
 
 // BUILD A PART'S 3D MODEL: its solids put together in a 3D view of their own. Simple solids added and sized, made
 // from the part's drawing and pinout, each moved, turned, scaled, mirrored, copied in a row or round, coloured, given
@@ -60,6 +61,27 @@ public:
     bool finishSketch(double depth);
     void cancelSketch();
     bool sketching() const { return sketchPlane_ >= 0; }
+    // THE 2D SKETCH: drawn flat on a plane, or on a face clicked (with the face tool on), in a window of its own, then
+    // made a solid - new, or combined with the one selected (the one whose face it is). A sketch selected, drawn again.
+    void openSketch2D(int plane);
+    void setFaceSketchTool(bool on);
+    bool faceSketchTool() const { return faceSketch_; }
+    void editSelectedSketch();
+    // WHAT A 2D SKETCH MAKES: a solid for each outline, with its holes - combined with `target` (an id) as it says. With
+    // `replace` (a body's index) the first of them is that body drawn again.
+    bool addSketchResult(const Sketch2DDialog::Result& result, const QString& target, int replace = -1);
+    // A sketch body as the 2D sketch begins from it.
+    static Sketch2DDialog::Result sketchOf(const Body3D& body);
+    // COMBINED: the one selected added to another, taken out of it, or kept only where it meets it; or a solid of its
+    // own again.
+    bool combineSelected(BodyOp op, int target);
+    void separateSelected();
+    // THE WHEEL: the view's turns, tilts, rolls and zooms - or, from its middle, the arrows that move the one selected
+    // a step along each axis and turn it, each where its axis runs on the screen.
+    NavWheel* wheel() const { return wheel_; }
+    void setWheelMoving(bool on);
+    bool wheelMoving() const { return wheelMoving_; }
+    void setMoveStep(double mm);
     // PINS PUT BY HAND: the next clicks on a face put pins (1) or sockets (2) there - 0 off. Numbered in turn.
     void setPinTool(int tool);
     bool placePinAt(const V3& point, const V3& normal, bool female);
@@ -84,6 +106,8 @@ private:
     void fromPanel();
     void rebuild(bool fit);
     void exportModel();
+    void buildMoveWheel();
+    void combineMenu(BodyOp op);
 
     LibraryPart part_;
     PartModel3D model_;
@@ -117,6 +141,22 @@ private:
     QCheckBox* female_ = nullptr;
     QSpinBox* number_ = nullptr;
     QLabel* numberLabel_ = nullptr;
+    // A SKETCH: both ways, the axis a revolved one turns round, drawn again. COMBINED: how, and with which.
+    QCheckBox* both_ = nullptr;
+    QComboBox* axis_ = nullptr;
+    QLabel* axisLabel_ = nullptr;
+    QPushButton* editSketch_ = nullptr;
+    QComboBox* op_ = nullptr;
+    QComboBox* target_ = nullptr;
+    QLabel* targetLabel_ = nullptr;
+    // The wheel's two rings (not saved): the view's, and the arrows that move the one selected; each step.
+    std::vector<NavWheel::Item> viewWheel_;
+    bool wheelMoving_ = false;
+    double wheelTurn_ = 15.0;
+    QDoubleSpinBox* moveStep_ = nullptr;
+    // Sketch on the face clicked (not saved), and its button.
+    bool faceSketch_ = false;
+    QToolButton* faceSketchButton_ = nullptr;
     // The sketch being drawn (not saved): its plane (-1 none), where the plane is, its points, a rectangle's or a
     // circle's first click; the bar it is drawn with.
     int sketchPlane_ = -1;

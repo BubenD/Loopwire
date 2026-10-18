@@ -52,9 +52,11 @@ const Topic kTopics[] = {
      "degrees, each going all the way round (-180&deg; to 180&deg;, and on). Their arrows step by 15&deg;; type any "
      "figure.</p>"
      "<p><b>Back to a known view:</b> <i>Iso</i>, <i>Top</i>, <i>Front</i>, <i>Side</i> and <i>Fit</i>.</p>"
+     "<p><b>Numpad:</b> 1 Front, 3 Right, 7 Top, 5 Iso; Ctrl shows the opposite side. 4/6 turn and 8/2 tilt. "
+     "These rotations animate and keep the zoom unchanged. Shift+4/6/8/2 pans. 0 fits the view; + and - zoom.</p>"
      "<p><b>The wheel</b> in the picture's top right corner does it by clicks: <i>Turn</i> left and right, "
      "<i>Tilt</i> up and down, <i>Roll</i> either way, <i>Zoom</i> in and out, <i>Fit</i>, <i>Iso</i>, and "
-     "<i>Lock</i>. Each click turns it by a step - 15&deg;, or what <i>Options</i> (the cog, or the wheel's middle) "
+     "<i>Lock</i>. The centre switches between View and Move. Each click turns it by a step - 15&deg;, or what <i>Options</i> (the cog) "
      "says: 5&deg;, 15&deg;, 45&deg; or 90&deg;. <i>Wheel</i> in the top row shows or hides it.</p>"},
     {"3. Where a click lands - the faces, the ground, the section",
      ":/help3d/plane.gif",
@@ -105,8 +107,12 @@ const Topic kTopics[] = {
      ":/help3d/bend.gif",
      "<p><b>A cable bends at the corners you click</b> while laying it - each one rounded on the bend radius, as a real "
      "cable bends, rather than turning on a point.</p>"
-     "<p><b>Bend R</b> is the tightest it may bend. <i>Auto</i> is six times its diameter; type a radius to bend wider "
-     "or tighter. <b>&Oslash;</b> is the diameter (the table sets one cable's own). A corner with no room for its bend "
+     "<p><b>Bend R</b> sets an additional minimum. <i>Auto</i> estimates the radius from overall diameter, conductor "
+     "AWG/cross-section, wire count, jacket, braided shield and heatshrink. Set these under <b>Bend construction</b> "
+     "in the cable properties; a specified cable minimum takes priority over a smaller estimate. Increasing tension "
+     "makes wider arcs and longer connector exits. Tension grades scale with the cable construction. "
+     "These are routing estimates; use the cable's specified minimum when known. <b>&Oslash;</b> is the diameter "
+     "(the table sets one cable's own). A corner with no room for its bend "
      "is counted under the table.</p>"
      "<p><b>Changing your mind:</b> while laying, <i>Backspace</i> takes back the last corner. Once laid, <i>Undo</i> "
      "(Ctrl+Z) takes a change back. To take a laid cable another way, <i>Lock view</i> and drag it: a corner is "
@@ -211,7 +217,8 @@ const Topic kTopics[] = {
      "<p><i>Display</i> (on the ribbon, or <i>Options</i> on the wheel) sets what is behind the picture - dark, light, "
      "a gradient either way, or a colour of your own (kept for next time) - and how it is shaded: shaded, wireframe, "
      "and the model see-through so the harness shows in it. The <i>Opacity</i> slider sets the whole model; for one "
-     "solid (or a harness part) on its own, right-click it, <i>Opacity of...</i>, and choose how solid it is.</p>"
+     "solid (or a harness part) on its own, right-click it and choose <i>Part transparency</i>. In the Parts list, the eye shows or hides a part; "
+     "the half circle makes it transparent. Hover over an active half circle for 1.5 seconds to adjust its transparency slider.</p>"
      "<p>The view's name is in the picture's top left corner: Top, Bottom, Front, Back, Left, Right, Iso - or Custom "
      "once it is turned away from those.</p>"
      "<p>At the side of the window the 3D view is the picture alone, with <i>Refresh</i> and <i>Open below</i> over it; "
@@ -221,14 +228,23 @@ const Topic kTopics[] = {
      "solid of the model or a part of the harness.</p>"
      "<p><b>Saved with the drawing:</b> the route, the model it is routed in (found again where it was, or beside the "
      "drawing), and how it was shown - the view, gravity and its direction, the solids hidden or see-through, the "
-     "section and the rulers.</p>"},
+     "section and the rulers. Use <b>Drawing &gt; Save routing</b> or <b>Ctrl+S</b> to write them into the DWX file.</p>"
+     "<p><b>Several harnesses in one system:</b> in the 3D ribbon's <b>Drawing</b> group, turn on <b>System design</b>, "
+     "then choose <b>Add drawings</b> and select the harness DWX files. For a drawing with saved routing, choose "
+     "<b>Initial</b> for its original shape or <b>Routed</b> for the saved 3D shape. The Properties view lists the "
+     "drawing feeds; select a row and <b>Remove</b> to take it out. Save routing stores the combined system in the "
+     "active DWX. The source drawings are unchanged; feeds are snapshots and do not automatically follow later source edits. "
+     "Turn off System design to return to this drawing's separate harness route.</p>"
+     "<p><b>2D views:</b> choose <b>Drawing &gt; 2D views</b>, select Top (XY), Front (XZ) and/or Side (YZ), "
+     "and save a DWX. Each view is editable linework at 1:1 scale, arranged beside the others, with label text. "
+     "Visible environment parts can be included. Hidden parts, hidden edges and surface mesh lines are omitted. This is a projected view, not a flattened manufacturing harness.</p>"},
     {"16. Tension and gravity - where a cable falls",
      ":/help3d/gravity.gif",
      "<p><b>Tension</b> is how taut a cable is put in: Slack, Loose (0.5 N), Normal (2 N), Firm (10 N) or Taut (50 N). "
      "<i>Cable tension</i> sets it for every cable with none of its own. One cable's own: click it and choose its "
-     "<i>Tension</i> in the <b>Cable</b> box on the right (or in the table's <i>Tension</i> column); <i>As all cables</i> "
-     "takes it back to the common one. A taut cable is stiff: pulled or moved, it keeps its form and bows round smoothly instead of kinking "
-     "or looping - and still follows the pointer; a slack one follows it loosely.</p>"
+     "<i>Tension</i> in the <b>Cable</b> box on the right (or in the table's <i>Tension</i> column). The field shows the effective tension. "
+     "Higher tension requests a wider bend radius, making broader arcs while the cable follows the pointer freely. "
+     "It does not add angular drag resistance. Available cut length and blocking keep-outs still limit reach.</p>"
      "<p><b>Attach to surface</b> lays the cable selected (every cable, where none is) on the faces under it, the way "
      "gravity pulls (<i>Down</i>) - onto a wall beside it where there is nothing under it near - and holds it there. "
      "<i>Undo</i> takes it back, <i>Redo</i> (Ctrl+Y) puts it back.</p>"
@@ -239,7 +255,7 @@ const Topic kTopics[] = {
      "is laid so long, its ends where they are; its <i>&Oslash;</i> (A: as all cables, or as its wires pack to); its "
      "<i>Wires</i> and <i>Wire &Oslash;</i>; <i>Wire colours</i> - each its own (<i>Each...</i> to choose each wire's) "
      "or all one colour; its <i>Tension</i>; its <i>Colour</i>.</p>"
-     "<p><b>A real harness:</b> open it in the harness wizard (or place it on the sheet), then <i>Route from harness</i> "
+     "<p><b>A real harness:</b> open it in the harness wizard (or place it on the sheet), then <i>Harness route</i> "
      "(right, by Link): a connector for each of its parts, where the harness is drawn in 3D, and its cables between "
      "them - through a branch where a cable goes to several parts - each as long as the design says. Drag (Move) each "
      "connector to where it goes in the model, add clips, <i>Attach to surface</i>; then <i>Lengths to harness</i> gives "
@@ -259,7 +275,7 @@ const Topic kTopics[] = {
      "model was drawn another way up. Nothing falls? Every cable is held or lies on something - add a clip where one "
      "does fall.</p>"},
     {"17. Keep-outs - levels and zones no cable may go through",
-     "",
+     ":/help3d/keepouts.gif",
      "<p>A <b>keep-out</b> is a place no cable may go: a <b>level</b> - a plane across X, Y or Z, at a place along it (a "
      "lid, a floor not to be crossed, a height to keep under) - or a <b>zone</b>, a box (a hot part, a moving part, "
      "another team's space).</p>"
@@ -270,12 +286,12 @@ const Topic kTopics[] = {
      "it, stretching it. The route stays as it was, and the status line says why.</li>"
      "<li><b>Alert</b> - it is allowed, but the cable is marked where it goes in, a red warning runs along the top of "
      "the picture, and the status line names the cable and the keep-out.</li></ul>"
-     "<p>A blocking level is drawn faint red, an alerting one orange. <i>Show keep-outs</i> (or <i>Show</i> on the "
-     "ribbon) hides them and shows them again - they still apply while hidden. <i>Example:</i> a lid 80 mm up - a level "
+     "<p>A blocking level is drawn faint red, an alerting one orange. <i>Show keep-out</i> on the "
+     "ribbon hides them and shows them again - they still apply while hidden. <i>Example:</i> a lid 80 mm up - a level "
      "Z at 80, Block: no cable can be laid or pulled over the rim.</p>"
      "<p>Keep-outs are saved with the drawing, with the route; <i>Undo</i> takes back adding, changing or deleting one.</p>"},
     {"18. What every command does",
-     "",
+     ":/help3d/commands.gif",
      "<p><b>The top row - what is shown, and the view</b></p><dl>"
      "<dt><i>The drawing / The harness wizard</i></dt><dd>Which harness to show: the one on the sheet, or the one open in "
      "the wizard.</dd>"
@@ -290,8 +306,8 @@ const Topic kTopics[] = {
      "<dt><i>Full screen</i></dt><dd>The view in a window of its own, filling the screen.</dd>"
      "<dt><i>Lock view</i></dt><dd>Hold the view still, so a drag moves a cable, a corner or a connector.</dd>"
      "<dt><i>Flip</i></dt><dd>Look from the opposite side, through the same middle.</dd>"
-     "<dt><i>Parts...</i></dt><dd>A list of the model's parts, each ticked to show it or unticked to hide it. A "
-     "hidden part is not drawn, and clicks and cables go through it.</dd>"
+     "<dt><i>Parts</i></dt><dd>Open the parts list. Use the eye to show or hide a part and the half circle for transparency. "
+     "Hidden parts are omitted from 2D projected views.</dd>"
      "</dl><p><b>Environment - the model routed in</b></p><dl>"
      "<dt><i>Load...</i></dt><dd>Read the model (STEP, STL, OBJ); a bar shows how far the reading has got, up to "
      "100.</dd>"
@@ -299,7 +315,7 @@ const Topic kTopics[] = {
      "<dt><i>Show</i></dt><dd>Show or hide the model.</dd>"
      "<dt><i>Opacity</i></dt><dd>How solid the model is drawn - to see through it.</dd>"
      "<dt><i>Harness</i></dt><dd>Show or hide the harness from the drawing.</dd>"
-     "<dt><i>Section X / Y / Z</i> and its slider</dt><dd>Cut the model open across that axis; the slider moves the "
+     "<dt><i>Section X / Y / Z</i> and its slider</dt><dd>Cut the environment and harness open across that axis; the slider moves the "
      "cut. A faint plane shows the cut, only across the parts it goes through.</dd>"
      "</dl><p><b>Route - laying the cables</b></p><dl>"
      "<dt><i>Select</i></dt><dd>Pick a point of the model, or select a node or a cable (to turn a connector, or "
@@ -321,7 +337,7 @@ const Topic kTopics[] = {
      "Taut (50 N). <i>Cable tension</i> is for every cable that has none of its own. To give one cable its own, click "
      "it and choose its <i>Tension</i> in the Cable box on the right, or in the table's <i>Tension</i> column. The less "
      "tension, the more a cable sags between where it is held; Slack, it hangs by its own length.</dd>"
-     "<dt><i>Route from harness</i></dt><dd>The harness open in the wizard put in as a route - its parts and cables - "
+     "<dt><i>Harness route</i></dt><dd>The harness open in the wizard put in as a route - its parts and cables - "
      "to move into the model.</dd>"
      "<dt><i>Attach</i></dt><dd>Attach to surface: lay the cable selected (all of them, where none is) on the faces "
      "under it, the way gravity pulls, and hold it there.</dd>"
@@ -335,7 +351,7 @@ const Topic kTopics[] = {
      "<dt><i>Measure</i></dt><dd>A ruler: click two points. It shows the distance straight between them, along X, Y "
      "and Z, and in the XY, YZ and XZ planes. Esc takes it away.</dd>"
      "<dt><i>&Oslash;</i></dt><dd>A cable's diameter (the table sets one cable's own).</dd>"
-     "<dt><i>Bend R</i></dt><dd>The tightest a cable may bend; Auto, six times its diameter.</dd>"
+     "<dt><i>Bend R</i></dt><dd>The construction-based bend minimum; tension widens the bend further.</dd>"
      "<dt><i>Lead</i></dt><dd>How far a cable comes straight out of a connector before it may turn.</dd>"
      "<dt><i>Undo</i></dt><dd>Take back the last change to the route (Ctrl+Z).</dd>"
      "<dt><i>Redo</i></dt><dd>Put back what Undo took back (Ctrl+Y or Ctrl+Shift+Z).</dd>"
@@ -344,8 +360,9 @@ const Topic kTopics[] = {
      "level or upright plane at the place given - to lay a cable through the air.</dd>"
      "</dl><p><b>The panel on the right</b></p><dl>"
      "<dt>The parts list</dt><dd>The harness's parts: choose one, and the Connector tool puts that part.</dd>"
-     "<dt><i>Link / Unlink</i></dt><dd>Make the node selected that part's, or no part's.</dd>"
-     "<dt><i>Lengths to harness</i></dt><dd>Give each cable of the harness its length along the route.</dd>"
+     "<dt><i>Link</i></dt><dd>Select a 3D connector and a harness part in the right list, then Link to assign that part to the connector.</dd>"
+     "<dt><i>Unlink</i></dt><dd>Remove that assignment. The 3D connector and the 2D part remain.</dd>"
+     "<dt><i>Lengths to harness</i></dt><dd>Copy the measured 3D cable lengths back to the linked harness design. Use Save routing to save the route itself in the DWX file.</dd>"
      "<dt><i>Connector: Points, Turned, Tilted, Spun</i></dt><dd>Which way the connector selected points, and how it "
      "is turned round its own axis.</dd>"
      "<dt>The table</dt><dd>Each cable, its length, and its diameter (type one in to set it).</dd>"
@@ -358,7 +375,35 @@ const Topic kTopics[] = {
      "<dt>Ctrl+Y</dt><dd>Redo.</dd>"
      "<dt>F11</dt><dd>Full screen, and back.</dd>"
      "</dl>"},
-    {"19. Words used here",
+    {"19. Link a connector to a harness part", ":/help3d/link.gif",
+     "<ol><li>Use Select to click the connector in 3D.</li><li>Choose its matching harness part in the right list.</li>"
+     "<li>Press Link. This associates the existing routing node with that part, so the route can supply its cable lengths to the harness.</li></ol>"},
+    {"20. Unlink a connector", ":/help3d/unlink.gif",
+     "<p>Select the 3D connector and press Unlink. This removes its harness assignment. It does not delete either the routing connector or the 2D part. Undo restores the assignment.</p>"},
+    {"21. Label text and stiffness", ":/help3d/labels.gif",
+     "<p>Select a cable, then choose its label in the right properties. Flexible follows the cable. Stiff keeps the label span straighter; Stiffness controls how strongly. "
+     "Check All to apply type and stiffness changes to every label in the route. Label colour and Text colour are separate choices. "
+     "Text always visible turns the ink toward the viewer; uncheck it to rotate with the harness.</p>"},
+    {"22. Stretch by pinpoints", ":/help3d/pinpoints.gif",
+     "<ol><li>Select a cable and open Stretch &gt; Stretch by pinpoints.</li><li>Click points in order from the cable's first end toward its second end. "
+     "Each point has a ball and numbered flag. Route to land sets the placement plane.</li><li>Press Enter or the orange Stretch button. The cable is routed through all points with its ends held.</li></ol>"
+     "<p>Backspace removes the last point; Esc cancels. A fixed cable that is too short stays unchanged, and the message gives the required length and shortfall in mm. "
+     "Extra fixed length bows between the points. Solid obstacles and blocking keep-outs can prevent the operation.</p>"},
+    {"23. Drawing, saving and 2D views", ":/help3d/drawing.gif",
+     "<p>Open Drawing on the 3D Preview ribbon. Save routing saves positions, cable dimensions, labels and routing in the DWX file. "
+     "System link switches to system routing; Add drawings supplies harness DWX files and lets you choose their initial or saved routed geometry. "
+     "Create 2D views exports Top, Front, Side and/or Current view as editable contours. Current view uses the on-screen viewing angle at true scale. Visible inner contours and harness wires are included; hidden parts, hidden lines and surface triangulation are removed.</p>"
+     "<p><b>Route &gt; Move &gt; Pane movement</b> restricts dragging to View, XY, XZ or YZ. <b>Show joints</b> turns cable control markers on or off. <b>Select &gt; Select and move</b> allows dragging with Select. A progress bar shows 2D export progress and lets you cancel before a drawing is saved.</p>"},
+    {"24. System drawing feeds", ":/help3d/system.gif",
+     "<ol><li>Open Drawing &gt; System link to work on the system route.</li><li>Use Add drawings to choose harness DWX files.</li>"
+     "<li>For a drawing with saved 3D routing, choose Initial for its 2D arrangement or Routed for its saved route.</li></ol>"
+     "<p>The System drawing feeds table lists the source files and which geometry was loaded. Save routing stores the system route with the current DWX.</p>"},
+    {"25. Parts, visibility and side views", ":/help3d/panels.gif",
+     "<p>Show &gt; Parts and Properties open or hide the side views. Their buttons show when they are active. "
+     "Pin a side view to keep it open; unpin it for temporary access and it folds to a narrow side bar after the pointer leaves. "
+     "The eye hides a part. The half circle makes it transparent; hover on an active transparency icon for 1.5 seconds to adjust the slider. "
+     "Show all restores hidden parts. Right-clicking a part on the canvas offers the same visibility controls.</p>"},
+    {"26. Words used here",
      "",
      "<dl>"
      "<dt><b>Environment</b></dt><dd>The CAD model the harness is routed in (STEP, STL or OBJ).</dd>"
@@ -371,10 +416,10 @@ const Topic kTopics[] = {
      "table.</dd>"
      "<dt><b>Corner</b></dt><dd>A point clicked while laying; the cable bends there.</dd>"
      "<dt><b>&Oslash;</b></dt><dd>The cable's diameter.</dd>"
-     "<dt><b>Bend R</b></dt><dd>The tightest the cable may bend (Auto: six times its diameter).</dd>"
+     "<dt><b>Bend R</b></dt><dd>The construction-based bend minimum (Auto); a specified minimum can increase it.</dd>"
      "<dt><b>Lead</b></dt><dd>How far a cable comes straight out of a connector before it may turn.</dd>"
      "<dt><b>Work plane</b></dt><dd>A level or upright plane clicks land on, for laying a cable through the air.</dd>"
-     "<dt><b>Section</b></dt><dd>A cut through the model, to see and click inside it.</dd>"
+     "<dt><b>Section</b></dt><dd>A cut through the environment and harness, to see and click the remaining geometry.</dd>"
      "</dl>"},
 };
 

@@ -9,6 +9,9 @@
 // Run on the screen (not the offscreen platform) with Qt's binaries on PATH. Recorded from the program itself, the
 // help cannot show the view doing something it does not do.
 #include "app/View3DPane.h"
+#include "app/MainWindow.h"
+#include "app/DrawingPreview.h"
+#include "io/Dwx.h"
 #include "app/NavWheel.h"
 #include "io/GifWriter.h"
 
@@ -26,6 +29,10 @@
 #include <QSlider>
 #include <QSpinBox>
 #include <QTableWidget>
+#include <QTabWidget>
+#include <QSettings>
+#include <QTemporaryDir>
+#include <QListWidget>
 #include <QTextStream>
 #include <QWheelEvent>
 
@@ -71,11 +78,12 @@ QString writeModel(const QString& dir) {
 
 class Recorder {
 public:
-    Recorder(View3DPane* pane, double scale) : pane_(pane), canvas_(pane->canvas()), scale_(scale) {
-        cursor_ = QPointF(pane->width() * 0.5, pane->height() * 0.5);
+    Recorder(View3DPane* pane, double scale) : pane_(pane), root_(pane->window()), canvas_(pane->canvas()), scale_(scale) {
+        cursor_ = QPointF(root_->width() * 0.5, root_->height() * 0.5);
     }
 
     void say(const QString& caption) {
+        std::printf("Demo: %s\n",qPrintable(caption));
         caption_ = caption;
         hold(6);
     }
@@ -87,9 +95,9 @@ public:
     QPointF at(const V3& p) const {
         QPointF s;
         canvas_->toScreen(p, s);
-        return QPointF(canvas_->mapTo(pane_, s.toPoint()));
+        return QPointF(canvas_->mapTo(root_, s.toPoint()));
     }
-    QPointF centreOf(QWidget* w) const { return QPointF(w->mapTo(pane_, w->rect().center())); }
+    QPointF centreOf(QWidget* w) const { return QPointF(w->mapTo(root_, w->rect().center())); }
 
     // THE POINTER, moved there over `steps` pictures - telling the picture where it is on the way, as moving the
     // mouse over it does.
@@ -115,6 +123,7 @@ public:
         clickCanvas();
     }
     void press(QAbstractButton* b) {
+        if(!b)return;
         moveTo(centreOf(b), 12);
         ripple_ = 6;
         b->click();
@@ -178,7 +187,7 @@ public:
         const QRect g = s->geometry();
         auto spot = [&](int v) {
             const double u = static_cast<double>(v - s->minimum()) / std::max(1, s->maximum() - s->minimum());
-            return QPointF(s->parentWidget()->mapTo(pane_, QPoint(g.left() + static_cast<int>(u * g.width()), g.center().y())));
+            return QPointF(s->parentWidget()->mapTo(root_, QPoint(g.left() + static_cast<int>(u * g.width()), g.center().y())));
         };
         moveTo(spot(s->value()), 12);
         const int from = s->value();
@@ -192,7 +201,7 @@ public:
     // A SEGMENT OF THE WHEEL, clicked: the pointer to it, and a press and a release on it.
     void clickWheel(NavWheel* wheel, int segment) {
         const QPointF local = wheel->segmentCentre(segment);
-        moveTo(QPointF(wheel->mapTo(pane_, local.toPoint())), 12);
+        moveTo(QPointF(wheel->mapTo(root_, local.toPoint())), 12);
         QMouseEvent down(QEvent::MouseButtonPress, local, wheel->mapToGlobal(local), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
         QMouseEvent up(QEvent::MouseButtonRelease, local, wheel->mapToGlobal(local), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
         QApplication::sendEvent(wheel, &down);
@@ -217,7 +226,7 @@ public:
     }
 
 private:
-    QPointF canvasPoint() const { return QPointF(canvas_->mapFrom(pane_, cursor_.toPoint())); }
+    QPointF canvasPoint() const { return QPointF(canvas_->mapFrom(root_, cursor_.toPoint())); }
     void send(QEvent::Type type, const QPointF& local, Qt::MouseButton b, Qt::MouseButtons held,
               Qt::KeyboardModifiers mods = Qt::NoModifier) {
         QMouseEvent e(type, local, canvas_->mapToGlobal(local), b, held, mods);
@@ -230,9 +239,19 @@ private:
     void frame(int delayCs) {
         QApplication::processEvents();
         if (!recording_) return;
-        QImage img = pane_->grab().toImage().convertToFormat(QImage::Format_RGB32);
+        QImage img = root_->grab().toImage().convertToFormat(QImage::Format_RGB32);
         QPainter p(&img);
         p.setRenderHint(QPainter::Antialiasing, true);
+        // Popup menus are separate native windows, so include them explicitly.
+        for(auto* widget:QApplication::topLevelWidgets())if(widget->isVisible() && widget->windowType()==Qt::Popup)
+            p.drawPixmap(root_->mapFromGlobal(widget->pos()),widget->grab());
+        // Keep the ribbon visible in the fullscreen demonstration as context.
+        if(pane_->isWindow() && pane_!=root_) {
+            const QImage full=pane_->grab().toImage();
+            const QRect target=img.rect().adjusted(0,150,0,-25);
+            const QImage fitted=full.scaled(target.size(),Qt::KeepAspectRatio,Qt::SmoothTransformation);
+            p.drawImage(QPoint(target.center().x()-fitted.width()/2,target.top()),fitted);
+        }
         // WHAT IS BEING DONE, along the top of the picture.
         if (!caption_.isEmpty()) {
             QFont f = p.font();
@@ -240,7 +259,7 @@ private:
             f.setBold(true);
             p.setFont(f);
             const QRect cr = canvas_->geometry();
-            const QRect band(QPoint(canvas_->mapTo(pane_, QPoint(0, 0))), QSize(cr.width(), 40));
+            const QRect band(QPoint(canvas_->mapTo(root_, QPoint(0, 0))), QSize(cr.width(), 40));
             p.fillRect(band, QColor(10, 14, 20, 215));
             p.setPen(QColor(255, 214, 102));
             p.drawText(band.adjusted(14, 0, -14, 0), Qt::AlignVCenter | Qt::AlignLeft, caption_);
@@ -252,7 +271,7 @@ private:
             f.setPixelSize(20);
             f.setBold(true);
             p.setFont(f);
-            const QRect cr(canvas_->mapTo(pane_, QPoint(0, 0)), canvas_->size());
+            const QRect cr(canvas_->mapTo(root_, QPoint(0, 0)), canvas_->size());
             const QRect k(cr.right() - 190, cr.bottom() - 70, 170, 50);
             p.setBrush(QColor(240, 240, 240));
             p.setPen(QPen(QColor(60, 60, 60), 2));
@@ -289,6 +308,7 @@ private:
     }
 
     View3DPane* pane_;
+    QWidget* root_;
     View3DCanvas* canvas_;
     double scale_;
     QPointF cursor_;
@@ -303,19 +323,45 @@ private:
 
 // A FRESH VIEW of the model, seen at an angle, nothing routed yet.
 struct Scene {
-    View3DPane pane;
-    explicit Scene(const QString& model) {
+    std::unique_ptr<MainWindow> owner;
+    MainWindow& window;
+    View3DPane& pane;
+    static View3DPane& open(MainWindow& window) {
+        std::fprintf(stderr,"Opening 3D Preview ribbon...\n");std::fflush(stderr);
+        window.resize(2200,1000);window.show();QApplication::processEvents();
+        for(auto* tabs:window.findChildren<QTabWidget*>())for(int i=0;i<tabs->count();++i)
+            if(tabs->tabText(i)==QLatin1String("3D Preview")){tabs->setCurrentIndex(i);QApplication::processEvents();}
+        auto* pane=window.findChild<View3DPane*>();if(!pane)qFatal("The 3D Preview tab did not create a view");return *pane;
+    }
+    explicit Scene(const QString& model) : owner(std::make_unique<MainWindow>()),window(*owner),pane(open(window)) {
         pane.setEnvironmentChoice(true);
-        pane.resize(1100, 700);
-        pane.show();
+        if(auto* shown=window.findChild<QAbstractButton*>(QStringLiteral("view3dShowPropertiesPanel"));shown && !shown->isChecked())pane.showPropertiesPanel();
+        if(auto* shown=window.findChild<QAbstractButton*>(QStringLiteral("view3dShowPartsPanel"));shown && !shown->isChecked())pane.showPartsPanel();
+        if(auto* pin=window.findChild<QAbstractButton*>(QStringLiteral("view3dRoutePin")))pin->setChecked(true);
+        if(auto* pin=window.findChild<QAbstractButton*>(QStringLiteral("view3dPartsPin")))pin->setChecked(true);
         pane.canvas()->setUseGpu(false);
         QApplication::processEvents();
         pane.loadEnvironment(model, true);
+        // Every tutorial starts shaded, independently of the Display recording.
+        if(auto* wire=window.findChild<QAbstractButton*>(QStringLiteral("view3dWireframe")))wire->setChecked(false);
+        pane.canvas()->setWireframe(false);
+        if(auto* gravity=window.findChild<QAbstractButton*>(QStringLiteral("view3dGravity")))gravity->setChecked(false);
+        if(auto* opacity=window.findChild<QSlider*>(QStringLiteral("view3dEnvOpacity")))opacity->setValue(100);
         pane.canvas()->viewFrom(QStringLiteral("iso"));
         pane.canvas()->fit();
         QApplication::processEvents();
     }
-    template <typename T> T* child(const char* name) { return pane.findChild<T*>(QLatin1String(name)); }
+    template <typename T> T* child(const char* name) {
+        QString mirrored=QLatin1String(name);mirrored.replace(QStringLiteral("view3dTool"),QStringLiteral("preview3d"));
+        mirrored.replace(QStringLiteral("view3d"),QStringLiteral("preview3d"));
+        mirrored.replace(QStringLiteral("RouteDiameter"),QStringLiteral("Diameter"));
+        mirrored.replace(QStringLiteral("RouteWires"),QStringLiteral("Wires"));
+        mirrored.replace(QStringLiteral("RouteWireD"),QStringLiteral("WireD"));
+        if(auto* control=window.findChild<T*>(mirrored);control && control->isVisible())return control;
+        auto* control=window.findChild<T*>(QLatin1String(name));
+        if(!control)qFatal("Help control missing: %s",name);
+        return control;
+    }
 };
 
 // THE CONNECTORS AND THE WAY ROUND THE RIB, in the model's millimetres.
@@ -369,16 +415,29 @@ void quickRoute(Recorder& r, Scene& s, bool cable) {
 } // namespace
 
 int main(int argc, char** argv) {
+    std::setvbuf(stdout,nullptr,_IONBF,0);
     QApplication app(argc, argv);
+    QTemporaryDir settings;
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,settings.path());
+    QCoreApplication::setOrganizationName(QStringLiteral("LoopwireHelpRecorder"));
+    QCoreApplication::setApplicationName(QStringLiteral("3D ribbon demonstrations"));
     const QString outDir = argc > 1 ? QString::fromLocal8Bit(argv[1]) : QDir::currentPath();
     QDir().mkpath(outDir);
-    const QString model = writeModel(QDir::tempPath());
+    QTemporaryDir modelDirectory;
+    const QString model = writeModel(modelDirectory.path());
     if (model.isEmpty()) return 1;
-    const double scale = 0.72;
+    const double scale = 0.52;
     int failed = 0;
+    const QStringList only=argc>2 ? QString::fromLocal8Bit(argv[2]).split(',') : QStringList{};
+    auto wanted=[&](std::initializer_list<const char*> names){
+        if(only.isEmpty())return true;
+        for(const char* name:names)if(only.contains(QLatin1String(name)))return true;
+        return false;
+    };
 
     // ---- THE VIEW AND THE PLANE ---------------------------------------------------------------------------------
-    {
+    if(wanted({"plane"})) {
         Scene s(model);
         Recorder r(&s.pane, scale);
         r.moveTo(r.at({300, 200, 40}), 6);
@@ -413,7 +472,7 @@ int main(int argc, char** argv) {
     }
 
     // ---- ROUTE A CABLE FROM CONNECTOR TO CONNECTOR --------------------------------------------------------------
-    {
+    if(wanted({"route"})) {
         Scene s(model);
         Recorder r(&s.pane, scale);
         r.say(QStringLiteral("1  Connector: click the face each connector sits on"));
@@ -436,7 +495,7 @@ int main(int argc, char** argv) {
     }
 
     // ---- BEND THE CABLE -----------------------------------------------------------------------------------------
-    {
+    if(wanted({"bend"})) {
         Scene s(model);
         Recorder r(&s.pane, scale);
         // The connectors are put first, as in the last recording.
@@ -466,7 +525,7 @@ int main(int argc, char** argv) {
         failed += !r.save(QDir(outDir).filePath(QStringLiteral("bend.gif")));
     }
     // ---- GETTING STARTED: THE WHOLE OF IT ONCE --------------------------------------------------------------------
-    {
+    if(wanted({"start"})) {
         Scene s(model);
         Recorder r(&s.pane, scale);
         r.say(QStringLiteral("1  The model: Environment - Load... (here, the example)"));
@@ -488,7 +547,7 @@ int main(int argc, char** argv) {
     }
 
     // ---- THE VIEW, ALL THE WAY ROUND ------------------------------------------------------------------------------
-    {
+    if(wanted({"view"})) {
         Scene s(model);
         Recorder r(&s.pane, scale);
         r.moveTo(r.at({300, 200, 40}), 6);
@@ -521,7 +580,7 @@ int main(int argc, char** argv) {
     }
 
     // ---- ROUTING UP AND DOWN: THE WORK PLANE ----------------------------------------------------------------------
-    {
+    if(wanted({"workplane"})) {
         Scene s(model);
         Recorder r(&s.pane, scale);
         quickRoute(r, s, false);
@@ -548,7 +607,7 @@ int main(int argc, char** argv) {
     }
 
     // ---- CONNECTORS: PUTTING AND TURNING ---------------------------------------------------------------------------
-    {
+    if(wanted({"connector"})) {
         Scene s(model);
         Recorder r(&s.pane, scale);
         quickRoute(r, s, true);
@@ -575,7 +634,7 @@ int main(int argc, char** argv) {
     }
 
     // ---- BRANCH -----------------------------------------------------------------------------------------------------
-    {
+    if(wanted({"branch"})) {
         Scene s(model);
         Recorder r(&s.pane, scale);
         quickRoute(r, s, true);
@@ -599,7 +658,7 @@ int main(int argc, char** argv) {
     }
 
     // ---- CLIP ---------------------------------------------------------------------------------------------------------
-    {
+    if(wanted({"clip"})) {
         Scene s(model);
         Recorder r(&s.pane, scale);
         quickRoute(r, s, true);
@@ -615,7 +674,7 @@ int main(int argc, char** argv) {
     }
 
     // ---- LOCK VIEW: THE WHEEL, AND MOVING A CABLE AND A CONNECTOR -----------------------------------------------
-    {
+    if(wanted({"lock"})) {
         Scene s(model);
         Recorder r(&s.pane, scale);
         quickRoute(r, s, true);
@@ -643,7 +702,7 @@ int main(int argc, char** argv) {
     }
 
     // ---- FULL SCREEN ---------------------------------------------------------------------------------------------------
-    {
+    if(wanted({"fullscreen"})) {
         Scene s(model);
         Recorder r(&s.pane, scale);
         quickRoute(r, s, true);
@@ -657,7 +716,7 @@ int main(int argc, char** argv) {
     }
 
     // ---- MEASURING ----------------------------------------------------------------------------------------------------
-    {
+    if(wanted({"measure"})) {
         Scene s(model);
         Recorder r(&s.pane, scale);
         r.say(QStringLiteral("Measure: click one end, then the other"));
@@ -676,7 +735,7 @@ int main(int argc, char** argv) {
     }
 
     // ---- MOVING AND PULLING: THE LENGTH KEPT; STRETCH ----------------------------------------------------------------
-    {
+    if(wanted({"pull"})) {
         Scene s(model);
         Recorder r(&s.pane, scale);
         quickRoute(r, s, true);
@@ -698,7 +757,7 @@ int main(int argc, char** argv) {
     }
 
     // ---- CONNECTORS: FORMS ------------------------------------------------------------------------------------------
-    {
+    if(wanted({"connforms"})) {
         Scene s(model);
         Recorder r(&s.pane, scale);
         r.say(QStringLiteral("The arrow on Connector chooses the form - here, cylindrical"));
@@ -721,7 +780,7 @@ int main(int argc, char** argv) {
     }
 
     // ---- DISPLAY: BACKGROUND AND SHADING -----------------------------------------------------------------------------
-    {
+    if(wanted({"display"})) {
         Scene s(model);
         Recorder r(&s.pane, scale);
         quickRoute(r, s, true);
@@ -747,7 +806,7 @@ int main(int argc, char** argv) {
     }
 
     // ---- TENSION AND GRAVITY ----------------------------------------------------------------------------------------
-    {
+    if(wanted({"gravity"})) {
         Scene s(model);
         Recorder r(&s.pane, scale);
         quickRoute(r, s, false);
@@ -768,7 +827,7 @@ int main(int argc, char** argv) {
         r.hold(20);
         r.say(QStringLiteral("Click the cable, then its own Tension: Loose - it sags more"));
         r.clickAt(cablePoint(s.pane, 0.5));
-        r.choose(s.child<QComboBox>("view3dCableTension"), 2);
+        r.choose(s.child<QComboBox>("view3dCableTension"), 1);
         r.hold(20);
         r.say(QStringLiteral("Taut - it hardly sags"));
         r.choose(s.child<QComboBox>("view3dCableTension"), 5);
@@ -777,6 +836,115 @@ int main(int argc, char** argv) {
         r.choose(s.child<QComboBox>("view3dCableTension"), 1);
         r.hold(26);
         failed += !r.save(QDir(outDir).filePath(QStringLiteral("gravity.gif")));
+    }
+
+    // Linking changes the association, never the physical 2D drawing.
+    if(wanted({"link","unlink"})) {
+        Scene s(model);Recorder r(&s.pane,scale);quickRoute(r,s,true);
+        RouteHarness harness;harness.ok=true;harness.name=QStringLiteral("Example harness");
+        harness.design.addBrick(BrickType::End,PartKind::Connector,0,0);
+        s.pane.setHarnessLink([&]{return harness;},{});
+        r.press(s.child<QAbstractButton>("view3dToolSelect"));r.clickAt(nodePoint(s.pane,QStringLiteral("X1")));
+        auto* parts=s.window.findChild<QListWidget*>(QStringLiteral("view3dParts"));parts->setCurrentRow(0);
+        r.say(QStringLiteral("Link assigns the selected harness part to this 3D connector"));
+        r.press(s.child<QAbstractButton>("view3dLinkPart"));r.hold(18);
+        failed+=!r.save(QDir(outDir).filePath(QStringLiteral("link.gif")));
+        r.say(QStringLiteral("Unlink removes the assignment; the connector and 2D part remain"));
+        r.press(s.child<QAbstractButton>("view3dUnlinkPart"));r.hold(18);
+        failed+=!r.save(QDir(outDir).filePath(QStringLiteral("unlink.gif")));
+    }
+    if(wanted({"keepouts"})) {
+        Scene s(model);Recorder r(&s.pane,scale);quickRoute(r,s,true);
+        r.say(QStringLiteral("Keep-out: add a zone to mark space the harness must avoid"));
+        s.pane.addKeepOutZone({200,260,0},{250,300,60},false);r.hold(20);
+        r.say(QStringLiteral("Show keep-out hides the markers; the routing rules still apply"));
+        r.press(s.child<QAbstractButton>("view3dKeepOutsShown"));r.hold(12);
+        r.press(s.child<QAbstractButton>("view3dKeepOutsShown"));r.hold(12);
+        failed+=!r.save(QDir(outDir).filePath(QStringLiteral("keepouts.gif")));
+    }
+    if(wanted({"pinpoints"})) {
+        Scene s(model);Recorder r(&s.pane,scale);quickRoute(r,s,true);
+        s.pane.clearEnvironment(false);
+        r.say(QStringLiteral("Stretch menu > Stretch by pinpoints: select the cable first"));
+        const QString cable=s.pane.route().segments.front().id;
+        s.pane.canvas()->selectSegment(cable);s.pane.setRouteTool(RouteTool::Pinpoints);
+        r.choose(s.child<QComboBox>("view3dWorkPlane"),3);
+        s.child<QDoubleSpinBox>("view3dWorkPlaneAt")->setValue(120);
+        r.say(QStringLiteral("Click ordered ball-and-flag points from the first end to the second"));
+        r.clickAt({230,320,120});r.clickAt({390,310,120});r.hold(16);
+        r.say(QStringLiteral("Enter or Stretch pulls the cable through every flag; fixed length is checked"));
+        r.key(Qt::Key_Return,QStringLiteral("Enter"));r.hold(22);
+        failed+=!r.save(QDir(outDir).filePath(QStringLiteral("pinpoints.gif")));
+    }
+    if(wanted({"labels"})) {
+        Scene s(model);Recorder r(&s.pane,scale);quickRoute(r,s,true);
+        Route3D route=s.pane.route();auto& segment=route.segments.front();
+        RouteLabel3D label;label.id=QStringLiteral("example-label");label.brick=QStringLiteral("label");label.text=QStringLiteral("CBL-001");label.length=45;label.clearShrink=true;
+        segment.labels={label};QJsonObject saved=route.toJson();saved.insert(QStringLiteral("environment"),QJsonObject{{"path",model}});
+        s.pane.setRoutingStore([&]{return saved;},[&](const QJsonObject& value){saved=value;});s.pane.reloadRouting(true);
+        s.pane.canvas()->selectSegment(segment.id);emit s.pane.canvas()->selectionChanged(segment.id);
+        r.say(QStringLiteral("Label properties: choose Flexible or Stiff; All applies to every label"));
+        r.choose(s.child<QComboBox>("view3dLabelFlex"),1);
+        r.sliderTo(s.child<QSlider>("view3dLabelStiffness"),70);
+        r.say(QStringLiteral("Text always visible faces the viewer; uncheck to rotate with the harness"));
+        r.press(s.child<QAbstractButton>("view3dLabelTextAlwaysVisible"));r.hold(16);
+        r.press(s.child<QAbstractButton>("view3dLabelTextAlwaysVisible"));r.hold(16);
+        failed+=!r.save(QDir(outDir).filePath(QStringLiteral("labels.gif")));
+    }
+    if(wanted({"drawing","commands"})) {
+        Scene s(model);Recorder r(&s.pane,scale);quickRoute(r,s,true);
+        r.say(QStringLiteral("Drawing contains Save routing, System link, Add drawings and Create 2D views"));
+        auto* drawing=s.window.findChild<QAbstractButton*>(QStringLiteral("preview3dFoldDrawing"));r.press(drawing);r.hold(24);
+        if(auto* popup=QApplication::activePopupWidget())popup->hide();
+        r.say(QStringLiteral("Save routing saves 3D positions and lengths in the DWX file"));r.hold(20);
+        r.say(QStringLiteral("Create 2D views exports visible outlines in Top, Front and Side planes"));r.hold(20);
+        DrawingPreview projection(QStringLiteral("Top (XY): visible outlines"),&s.window);
+        projection.setEntities(s.pane.canvas()->projectedDrawing(0,false));
+        projection.setGeometry(QRect(s.pane.canvas()->mapTo(&s.window,QPoint()),s.pane.canvas()->size()));
+        projection.show();projection.raise();r.hold(20);projection.hide();
+        failed+=!r.save(QDir(outDir).filePath(QStringLiteral("drawing.gif")));
+        r.say(QStringLiteral("Delete removes a selected cable or node; Undo and Redo restore route changes"));
+        s.pane.canvas()->selectSegment(s.pane.route().segments.front().id);r.key(Qt::Key_Delete,QStringLiteral("Delete"));r.hold(16);
+        s.pane.undoRoute();r.say(QStringLiteral("Undo restores the deleted cable"));r.hold(16);
+        s.pane.redoRoute();r.say(QStringLiteral("Redo repeats the deletion"));r.hold(16);s.pane.undoRoute();
+        r.say(QStringLiteral("Attach places the selected cable onto the environment faces"));
+        r.press(s.child<QAbstractButton>("view3dAttach"));r.hold(18);
+        failed+=!r.save(QDir(outDir).filePath(QStringLiteral("commands.gif")));
+    }
+
+    if(wanted({"system"})) {
+        Scene s(model);Recorder r(&s.pane,scale);
+        Document drawing;Entity wire;wire.id=QStringLiteral("help-system-wire");wire.type=EntityType::TwistedPair;
+        wire.a={0,0};wire.b={300,0};wire.points={wire.a,wire.b};wire.meta=QJsonObject{{"twistStraight",true},{"twistWires",4},{"twistWireWidth",1.0}};
+        drawing.entities()={wire};Route3D initial;addDrawingToRoute(initial,drawing.entities(),false);Route3D routed=initial;
+        routed.segments.front().via={{{100,80,50},{0,0,1}},{{200,80,50},{0,0,1}}};
+        QJsonObject saved=routed.toJson();saved.insert(QStringLiteral("initialHarnessRoute"),initial.toJson());drawing.routing3d()=saved;
+        const QString first=QDir(outDir).filePath(QStringLiteral("Harness A.dwx")),second=QDir(outDir).filePath(QStringLiteral("Harness B.dwx"));QString error;
+        if(!dwx::save(drawing,first,&error))qFatal("Could not create help feed: %s",qPrintable(error));
+        for(auto& node:initial.nodes)node.at.y+=150;for(auto& node:routed.nodes)node.at.y+=150;
+        for(auto& segment:routed.segments)for(auto& via:segment.via)via.at.y+=150;
+        for(auto& entity:drawing.entities()){entity.a.y+=150;entity.b.y+=150;for(auto& p:entity.points)p.y+=150;}
+        saved=routed.toJson();saved.insert(QStringLiteral("initialHarnessRoute"),initial.toJson());drawing.routing3d()=saved;
+        if(!dwx::save(drawing,second,&error))qFatal("Could not create help feed: %s",qPrintable(error));
+        r.say(QStringLiteral("Drawing > System link switches from this harness to the system routing"));
+        s.pane.setSystemDesignLinked(true);r.hold(18);
+        r.say(QStringLiteral("Add drawings: choose Initial to load a harness as it was drawn in 2D"));
+        if(!s.pane.addSystemDrawing(first,false,&error))qFatal("Help system feed: %s",qPrintable(error));s.pane.canvas()->fit();r.hold(24);
+        r.say(QStringLiteral("Choose Routed to use a drawing's saved 3D route; the feed table lists both drawings"));
+        if(!s.pane.addSystemDrawing(second,true,&error))qFatal("Help routed feed: %s",qPrintable(error));s.pane.canvas()->fit();r.hold(28);
+        failed+=!r.save(QDir(outDir).filePath(QStringLiteral("system.gif")));
+    }
+    if(wanted({"panels"})) {
+        Scene s(model);Recorder r(&s.pane,scale);quickRoute(r,s,true);
+        r.say(QStringLiteral("Show > Parts and Properties switch the side views on and off"));
+        s.pane.showPartsPanel();r.hold(15);s.pane.showPartsPanel();r.hold(15);
+        s.pane.showPropertiesPanel();r.hold(15);s.pane.showPropertiesPanel();r.hold(15);
+        r.say(QStringLiteral("Eye hides a part; the half circle makes it transparent"));
+        s.pane.canvas()->setEnvPartOpacity(1,.25);s.pane.refreshSolids();r.hold(22);
+        s.pane.canvas()->setEnvPartHidden(1,true);s.pane.refreshSolids();r.hold(22);
+        r.say(QStringLiteral("Show all restores hidden parts. Pin a side view to keep it open"));
+        s.pane.canvas()->showAllParts();s.pane.refreshSolids();r.hold(20);
+        failed+=!r.save(QDir(outDir).filePath(QStringLiteral("panels.gif")));
     }
 
     // THE EXAMPLE, for the help's "Open the example": the model all of the above were recorded on.

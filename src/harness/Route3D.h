@@ -57,10 +57,17 @@ struct RouteNode3D {
 
 struct RouteLabel3D {
     QString id, text;
+    QString brick;              // source part used by visibility and transparency controls
+    QColor color = QColor(255, 215, 45);
+    QColor textColor = QColor(0, 0, 0);
     double position = 0.5;       // fraction of the cable's length, measured from a
     double length = 12.0;        // axial size in mm; diameter follows its supporting body/wire
+    double textHeight = 0.0;     // drawing text height in mm; zero uses a readable preview default
     int wire = -1;
     bool clearShrink = false;
+    bool textAlwaysVisible = true;
+    bool textVisibilityOverride = false; // chosen in the 3D label properties
+    bool stiffnessOverride = false;
     bool flexible = true;
     double stiffness = 1.0;      // 0 follows the cable, 1 keeps this span straight
 };
@@ -76,8 +83,16 @@ struct RouteSegment3D {
     std::vector<RouteLabel3D> labels;
     QString designCable;
     QString covering;          // the outer layer of the designed cable, empty for bare wires
+    double conductorAreaMm2 = 0.0;
+    double minimumBendRadius = 0.0; // a specified/library minimum, independent of the estimate
+    bool braidedShield = false, heatshrink = false, jacket = false;
     double coverStart = 0.0, coverFinish = 0.0; // exposed fan lengths, mm
+    // HOW FAR ITS COVERING'S STIFFNESS HAS GIVEN WAY TO A PULL: 0 none - bent as wide as the jacket, braid and heatshrink
+    // over it want - to 1, bent as the wires alone are. A covering stiffens a cable; it does not stop it being moved.
+    double coverYield = 0.0;
     std::vector<RouteVia3D> via;
+    bool throughPinpoints = false;
+    double pinpointSlack = 0.0;
     double diameter = 0.0;
     // Its colour - none: as bundles are.
     QColor color;
@@ -107,7 +122,7 @@ struct KeepOut3D {
 struct Route3D {
     // For a bundle that gives none, in mm.
     double diameter = 8.0;
-    // The tightest a bundle may be bent; 0 or less: six times its diameter.
+    // Additional minimum bend radius; 0 uses the construction estimate.
     double bendRadius = 0.0;
     // How far a bundle comes straight out of a connector before it may turn, in mm.
     double lead = 10.0;
@@ -155,9 +170,14 @@ struct Route3D {
     // A BUNDLE MADE LONGER - to `target` mm along it - its ends where they are: laid through more points where it has few,
     // and bowed out from what it lies on until it is that long (or as near as it will go). False where there is none.
     bool lengthen(const QString& id, double target);
+    // Route through exact, ordered cable-centre points. Failure leaves the route unchanged.
+    bool stretchThrough(const QString& id, const std::vector<V3>& points, double& required, QString& reason);
     // How many bundles meet at a node.
     int degree(const QString& id) const;
     double diameterOf(const RouteSegment3D& s) const;
+    double constructionBendRadiusOf(const RouteSegment3D& s) const;
+    double tensionReferenceOf(const RouteSegment3D& s) const;
+    double minimumRadiusOf(const RouteSegment3D& s) const;
     std::vector<V3> labelPath(const RouteSegment3D& s, const RouteLabel3D& label) const;
     double labelDiameterOf(const RouteSegment3D& s, const RouteLabel3D& label) const;
     // Keep a stiff label's supporting cable straight over its occupied span, including under gravity.
@@ -192,6 +212,9 @@ struct Route3D {
     // or as near it as the straight runs either side leave room for. `tight`, where given, is how many corners
     // could not be turned that wide.
     std::vector<V3> centreline(const RouteSegment3D& s, int* tight = nullptr) const;
+    // Live Route tool geometry, using the same tension, construction and obstacles as a finished cable.
+    std::vector<V3> previewCentreline(const QString& from, const std::vector<RouteVia3D>& via,
+                                      const V3& at, const V3& normal, const QString& endNode = {}) const;
     // Its length along that middle, in mm.
     double length(const RouteSegment3D& s) const;
     // Refit slack with the endpoints held; false if a fixed cable cannot reach its route.

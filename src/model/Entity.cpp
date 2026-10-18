@@ -449,6 +449,53 @@ std::vector<std::vector<Vec2>> shrunkSleeveRunsOf(const Entity& e) {
     return runs;
 }
 
+bool sleeveIsBraid(const Entity& e) {
+    return e.type == EntityType::Polyline && e.meta.value(QLatin1String("shrunkEnds")).toBool() &&
+           e.meta.value(QLatin1String("shrinkBraid")).toBool() && e.points.size() >= 2;
+}
+
+std::vector<std::pair<Vec2, Vec2>> sleeveBraidStrokes(const Entity& e) {
+    std::vector<std::pair<Vec2, Vec2>> strokes;
+    if (!sleeveIsBraid(e)) return strokes;
+    const double total = polylineLength(e.points);
+    const double body = std::max(0.2, sleeveAcross(e));
+    // ITS BODY: between the two end sleeves, as wide as the cable under them - or the whole run, full width.
+    double from = 0.0, to = total, across = body;
+    if (cableWithEndSleeves(e)) {
+        double coverStart = 0.0, coverEnd = 0.0;
+        if (!sleeveEndCoverageOf(e, coverStart, coverEnd)) return strokes;
+        from = coverStart;
+        to = total - coverEnd;
+        across = std::clamp(e.meta.value(QStringLiteral("shrinkCableWidth")).toDouble(body * 0.82), 0.1, body);
+    }
+    const RouteSlice slice = routeSlice(e.points, from, to);
+    if (slice.points.size() < 2) return strokes;
+    const std::vector<Vec2> centre = roundedPolylinePerCorner(slice.points, routeSliceRadii(e, slice, across / 2.0));
+    std::vector<double> at{0.0};
+    for (size_t i = 1; i < centre.size(); ++i) at.push_back(at.back() + distance(centre[i - 1], centre[i]));
+    const double length = at.back();
+    if (length < 1e-7) return strokes;
+    // ONE SIDE OR THE OTHER at a point so far along it: the centre there, out square to the way it runs.
+    auto side = [&](double t, double sign) {
+        t = std::clamp(t, 0.0, length);
+        size_t k = 1;
+        while (k + 1 < at.size() && at[k] < t) ++k;
+        const double span = std::max(1e-12, at[k] - at[k - 1]);
+        const Vec2 dir = (centre[k] - centre[k - 1]) * (1.0 / span);
+        const Vec2 p = centre[k - 1] + dir * (t - at[k - 1]);
+        return p + Vec2{-dir.y, dir.x} * (sign * across / 2.0);
+    };
+    // A PITCH OF ABOUT THREE QUARTERS ITS WIDTH, fitted to its length so the weave meets both ends.
+    const int steps = std::max(1, static_cast<int>(std::round(length / std::clamp(across * 0.75, 0.3, 6.0))));
+    const double pitch = length / steps;
+    for (int k = 0; k < steps; ++k) {
+        const double t0 = k * pitch, t1 = (k + 1) * pitch;
+        strokes.emplace_back(side(t0, 1.0), side(t1, -1.0));
+        strokes.emplace_back(side(t0, -1.0), side(t1, 1.0));
+    }
+    return strokes;
+}
+
 std::vector<Vec2> entityOutline(const Entity& e) {
     if (e.meta.value(QLatin1String("shrunkEnds")).toBool()) {
         std::vector<Vec2> points;

@@ -19,6 +19,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMenu>
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QPushButton>
@@ -78,9 +79,16 @@ Part3DEditorDialog::Part3DEditorDialog(const LibraryPart& part, const PartModel3
     {
         QToolButton* sk = cadButton(QStringLiteral("Sketch"));
         sk->setObjectName(QStringLiteral("part3dSketch"));
-        sk->setToolTip(QStringLiteral("Draw an outline on a plane in the view - lines, a rectangle, a circle - and give it depth"));
-        connect(sk, &QToolButton::clicked, this, [this] { startSketch(sketchPlane_ >= 0 ? sketchPlane_ : 0); });
+        sk->setToolTip(QStringLiteral("Draw outlines flat on a plane - lines, rectangles, circles, polygons, slots - then extrude "
+                                      "or revolve them: a new solid, or added to, cut out of, or kept where it meets the one selected"));
+        connect(sk, &QToolButton::clicked, this, [this] { openSketch2D(0); });
         addRow->addWidget(sk);
+        faceSketchButton_ = cadButton(QStringLiteral("Sketch on face"));
+        faceSketchButton_->setObjectName(QStringLiteral("part3dSketchFace"));
+        faceSketchButton_->setCheckable(true);
+        faceSketchButton_->setToolTip(QStringLiteral("Click a face of a solid to sketch on its plane - what is made goes with that solid"));
+        connect(faceSketchButton_, &QToolButton::toggled, this, [this](bool on) { setFaceSketchTool(on); });
+        addRow->addWidget(faceSketchButton_);
         for (int kind = 1; kind <= 2; ++kind) {
             QToolButton* b = cadButton(kind == 1 ? QStringLiteral("Pin") : QStringLiteral("Socket"));
             b->setObjectName(kind == 1 ? QStringLiteral("part3dPinTool") : QStringLiteral("part3dSocketTool"));
@@ -160,6 +168,15 @@ Part3DEditorDialog::Part3DEditorDialog(const LibraryPart& part, const PartModel3
     modButton("part3dRenumber", QStringLiteral("Number pins"), QStringLiteral("The pins and sockets numbered 1, 2, 3... in the order they are listed"),
               [this] { renumberPins(); });
     modRow->addSpacing(12);
+    // COMBINE: the one selected with another, chosen from a list of them.
+    modButton("part3dUnion", QStringLiteral("Add"), QStringLiteral("Join it to another solid - one solid of both"),
+              [this] { combineMenu(BodyOp::Add); });
+    modButton("part3dSubtract", QStringLiteral("Subtract"), QStringLiteral("Take it out of another solid - a hole, a pocket, a slot"),
+              [this] { combineMenu(BodyOp::Subtract); });
+    modButton("part3dIntersect", QStringLiteral("Intersect"), QStringLiteral("Keep only where it and another solid meet"),
+              [this] { combineMenu(BodyOp::Intersect); });
+    modButton("part3dSeparate", QStringLiteral("Separate"), QStringLiteral("A solid of its own again"), [this] { separateSelected(); });
+    modRow->addSpacing(12);
     modButton("part3dUndo", QStringLiteral("Undo"), QStringLiteral("Take back the last change (Ctrl+Z)"), [this] { undo(); });
     modButton("part3dRedo", QStringLiteral("Redo"), QStringLiteral("Do it again (Ctrl+Y)"), [this] { redo(); });
     modRow->addSpacing(12);
@@ -167,6 +184,15 @@ Part3DEditorDialog::Part3DEditorDialog(const LibraryPart& part, const PartModel3
         modButton(QStringLiteral("part3dView%1").arg(QLatin1String(name)).toLatin1().constData(), QString::fromLatin1(name),
                   QStringLiteral("View it from there"), [this, k = QString::fromLatin1(key)] { canvas_->viewFrom(k); });
     modButton("part3dFit", QStringLiteral("Fit"), QStringLiteral("All of it in view"), [this] { canvas_->fit(); });
+    modRow->addWidget(new QLabel(QStringLiteral("Step"), this));
+    moveStep_ = new QDoubleSpinBox(this);
+    moveStep_->setObjectName(QStringLiteral("part3dStep"));
+    moveStep_->setRange(0.01, 1000);
+    moveStep_->setDecimals(2);
+    moveStep_->setValue(1.0);
+    moveStep_->setSuffix(QStringLiteral(" mm"));
+    moveStep_->setToolTip(QStringLiteral("How far each arrow of the wheel moves the one selected"));
+    modRow->addWidget(moveStep_);
     modRow->addStretch(1);
     lay->addLayout(modRow);
     {
@@ -186,7 +212,8 @@ Part3DEditorDialog::Part3DEditorDialog(const LibraryPart& part, const PartModel3
             {"part3dRedo", "redo"},        {"part3dViewIso", "iso"},          {"part3dViewFront", "front"},
             {"part3dViewTop", "top"},      {"part3dViewSide", "side"},        {"part3dFit", "fit"},
             {"part3dSketch", "sketch"},    {"part3dPinTool", "pin"},          {"part3dSocketTool", "socket"},
-            {"part3dRenumber", "renumber"},
+            {"part3dRenumber", "renumber"}, {"part3dSketchFace", "sketchface"}, {"part3dUnion", "union"},
+            {"part3dSubtract", "subtract"}, {"part3dIntersect", "intersect"}, {"part3dSeparate", "separate"},
         };
         for (const auto& i : icons)
             if (auto* b = findChild<QToolButton*>(QLatin1String(i.name))) b->setIcon(icon3D(QLatin1String(i.icon), ink));
@@ -266,19 +293,48 @@ Part3DEditorDialog::Part3DEditorDialog(const LibraryPart& part, const PartModel3
     canvas_->setMinimumSize(560, 420);
     canvas_->installEventFilter(this);
     split->addWidget(canvas_);
-    // THE WHEEL over the view, as in the 3D view of a harness.
+    // THE WHEEL over the view, as in the 3D view of a harness: the view's ring, and - its middle clicked - the arrows
+    // that move the one selected.
     wheel_ = new NavWheel(canvas_);
-    wheel_->setItems({
-        {QStringLiteral("up"), QStringLiteral("Tilt up"), QString(), [this] { canvas_->nudge(0, 15, 0); }, {}},
-        {QStringLiteral("plus"), QStringLiteral("Zoom in"), QString(), [this] { canvas_->zoomBy(0.8); }, {}},
-        {QStringLiteral("right"), QStringLiteral("Turn"), QString(), [this] { canvas_->nudge(-15, 0, 0); }, {}},
-        {QStringLiteral("fit"), QStringLiteral("Fit"), QString(), [this] { canvas_->fit(); }, {}},
-        {QStringLiteral("down"), QStringLiteral("Tilt down"), QString(), [this] { canvas_->nudge(0, -15, 0); }, {}},
-        {QStringLiteral("iso"), QStringLiteral("Iso"), QString(), [this] { canvas_->viewFrom(QStringLiteral("iso")); }, {}},
-        {QStringLiteral("left"), QStringLiteral("Turn"), QString(), [this] { canvas_->nudge(15, 0, 0); }, {}},
-        {QStringLiteral("minus"), QStringLiteral("Zoom out"), QString(), [this] { canvas_->zoomBy(1.25); }, {}},
+    wheel_->setObjectName(QStringLiteral("part3dWheel"));
+    viewWheel_ = {
+        {QStringLiteral("up"), QStringLiteral("Tilt up"), QStringLiteral("Tilt the view up and over"), [this] { canvas_->nudge(0, wheelTurn_, 0); }, {}},
+        {QStringLiteral("plus"), QStringLiteral("Zoom in"), QStringLiteral("Nearer"), [this] { canvas_->zoomBy(0.8); }, {}},
+        {QStringLiteral("cw"), QStringLiteral("Roll"), QStringLiteral("Roll the view clockwise round the way it looks"), [this] { canvas_->nudge(0, 0, wheelTurn_); }, {}},
+        {QStringLiteral("right"), QStringLiteral("Turn"), QStringLiteral("Turn the view to the right, round the upright"), [this] { canvas_->nudge(-wheelTurn_, 0, 0); }, {}},
+        {QStringLiteral("fit"), QStringLiteral("Fit"), QStringLiteral("Everything in view"), [this] { canvas_->fit(); }, {}},
+        {QStringLiteral("lock"), QStringLiteral("Lock"), QStringLiteral("Hold the view still - a drag moves the one selected"),
+         [this] { canvas_->setViewLocked(!canvas_->viewLocked()); }, [this] { return canvas_->viewLocked(); }},
+        {QStringLiteral("down"), QStringLiteral("Tilt down"), QStringLiteral("Tilt the view down and under"), [this] { canvas_->nudge(0, -wheelTurn_, 0); }, {}},
+        {QStringLiteral("gear"), QStringLiteral("Options"), QStringLiteral("How far each click turns the view, and moves the one selected"),
+         [this] {
+             QMenu menu(this);
+             for (int deg : {5, 15, 30, 45, 90}) {
+                 QAction* a = menu.addAction(QStringLiteral("Turn the view %1° a click").arg(deg));
+                 a->setCheckable(true);
+                 a->setChecked(std::abs(wheelTurn_ - deg) < 1e-9);
+                 connect(a, &QAction::triggered, this, [this, deg] { wheelTurn_ = deg; });
+             }
+             menu.addSeparator();
+             for (double mm : {0.1, 0.5, 1.0, 5.0, 10.0}) {
+                 QAction* a = menu.addAction(QStringLiteral("Move %1 mm a click").arg(mm));
+                 a->setCheckable(true);
+                 a->setChecked(std::abs(moveStep_->value() - mm) < 1e-9);
+                 connect(a, &QAction::triggered, this, [this, mm] { setMoveStep(mm); });
+             }
+             menu.exec(QCursor::pos());
+         }, {}},
+        {QStringLiteral("iso"), QStringLiteral("Iso"), QStringLiteral("At an angle, the whole of it"), [this] { canvas_->viewFrom(QStringLiteral("iso")); }, {}},
+        {QStringLiteral("left"), QStringLiteral("Turn"), QStringLiteral("Turn the view to the left, round the upright"), [this] { canvas_->nudge(wheelTurn_, 0, 0); }, {}},
+        {QStringLiteral("ccw"), QStringLiteral("Roll"), QStringLiteral("Roll the view counter-clockwise round the way it looks"), [this] { canvas_->nudge(0, 0, -wheelTurn_); }, {}},
+        {QStringLiteral("minus"), QStringLiteral("Zoom out"), QStringLiteral("Further off"), [this] { canvas_->zoomBy(1.25); }, {}},
+    };
+    wheelMoving_ = true;
+    setWheelMoving(false);
+    // THE ARROWS the way the axes run as the view is turned.
+    connect(canvas_, &View3DCanvas::cameraChanged, this, [this] {
+        if (wheelMoving_) buildMoveWheel();
     });
-    wheel_->setMiddle(QStringLiteral("View"), {});
 
     auto* scroll = new QScrollArea(split);
     scroll->setWidgetResizable(true);
@@ -355,13 +411,44 @@ Part3DEditorDialog::Part3DEditorDialog(const LibraryPart& part, const PartModel3
     number_->setRange(0, 999);
     numberLabel_ = new QLabel(QStringLiteral("Pin number"), panel_);
     form->addRow(numberLabel_, number_);
+    // A SKETCH: given depth both ways; a revolved one, the axis it turns round; and drawn again in the 2D sketch.
+    both_ = new QCheckBox(QStringLiteral("Both ways - half each side of its plane"), panel_);
+    both_->setObjectName(QStringLiteral("part3dBoth"));
+    form->addRow(QString(), both_);
+    axis_ = new QComboBox(panel_);
+    axis_->setObjectName(QStringLiteral("part3dAxis"));
+    axis_->addItems({QStringLiteral("Its plane's first axis"), QStringLiteral("Its plane's second axis")});
+    axisLabel_ = new QLabel(QStringLiteral("Turned round"), panel_);
+    form->addRow(axisLabel_, axis_);
+    editSketch_ = new QPushButton(QStringLiteral("Edit sketch..."), panel_);
+    editSketch_->setObjectName(QStringLiteral("part3dEditSketch"));
+    editSketch_->setIcon(icon3D(QStringLiteral("sketch"), Chrome::ink()));
+    editSketch_->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
+    connect(editSketch_, &QPushButton::clicked, this, [this] { editSelectedSketch(); });
+    form->addRow(QString(), editSketch_);
+    // COMBINED WITH ANOTHER: how, and with which of the others.
+    op_ = new QComboBox(panel_);
+    op_->setObjectName(QStringLiteral("part3dOp"));
+    op_->addItem(QStringLiteral("A solid of its own"), static_cast<int>(BodyOp::None));
+    op_->addItem(QStringLiteral("Added to"), static_cast<int>(BodyOp::Add));
+    op_->addItem(QStringLiteral("Subtracted from"), static_cast<int>(BodyOp::Subtract));
+    op_->addItem(QStringLiteral("Intersected with"), static_cast<int>(BodyOp::Intersect));
+    form->addRow(QStringLiteral("Combined"), op_);
+    target_ = new QComboBox(panel_);
+    target_->setObjectName(QStringLiteral("part3dTarget"));
+    targetLabel_ = new QLabel(QStringLiteral("With"), panel_);
+    form->addRow(targetLabel_, target_);
+    connect(both_, &QCheckBox::toggled, this, [this] { fromPanel(); });
+    connect(axis_, &QComboBox::currentIndexChanged, this, [this] { fromPanel(); });
+    connect(op_, &QComboBox::currentIndexChanged, this, [this] { fromPanel(); });
+    connect(target_, &QComboBox::currentIndexChanged, this, [this] { fromPanel(); });
     connect(fillet_, &QDoubleSpinBox::valueChanged, this, [this] { fromPanel(); });
     connect(chamfer_, &QDoubleSpinBox::valueChanged, this, [this] { fromPanel(); });
     connect(female_, &QCheckBox::toggled, this, [this] { fromPanel(); });
     connect(number_, &QSpinBox::valueChanged, this, [this] { fromPanel(); });
     pf->addLayout(form);
-    pf->addWidget(new QLabel(QStringLiteral("<i>Ctrl + drag in the view moves the one selected across it; a click "
-                                            "selects.</i>"),
+    pf->addWidget(new QLabel(QStringLiteral("<i>Ctrl + drag in the view (or any drag, the view locked) moves the one "
+                                            "selected across it; a click selects. The wheel's middle: its arrows.</i>"),
                              panel_));
     pf->addStretch(1);
     scroll->setWidget(panel_);
@@ -711,8 +798,15 @@ void Part3DEditorDialog::fillPanel() {
         name_->setText(b.name);
         const QStringList labels = bodySizeLabels(b.shape);
         const double sizes[3] = {b.a, b.b, b.c};
-        // A SKETCH'S DEPTH may go either way from its plane; every other size is more than nothing.
-        size_[0]->setMinimum(b.shape == BodyShape::Sketch ? -10000.0 : 0.0);
+        // A SKETCH'S DEPTH may go either way from its plane; a revolved one's is an angle; every other size is more than
+        // nothing.
+        if (b.shape == BodyShape::Revolved) {
+            size_[0]->setRange(0.5, 360.0);
+            size_[0]->setSuffix(QStringLiteral("°"));
+        } else {
+            size_[0]->setRange(b.shape == BodyShape::Sketch ? -10000.0 : 0.0, 10000.0);
+            size_[0]->setSuffix(QStringLiteral(" mm"));
+        }
         for (int i = 0; i < 3; ++i) {
             sizeLabel_[i]->setText(labels.value(i));
             sizeLabel_[i]->setVisible(!labels.value(i).isEmpty());
@@ -731,7 +825,23 @@ void Part3DEditorDialog::fillPanel() {
                                   .arg(b.color.name(), b.color.lightness() > 128 ? QStringLiteral("#000") : QStringLiteral("#fff")));
         material_->setCurrentIndex(std::max(0, material_->findData(b.texture)));
         cut_->setChecked(b.cut);
-        cut_->setEnabled(bodyIsPrimitive(b.shape) && b.shape != BodyShape::Pin);
+        cut_->setEnabled(bodyIsSolid(b.shape) && b.shape != BodyShape::Pin);
+        both_->setVisible(b.shape == BodyShape::Sketch);
+        both_->setChecked(b.both);
+        axis_->setVisible(b.shape == BodyShape::Revolved);
+        axisLabel_->setVisible(b.shape == BodyShape::Revolved);
+        axis_->setCurrentIndex(b.axis);
+        editSketch_->setVisible(bodyIsSketch(b.shape));
+        // WHAT IT CAN BE COMBINED WITH: every other solid not made from it.
+        const bool solid = bodyIsSolid(b.shape) && b.shape != BodyShape::Pin;
+        op_->setEnabled(solid);
+        op_->setCurrentIndex(std::max(0, op_->findData(static_cast<int>(b.op))));
+        target_->clear();
+        for (size_t i = 0; i < model_.bodies.size(); ++i)
+            if (model_.canCombine(selected_, static_cast<int>(i))) target_->addItem(model_.bodies[i].name, model_.bodies[i].id);
+        target_->setCurrentIndex(target_->findData(b.target));
+        target_->setVisible(b.op != BodyOp::None);
+        targetLabel_->setVisible(b.op != BodyOp::None);
         shown_->setChecked(b.shown);
         const bool edges = bodyIsPrimitive(b.shape) && b.shape != BodyShape::Pin;
         for (QWidget* w : {static_cast<QWidget*>(fillet_), static_cast<QWidget*>(filletLabel_), static_cast<QWidget*>(chamfer_),
@@ -763,10 +873,24 @@ void Part3DEditorDialog::fromPanel() {
     auto keep = [](double v, double was) { return std::abs(v) < 1e-6 ? was : v; };
     b.scale = {keep(scale_[0]->value(), b.scale.x), keep(scale_[1]->value(), b.scale.y), keep(scale_[2]->value(), b.scale.z)};
     b.texture = material_->currentData().toInt();
-    b.cut = cut_->isChecked() && bodyIsPrimitive(b.shape);
+    b.cut = cut_->isChecked() && bodyIsSolid(b.shape);
     b.shown = shown_->isChecked();
     b.fillet = fillet_->value();
     b.chamfer = chamfer_->value();
+    b.both = both_->isChecked();
+    b.axis = axis_->currentIndex();
+    // COMBINED: with the one chosen - or, newly combined, the first it can be.
+    const BodyOp op = static_cast<BodyOp>(op_->currentData().toInt());
+    QString target = target_->currentData().toString();
+    if (op != BodyOp::None && target.isEmpty() && target_->count() > 0) target = target_->itemData(0).toString();
+    if (op != BodyOp::None && model_.canCombine(selected_, model_.indexOf(target))) {
+        b.op = op;
+        b.target = target;
+        b.cut = false;
+    } else {
+        b.op = BodyOp::None;
+        b.target.clear();
+    }
     if (b.shape == BodyShape::Pin) {
         // A SOCKET IS A HOLE: cut out of what it is on, dark; a pin gold, standing out.
         if (b.female != female_->isChecked()) b.color = female_->isChecked() ? QColor(30, 30, 34) : QColor(212, 175, 80);
@@ -821,9 +945,30 @@ bool Part3DEditorDialog::eventFilter(QObject* watched, QEvent* event) {
             return true;
         }
     }
-    // CTRL AND A DRAG: the one selected moved across the view, at its own depth.
-    if (event->type() == QEvent::MouseButtonPress && m->button() == Qt::LeftButton && (m->modifiers() & Qt::ControlModifier) &&
-        selected_ >= 0) {
+    // SKETCH ON A FACE: the face clicked, its plane the sketch's - and the solid it is a face of, what it goes with.
+    if (faceSketch_ && m->button() == Qt::LeftButton) {
+        if (event->type() == QEvent::MouseButtonPress) dragLast_ = m->position().toPoint();
+        if (event->type() == QEvent::MouseButtonRelease && (m->position().toPoint() - dragLast_).manhattanLength() <= 3) {
+            V3 origin, dir;
+            canvas_->camera().rayAt(m->position().x(), m->position().y(), canvas_->width(), canvas_->height(), origin, dir);
+            const Pick3D pick = pickIndex_.cast(origin, dir);
+            if (!pick.hit || pick.normal.length() < 0.5) {
+                said_->setText(QStringLiteral("Click a face of a solid to sketch on it."));
+                return true;
+            }
+            const int body = pick.part >= 0 && pick.part < static_cast<int>(pickBody_.size()) ? pickBody_[static_cast<size_t>(pick.part)] : -1;
+            setFaceSketchTool(false);
+            select(body);
+            const QString target = body >= 0 ? model_.bodies[static_cast<size_t>(body)].id : QString();
+            Sketch2DDialog d(items_, body >= 0 ? model_.bodies[static_cast<size_t>(body)].name : QString(), this);
+            d.setFace(pick.point, pick.normal);
+            if (d.exec() == QDialog::Accepted) addSketchResult(d.result(), target);
+            return true;
+        }
+    }
+    // CTRL AND A DRAG - or a drag, the view locked: the one selected moved across the view, at its own depth.
+    if (event->type() == QEvent::MouseButtonPress && m->button() == Qt::LeftButton &&
+        ((m->modifiers() & Qt::ControlModifier) || canvas_->viewLocked()) && selected_ >= 0) {
         remember();
         dragging_ = true;
         dragLast_ = m->position().toPoint();
@@ -987,6 +1132,217 @@ void Part3DEditorDialog::renumberPins() {
             b.name = QStringLiteral("%1 %2").arg(b.female ? QStringLiteral("Socket") : QStringLiteral("Pin")).arg(b.number);
         }
     changed();
+}
+
+// ---- The 2D sketch ----------------------------------------------------------------------------------------------
+
+void Part3DEditorDialog::openSketch2D(int plane) {
+    setPinTool(0);
+    setFaceSketchTool(false);
+    // WITH THE ONE SELECTED, if it is a solid: what is made can be added to it, cut out of it, or kept where they meet.
+    const bool with = selected_ >= 0 && bodyIsSolid(model_.bodies[static_cast<size_t>(selected_)].shape) &&
+                      model_.bodies[static_cast<size_t>(selected_)].shape != BodyShape::Pin;
+    const QString target = with ? model_.bodies[static_cast<size_t>(selected_)].id : QString();
+    Sketch2DDialog d(items_, with ? model_.bodies[static_cast<size_t>(selected_)].name : QString(), this);
+    d.setPlane(plane, 0.0);
+    if (d.exec() == QDialog::Accepted) addSketchResult(d.result(), target);
+}
+
+void Part3DEditorDialog::setFaceSketchTool(bool on) {
+    if (on) {
+        setPinTool(0);
+        if (sketchPlane_ >= 0) cancelSketch();
+    }
+    faceSketch_ = on;
+    if (faceSketchButton_) {
+        const QSignalBlocker hold(faceSketchButton_);
+        faceSketchButton_->setChecked(on);
+    }
+    canvas_->setCursor(on ? Qt::CrossCursor : Qt::ArrowCursor);
+    if (on) said_->setText(QStringLiteral("Click a face of a solid to sketch on its plane."));
+}
+
+Sketch2DDialog::Result Part3DEditorDialog::sketchOf(const Body3D& b) {
+    Sketch2DDialog::Result r;
+    r.plane = b.plane;
+    r.at = b.at;
+    r.turnDeg = b.turnDeg;
+    r.loops.push_back(b.profile);
+    for (const SketchLoop& h : b.holes) r.loops.push_back(h);
+    r.revolve = b.shape == BodyShape::Revolved;
+    if (r.revolve) r.angle = b.a;
+    else r.depth = b.a;
+    r.both = b.both;
+    r.axis = b.axis;
+    r.op = b.op;
+    r.cutAll = b.cut;
+    return r;
+}
+
+void Part3DEditorDialog::editSelectedSketch() {
+    if (selected_ < 0 || !bodyIsSketch(model_.bodies[static_cast<size_t>(selected_)].shape)) return;
+    const Body3D& b = model_.bodies[static_cast<size_t>(selected_)];
+    const int t = model_.indexOf(b.target);
+    // THE MODEL WITHOUT IT, under the sketch.
+    PartModel3D rest = model_;
+    rest.bodies.erase(rest.bodies.begin() + selected_);
+    Sketch2DDialog d(modelItems(rest), t >= 0 ? model_.bodies[static_cast<size_t>(t)].name : QString(), this);
+    d.setStart(sketchOf(b));
+    if (d.exec() == QDialog::Accepted) addSketchResult(d.result(), b.target, selected_);
+}
+
+bool Part3DEditorDialog::addSketchResult(const Sketch2DDialog::Result& r, const QString& target, int replace) {
+    const std::vector<SketchRegion> regions = sketchRegions(r.loops);
+    if (regions.empty()) {
+        said_->setText(QStringLiteral("The sketch has no closed outline to make a solid of."));
+        return false;
+    }
+    remember();
+    int first = -1;
+    for (size_t k = 0; k < regions.size(); ++k) {
+        Body3D b;
+        const bool again = k == 0 && replace >= 0 && replace < static_cast<int>(model_.bodies.size());
+        if (again) {
+            b = model_.bodies[static_cast<size_t>(replace)];
+        } else {
+            b.id = model_.freshId();
+            b.color = QColor(150, 158, 170);
+            b.texture = Texture3D::Plastic;
+        }
+        b.shape = r.revolve ? BodyShape::Revolved : BodyShape::Sketch;
+        if (!again) b.name = regions.size() > 1 ? QStringLiteral("%1 %2").arg(bodyShapeName(b.shape)).arg(k + 1) : bodyShapeName(b.shape);
+        b.a = r.revolve ? std::clamp(r.angle, 0.5, 360.0) : (std::abs(r.depth) < 0.05 ? 0.05 : r.depth);
+        b.both = !r.revolve && r.both;
+        b.axis = r.axis;
+        b.plane = r.plane;
+        b.profile = regions[k].outer;
+        b.holes = regions[k].holes;
+        b.at = r.at;
+        b.turnDeg = r.turnDeg;
+        b.scale = {1, 1, 1};
+        b.cut = r.cutAll;
+        b.op = BodyOp::None;
+        b.target.clear();
+        if (!r.cutAll && r.op != BodyOp::None && !target.isEmpty()) {
+            b.op = r.op;
+            b.target = target;
+        }
+        if (b.cut || b.op == BodyOp::Subtract) b.color = QColor(230, 90, 90);
+        if (again) {
+            model_.bodies[static_cast<size_t>(replace)] = b;
+            first = replace;
+        } else {
+            model_.bodies.push_back(b);
+            if (first < 0) first = static_cast<int>(model_.bodies.size()) - 1;
+        }
+        // NOT MADE FROM ITSELF: one that would be, a solid of its own.
+        const int at = again ? replace : static_cast<int>(model_.bodies.size()) - 1;
+        Body3D& made = model_.bodies[static_cast<size_t>(at)];
+        if (made.op != BodyOp::None && !model_.canCombine(at, model_.indexOf(made.target))) {
+            made.op = BodyOp::None;
+            made.target.clear();
+        }
+    }
+    selected_ = first;
+    changed();
+    return true;
+}
+
+// ---- Combining ------------------------------------------------------------------------------------------------
+
+void Part3DEditorDialog::combineMenu(BodyOp op) {
+    if (selected_ < 0) {
+        said_->setText(QStringLiteral("Select the solid to %1 first.").arg(bodyOpName(op).toLower()));
+        return;
+    }
+    QMenu menu(this);
+    menu.setObjectName(QStringLiteral("part3dCombineMenu"));
+    for (size_t i = 0; i < model_.bodies.size(); ++i)
+        if (model_.canCombine(selected_, static_cast<int>(i))) {
+            const int t = static_cast<int>(i);
+            QAction* a = menu.addAction(model_.bodies[i].name);
+            connect(a, &QAction::triggered, this, [this, op, t] { combineSelected(op, t); });
+        }
+    if (menu.isEmpty()) {
+        said_->setText(QStringLiteral("There is no other solid to %1 it with.").arg(bodyOpName(op).toLower()));
+        return;
+    }
+    menu.exec(QCursor::pos());
+}
+
+bool Part3DEditorDialog::combineSelected(BodyOp op, int target) {
+    if (op == BodyOp::None) {
+        separateSelected();
+        return true;
+    }
+    if (!model_.canCombine(selected_, target)) {
+        said_->setText(QStringLiteral("It cannot be combined with that - not a solid, or made from it."));
+        return false;
+    }
+    remember();
+    Body3D& b = model_.bodies[static_cast<size_t>(selected_)];
+    b.op = op;
+    b.target = model_.bodies[static_cast<size_t>(target)].id;
+    b.cut = false;
+    said_->setText(QStringLiteral("%1 %2 %3.")
+                       .arg(b.name, op == BodyOp::Add ? QStringLiteral("added to") : op == BodyOp::Subtract ? QStringLiteral("subtracted from")
+                                                                                                           : QStringLiteral("intersected with"),
+                            model_.bodies[static_cast<size_t>(target)].name));
+    changed();
+    return true;
+}
+
+void Part3DEditorDialog::separateSelected() {
+    if (selected_ < 0) return;
+    Body3D& b = model_.bodies[static_cast<size_t>(selected_)];
+    if (b.op == BodyOp::None && !b.cut) return;
+    remember();
+    b.op = BodyOp::None;
+    b.target.clear();
+    if (b.shape != BodyShape::Pin) b.cut = false;
+    changed();
+}
+
+// ---- The wheel ------------------------------------------------------------------------------------------------
+
+void Part3DEditorDialog::setMoveStep(double mm) { moveStep_->setValue(mm); }
+
+void Part3DEditorDialog::setWheelMoving(bool on) {
+    if (on == wheelMoving_) return;
+    wheelMoving_ = on;
+    if (on) {
+        buildMoveWheel();
+        wheel_->setMiddle(QStringLiteral("Move"), [this](const QPoint&) { setWheelMoving(false); });
+    } else {
+        wheel_->setItems(viewWheel_);
+        wheel_->setMiddle(QStringLiteral("View"), [this](const QPoint&) { setWheelMoving(true); });
+    }
+    wheel_->update();
+}
+
+void Part3DEditorDialog::buildMoveWheel() {
+    V3 right, up, forward;
+    canvas_->camera().axes(right, up, forward);
+    const std::array<std::pair<double, double>, 3> screen{{{right.x, up.x}, {right.y, up.y}, {right.z, up.z}}};
+    wheel_->setItems(NavWheel::axisItems(
+        screen,
+        [this](int axis, int sign) {
+            if (selected_ < 0) {
+                said_->setText(QStringLiteral("Move: select the solid to move first."));
+                return;
+            }
+            V3 by;
+            (axis == 0 ? by.x : axis == 1 ? by.y : by.z) = moveStep_->value() * sign;
+            moveSelected(by);
+        },
+        [this](int axis, int sign) {
+            if (selected_ < 0) {
+                said_->setText(QStringLiteral("Turn: select the solid to turn first."));
+                return;
+            }
+            turnSelected(axis, 15.0 * sign);
+        }));
+    wheel_->update();
 }
 
 void Part3DEditorDialog::exportModel() {

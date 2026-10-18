@@ -193,7 +193,62 @@ void rotateEntity(Entity& e, const Vec2& pivot, double angle) {
 
 void scaleEntity(Entity& e, const Vec2& base, double factor) {
     const double s = std::abs(factor);
+    const ConnectorSpec originalConnector=connectorSpecFromMeta(e.meta);
+    const ConnectorGeometry originalConnectorGeometry=e.type==EntityType::Connector ? connectorGeometry(e.a,originalConnector) : ConnectorGeometry{};
+    if(e.type==EntityType::Connector)writeConnectorSpec(e.meta,originalConnector);
+    if(e.type==EntityType::TwistedPair) {
+        // Materialize drawing defaults before scaling; otherwise an unset wire width
+        // or fan length stays at its original absolute size while its connector shrinks.
+        if(!e.meta.contains("twistWidth"))e.meta.insert("twistWidth",kTwistedPairWidth);
+        if(!e.meta.contains("twistPitch"))e.meta.insert("twistPitch",kTwistedPairPitch);
+        const bool straight=e.meta.value("twistStraight").toBool();
+        const double wire=e.meta.value("twistWireWidth").toDouble(kWiresRunWire);
+        if(straight && !e.meta.contains("twistWireWidth"))e.meta.insert("twistWireWidth",wire);
+        const double askedPitch=e.meta.value("twistBodyPitch").toDouble();
+        const double packed=askedPitch>0 ? std::max(wire,askedPitch) : wire*kWiresRunPitch/kWiresRunWire;
+        const int wires=std::clamp(e.meta.value("twistWires").toInt(2),2,kTwistedMaxWires);
+        auto lead=[&](const char* lane){
+            double pitch=e.meta.value(QLatin1String(lane)).toDouble(e.meta.value("twistLane").toDouble());
+            if(pitch<=0)pitch=packed*1.5;
+            return straight ? std::max(kTwistedPairLead,pitch*(wires-1)*0.5) : kTwistedPairLead;
+        };
+        if(!e.meta.contains("twistEnds")) {
+            const double end=lead("twistLane");
+            if(!e.meta.contains("twistEndsFinish") && e.meta.value("twistLaneFinish").toDouble()>0)
+                e.meta.insert("twistEndsFinish",lead("twistLaneFinish"));
+            e.meta.insert("twistEnds",end);
+        }
+        if(straight) {
+            const bool same=e.meta.value("twistSidesSame").toBool(true);
+            const double first=e.meta.value("twistEnds").toDouble();
+            const double last=same ? first : e.meta.value("twistEndsFinish").toDouble(first);
+            double length=0;
+            if(e.points.size()>=2)for(size_t i=1;i<e.points.size();++i)length+=distance(e.points[i-1],e.points[i]);
+            else length=distance(e.a,e.b);
+            const double fitting=first+last>0 ? std::min(1.0,length/(first+last)) : 1.0;
+            const bool ownStrip=e.meta.contains("twistStripLen");
+            const bool startStrip=e.meta.value("twistStrip").toBool();
+            const bool finishStrip=same ? startStrip : e.meta.value("twistStripFinish").toBool(startStrip);
+            if(startStrip && !ownStrip)e.meta.insert("twistStripLen",std::min(5.0,first*fitting*0.4));
+            if(finishStrip && !ownStrip && !e.meta.contains("twistStripLenFinish"))e.meta.insert("twistStripLenFinish",std::min(5.0,last*fitting*0.4));
+        }
+        if(e.meta.value("twistEndShrink").toBool() && !e.meta.contains("twistEndShrinkLen"))e.meta.insert("twistEndShrinkLen",10.0);
+    }
     mapPoints(e, [&](const Vec2& p) { return scalePoint(p, base, factor); });
+    if(e.meta.contains("labelMidX")) {
+        const Vec2 mid=scalePoint({e.meta.value("labelMidX").toDouble(),e.meta.value("labelMidY").toDouble()},base,factor);
+        e.meta.insert("labelMidX",mid.x);e.meta.insert("labelMidY",mid.y);
+    }
+    if(e.meta.contains("labelPath")) {
+        QJsonArray path=e.meta.value("labelPath").toArray();
+        for(int i=0;i+1<path.size();i+=2){const Vec2 point=scalePoint({path[i].toDouble(),path[i+1].toDouble()},base,factor);path[i]=point.x;path[i+1]=point.y;}
+        e.meta.insert("labelPath",path);
+    }
+    if(e.meta.contains("labelProto")) {
+        QJsonArray prototype;
+        for(const auto& value:e.meta.value("labelProto").toArray()) {Entity part=Entity::fromJson(value.toObject());scaleEntity(part,{0,0},factor);prototype.append(part.toJson());}
+        e.meta.insert("labelProto",prototype);
+    }
     e.radius *= s;
     e.radiusY *= s;
     // Scale every length-valued meta so the shape scales uniformly: the double-line
@@ -203,7 +258,13 @@ void scaleEntity(Entity& e, const Vec2& base, double factor) {
                           "twistWidth", "twistPitch", "twistEnds", "shrinkWidth",
                           "shrinkFaceStart", "shrinkFaceEnd", "shrinkTaperStart",
                           "shrinkTaperEnd", "shrinkCoverStart", "shrinkCoverEnd",
-                          "shrinkCableWidth", "pinScale"})
+                          "shrinkCableWidth", "pinScale", "twistWireWidth", "twistBodyPitch",
+                          "twistLane", "twistLaneFinish", "twistEndsFinish", "twistKnee",
+                          "twistFanKnee", "twistFanKneeFinish", "twistFlushLen", "twistFlushLenFinish",
+                          "twistStripLen", "twistStripLenFinish", "twistBodyWidth", "twistBodyFace",
+                          "twistBodyFaceFinish", "twistBodyShrink", "twistBodyShrinkFinish",
+                          "twistBoot", "twistBootFinish", "twistBootWidth", "twistBootWidthFinish",
+                          "twistEndShrinkLen", "labelAlong", "labelAcross", "labelMidS", "labelMidOff", "labelTextHeight"})
         if (e.meta.contains(QLatin1String(k)))
             e.meta.insert(QLatin1String(k), e.meta.value(QLatin1String(k)).toDouble() * s);
     // Per-corner fillet radii / chamfer setbacks are lengths too — scale each entry.
@@ -222,7 +283,7 @@ void scaleEntity(Entity& e, const Vec2& base, double factor) {
     // drawing; they are a drawing with the wrong writing on it.
     for (const char* k : {"height", "size", "textHeight", "textSize", "arrowSize", "extOffset",
                           "detailTextSize", "detailTagGap", "detailBigGap", "colorSize", "gaugeSize",
-                          "labelSize", "dimTextHeight"})
+                          "labelSize", "dimTextHeight", "boxWidth", "boxHeight"})
         if (e.meta.contains(QLatin1String(k)))
             e.meta.insert(QLatin1String(k), e.meta.value(QLatin1String(k)).toDouble() * s);
     // A TABLE keeps a height per cell where a cell has been given one of its own, and the table's own height is
@@ -246,8 +307,7 @@ void scaleEntity(Entity& e, const Vec2& base, double factor) {
     // the whole body / pins / text resize UNIFORMLY, keeping its structure. mapPoints
     // already moved the anchor about the base, so it scales about the scale base point.
     if (e.type == EntityType::Connector) {
-        const ConnectorSpec spec = connectorSpecFromMeta(e.meta); // pre-scale sizes
-        const ConnectorGeometry g = connectorGeometry(e.a, spec); // current body W/H
+        const ConnectorGeometry& g = originalConnectorGeometry;
         // textSize is NOT here: it is in the general list above, which every entity goes through. Scaling it in
         // both places doubled it, so a connector's words came out the square of the factor.
         for (const char* k : {"pitch", "pinLength", "pinSize", "desSize", "pnSize", "pinTextDX",

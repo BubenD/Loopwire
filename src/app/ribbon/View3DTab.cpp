@@ -24,6 +24,7 @@
 #include <QGridLayout>
 #include <QActionGroup>
 #include <QMenu>
+#include <QWidgetAction>
 #include <QEvent>
 #include <QFrame>
 #include <QHash>
@@ -34,6 +35,7 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QScreen>
 
 namespace Loopwire {
 
@@ -75,11 +77,31 @@ void MainWindow::buildView3DTab() {
         auto* popup = new QFrame(slot, Qt::Popup);
         popup->setObjectName(QStringLiteral("preview3dFoldPopup"));
         popup->setFrameShape(QFrame::StyledPanel);
-        auto* pl = new QHBoxLayout(popup);
+        auto* pl = new QVBoxLayout(popup);
         pl->setContentsMargins(6, 4, 6, 4);
+        auto* heading=new QLabel(title,popup);
+        heading->setObjectName(QStringLiteral("preview3dSectionTitle"));
+        heading->setStyleSheet(QStringLiteral("font-weight:bold;padding:3px;background:transparent;color:%1;").arg(Chrome::ink().name()));
+        pl->addWidget(heading);
+        auto* foldScroll=new QScrollArea(popup);
+        foldScroll->setObjectName(QStringLiteral("preview3dFoldScroll"));
+        foldScroll->setWidgetResizable(true);
+        foldScroll->setFrameShape(QFrame::NoFrame);
+        pl->addWidget(foldScroll);
         connect(fold, &QToolButton::clicked, this, [fold, popup] {
             popup->adjustSize();
-            popup->move(fold->mapToGlobal(QPoint(0, fold->height())));
+            const QPoint anchor=fold->mapToGlobal(QPoint(0,fold->height()));
+            const QScreen* screen=QGuiApplication::screenAt(anchor);
+            if(!screen) screen=fold->screen();
+            const QRect room=screen->availableGeometry().adjusted(4,4,-4,-4);
+            popup->setMaximumSize(room.size());
+            popup->resize(popup->sizeHint().boundedTo(room.size()));
+            QPoint position=anchor;
+            if(position.y()+popup->height()>room.bottom()+1)
+                position.setY(fold->mapToGlobal(QPoint(0,0)).y()-popup->height());
+            position.setX(std::clamp(position.x(),room.left(),std::max(room.left(),room.right()-popup->width()+1)));
+            position.setY(std::clamp(position.y(),room.top(),std::max(room.top(),room.bottom()-popup->height()+1)));
+            popup->move(position);
             popup->show();
         });
         Preview3DFold f;
@@ -90,7 +112,11 @@ void MainWindow::buildView3DTab() {
         f.popup = popup;
         f.order = how.second;
         preview3dFolds_.append(f);
-        addGroup(lay, title, slot);
+        auto* section=addGroupKeep(lay, title, slot);
+        section->setObjectName(QStringLiteral("preview3dRibbonSection"));
+        section->setAccessibleName(title);
+        if(auto* caption=section->findChild<QLabel*>(QStringLiteral("ribbonGroupTitle")))
+            caption->setStyleSheet(QStringLiteral("font-size:11px;font-weight:bold;background:transparent;"));
     };
     // A FIELD'S NAME, in the scheme's own ink - readable on the ribbon, light or dark.
     auto fieldLabel = [](const QString& text, QWidget* parent) {
@@ -192,6 +218,30 @@ void MainWindow::buildView3DTab() {
             b->setCheckable(true);
             tools->addButton(b, static_cast<int>(t.tool));
             preview3dTools_.append({static_cast<int>(t.tool), b});
+            if (t.tool == RouteTool::Select) {
+                auto* menu=new QMenu(b);menu->setObjectName(QStringLiteral("preview3dSelectMenu"));
+                auto* move=new QCheckBox(QStringLiteral("Select and move"),menu);
+                move->setObjectName(QStringLiteral("preview3dSelectAndMove"));
+                move->setStyleSheet(QStringLiteral("QCheckBox{color:%1;background:transparent;padding:6px 10px;}").arg(Chrome::ink().name()));
+                move->setContentsMargins(10,6,10,6);
+                move->setToolTip(QStringLiteral("Drag items with Select. Uncheck to select without moving them."));
+                auto* option=new QWidgetAction(menu);option->setDefaultWidget(move);menu->addAction(option);
+                b->setMenu(menu);b->setPopupMode(QToolButton::MenuButtonPopup);
+                preview3dMirrors_.append({move,QStringLiteral("view3dSelectAndMove")});
+            }
+            if (t.tool == RouteTool::Move) {
+                auto* menu=new QMenu(b);menu->setObjectName(QStringLiteral("preview3dMoveMenu"));
+                auto* options=new QWidget(menu);auto* layout=new QVBoxLayout(options);
+                layout->setContentsMargins(10,6,10,6);
+                layout->addWidget(fieldLabel(QStringLiteral("Pane movement"),options));
+                auto* plane=new QComboBox(options);plane->setObjectName(QStringLiteral("preview3dDragPlane"));
+                plane->setAccessibleName(QStringLiteral("Pane movement"));plane->setMinimumWidth(150);
+                plane->setToolTip(QStringLiteral("View follows the camera. XY keeps Z; XZ keeps Y; YZ keeps X."));
+                layout->addWidget(plane);
+                auto* option=new QWidgetAction(menu);option->setDefaultWidget(options);menu->addAction(option);
+                b->setMenu(menu);b->setPopupMode(QToolButton::MenuButtonPopup);
+                preview3dMirrors_.append({plane,QStringLiteral("view3dDragPlane")});
+            }
         }
         if (QAbstractButton* first = tools->button(static_cast<int>(RouteTool::Select))) first->setChecked(true);
         big(w, row, "preview3dAttach", QStringLiteral("Attach"), QStringLiteral("attach"),
@@ -226,6 +276,14 @@ void MainWindow::buildView3DTab() {
                                         {"Right angle (L)", "angle"}, {"D-sub shell", "dsub"}})
             forms.append({QString::fromLatin1(text), [this, k = QString::fromLatin1(key)] { if (view3dPane_) view3dPane_->setPlaceForm(k); }});
         popup("preview3dConnector", forms, 0);
+        if(auto* stretch=page->findChild<QToolButton*>(QStringLiteral("preview3dStretch"))) {
+            auto* menu=new QMenu(stretch);
+            auto* pull=menu->addAction(QStringLiteral("Stretch by pulling a connector"));
+            connect(pull,&QAction::triggered,this,[this]{if(view3dPane_)view3dPane_->setRouteTool(RouteTool::Stretch);});
+            auto* points=menu->addAction(QStringLiteral("Stretch by pinpoints"));points->setObjectName(QStringLiteral("preview3dStretchByPinpoints"));
+            connect(points,&QAction::triggered,this,[this]{if(view3dPane_)view3dPane_->setRouteTool(RouteTool::Pinpoints);});
+            stretch->setMenu(menu);stretch->setPopupMode(QToolButton::MenuButtonPopup);
+        }
         popup("preview3dMeasure",
               {{QStringLiteral("Point to point"), [this] { if (view3dPane_) view3dPane_->setMeasureMode(0); }},
                {QStringLiteral("Surface to surface"), [this] { if (view3dPane_) view3dPane_->setMeasureMode(1); }},
@@ -258,21 +316,38 @@ void MainWindow::buildView3DTab() {
         auto* gl = new QGridLayout(g);
         gl->setContentsMargins(4, 2, 4, 2);
         gl->setVerticalSpacing(2);
+        row->removeWidget(land);
+        land->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        land->setIconSize(QSize(18,18));
+        land->setFixedSize(28,24);
+        gl->addWidget(land,0,0);
         auto* plane = new QComboBox(g);
         plane->setObjectName(QStringLiteral("preview3dWorkPlane"));
-        gl->addWidget(plane, 0, 0, 1, 2);
+        plane->setFixedWidth(190);
+        gl->addWidget(plane, 0, 1);
         preview3dMirrors_.append({plane, QStringLiteral("view3dWorkPlane")});
-        gl->addWidget(fieldLabel(QStringLiteral("at"), g), 1, 0);
+        gl->addWidget(fieldLabel(QStringLiteral("At"), g), 1, 0);
         auto* at = new QDoubleSpinBox(g);
         at->setObjectName(QStringLiteral("preview3dWorkPlaneAt"));
+        at->setFixedWidth(190);
         gl->addWidget(at, 1, 1);
         preview3dMirrors_.append({at, QStringLiteral("view3dWorkPlaneAt")});
         row->addWidget(g);
-        big(w, row, "preview3dWorkPlaneHere", QStringLiteral("Through the point"), QStringLiteral("workplane"),
+        auto* through=big(w, row, "preview3dWorkPlaneHere", QStringLiteral("Through point"), QStringLiteral("workplane"),
             QStringLiteral("The plane put through the node selected, or the point last picked"), [this] {
                 if (!view3dPane_) return;
                 if (auto* b = view3dPane_->findChild<QToolButton*>(QStringLiteral("view3dWorkPlaneHere"))) b->click();
             });
+        row->removeWidget(through);
+        through->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        through->setIconSize(QSize(16,16));
+        gl->addWidget(through,2,0,1,2);
+        auto* joints = new QCheckBox(QStringLiteral("Show joints"), g);
+        joints->setObjectName(QStringLiteral("preview3dShowJoints"));
+        joints->setToolTip(QStringLiteral("Show cable control joints while moving."));
+        gl->addWidget(joints,0,2);
+        preview3dMirrors_.append({joints, QStringLiteral("view3dShowJoints")});
+
     });
     group(QStringLiteral("Show"), [&](QWidget* w, QHBoxLayout* row) {
         auto* g = new QWidget(w);
@@ -295,8 +370,12 @@ void MainWindow::buildView3DTab() {
                                    QStringLiteral("Show or hide the harness drawn on the sheet"), [] {});
         harness->setCheckable(true);
         preview3dMirrors_.append({harness, QStringLiteral("view3dHarnessShown")});
-        big(w, row, "preview3dParts", QStringLiteral("Parts"), QStringLiteral("parts"),
-            QStringLiteral("The model's solids, each to show or hide"), [this] { if (view3dPane_) view3dPane_->showPartsList(); });
+        auto* parts = big(w, row, "preview3dParts", QStringLiteral("Parts panel"), QStringLiteral("parts"),
+            QStringLiteral("Show or hide the left Parts panel"), [] {});
+        parts->setCheckable(true); preview3dMirrors_.append({parts,QStringLiteral("view3dShowPartsPanel")});
+        auto* properties = big(w, row, "preview3dProperties", QStringLiteral("Properties panel"), QStringLiteral("properties"),
+            QStringLiteral("Show or hide the right Properties panel"), [] {});
+        properties->setCheckable(true); preview3dMirrors_.append({properties,QStringLiteral("view3dShowPropertiesPanel")});
     });
     group(QStringLiteral("Environment"), [&](QWidget* w, QHBoxLayout* row) {
         big(w, row, "preview3dEnvLoad", QStringLiteral("Load"), QStringLiteral("load"),
@@ -305,37 +384,35 @@ void MainWindow::buildView3DTab() {
         big(w, row, "preview3dEnvClear", QStringLiteral("Clear"), QStringLiteral("clear"),
             QStringLiteral("Take the environment away (Undo brings it back)"),
             [this] { if (view3dPane_) view3dPane_->clearEnvironment(); });
-        // SHOWN, HOW SOLID, AND CUT OPEN.
-        auto* g = new QWidget(w);
+        auto* g = new QWidget(w);g->setObjectName(QStringLiteral("preview3dEnvironmentForm"));
         auto* gl = new QGridLayout(g);
-        gl->setContentsMargins(4, 2, 4, 2);
-        gl->setVerticalSpacing(2);
-        auto* shown = new QCheckBox(QStringLiteral("Show"), g);
-        shown->setObjectName(QStringLiteral("preview3dEnvShown"));
-        gl->addWidget(shown, 0, 0);
-        preview3dMirrors_.append({shown, QStringLiteral("view3dEnvShown")});
-        // EACH SLIDER NAMED: how solid the model is, where the cut is.
-        auto* opacityName = fieldLabel(QStringLiteral("Opacity"), g);
-        opacityName->setObjectName(QStringLiteral("preview3dEnvOpacityLabel"));
-        gl->addWidget(opacityName, 0, 1);
-        auto* opacity = new QSlider(Qt::Horizontal, g);
-        opacity->setObjectName(QStringLiteral("preview3dEnvOpacity"));
-        opacity->setMinimumWidth(90);
-        opacity->setToolTip(QStringLiteral("How solid the model is drawn (a solid's own: right-click it, Opacity)"));
-        gl->addWidget(opacity, 0, 2);
-        preview3dMirrors_.append({opacity, QStringLiteral("view3dEnvOpacity")});
-        auto* section = new QComboBox(g);
-        section->setObjectName(QStringLiteral("preview3dSection"));
-        gl->addWidget(section, 1, 0);
-        preview3dMirrors_.append({section, QStringLiteral("view3dSection")});
-        auto* sectionAt = new QSlider(Qt::Horizontal, g);
-        sectionAt->setObjectName(QStringLiteral("preview3dSectionAt"));
-        sectionAt->setMinimumWidth(90);
-        sectionAt->setToolTip(QStringLiteral("Where the cut is"));
-        gl->addWidget(fieldLabel(QStringLiteral("Cut at"), g), 1, 1);
-        gl->addWidget(sectionAt, 1, 2);
-        preview3dMirrors_.append({sectionAt, QStringLiteral("view3dSectionAt")});
+        gl->setContentsMargins(8,4,8,4);gl->setHorizontalSpacing(8);gl->setVerticalSpacing(6);
+        gl->setColumnMinimumWidth(0,82);gl->setColumnStretch(1,1);
+        auto* shown=new QCheckBox(QStringLiteral("Show environment"),g);
+        shown->setObjectName(QStringLiteral("preview3dEnvShown"));gl->addWidget(shown,0,0,1,3);
+        preview3dMirrors_.append({shown,QStringLiteral("view3dEnvShown")});
+        auto* opacityName=fieldLabel(QStringLiteral("Opacity"),g);
+        opacityName->setObjectName(QStringLiteral("preview3dEnvOpacityLabel"));gl->addWidget(opacityName,1,0);
+        auto* opacity=new QSlider(Qt::Horizontal,g);opacity->setObjectName(QStringLiteral("preview3dEnvOpacity"));
+        opacity->setMinimumWidth(150);gl->addWidget(opacity,1,1);
+        auto* opacityValue=fieldLabel(QStringLiteral("100%"),g);opacityValue->setMinimumWidth(38);gl->addWidget(opacityValue,1,2);
+        connect(opacity,&QSlider::valueChanged,opacityValue,[opacityValue](int value){opacityValue->setText(QString::number(value)+QLatin1Char('%'));});
+        preview3dMirrors_.append({opacity,QStringLiteral("view3dEnvOpacity")});
+        gl->addWidget(fieldLabel(QStringLiteral("Cut direction"),g),2,0);
+        auto* section=new QComboBox(g);section->setObjectName(QStringLiteral("preview3dSection"));
+        section->setMinimumWidth(150);gl->addWidget(section,2,1,1,2);
+        preview3dMirrors_.append({section,QStringLiteral("view3dSection")});
+        auto* cutName=fieldLabel(QStringLiteral("Cut at"),g);gl->addWidget(cutName,3,0);
+        auto* sectionAt=new QSlider(Qt::Horizontal,g);sectionAt->setObjectName(QStringLiteral("preview3dSectionAt"));
+        sectionAt->setToolTip(QStringLiteral("Move the cut through the environment and harness together."));
+        gl->addWidget(sectionAt,3,1);
+        auto* cutValue=fieldLabel(QStringLiteral("50%"),g);gl->addWidget(cutValue,3,2);
+        connect(sectionAt,&QSlider::valueChanged,cutValue,[cutValue](int value){cutValue->setText(QString::number(value/10.0,'f',1)+QLatin1Char('%'));});
+        auto enableCut=[=](int value){sectionAt->setEnabled(value>0);cutName->setEnabled(value>0);cutValue->setEnabled(value>0);};
+        connect(section,&QComboBox::currentIndexChanged,g,enableCut);enableCut(0);
+        preview3dMirrors_.append({sectionAt,QStringLiteral("view3dSectionAt")});
         row->addWidget(g);
+
     });
     // THE BUNDLES' SIZES, and where a click lands.
     group(QStringLiteral("Bundle"), [&](QWidget* w, QHBoxLayout* row) {
@@ -424,22 +501,38 @@ void MainWindow::buildView3DTab() {
         big(w, row, "preview3dKeepOuts", QStringLiteral("Keep-outs"), QStringLiteral("parts"),
             QStringLiteral("Every keep-out: where it is, and whether it blocks a cable or alerts"),
             [this] { if (view3dPane_) view3dPane_->showKeepOuts(); });
-        QToolButton* shown = big(w, row, "preview3dKeepOutsShown", QStringLiteral("Show"), QStringLiteral("harness"),
+        QToolButton* shown = big(w, row, "preview3dKeepOutsShown", QStringLiteral("Show keep-out"), QStringLiteral("keepvisibility"),
                                  QStringLiteral("Show or hide the keep-outs"), [] {});
         shown->setCheckable(true);
         preview3dMirrors_.append({shown, QStringLiteral("view3dKeepOutsShown")});
     });
     // TO AND FROM THE DRAWING: the route's lengths given to the harness drawn, and the 3D harness built again from it.
     group(QStringLiteral("Drawing"), [&](QWidget* w, QHBoxLayout* row) {
-        big(w, row, "preview3dFromHarness", QStringLiteral("Route from harness"), QStringLiteral("route"),
+        big(w,row,"preview3dSaveRoute",QStringLiteral("Save routing"),QStringLiteral("save"),
+            QStringLiteral("Save this drawing including its routing"),[this]{
+                if(view3dPane_) if(auto* b=view3dPane_->findChild<QToolButton*>(QStringLiteral("view3dSaveRoute"))) b->click();
+            });
+        auto* system=big(w,row,"preview3dSystemLink",QStringLiteral("System design"),QStringLiteral("link"),
+            QStringLiteral("Link the 3D view to the system's drawing feeds; off links it to this harness drawing"),[]{});
+        system->setCheckable(true); preview3dMirrors_.append({system,QStringLiteral("view3dSystemLink")});
+        big(w,row,"preview3dAddDrawing",QStringLiteral("Add drawings"),QStringLiteral("load"),
+            QStringLiteral("Add multiple harness drawings to the system route"),[this]{if(view3dPane_) view3dPane_->chooseSystemDrawings();});
+        big(w,row,"preview3dExportPlanes",QStringLiteral("2D views"),QStringLiteral("lengths"),
+            QStringLiteral("Create editable Top, Front and Side projections in a DWX drawing"),[this]{if(view3dPane_)view3dPane_->exportPlaneDrawings();});
+        QToolButton* harnessRoute = big(w, row, "preview3dFromHarness", QStringLiteral("Harness route"), QStringLiteral("route"),
             QStringLiteral("Put the harness in as a route - its parts where it is drawn in 3D and its cables between them - to "
                            "move into the model"),
             [this] {
                 if (!view3dPane_) return;
                 if (auto* b = view3dPane_->findChild<QToolButton*>(QStringLiteral("view3dRouteFromHarness"))) b->click();
             });
+        harnessRoute->setAutoRaise(false);
+        harnessRoute->setStyleSheet(QStringLiteral("QToolButton{background:#d66b13;color:white;border:1px solid #f6a04d;"
+                                                  "border-radius:5px;padding:5px;font-weight:bold;}"
+                                                  "QToolButton:hover{background:#ed852a;}"));
         big(w, row, "preview3dLengths", QStringLiteral("Lengths to harness"), QStringLiteral("lengths"),
-            QStringLiteral("Give each cable of the harness drawn its length along the route"),
+            QStringLiteral("Update the harness wizard's cable lengths from the measured 3D route. "
+                           "This does not redraw an existing 2D mechanical drawing."),
             [this] { if (view3dPane_) view3dPane_->applyLengths(true); });
         big(w, row, "preview3dRefresh", QStringLiteral("Refresh"), QStringLiteral("refresh"), QStringLiteral("Build the 3D harness again from the drawing"),
             [this] { if (view3dPane_) view3dPane_->rebuild(false); });
@@ -500,16 +593,21 @@ void MainWindow::buildView3DTab() {
         if (!row) return;
         const int at = row->indexOf(buttons.first());
         auto* column = new QWidget(holder);
+        if(names.contains(QStringLiteral("preview3dSaveRoute")))column->setObjectName(QStringLiteral("preview3dDrawingCommands"));
         auto* gl = new QGridLayout(column);
         gl->setContentsMargins(2, 0, 2, 0);
         gl->setHorizontalSpacing(2);
-        gl->setVerticalSpacing(0);
+        gl->setVerticalSpacing(names.contains(QStringLiteral("preview3dHarness")) ? 4 : 0);
         for (int i = 0; i < buttons.size(); ++i) {
             QToolButton* b = buttons[i];
             row->removeWidget(b);
             b->setParent(column);
             b->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
             b->setIconSize(QSize(18, 18));
+            if(names.contains(QStringLiteral("preview3dHarness")))
+                b->setStyleSheet(QStringLiteral("QToolButton{margin:1px 0;padding:2px 4px;border:1px solid transparent;border-radius:3px;}"
+                    "QToolButton:hover{background:rgba(43,140,210,35);border-color:rgba(43,140,210,100);}"
+                    "QToolButton:checked{background:rgba(43,140,210,65);border-color:rgba(43,140,210,180);}"));
             gl->addWidget(b, i % 3, i / 3);
         }
         row->insertWidget(std::max(0, at), column);
@@ -518,13 +616,14 @@ void MainWindow::buildView3DTab() {
     stack({QStringLiteral("preview3dIso"), QStringLiteral("preview3dTop"), QStringLiteral("preview3dBottom"), QStringLiteral("preview3dFront"),
            QStringLiteral("preview3dBack"), QStringLiteral("preview3dLeft"), QStringLiteral("preview3dSide"), QStringLiteral("preview3dFlip"),
            QStringLiteral("preview3dFullScreen"), QStringLiteral("preview3dLock")});
-    stack({QStringLiteral("preview3dHarness"), QStringLiteral("preview3dParts")});
-    stack({QStringLiteral("preview3dEnvClear")});
+    stack({QStringLiteral("preview3dHarness"), QStringLiteral("preview3dParts"), QStringLiteral("preview3dProperties")});
+    stack({QStringLiteral("preview3dEnvLoad"),QStringLiteral("preview3dEnvClear")});
     stack({QStringLiteral("preview3dBranch"), QStringLiteral("preview3dClip"), QStringLiteral("preview3dMove"), QStringLiteral("preview3dStretch"),
            QStringLiteral("preview3dDelete"), QStringLiteral("preview3dAttach")});
     stack({QStringLiteral("preview3dAddLoose"), QStringLiteral("preview3dAddLength")});
     stack({QStringLiteral("preview3dWorkPlaneHere")});
-    stack({QStringLiteral("preview3dRefresh")});
+    stack({QStringLiteral("preview3dSaveRoute"),QStringLiteral("preview3dSystemLink"),QStringLiteral("preview3dAddDrawing"),
+           QStringLiteral("preview3dExportPlanes"),QStringLiteral("preview3dFromHarness"),QStringLiteral("preview3dLengths"),QStringLiteral("preview3dRefresh")});
     for (QToolButton* b : page->findChildren<QToolButton*>())
         if (b->toolButtonStyle() == Qt::ToolButtonTextUnderIcon) b->setIconSize(QSize(26, 26));
     lay->addStretch(1);
@@ -566,16 +665,20 @@ void MainWindow::fitPreview3DRibbon() {
     auto* scroll = qobject_cast<QScrollArea*>(view3dTabPage_);
     QWidget* page = scroll ? scroll->widget() : nullptr;
     if (!page || preview3dFolding_) return;
+    // Opening a popup can resize the ribbon viewport. Do not immediately refold its
+    // contents and hide the popup while the user is trying to use it.
+    for(const auto& group:preview3dFolds_)if(group.popup && group.popup->isVisible())return;
     preview3dFolding_ = true;
     auto setFolded = [](Preview3DFold& f, bool on) {
         if (!f.slot || !f.content || !f.fold || !f.popup || f.folded == on) return;
         f.folded = on;
         if (on) {
-            f.popup->layout()->addWidget(f.content);
+            f.popup->findChild<QScrollArea*>(QStringLiteral("preview3dFoldScroll"))->setWidget(f.content);
             f.content->show();
             f.fold->show();
         } else {
             f.popup->hide();
+            f.popup->findChild<QScrollArea*>(QStringLiteral("preview3dFoldScroll"))->takeWidget();
             qobject_cast<QHBoxLayout*>(f.slot->layout())->insertWidget(0, f.content);
             f.content->show();
             f.fold->hide();
@@ -588,7 +691,7 @@ void MainWindow::fitPreview3DRibbon() {
         return page->sizeHint().width();
     };
     // ALL OPEN, then folded one by one - the least used first - until the tab fits the width there is.
-    for (Preview3DFold& f : preview3dFolds_) setFolded(f, false);
+    for (Preview3DFold& f : preview3dFolds_) setFolded(f, f.title==QLatin1String("Drawing") || f.title==QLatin1String("Environment"));
     QList<int> order;
     for (int i = 0; i < preview3dFolds_.size(); ++i) order << i;
     std::sort(order.begin(), order.end(), [this](int a, int b) { return preview3dFolds_[a].order < preview3dFolds_[b].order; });
@@ -600,6 +703,7 @@ void MainWindow::fitPreview3DRibbon() {
     // ROOM LEFT: a small group folded on the way opened again where it still fits - the most used first.
     for (auto it = order.rbegin(); it != order.rend(); ++it) {
         Preview3DFold& f = preview3dFolds_[*it];
+        if(f.title==QLatin1String("Drawing") || f.title==QLatin1String("Environment"))continue;
         if (!f.folded) continue;
         setFolded(f, false);
         if (wants() > room) setFolded(f, true);
@@ -628,6 +732,16 @@ void MainWindow::mirrorPreview3D() {
     // EACH ON THE RIBBON THE 3D VIEW'S OWN, in step both ways: what it can be set to, and what it is set to.
     if (preview3dMirrored_ || !view3dPane_) return;
     preview3dMirrored_ = true;
+    if (auto* button = view3dTabPage_->findChild<QToolButton*>(QStringLiteral("preview3dFromHarness"))) {
+        auto sync = [this, button] {
+            if (auto* source = view3dPane_->findChild<QToolButton*>(QStringLiteral("view3dRouteFromHarness"))) {
+                button->setStyleSheet(source->styleSheet());
+                button->setProperty("routeActive", source->property("routeActive"));
+            }
+        };
+        sync();
+        connect(view3dPane_, &View3DPane::harnessRouteStateChanged, button, [sync](bool) { sync(); });
+    }
     for (const auto& [ribbonW, name] : preview3dMirrors_) {
         QWidget* paneW = view3dPane_->findChild<QWidget*>(name);
         if (!ribbonW || !paneW) continue;
@@ -714,6 +828,8 @@ void MainWindow::showPreview3D(bool on) {
         QTimer::singleShot(0, this, [this, again] { splitView3D(static_cast<Qt::Orientation>(again)); });
     }
     preview3dOn_ = on;
+    if(auto* controls=findChild<QWidget*>(QStringLiteral("draftingStatusControls")))controls->setVisible(!on);
+    if(coordLabel_)coordLabel_->setVisible(!on);
     if (on) {
         // OUT OF ITS PANEL INTO THE MIDDLE: the panel put away for as long as the tab is open, and given back after.
         if (view3dPane_->fullScreenView()) view3dPane_->setFullScreen(false);

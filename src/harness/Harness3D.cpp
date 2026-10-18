@@ -10,11 +10,66 @@
 #include <QHash>
 #include <QJsonArray>
 #include <QRegularExpression>
+#include <QPainter>
+#include <QFontMetrics>
 
 #include <algorithm>
 #include <cmath>
 
 namespace Loopwire {
+
+// Print glyphs onto the curved sleeve as surface triangles. They share the cable's
+// depth and orientation in both renderers, rather than floating above it on screen.
+Mesh3D labelTextMesh3D(const std::vector<V3>& path, double radius, const QString& text, double textHeight, const V3& facing) {
+    Mesh3D mesh;
+    if (path.size() < 2 || text.isEmpty()) return mesh;
+    QFont font; font.setPixelSize(32);
+    QFontMetrics fm(font);
+    int width = 1;
+    const auto lines = text.split(QLatin1Char('\n'));
+    for (const auto& line : lines) width = std::max(width, fm.horizontalAdvance(line) + 4);
+    QImage glyphs(std::min(1024,width), std::min(256, fm.height()*int(lines.size())+4), QImage::Format_ARGB32);
+    glyphs.fill(Qt::transparent);
+    { QPainter p(&glyphs); p.setFont(font); p.setPen(Qt::white); p.drawText(glyphs.rect(), Qt::AlignCenter, text); }
+    QRect inkBounds;
+    for (int y = 0; y < glyphs.height(); ++y) for (int x = 0; x < glyphs.width(); ++x)
+        if (qAlpha(glyphs.pixel(x,y)) >= 100) inkBounds = inkBounds.united(QRect(x,y,1,1));
+    if (!inkBounds.isValid()) return mesh;
+    glyphs = glyphs.copy(inkBounds);
+    std::vector<double> lengths{0.0};
+    for (size_t i = 1; i < path.size(); ++i) lengths.push_back(lengths.back() + (path[i]-path[i-1]).length());
+    const double total = lengths.back();
+    if (total < 1e-6) return mesh;
+    const double height = std::min({textHeight > 0 ? textHeight : 2.5, radius*1.6,
+                                   total*0.9*glyphs.height()/glyphs.width()});
+    const double textLength = height*glyphs.width()/glyphs.height();
+    auto surface = [&](double x, double y) {
+        const double along = (total-textLength)*0.5 + x/glyphs.width()*textLength;
+        size_t i = 1;
+        while (i+1 < path.size() && lengths[i] < along) ++i;
+        const V3 tangent = (path[i]-path[i-1]).normalized();
+        const double span = lengths[i]-lengths[i-1];
+        const V3 centre = path[i-1] + (path[i]-path[i-1])*(span > 1e-9 ? (along-lengths[i-1])/span : 0.0);
+        V3 normal = facing-tangent*dot3(facing,tangent);
+        if (normal.length() < 1e-6) normal = V3{0,0,1}-tangent*tangent.z;
+        if (normal.length() < 1e-6) normal = V3{1,0,0}-tangent*tangent.x;
+        normal = normal.normalized();
+        const V3 across = cross3(normal,tangent).normalized();
+        const double angle = (0.5-y/glyphs.height())*height/radius;
+        return centre + (normal*std::cos(angle)+across*std::sin(angle))*(radius+0.035);
+    };
+    for (int y = 0; y < glyphs.height(); ++y) for (int x = 0; x < glyphs.width();) {
+        if (qAlpha(glyphs.pixel(x,y)) < 100) { ++x; continue; }
+        const int start = x++;
+        while (x < glyphs.width() && x-start < 3 && qAlpha(glyphs.pixel(x,y)) >= 100) ++x;
+        const int a = mesh.addVertex(surface(start,y)); const int b = mesh.addVertex(surface(x,y));
+        const int c = mesh.addVertex(surface(x,y+1)); const int d = mesh.addVertex(surface(start,y+1));
+        mesh.addTri(a,b,c); mesh.addTri(a,c,d);
+    }
+    return mesh;
+}
+
+
 
 QString harness3DPartKey(const Entity& e) {
     for (const char* key : {"brickId", "harnessBrick"}) {
@@ -29,6 +84,10 @@ QString harness3DPartKey(const Entity& e) {
 }
 
 namespace {
+
+// A BRAID'S COLOURS: a screen braid tinned copper; a braided sleeve, of plastic strands, nearly black.
+const QColor kBraidShield(168, 172, 180);
+const QColor kBraidColour(58, 62, 70);
 
 struct Cached {
     QDateTime when;
@@ -718,7 +777,11 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
         return QString();
     };
     auto brickOf = [](const Entity& e) {
-        return harness3DPartKey(e);
+        const QString key = harness3DPartKey(e);
+        if (!key.isEmpty()) return key;
+        if (e.type == EntityType::TwistedPair || e.type == EntityType::Wire || e.type == EntityType::DoubleLine)
+            return QStringLiteral("drawing:run:") + e.id;
+        return QStringLiteral("drawing:special:") + e.id;
     };
     // A wire's colour: the one the run carries for it, else the general colours.
     auto colourOf = [](const Entity& e, int k) {
@@ -749,7 +812,7 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
             }
         }
         Harness3DItem sl;
-        sl.mesh = tubeMesh(piece, radius, 10, true);
+        sl.smoothContours = true; sl.mesh = tubeMesh(piece, radius, 10, true);
         sl.color = QColor(36, 36, 40);
         sl.what = QStringLiteral("sleeve");
         sl.brick = brick;
@@ -768,7 +831,7 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
                 across = std::max(across, distance(l, r));
             }
             Harness3DItem sl;
-            sl.mesh = tubeMesh(mid, std::max(0.2, across / 2.0), 10, true);
+            sl.smoothContours = true; sl.mesh = tubeMesh(mid, std::max(0.2, across / 2.0), 10, true);
             sl.color = QColor(36, 36, 40);
             sl.what = QStringLiteral("sleeve");
             sl.brick = brickOf(e);
@@ -781,7 +844,7 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
             std::vector<V3> path;
             for (const Vec2& point : path2) path.push_back(at3(point));
             Harness3DItem wire;
-            wire.mesh = tubeMesh(path, std::max(0.2, e.meta.value(QStringLiteral("gap")).toDouble(1.0)) / 2.0, 10, true);
+            wire.smoothContours = true; wire.mesh = tubeMesh(path, std::max(0.2, e.meta.value(QStringLiteral("gap")).toDouble(1.0)) / 2.0, 10, true);
             wire.what = QStringLiteral("wire");
             wire.color = colourOf(e, 0);
             scene.items.push_back(std::move(wire));
@@ -842,28 +905,32 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
                     const double coverS = e.meta.value(QStringLiteral("shrinkCoverStart")).toDouble(20.0);
                     const double coverE = e.meta.value(QStringLiteral("shrinkCoverEnd")).toDouble(20.0);
                     Harness3DItem cab;
-                    cab.mesh = tubeMesh(fine, cable, 16, true);
-                    cab.color = QColor(70, 74, 82);
-                    cab.what = QStringLiteral("run");
+                    cab.smoothContours = true; cab.mesh = tubeMesh(fine, cable, 16, true);
+                    // A BRAID BETWEEN THE TWO SLEEVES, woven; or a cable.
+                    const bool braided = sleeveIsBraid(e);
+                    cab.color = braided ? kBraidColour : QColor(70, 74, 82);
+                    cab.what = braided ? QStringLiteral("braid") : QStringLiteral("run");
                     cab.brick = brickOf(e);
                     scene.items.push_back(std::move(cab));
-                    wi.mesh = tubeMeshVar(fine, [&](double s) {
+                    wi.smoothContours = true; wi.mesh = tubeMeshVar(fine, [&](double s) {
                         if (s > coverS && s < L - coverE) return 1e-4;   // no sleeve between the two ends
                         return s <= coverS ? ease(faceS, R, s / std::max(1e-9, tapS)) : ease(faceE, R, (L - s) / std::max(1e-9, tapE));
                     }, 18, true);
                 } else {
                     const bool transition = e.meta.value(QStringLiteral("shrinkTransition")).toBool();
-                    wi.mesh = tubeMeshVar(fine, [&](double s) {
+                    wi.smoothContours = true; wi.mesh = tubeMeshVar(fine, [&](double s) {
                         if (!transition && tapS > 1e-9 && s < tapS) return ease(faceS, R, s / tapS);
                         if (tapE > 1e-9 && s > L - tapE) return ease(faceE, R, (L - s) / tapE);
                         return R;
                     }, 18, true);
                 }
             } else {
-                wi.mesh = tubeMesh(path, std::max(0.2, across) / 2.0, 8, true);
+                wi.smoothContours = true; wi.mesh = tubeMesh(path, std::max(0.2, across) / 2.0, 8, true);
             }
-            wi.color = sleeve ? QColor(32, 32, 35) : colourOf(e, 0);
-            wi.what = sleeve ? QStringLiteral("sleeve") : QStringLiteral("wire");
+            // A BRAIDED SLEEVE over the whole run, woven.
+            const bool braidRun = sleeve && sleeveIsBraid(e) && !e.meta.value(QStringLiteral("shrinkEndsOnly")).toBool();
+            wi.color = braidRun ? kBraidColour : sleeve ? QColor(32, 32, 35) : colourOf(e, 0);
+            wi.what = braidRun ? QStringLiteral("braid") : sleeve ? QStringLiteral("sleeve") : QStringLiteral("wire");
             wi.brick = brickOf(e);
             scene.items.push_back(std::move(wi));
             continue;
@@ -886,9 +953,10 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
         // ITS BODY: a cable, or heatshrink over the wires, between where it fans out at each end.
         if (covered && total > fanA + fanB + 0.5) {
             Harness3DItem it;
-            it.mesh = tubeMesh(stretch(route, fanA, total - fanB), bodyW / 2.0, 18, true);
-            it.color = body == QLatin1String("heatshrink") ? QColor(42, 42, 46) : QColor(70, 74, 82);
-            it.what = body == QLatin1String("heatshrink") ? QStringLiteral("sleeve") : QStringLiteral("run");
+            it.smoothContours = true; it.mesh = tubeMesh(stretch(route, fanA, total - fanB), bodyW / 2.0, 18, true);
+            const bool braided = e.meta.value(QStringLiteral("twistBodyBraid")).toBool();
+            it.color = braided ? kBraidShield : body == QLatin1String("heatshrink") ? QColor(42, 42, 46) : QColor(70, 74, 82);
+            it.what = braided ? QStringLiteral("braid") : body == QLatin1String("heatshrink") ? QStringLiteral("sleeve") : QStringLiteral("run");
             it.brick = brickOf(e);
             scene.items.push_back(std::move(it));
             // ITS TRANSITION SLEEVES, on the body at the ends it says.
@@ -900,7 +968,7 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
             auto sleeve = [&](double s0, double s1, double width) {
                 if (s1 - s0 < 0.2) return;
                 Harness3DItem sl;
-                sl.mesh = tubeMesh(stretch(route, s0, s1), std::max(width, bodyW * 1.05) / 2.0, 18, true);
+                sl.smoothContours = true; sl.mesh = tubeMesh(stretch(route, s0, s1), std::max(width, bodyW * 1.05) / 2.0, 18, true);
                 sl.color = QColor(28, 28, 30);
                 sl.what = QStringLiteral("transition");
                 sl.brick = brickOf(e);
@@ -1040,7 +1108,7 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
                     if (ss >= total) break;
                 }
                 Harness3DItem wi;
-                wi.mesh = tubeMesh(helix, wire / 2.0, 8, true);
+                wi.smoothContours = true; wi.mesh = tubeMesh(helix, wire / 2.0, 8, true);
                 wi.color = colourOf(e, k);
                 wi.what = QStringLiteral("wire");
                 wi.brick = brickOf(e);
@@ -1161,7 +1229,7 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
                     if (ss >= total) break;
                 }
                 Harness3DItem wi;
-                wi.mesh = tubeMesh(path, ww / 2.0, 8, true);
+                wi.smoothContours = true; wi.mesh = tubeMesh(path, ww / 2.0, 8, true);
                 wi.color = colourOf(e, k);
                 wi.what = QStringLiteral("wire");
                 wi.brick = brickOf(e);
@@ -1189,7 +1257,7 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
                 const std::vector<V3> piece = stretch(c, s0, s1);
                 if (piece.size() < 2) return;
                 Harness3DItem wi;
-                wi.mesh = tubeMesh(piece, ww / 2.0, 8, false);
+                wi.smoothContours = true; wi.mesh = tubeMesh(piece, ww / 2.0, 8, false);
                 wi.color = colourOf(e, k);
                 wi.what = QStringLiteral("wire");
                 wi.brick = brickOf(e);
@@ -1246,6 +1314,23 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
         label.mesh = sleeve({centre2.x, centre2.y, 0}, {axis2.x, axis2.y, 0}, length, radius, 0.12);
         label.color = QColor(255, 215, 45); label.what = QStringLiteral("Label");
         label.ownLook = true; label.brick = brickOf(mask); scene.items.push_back(label);
+        QString caption = mask.meta.value(QStringLiteral("labelCaption")).toString();
+        double textHeight = mask.meta.value(QStringLiteral("labelTextHeight")).toDouble();
+        const QString labelGroup = mask.meta.value(QStringLiteral("labelGroup")).toString();
+        if (!labelGroup.isEmpty()) for (const auto& entity : ents) {
+            if (entity.meta.value(QStringLiteral("labelGroup")).toString() != labelGroup || entity.type != EntityType::Text) continue;
+            caption = entity.meta.value(QStringLiteral("text")).toString(caption);
+            textHeight = entity.meta.value(QStringLiteral("height")).toDouble(textHeight);
+        }
+        Harness3DItem ink;
+        const V3 centre{centre2.x,centre2.y,0}, along{axis2.x,axis2.y,0};
+        ink.surfaceText = caption;
+        ink.textAlwaysVisible = mask.meta.value(QStringLiteral("labelTextAlwaysVisible")).toBool(true);
+        ink.textPath = {centre-along*(length*0.5),centre+along*(length*0.5)};
+        ink.textRadius = radius+0.12; ink.textHeight = textHeight;
+        ink.mesh = labelTextMesh3D({centre-along*(length*0.5),centre+along*(length*0.5)}, radius+0.12, caption, textHeight);
+        ink.color = Qt::black; ink.what = QStringLiteral("Label text"); ink.brick = label.brick; ink.ownLook = true;
+        if (!ink.mesh.empty()) scene.items.push_back(std::move(ink));
         bool clear = false;
         const QString group = mask.meta.value(QStringLiteral("labelGroup")).toString();
         for (const auto& e : ents) {
@@ -1266,7 +1351,7 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
         }
         if (clear) {
             Harness3DItem cover;
-            cover.mesh = sleeve({centre2.x, centre2.y, 0}, {axis2.x, axis2.y, 0}, length + 3.2, radius + 0.3, 0.18);
+            cover.mesh = sleeve({centre2.x, centre2.y, 0}, {axis2.x, axis2.y, 0}, length + 4.0, radius + 0.3, 0.18);
             cover.color = QColor(220, 240, 250); cover.alpha = 0.22; cover.ownLook = true;
             cover.what = QStringLiteral("Clear label sleeve"); cover.brick = label.brick;
             scene.items.push_back(cover);
@@ -1301,7 +1386,7 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
             const double offset = dot(q - centre2, across);
             path.push_back({q.x, q.y, std::sqrt(std::max(0.0, radius * radius - offset * offset)) + cord});
         }
-        Harness3DItem tie; tie.mesh = tubeMesh(path, cord, 10, true);
+        Harness3DItem tie; tie.smoothContours = true; tie.mesh = tubeMesh(path, cord, 10, true);
         tie.color = QColor(225, 215, 185); tie.what = QStringLiteral("Lacing tie"); tie.ownLook = true;
         tie.brick = brickOf(e); scene.items.push_back(tie);
     }
@@ -1596,6 +1681,7 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
     for (Harness3DItem& it : scene.items) {
         if (it.ownLook) continue;
         if (it.what == QLatin1String("wire")) it.texture = Texture3D::Plastic;
+        else if (it.what == QLatin1String("braid")) it.texture = Texture3D::Braid;
         else if (it.what == QLatin1String("run") || it.what == QLatin1String("sleeve") ||
                  it.what == QLatin1String("transition") || it.what == QLatin1String("sockets") || it.what == QLatin1String("insert"))
             it.texture = Texture3D::Matte;

@@ -1379,19 +1379,20 @@ void MainWindow::buildHarnessMechanicalTab() {
             auto* hm = new QMenu(hsBtn);
             struct Sort { ShrinkRouteMode mode; int icon; const char* onButton; const char* inMenu;
                           const char* tip; };
+            // A CABLE OR A BRAID OVER THE RUN, with heatshrink on its ends or without: the sort chosen here, the
+            // ends switched on the parameters beside it (and on the panel, for one already drawn).
             const Sort sorts[4] = {
                 {ShrinkRouteMode::Sleeve, 0, "Heatshrink", "Heatshrink over the run",
                  "Heatshrink over the run: click along the stretch it covers, Enter finishes. Drawn "
                  "recovered - pulled in at both ends onto what it grips, and following the knees in "
                  "between."},
                 {ShrinkRouteMode::Cable, 1, "Cable", "Cable over the run",
-                 "A cable running along the run under a length of heatshrink: one width from end to "
-                 "end, cut square across each end rather than recovered onto what is under it."},
-                {ShrinkRouteMode::CableEnds, 2, "Cable ends",
-                 "Cable over the run with heatshrink on ends",
-                 "Cable over the run with heatshrink on its ends: the cable shows between the two "
-                 "sleeves, each split line can be dragged, and each end keeps its own face and "
-                 "shrunk length."},
+                 "A cable running along the run: one width from end to end, cut square across each end - "
+                 "or, Heatshrink on ends switched on, with a sleeve over each end and the cable showing "
+                 "between them, each end its own face and shrunk length."},
+                {ShrinkRouteMode::Braid, 4, "Braid", "Braided sleeve over the run",
+                 "A braided sleeve over the run: one width, its weave drawn along it, cut square at each "
+                 "end - or, Heatshrink on ends switched on, with a sleeve over each end."},
                 {ShrinkRouteMode::Transition, 3, "Transition", "Transition heatshrink",
                  "Transition heatshrink: draw a line across the parallel lines it covers; the sleeve "
                  "is fitted at their closest end, using the longest line when their lengths differ."}};
@@ -1413,7 +1414,10 @@ void MainWindow::buildHarnessMechanicalTab() {
                     hsBtn->setProperty("shrinkMode", static_cast<int>(mode));
                     hsAct->setIcon(makeToolIcon(ToolId::HeatshrinkRoute,
                                                 Chrome::ink(), icon));
-                    if (editor_) editor_->setShrinkRouteMode(mode);
+                    if (editor_) {
+                        editor_->setShrinkRouteMode(mode);
+                        if (shrinkModeIsOverRun(mode)) editor_->setShrinkEndSleeves(shrinkEndsWanted_);
+                    }
                     hsAct->trigger();   // picks the tool, and checks it on the ribbon
                 });
             }
@@ -1423,9 +1427,10 @@ void MainWindow::buildHarnessMechanicalTab() {
             // Pressing the button itself draws whichever sort it is wearing. The default action sets
             // the tool; this only has to say which sort of sleeve that tool is to draw.
             connect(hsAct, &QAction::triggered, this, [this, hsBtn] {
-                if (editor_)
-                    editor_->setShrinkRouteMode(static_cast<ShrinkRouteMode>(
-                        hsBtn->property("shrinkMode").toInt()));
+                if (!editor_) return;
+                const auto mode = static_cast<ShrinkRouteMode>(hsBtn->property("shrinkMode").toInt());
+                editor_->setShrinkRouteMode(mode);
+                if (shrinkModeIsOverRun(mode)) editor_->setShrinkEndSleeves(shrinkEndsWanted_);
             });
             lgAdd(hsBtn);
         }
@@ -1631,6 +1636,19 @@ void MainWindow::buildHarnessMechanicalTab() {
                   }
                   return actual(QStringLiteral("shrinkCoverStart"), 20.0);
               }, [this](double v){ editor_->setShrinkCover(v); }, true);
+        // HEATSHRINK ON THE ENDS of a cable or a braid over the run - and with it, the faces, recovery and cover length
+        // of those sleeves.
+        auto* endSleeves = new QCheckBox(QStringLiteral("Heatshrink on ends"), settings);
+        endSleeves->setObjectName(QStringLiteral("shrinkRouteEndSleeves"));
+        endSleeves->setStyleSheet(QStringLiteral("QCheckBox{color:#e6e9ef;background:transparent;}"));
+        endSleeves->setToolTip(QStringLiteral("A sleeve of heatshrink over each end of the cable or braid, the run showing between them"));
+        connect(endSleeves, &QCheckBox::toggled, this, [this](bool on) {
+            shrinkEndsWanted_ = on;
+            editor_->setShrinkEndSleeves(on);
+            if (syncShrinkRibbon_) syncShrinkRibbon_();
+            canvas_->update();
+        });
+        grid->addWidget(endSleeves, 0, 3);
         auto* finish = new QToolButton(settings);
         finish->setObjectName(QStringLiteral("shrinkRouteFinish"));
         finish->setText(QStringLiteral("Finish (Enter)"));
@@ -1643,17 +1661,23 @@ void MainWindow::buildHarnessMechanicalTab() {
         shrinkOptionsGroup_ = addGroupKeep(lay, QStringLiteral("Cable / heatshrink parameters"), settings);
         shrinkOptionsGroup_->setObjectName(QStringLiteral("shrinkRouteRibbonGroup"));
         mechGroups_ << shrinkOptionsGroup_;
-        syncShrinkRibbon_ = [this, fields, finish] {
+        syncShrinkRibbon_ = [this, fields, finish, endSleeves] {
             const bool active = editor_->tool() == ToolId::HeatshrinkRoute;
             shrinkOptionsGroup_->setVisible(active);
             if (!active) return;
             const auto mode = editor_->shrinkRouteMode();
+            endSleeves->setVisible(shrinkModeIsOverRun(mode));
+            {
+                const QSignalBlocker hold(endSleeves);
+                endSleeves->setChecked(shrinkModeHasEndSleeves(mode));
+            }
+            const bool squareEnds = mode == ShrinkRouteMode::Cable || mode == ShrinkRouteMode::Braid;
             for (const Field& f : fields) {
                 const bool transition = mode == ShrinkRouteMode::Transition;
                 const bool visible = f.kind <= 1 ? !transition
                                      : f.kind == 7 ? !transition
-                                     : f.kind == 6 ? transition || mode == ShrinkRouteMode::CableEnds
-                                     : mode != ShrinkRouteMode::Cable && (!transition || f.kind == 3 || f.kind == 5);
+                                     : f.kind == 6 ? transition || shrinkModeHasEndSleeves(mode)
+                                     : !squareEnds && (!transition || f.kind == 3 || f.kind == 5);
                 f.cell->setVisible(visible);
                 if (!visible) continue;
                 QSignalBlocker blocker(f.spin);

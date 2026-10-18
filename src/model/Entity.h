@@ -159,6 +159,11 @@ std::vector<Vec2> shrunkSleeveEndOutlineOf(const Entity& e, int end);
 // How far heatshrink covers the route from each end, in drawing units. False unless the entity is
 // the cable-with-end-sleeves sort; the values are clamped so the two ends cannot overlap.
 bool sleeveEndCoverageOf(const Entity& e, double& start, double& end);
+// A BRAIDED SLEEVE OVER THE RUN (shrinkBraid): the weave drawn on its body, as strokes - crossing diagonals from one
+// side to the other, a pitch apart, following the run round its knees. Its body is the whole run, or (heatshrink on its
+// ends) the stretch between the two sleeves. Empty for any other sleeve.
+bool sleeveIsBraid(const Entity& e);
+std::vector<std::pair<Vec2, Vec2>> sleeveBraidStrokes(const Entity& e);
 std::vector<Vec2> entityOutline(const Entity& e);
 
 // WHERE AN AXIS ANGLE STARTS ITS SWEEP, and HOW LONG ITS CENTRE LINES ARE.

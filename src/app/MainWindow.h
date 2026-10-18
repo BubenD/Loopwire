@@ -940,6 +940,8 @@ private:
     // as it is placed, so the numbers belong beside the button rather than in a dialog.
     QWidget* shrinkOptionsGroup_ = nullptr;
     std::function<void()> syncShrinkRibbon_;
+    // Heatshrink on the ends of the next cable or braid over the run, as the ribbon says. Not saved.
+    bool shrinkEndsWanted_ = false;
     QWidget* breakOptionsGroup_ = nullptr;
     // The twisted bundle's own setting: how many wires it fans out to. Shown only while that tool is
     // armed, like everything else on this tab (see updateMechanicalRibbonGroups).

@@ -11,6 +11,7 @@
 #include "render/Render3D.h"
 
 #include <QJsonObject>
+#include <QJsonArray>
 #include <QPointer>
 #include <QSet>
 #include <QVariantAnimation>
@@ -56,7 +57,7 @@ class View3DHelpDialog;
 // MOVE takes a node somewhere else on the model, its bundles following from where they were laid; STRETCH pulls a node -
 // an end, to make the harness shorter or longer - and the points each of its bundles was laid through go with it, the
 // nearer the more, up to the node at the bundle's other end: a clip or a branch there holds the harness where it is.
-enum class RouteTool { Select, Connector, Branch, Clip, Route, Delete, Move, Stretch, Measure };
+enum class RouteTool { Select, Connector, Branch, Clip, Route, Delete, Move, Stretch, Measure, Pinpoints };
 
 // THE HARNESS THE ROUTE IS FOR: its name and the wizard's design of it - the one open in the wizard, or the one this
 // drawing has placed (or keeps, where it keeps one only). `ok` false: none.
@@ -98,6 +99,11 @@ public:
     void setEnvironmentChoice(bool shown);
     // How a part with no 3D model is shown: a box, or a solid made from its 2D drawing.
     void setPartLook(PartLook look);
+    NavWheel* navigationWheel() const { return wheel_; }
+    bool navigationWheelShown() const;
+    void setNavigationWheelShown(bool shown);
+    int wheelTurnStep() const { return wheelStep_; }
+    void setWheelTurnStep(int degrees);
     // THE BRICKS PICKED: their parts and runs lit in the picture.
     void setHighlight(const QStringList& bricks);
     const Harness3DScene& scene() const { return scene_; }
@@ -118,6 +124,7 @@ public:
     // Read again from the drawing - another drawing made current, or one opened. The environment it names is read
     // in the background, or at once where `wait`.
     void reloadRouting(bool wait = false);
+    void transformDrawingRoute(const std::function<Vec2(const Vec2&)>& map);
     const Route3D& route() const { return route_; }
     void setRouteTool(RouteTool tool);
     // The last change to the route taken back.
@@ -147,6 +154,14 @@ public:
     void setFullScreen(bool on);
     // THE MODEL'S SOLIDS, each shown or hidden - a list of them to tick.
     void showPartsList();
+    void showPartsPanel();
+    void showPropertiesPanel();
+    void setSystemDesignLinked(bool on);
+    bool systemDesignLinked() const { return systemLinked_; }
+    bool addSystemDrawing(const QString& path, bool routed, QString* error = nullptr);
+    bool removeSystemDrawing(int row);
+    QJsonArray systemDrawings() const { return systemFeeds_; }
+    void chooseSystemDrawings();
     // THE PANE'S OWN ROWS shown, or not - the 3D Preview tab has all of them on its ribbon.
     void setRowsShown(bool on);
     // AT THE SIDE OF THE WINDOW: the picture alone, with a button to open it below (dockBelowRequested); below, a button
@@ -202,17 +217,22 @@ public:
     // WHAT THE ROUTE WOULD MAKE THE HARNESS'S LENGTHS, and made so - asked first where `ask`. False when nothing changed.
     RouteLengths proposedLengths() const;
     bool applyLengths(bool ask = true);
+    bool harnessRouteActive() const { return harnessRouteActive_; }
+    void exportPlaneDrawings();
 
 protected:
     void closeEvent(QCloseEvent* e) override;
 
 signals:
+    void saveDrawingRequested();
+    void routingTargetChanged(bool system);
     // An environment read, or cleared.
     void environmentChanged();
     // The route changed (and written back to the drawing).
     void routeChanged();
     // The route tool chosen - here, or from outside.
     void routeToolChanged(RouteTool tool);
+    void harnessRouteStateChanged(bool active);
     void dockBelowRequested();
     void dockSideRequested();
     void dockToSideRequested(bool left);
@@ -267,6 +287,7 @@ private:
     QStringList harnessBricks() const;
     QString harnessPartName(const QString& brick) const;
     void saveRouting();
+    void setHarnessRouteActive(bool active);
     void refreshRoute();
     void beforeRouteChange();
     // The route told what it cannot pass through: the model's solids, those shown.
@@ -351,6 +372,8 @@ private:
     // Where a new keep-out goes: the model's middle along that axis (or the route's, or nought), its extent.
     bool sceneBounds(V3& lo, V3& hi) const;
     QButtonGroup* tools_ = nullptr;
+    QCheckBox* selectMove_ = nullptr;
+    bool harnessRouteActive_ = false;
     QDoubleSpinBox* diameter_ = nullptr;
     QToolButton* diameterAuto_ = nullptr;
     QSpinBox* wires_ = nullptr;
@@ -385,6 +408,7 @@ private:
     QToolButton* resetHarness_ = nullptr;
     std::function<void(const QString&, const BrickDesign&)> applyHarness_;
     QLabel* harnessSaid_ = nullptr;
+    QComboBox* partNames_ = nullptr;
     QListWidget* parts_ = nullptr;
     QToolButton* link_ = nullptr;
     QToolButton* unlink_ = nullptr;
@@ -402,6 +426,18 @@ private:
     QWidget* rowsBox_ = nullptr;
     QLayout* rowsLay_ = nullptr;
     QWidget* solidsPanel_ = nullptr;          // what is in view, on the left (the 3D Preview tab)
+    QToolButton* panelsButton_ = nullptr;
+    QToolButton* routePanelButton_ = nullptr;
+    QToolButton* partsPin_ = nullptr;
+    QToolButton* routePin_ = nullptr;
+    QTimer* panelsFoldTimer_ = nullptr;
+    bool partsPanelOpen_ = true, routePanelOpen_ = true;
+    bool systemLinked_ = false;
+    QJsonArray systemFeeds_;
+    QTableWidget* systemFeedTable_ = nullptr;
+    QWidget* systemFeedBox_ = nullptr;
+    std::vector<Entity> systemEntities() const;
+    void refreshSystemFeeds();
     bool compact_ = false;                    // at the side of the window: the picture alone
     bool sideDocked_ = false;                 // below, having come from the side
     bool dockedBelow_ = false;                // below the drawing, or floating
@@ -416,7 +452,11 @@ private:
     QComboBox* cableLabels_ = nullptr;
     QComboBox* labelFlex_ = nullptr;
     QSlider* labelStiffness_ = nullptr;
+    QCheckBox* labelStiffnessAll_ = nullptr;
+    void editLabelStiffness(const std::function<void(RouteLabel3D&)>& change);
     QLabel* labelSize_ = nullptr;
+    QToolButton* labelColor_ = nullptr;
+    QToolButton* labelTextColor_ = nullptr;
     QDoubleSpinBox* cableDia_ = nullptr;
     QToolButton* cableDiaAuto_ = nullptr;
     QSpinBox* cableWires_ = nullptr;
@@ -427,6 +467,10 @@ private:
     void chooseWireColours(const QString& seg);
     // UNDER THE WHEEL: what the pointer is on.
     QLabel* hoverSaid_ = nullptr;
+    QTimer* partHoverTimer_ = nullptr;
+    QString pendingHoverText_;
+    int pendingHoverPart_ = -1;
+    QString pendingHoverBrick_, pendingHoverNode_;
     // HOW IT WAS SHOWN, saved with the route: the view, gravity, what is hidden or see-through, the section, the rulers -
     // what needs the model put back once it is read.
     QJsonObject viewState() const;
@@ -489,7 +533,10 @@ public:
     // Just this box in view.
     void fitBox(const V3& lo, const V3& hi);
     // From the top, the front, the side, or at an angle (isometric).
-    void viewFrom(const QString& which);
+    void viewFrom(const QString& which, bool animate = false);
+    // Orthographic editable edges, in millimetres: 0 XY, 1 XZ, 2 YZ, 3 current camera orientation.
+    std::vector<Entity> projectedDrawing(int plane, bool includeEnvironment = true,
+                                         const std::function<bool(int)>& progress = {}) const;
     void setWireframe(bool on);
     void setHighlight(const QStringList& bricks);
     QStringList highlighted() const { return lit_; }
@@ -501,6 +548,7 @@ public:
     void setHarnessShown(bool on);
     void setSection(const Section3D& section);
     const Section3D& section() const { return section_; }
+    bool geometryBounds(V3& lo, V3& hi) const;
     // WHAT IS UNDER A POINT OF THE PICTURE: the environment where the ray from the eye through it first meets it -
     // beyond the section, where one cuts it open. Marked in the picture, and said by `picked`.
     Pick3D pickAt(const QPointF& at);
@@ -516,13 +564,27 @@ public:
     // THE ROUTE it shows and edits in place - none in the wizard's view.
     void setRoute(Route3D* route);
     void setOriginalConnectors(const QJsonObject& initial, bool keep);
+    void setPartNamesMode(int mode);
+    void setPartNameHover(int part, const QString& brick, const QString& node);
+    void clearPartHover();
     bool keepsOriginalConnectors() const { return keepOriginalConnectors_; }
     void setRouteTool(RouteTool tool);
     RouteTool routeTool() const { return tool_; }
+    void addStretchPinpoint(const V3& point);
+    bool stretchByPinpoints();
+    const std::vector<V3>& stretchPinpoints() const { return stretchPinpoints_; }
+    void setSelectAndMove(bool enabled) { selectAndMove_ = enabled; }
+    bool selectAndMove() const { return selectAndMove_; }
+    void setJointsShown(bool shown) { jointsShown_ = shown; update(); }
+    bool jointsShown() const { return jointsShown_; }
+    // 0: camera plane, 1: XY, 2: XZ, 3: YZ.
+    void setDragPlane(int plane) { dragPlane_ = std::clamp(plane, 0, 3); update(); }
+    int dragPlane() const { return dragPlane_; }
     // The route changed from outside: drawn again.
     void routeRedraw();
     QString selectedSegment() const { return selSegment_; }
     QString selectedNode() const { return selNode_; }
+    QString selectedCoordinatesText() const;
     void selectSegment(const QString& id);
     // THE PART THE NEXT CONNECTOR CLICKED IS PUT FOR: its brick id, its designator, and the kind of node it makes.
     void setPartToPlace(const QString& brick, const QString& designator, RouteNodeKind kind);
@@ -543,7 +605,8 @@ public:
     bool viewLocked() const { return viewLocked_; }
     // THE VIEW TURNED by so many degrees round the upright, up and over, and round the way it looks; brought nearer
     // (under 1) or further (over 1).
-    void nudge(double turnDeg, double tiltDeg, double rollDeg);
+    void nudge(double turnDeg, double tiltDeg, double rollDeg, bool animate = false);
+    void turnTo(double yaw, double pitch, double roll);
     // THE OTHER SIDE: looked at from straight opposite where it is looked at from now, through the same middle.
     void flip();
     // A SOLID OF THE MODEL HIDDEN, or shown again: not drawn, and a click and a bundle go through it.
@@ -676,6 +739,7 @@ signals:
     void escapePressed();
     // Esc with a tool in hand and nothing half done: back to Select.
     void toolCancelRequested();
+    void rotatePartAsked(int axis, double degrees);
 
 protected:
     void paintEvent(QPaintEvent*) override;
@@ -705,6 +769,8 @@ private:
     const RayIndex3D* envIndex_ = nullptr;
     bool envShown_ = true;
     double envAlpha_ = 1.0;
+    bool sourceHarnessVisible() const;
+    bool routedHarnessVisible() const;
     bool harnessShown_ = true;
     Section3D section_;
     Pick3D pick_;
@@ -722,6 +788,12 @@ private:
     // The route.
     Route3D* route_ = nullptr;
     RouteTool tool_ = RouteTool::Select;
+    std::vector<V3> stretchPinpoints_;
+    QToolButton* pinpointStretch_ = nullptr;
+    bool selectAndMove_ = true;
+    bool jointsShown_ = false;
+    int dragPlane_ = 0;
+    V3 dragPlaneOrigin_;
     QString selSegment_, selNode_;
     QString layFrom_;
     QString placeBrick_, placePart_;
@@ -736,13 +808,19 @@ private:
         QString node;   // the node it is the body of - clicked anywhere on it, it is that node
         QString segment;   // the bundle it is (or a wire of) - clicked anywhere on it, it is that bundle
         double alpha = 1.0;
+        QString brick;   // a label's source part, where it is not a route node
     };
     // The bundle whose drawn body the ray through a point of the picture meets first (empty: none), and where.
     QString segmentUnder(const QPointF& at, V3* hit = nullptr) const;
     Route3D originalRoute_;
     bool keepOriginalConnectors_ = true;
+    int partNamesMode_ = 1;
+    int nameHoverPart_ = -1;
+    QString nameHoverBrick_, nameHoverNode_;
     QSet<QString> dragNodes_;
     mutable std::vector<Drawn> routeMeshes_;
+    mutable V3 textEye_{1e300, 0, 0};
+    mutable std::map<int, Mesh3D> sourceTextMeshes_;
     mutable bool routeDirty_ = true;
     Mesh3D layMesh_;
     // The release that ends a double-click is not another click.
@@ -836,6 +914,9 @@ private:
     bool keepLength() const;
     void beginKeepLength();
     void pullKept(V3 target);
+    void pullKeptOnce(V3 target);
+    void settleDrag(const Route3D& before);
+    Route3D dragBaseline_;
     // Where the point pulled is reached to - `start`, or as near it as a stiff cable bends.
     V3 layKept(const Kept& k, const V3& start, double scale);
     bool grow_ = false;

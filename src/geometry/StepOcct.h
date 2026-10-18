@@ -21,9 +21,25 @@ struct OcctSolid {
     std::vector<std::pair<double, double>> profile;
     V3 u{1, 0, 0}, v{0, 1, 0}, w{0, 0, 1};
     bool female = false;
+    // A SKETCH'S HOLES, inside its outline; given depth both ways from its plane; turned round the plane's first
+    // direction (0) or its second (1) - a revolved one.
+    std::vector<std::vector<std::pair<double, double>>> holes;
+    bool both = false;
+    int axis = 0;
+    // MADE FROM THE PART'S DRAWING: its triangles, in its own space, sewn into a solid.
+    const Mesh3D* mesh = nullptr;
+};
+// A SOLID AND WHAT IS COMBINED WITH IT, in turn: each one added to it (1), taken out of it (2) or only what both hold
+// kept (3) - itself first made from what is combined with it.
+struct OcctFeature {
+    OcctSolid solid;
+    int op = 0;
+    std::vector<OcctFeature> with;
 };
 // THE SOLID WITH THE CUTS TAKEN OUT OF IT, as triangles. False (and why) where it cannot be made.
 bool occtCutSolid(const OcctSolid& solid, const std::vector<OcctSolid>& cuts, Mesh3D& out, QString* why);
+// THE SOLID WITH WHAT IS COMBINED WITH IT, then the cuts taken out, as triangles.
+bool occtBuildFeature(const OcctFeature& feature, const std::vector<OcctSolid>& cuts, Mesh3D& out, QString* why);
 
 bool readStepOcct(const QString& path, std::vector<EnvPart3D>& parts, QString* how, const Load3DProgress& progress = {});
 

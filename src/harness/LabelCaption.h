@@ -33,8 +33,9 @@ inline void layoutLabelCaption(Entity& e) {
         }
         return used;
     };
-    // Always start from the normal size: an explicit newline or shorter text can recover it.
-    double lo = 0.001, hi = 2.5;
+    // An explicit height is a target; reduce it only when the text cannot fit the label.
+    const double requested = e.meta.value(QStringLiteral("labelTextHeight")).toDouble();
+    double lo = 0.001, hi = requested > 0.0 ? requested : 2.5;
     for (int i = 0; i < 22; ++i) {
         QStringList lines;
         const double mid = (lo + hi) * 0.5;

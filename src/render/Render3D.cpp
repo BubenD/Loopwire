@@ -36,6 +36,15 @@ double hash3(double x, double y, double z) {
 }
 } // namespace
 
+void braidAt(const V3& at, double& ridgeA, double& ridgeB, int& over) {
+    // About 1.2 mm a strand, as a sleeve's are.
+    const double k = 0.8;
+    const double a = (at.x + at.y + at.z) * 0.57735 * k, b = (at.x - at.y + at.z) * 0.57735 * k;
+    ridgeA = std::sin(M_PI * (a - std::floor(a)));
+    ridgeB = std::sin(M_PI * (b - std::floor(b)));
+    over = (static_cast<long long>(std::floor(a)) + static_cast<long long>(std::floor(b))) & 1;
+}
+
 void textureAt(int texture, const V3& at, const V3& normal, const V3& light, const V3& toEye, double& scale, double& shine) {
     scale = 1.0;
     shine = 0.0;
@@ -54,6 +63,15 @@ void textureAt(int texture, const V3& at, const V3& normal, const V3& light, con
     } else if (texture == Texture3D::Plastic) {
         scale = 0.95 + 0.07 * hash3(std::floor(at.x * 5.0), std::floor(at.y * 5.0), std::floor(at.z * 5.0));
         shine = 0.18 * std::pow(facing, 10.0);
+    } else if (texture == Texture3D::Braid) {
+        // WOVEN: two sets of planes across space, a strand between each two, met by a tube's surface as two sets of
+        // strands crossing it; in each cell one strand lies over the other, by turns - lit along its crown.
+        double ridgeA = 0.0, ridgeB = 0.0;
+        int over = 0;
+        braidAt(at, ridgeA, ridgeB, over);
+        const double top = over ? ridgeA : ridgeB;
+        scale = 0.5 + 0.55 * top;
+        shine = 0.35 * std::pow(facing, 16.0) * top;
     } else {
         scale = 0.96 + 0.06 * hash3(std::floor(at.x * 3.0), std::floor(at.y * 3.0), std::floor(at.z * 3.0));
     }
@@ -135,14 +153,16 @@ void renderScene3D(QImage& image, const std::vector<DrawItem3D>& items, const Ca
             pts.reserve(it.mesh->v.size());
             for (const V3& v : it.mesh->v) pts.push_back(project(v));
             for (const auto& t : it.mesh->f) {
-                if (it.sectioned && section.on) {
-                    const V3 mid = (it.mesh->v[static_cast<size_t>(t[0])] + it.mesh->v[static_cast<size_t>(t[1])] +
-                                    it.mesh->v[static_cast<size_t>(t[2])]) / 3.0;
-                    if (section.cuts(mid)) continue;
-                }
                 for (int k = 0; k < 3; ++k) {
-                    const P& a = pts[static_cast<size_t>(t[static_cast<size_t>(k)])];
-                    const P& b = pts[static_cast<size_t>(t[static_cast<size_t>((k + 1) % 3)])];
+                    V3 va=it.mesh->v[size_t(t[size_t(k)])],vb=it.mesh->v[size_t(t[size_t((k+1)%3)])];
+                    if(it.sectioned && section.on) {
+                        const double da=dot3(va,section.normal)-section.offset,db=dot3(vb,section.normal)-section.offset;
+                        if(da>0 && db>0)continue;
+                        if(da>0)va=va+(vb-va)*(da/(da-db));
+                        else if(db>0)vb=va+(vb-va)*(da/(da-db));
+                    }
+                    const P a=(it.sectioned && section.on) ? project(va) : pts[size_t(t[size_t(k)])];
+                    const P b=(it.sectioned && section.on) ? project(vb) : pts[size_t(t[size_t((k+1)%3)])];
                     if (a.ok && b.ok) p.drawLine(QPointF(a.x, a.y), QPointF(b.x, b.y));
                 }
             }

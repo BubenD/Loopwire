@@ -1,23 +1,117 @@
 #include "app/NavWheel.h"
 
 #include <QMouseEvent>
+#include <QEnterEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QApplication>
+#include <QSettings>
+
+#include <algorithm>
 
 #include <cmath>
 
 namespace Loopwire {
 
+namespace {
+int& wheelSizeSetting() { static int v = QSettings().value(QStringLiteral("view3d/wheelSizePercent"), 100).toInt(); return v; }
+bool& wheelHoverSetting() { static bool v = QSettings().value(QStringLiteral("view3d/wheelEnlargeOnHover"), true).toBool(); return v; }
+double& wheelHoverScaleSetting() { static double v = QSettings().value(QStringLiteral("view3d/wheelHoverScale"), 1.2).toDouble(); return v; }
+constexpr int wheelBaseSide() { return static_cast<int>(2.0 * 58.8) + 4; }
+} // namespace
+
 // ==================================================================================================
 // The navigation wheel
 // ==================================================================================================
+
+std::vector<NavWheel::Item> NavWheel::axisItems(const std::array<std::pair<double, double>, 3>& screen,
+                                                const std::function<void(int, int)>& move,
+                                                const std::function<void(int, int)>& turn) {
+    const int ring = 12;
+    std::vector<Item> items(static_cast<size_t>(ring));
+    std::vector<bool> taken(static_cast<size_t>(ring), false);
+    struct Way {
+        int axis, sign;
+        double deg, shown;
+    };
+    std::vector<Way> ways;
+    for (int axis = 0; axis < 3; ++axis)
+        for (int sign : {1, -1}) {
+            const double sx = screen[static_cast<size_t>(axis)].first * sign, sy = screen[static_cast<size_t>(axis)].second * sign;
+            ways.push_back({axis, sign, std::atan2(sy, sx) * 180.0 / M_PI, std::hypot(sx, sy)});
+        }
+    // Those that show longest first; one pointing straight at the eye takes what is left.
+    std::sort(ways.begin(), ways.end(), [](const Way& a, const Way& b) { return a.shown > b.shown; });
+    for (const Way& w : ways) {
+        int best = -1;
+        double nearest = 1e9;
+        for (int i = 0; i < ring; ++i) {
+            if (taken[static_cast<size_t>(i)]) continue;
+            const double slot = 90.0 - i * 360.0 / ring;
+            const double off = std::abs(std::remainder(w.deg - slot, 360.0));
+            if (off < nearest) {
+                nearest = off;
+                best = i;
+            }
+        }
+        taken[static_cast<size_t>(best)] = true;
+        const QString key = QStringLiteral("%1%2").arg(QLatin1Char("xyz"[w.axis])).arg(w.sign > 0 ? QLatin1Char('+') : QLatin1Char('-'));
+        const QString name = QStringLiteral("%1%2").arg(QChar(QLatin1Char("XYZ"[w.axis]))).arg(w.sign > 0 ? QLatin1Char('+') : QLatin1Char('-'));
+        Item it{key, QStringLiteral("Move %1").arg(name), QStringLiteral("Move it a step along %1").arg(name),
+                [move, axis = w.axis, sign = w.sign] { move(axis, sign); }, {}};
+        it.arrowDeg = w.shown > 0.05 ? w.deg : 1e9;
+        items[static_cast<size_t>(best)] = it;
+    }
+    int next = 0;
+    for (int axis = 0; axis < 3; ++axis)
+        for (int sign : {1, -1}) {
+            while (next < ring && taken[static_cast<size_t>(next)]) ++next;
+            if (next >= ring) break;
+            taken[static_cast<size_t>(next)] = true;
+            const QString key = QStringLiteral("r%1%2").arg(QLatin1Char("xyz"[axis])).arg(sign > 0 ? QLatin1Char('+') : QLatin1Char('-'));
+            items[static_cast<size_t>(next)] = {key, QStringLiteral("Turn %1").arg(QChar(QLatin1Char("XYZ"[axis]))),
+                                                QStringLiteral("Turn it 15° round %1").arg(QChar(QLatin1Char("XYZ"[axis]))),
+                                                [turn, axis, sign] { turn(axis, sign); }, {}};
+        }
+    return items;
+}
 
 NavWheel::NavWheel(QWidget* parent) : QWidget(parent) {
     setMouseTracking(true);
     setAttribute(Qt::WA_TranslucentBackground);
     setCursor(Qt::PointingHandCursor);
-    const int side = static_cast<int>(2.0 * kOuter) + 4;
+    shrinkTimer_.setSingleShot(true);
+    shrinkTimer_.setInterval(2000);
+    connect(&shrinkTimer_, &QTimer::timeout, this, [this] {
+        pointerOver_ = false;
+        updateDrawingSize();
+    });
+    updateDrawingSize();
+}
+
+void NavWheel::setGlobalAppearance(int sizePercent, bool enlargeOnHover, double hoverScale) {
+    wheelSizeSetting() = std::clamp(sizePercent, 50, 200);
+    wheelHoverSetting() = enlargeOnHover;
+    wheelHoverScaleSetting() = std::clamp(hoverScale, 1.05, 2.0);
+    const auto widgets = QApplication::allWidgets();
+    for (QWidget* widget : widgets)
+        if (auto* wheel = qobject_cast<NavWheel*>(widget)) wheel->updateDrawingSize();
+}
+
+int NavWheel::globalSizePercent() { return wheelSizeSetting(); }
+bool NavWheel::globalEnlargeOnHover() { return wheelHoverSetting(); }
+double NavWheel::globalHoverScale() { return wheelHoverScaleSetting(); }
+
+double NavWheel::drawingScale() const {
+    const double base = wheelSizeSetting() / 100.0;
+    return base * (pointerOver_ && wheelHoverSetting() ? wheelHoverScaleSetting() : 1.0);
+}
+
+void NavWheel::updateDrawingSize() {
+    const int side = qRound(wheelBaseSide() * drawingScale());
     setFixedSize(side, side);
+    update();
+    emit geometryChanged();
 }
 
 void NavWheel::setMiddle(const QString& label, std::function<void(const QPoint& global)> act) {
@@ -32,15 +126,17 @@ void NavWheel::setItems(std::vector<Item> items) {
 }
 
 QSize NavWheel::sizeHint() const {
-    const int side = static_cast<int>(2.0 * kOuter) + 4;
+    const int side = qRound(wheelBaseSide() * drawingScale());
     return {side, side};
 }
 
 void NavWheel::resizeEvent(QResizeEvent*) {
     // ROUND TO THE POINTER as well as to the eye: the corners of its square let clicks through to the pane.
     const QPointF c = rect().center() + QPointF(0.5, 0.5);
-    setMask(QRegion(QRect(static_cast<int>(c.x() - kOuter - 1), static_cast<int>(c.y() - kOuter - 1),
-                          static_cast<int>(2 * kOuter + 2), static_cast<int>(2 * kOuter + 2)),
+    const double scale = drawingScale();
+    const double radius = kOuter * scale;
+    setMask(QRegion(QRect(static_cast<int>(c.x() - radius - 1), static_cast<int>(c.y() - radius - 1),
+                          static_cast<int>(2 * radius + 2), static_cast<int>(2 * radius + 2)),
                     QRegion::Ellipse));
 }
 
@@ -52,7 +148,8 @@ double NavWheel::angleOf(int i) const {
 int NavWheel::segmentAt(const QPointF& p) const {
     if (items_.empty()) return -1;
     const QPointF c = QRectF(rect()).center();
-    const double dx = p.x() - c.x(), dy = c.y() - p.y();
+    const double scale = drawingScale();
+    const double dx = (p.x() - c.x()) / scale, dy = (c.y() - p.y()) / scale;
     const double r = std::hypot(dx, dy);
     if (r < kInner || r > kOuter) return -1;
     const double step = 360.0 / count();
@@ -65,14 +162,18 @@ int NavWheel::segmentAt(const QPointF& p) const {
 
 QPointF NavWheel::segmentCentre(int i) const {
     const QPointF c = QRectF(rect()).center();
-    const double a = angleOf(i) * M_PI / 180.0, r = (kOuter + kInner) / 2.0;
+    const double a = angleOf(i) * M_PI / 180.0, r = (kOuter + kInner) / 2.0 * drawingScale();
     return {c.x() + r * std::cos(a), c.y() - r * std::sin(a)};
 }
 
 void NavWheel::paintEvent(QPaintEvent*) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
-    const QPointF c = QRectF(rect()).center();
+    const double scale = drawingScale();
+    p.translate(QRectF(rect()).center());
+    p.scale(scale, scale);
+    p.translate(-QPointF(wheelBaseSide() / 2.0, wheelBaseSide() / 2.0));
+    const QPointF c(wheelBaseSide() / 2.0, wheelBaseSide() / 2.0);
     const QRectF outer(c.x() - kOuter, c.y() - kOuter, 2 * kOuter, 2 * kOuter);
     const QRectF inner(c.x() - kInner, c.y() - kInner, 2 * kInner, 2 * kInner);
     // The ring's dark rim.
@@ -97,7 +198,10 @@ void NavWheel::paintEvent(QPaintEvent*) {
         p.setPen(QPen(QColor(150, 172, 196, 120), 1.0));
         p.drawPath(seg);
         // ITS PICTURE, in the middle of the segment, upright.
-        const QPointF m = segmentCentre(i);
+        // The painter is already scaled; use the original wheel coordinates here.
+        const double pictureAngle = angleOf(i) * M_PI / 180.0;
+        const double pictureRadius = (kOuter + kInner) / 2.0;
+        const QPointF m(c.x() + pictureRadius * std::cos(pictureAngle), c.y() - pictureRadius * std::sin(pictureAngle));
         p.save();
         p.translate(m);
         const QColor ink(236, 242, 248, i == hover_ || on ? 255 : 215);
@@ -237,6 +341,12 @@ void NavWheel::paintEvent(QPaintEvent*) {
 }
 
 void NavWheel::mouseMoveEvent(QMouseEvent* e) {
+    const QPointF centre = QRectF(rect()).center();
+    const bool over = std::hypot(e->position().x() - centre.x(), e->position().y() - centre.y()) <= kOuter * drawingScale();
+    if (over) {
+        shrinkTimer_.stop();
+        if (!pointerOver_) { pointerOver_ = true; updateDrawingSize(); }
+    } else if (pointerOver_ && !shrinkTimer_.isActive()) shrinkTimer_.start();
     const int at = segmentAt(e->position());
     if (at != hover_) {
         hover_ = at;
@@ -256,7 +366,7 @@ void NavWheel::mouseReleaseEvent(QMouseEvent* e) {
     // THE MIDDLE, clicked: its own act.
     if (e->button() == Qt::LeftButton && pressed_ < 0 && middleAct_) {
         const QPointF c = QRectF(rect()).center();
-        if (std::hypot(e->position().x() - c.x(), e->position().y() - c.y()) < kInner) {
+        if (std::hypot(e->position().x() - c.x(), e->position().y() - c.y()) < kInner * drawingScale()) {
             middleAct_(e->globalPosition().toPoint());
             return;
         }
@@ -272,5 +382,11 @@ void NavWheel::leaveEvent(QEvent*) {
     hover_ = -1;
     pressed_ = -1;
     update();
+    if (pointerOver_) shrinkTimer_.start();
+}
+
+void NavWheel::enterEvent(QEnterEvent*) {
+    shrinkTimer_.stop();
+    if (!pointerOver_) { pointerOver_ = true; updateDrawingSize(); }
 }
 } // namespace Loopwire

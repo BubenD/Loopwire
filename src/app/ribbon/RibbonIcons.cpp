@@ -102,6 +102,7 @@ QIcon makeCadActionIcon(const QString& key, const QColor& ink) {
         if(key=="heatshrink1")p.drawRect(QRectF(4,10,16,10));
         else if(key=="heatshrink2"){p.drawPolygon(QPolygonF{{3,14},{6,10},{9,10},{9,20},{6,20},{3,16}});p.drawPolygon(QPolygonF{{15,10},{18,10},{21,14},{21,16},{18,20},{15,20}});}
         else if(key=="heatshrink3")p.drawPolygon(QPolygonF{{4,10},{14,10},{20,14},{20,16},{14,20},{4,20}});
+        else if(key=="heatshrink4"){p.drawRect(QRectF(4,10,16,10));stroke(ink,0.9);for(int i=0;i<4;++i){line(4+i*4,10,8+i*4,20);line(8+i*4,10,4+i*4,20);}stroke(accent);}
         else p.drawPolygon(QPolygonF{{4,14},{8,10},{16,10},{20,14},{20,16},{16,20},{8,20},{4,16}});
         stroke(ink,1.25);for(int i=0;i<2;++i){QPainterPath wave;wave.moveTo(9+i*6,7);wave.cubicTo(6+i*6,5,12+i*6,4,9+i*6,2);p.drawPath(wave);}
     }else if(key=="lacingtie"){

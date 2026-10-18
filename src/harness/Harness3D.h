@@ -12,6 +12,9 @@
 
 namespace Loopwire {
 
+Mesh3D labelTextMesh3D(const std::vector<V3>& path, double radius, const QString& text, double textHeight = 0.0,
+                     const V3& facing = {0,0,1});
+
 // THE HARNESS IN 3D: its runs as tubes - a cable's body, the transition sleeves on it, each wire where the wires fan
 // out - and each end part as its 3D model, fitted to where and how big it is drawn, or as a box where it has none.
 struct Harness3DItem {
@@ -24,6 +27,11 @@ struct Harness3DItem {
     double alpha = 1.0;
     bool ownLook = false;  // its colour and texture its own model's, not set by what it is
     QString brick;         // the wizard brick it is (on the sheet: the brick it was placed from)
+    QString surfaceText;
+    bool textAlwaysVisible = true;
+    std::vector<V3> textPath;
+    double textRadius = 0.0, textHeight = 0.0;
+    bool smoothContours = false; // Tube facets are tessellation, not drawing features.
 };
 
 struct Harness3DScene {

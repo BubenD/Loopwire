@@ -81,6 +81,21 @@ void draw(QPainter& p, const QString& k, const QColor& ink, const QColor& acc) {
     const QPen line(ink, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
     const QPen accLine(acc, 2.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
     p.setPen(line);
+    if (k == QLatin1String("save")) {
+        p.setBrush(soft); p.drawRoundedRect(QRectF(4,3,24,26),2,2);
+        p.drawRect(QRectF(9,3,13,9)); p.drawRect(QRectF(9,18,14,11));
+        p.setPen(accLine); p.drawLine(QPointF(19,5),QPointF(19,10));
+        return;
+    }
+    if (k == QLatin1String("properties")) {
+        p.setBrush(soft);
+        p.drawRoundedRect(QRectF(5, 3, 22, 26), 2, 2);
+        for (int y : {10, 16, 22}) {
+            p.setPen(line); p.drawLine(QPointF(9,y), QPointF(23,y));
+            p.setPen(accLine); p.drawLine(QPointF(y == 16 ? 19 : 13,y-2), QPointF(y == 16 ? 19 : 13,y+2));
+        }
+        return;
+    }
     // ---- The ruler, the other side, the solids, the harness ----
     if (k == QLatin1String("measure")) {
         // A rule at a slant, its marks along it.
@@ -318,6 +333,12 @@ void draw(QPainter& p, const QString& k, const QColor& ink, const QColor& acc) {
         p.setPen(QPen(ink, 1.4));
         p.setBrush(QColor(205, 208, 214));
         p.drawEllipse(QPointF(16, 16), 4, 4);
+        return;
+    }
+    if (k == QLatin1String("keepvisibility")) {
+        cube(p, 16, 16, 12, ink, acc, 0, false);
+        p.setBrush(QColor(35,42,50));p.setPen(QPen(acc,1.8));
+        p.drawEllipse(QRectF(7,13,18,10));p.setBrush(acc);p.drawEllipse(QRectF(13,15,6,6));
         return;
     }
     if (k == QLatin1String("keepout") || k == QLatin1String("keepzone")) {
@@ -667,6 +688,53 @@ void draw(QPainter& p, const QString& k, const QColor& ink, const QColor& acc) {
         p.setPen(QPen(ink, 1.6));
         p.setBrush(QColor(240, 200, 90));
         p.drawPolygon(QPolygonF{{20, 4}, {27, 11}, {24, 13}, {17, 6}});
+        return;
+    }
+    if (k == QLatin1String("union") || k == QLatin1String("subtract") || k == QLatin1String("intersect")) {
+        // TWO SOLIDS OVERLAPPING, and what of them is kept: both, the first less the second, or only where they meet.
+        const QRectF one(4, 9, 15, 15), two(13, 9, 15, 15);
+        QPainterPath a, b;
+        a.addEllipse(one);
+        b.addEllipse(two);
+        const QPainterPath kept = k == QLatin1String("union") ? a.united(b) : k == QLatin1String("subtract") ? a.subtracted(b) : a.intersected(b);
+        p.setPen(Qt::NoPen);
+        p.setBrush(acc);
+        p.drawPath(kept);
+        p.setPen(QPen(ink, 1.3, k == QLatin1String("union") ? Qt::SolidLine : Qt::DashLine));
+        p.setBrush(Qt::NoBrush);
+        p.drawEllipse(one);
+        p.drawEllipse(two);
+        return;
+    }
+    if (k == QLatin1String("separate")) {
+        p.setBrush(acc);
+        p.drawEllipse(QRectF(2, 10, 13, 13));
+        p.setBrush(soft);
+        p.drawEllipse(QRectF(17, 10, 13, 13));
+        return;
+    }
+    if (k == QLatin1String("revolve")) {
+        // AN OUTLINE TURNED ROUND AN AXIS: the axis dashed, the outline, the way round.
+        p.setPen(QPen(ink, 1.2, Qt::DashDotLine));
+        p.drawLine(16, 2, 16, 30);
+        p.setPen(QPen(ink, 1.4));
+        p.setBrush(acc);
+        p.drawPolygon(QPolygonF{{17, 8}, {25, 8}, {25, 12}, {21, 15}, {21, 24}, {17, 24}});
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(acc, 2.0, Qt::SolidLine, Qt::RoundCap));
+        p.drawArc(QRectF(5, 23, 22, 7), 200 * 16, 160 * 16);
+        p.setBrush(acc);
+        arrowHead(p, QPointF(26.5, 26.5), QPointF(23, 29), 4.5);
+        return;
+    }
+    if (k == QLatin1String("sketchface")) {
+        // A SOLID, and a sketch on its face.
+        cube(p, 15, 18, 10, ink, soft, 0);
+        p.setPen(accLine);
+        p.drawEllipse(QRectF(10, 15, 8, 6));
+        p.setPen(QPen(ink, 1.6));
+        p.setBrush(QColor(240, 200, 90));
+        p.drawPolygon(QPolygonF{{21, 3}, {28, 10}, {25, 12}, {18, 5}});
         return;
     }
     if (k == QLatin1String("pin") || k == QLatin1String("socket")) {

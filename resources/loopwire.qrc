@@ -32,6 +32,15 @@
     <file alias="connforms.gif">help3d/connforms.gif</file>
     <file alias="display.gif">help3d/display.gif</file>
     <file alias="gravity.gif">help3d/gravity.gif</file>
+    <file alias="link.gif">help3d/link.gif</file>
+    <file alias="unlink.gif">help3d/unlink.gif</file>
+    <file alias="keepouts.gif">help3d/keepouts.gif</file>
+    <file alias="labels.gif">help3d/labels.gif</file>
+    <file alias="pinpoints.gif">help3d/pinpoints.gif</file>
+    <file alias="drawing.gif">help3d/drawing.gif</file>
+    <file alias="commands.gif">help3d/commands.gif</file>
+    <file alias="system.gif">help3d/system.gif</file>
+    <file alias="panels.gif">help3d/panels.gif</file>
     <file alias="example.obj">help3d/example.obj</file>
   </qresource>
   <!--

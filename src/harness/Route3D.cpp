@@ -4,12 +4,52 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace Loopwire {
 
 namespace {
 
 constexpr double kPi = 3.14159265358979323846;
+
+// Fair an entire bend neighbourhood. Independent short fillets can still leave a
+// hook when a pull folds several nearby control points back over one another.
+std::vector<V3> fairTensionBends(const std::vector<V3>& path,double radius,double head,double tail) {
+    if(path.size()<3 || radius<=0)return path;
+    std::vector<double> along{0};
+    for(size_t i=1;i<path.size();++i)along.push_back(along.back()+(path[i]-path[i-1]).length());
+    const double total=along.back();
+    if(total<=head+tail+1e-6)return path;
+    const int count=std::clamp(int(std::ceil(total/std::max(0.25,radius/8.0))),16,512);
+    const double step=total/count,sigma=radius*0.7;
+    std::vector<V3> original;original.reserve(size_t(count+1));size_t segment=1;
+    for(int i=0;i<=count;++i){
+        const double at=step*i;
+        while(segment+1<path.size() && along[segment]<at)++segment;
+        const double fraction=(at-along[segment-1])/std::max(1e-12,along[segment]-along[segment-1]);
+        original.push_back(path[segment-1]+(path[segment]-path[segment-1])*fraction);
+    }
+    auto smooth=original;
+    const int window=std::clamp(int(std::ceil(3*sigma/step)),1,64);
+    std::vector<double> weights(size_t(window+1));
+    for(int k=0;k<=window;++k)weights[size_t(k)]=std::exp(-0.5*std::pow(k*step/sigma,2));
+    for(int pass=0;pass<2;++pass){
+        auto next=smooth;
+        for(int i=1;i<count;++i){
+            V3 value;double sum=0;
+            for(int k=-window;k<=window;++k){const double weight=weights[size_t(std::abs(k))];value=value+smooth[size_t(std::clamp(i+k,0,count))]*weight;sum+=weight;}
+            next[size_t(i)]=value/sum;
+        }
+        smooth=std::move(next);
+    }
+    auto fade=[radius](double distance){const double t=std::clamp(distance/radius,0.0,1.0);return 0.5-0.5*std::cos(kPi*t);};
+    for(int i=0;i<=count;++i){
+        const double weight=fade(step*i-head)*fade(total-step*i-tail);
+        smooth[size_t(i)]=original[size_t(i)]+(smooth[size_t(i)]-original[size_t(i)])*weight;
+    }
+    smooth.front()=path.front();smooth.back()=path.back();
+    return smooth;
+}
 
 QJsonArray v3Json(const V3& v) { return QJsonArray{v.x, v.y, v.z}; }
 
@@ -174,6 +214,12 @@ QString Route3D::splitSegment(const QString& id, const V3& at, const V3& normal,
     const QString next = addSegment(mid, b, std::move(after), dia);
     if (RouteSegment3D* second = segment(next)) {
         second->bodyDiameter = original.bodyDiameter;
+        second->conductorAreaMm2 = original.conductorAreaMm2;
+        second->minimumBendRadius = original.minimumBendRadius;
+        second->braidedShield = original.braidedShield;
+        second->heatshrink = original.heatshrink;
+        second->jacket = original.jacket;
+        second->tension = original.tension;
         second->designCable = original.designCable;
         second->covering = original.covering;
         second->wires = original.wires;
@@ -289,6 +335,40 @@ bool Route3D::lengthen(const QString& id, double target) {
         lastNow = now;
         scale = std::clamp(scale + (target - now) / slope, 0.2, 10.0);
     }
+    if (std::abs(length(*s) - target) < 0.05) return true;
+    // A STIFF CABLE'S SLACK IN ONE LOOP: where its bends are wide for how short it is, steps laid to and fro are drawn
+    // smoothed straight again - so its slack is bowed out instead, away from the line between its ends, as high as it
+    // must be to be drawn as long as it is.
+    const V3 span = b->at - a->at;
+    const double across = span.length();
+    if (across < 1e-9) return true;
+    const V3 along = span / across;
+    V3 out = a->normal + b->normal;
+    out = out - along * dot3(out, along);
+    if (out.length() < 1e-6) out = cross3(along, V3{0, 0, 1});
+    if (out.length() < 1e-6) out = cross3(along, V3{0, 1, 0});
+    out = out.normalized();
+    const int n = static_cast<int>(s->via.size());
+    const std::vector<RouteVia3D> laid = s->via;
+    auto bow = [&](double height) {
+        for (int i = 0; i < n; ++i) {
+            const double t = (i + 1.0) / (n + 1.0);
+            s->via[static_cast<size_t>(i)].at = a->at + span * t + out * (height * std::sin(kPi * t));
+        }
+        return length(*s);
+    };
+    double lo = 0.0, hi = std::max(target, across);
+    if (bow(hi) < target) {
+        s->via = laid;
+        return true;   // as long as it goes; the caller sees it is short
+    }
+    for (int iteration = 0; iteration < 60; ++iteration) {
+        const double mid = (lo + hi) / 2.0;
+        const double now = bow(mid);
+        if (std::abs(now - target) < 0.05) return true;
+        (now < target ? lo : hi) = mid;
+    }
+    bow((lo + hi) / 2.0);
     return true;
 }
 
@@ -377,7 +457,10 @@ std::vector<V3> Route3D::labelPath(const RouteSegment3D& s, const RouteLabel3D& 
 
 double Route3D::labelDiameterOf(const RouteSegment3D& s, const RouteLabel3D& label) const {
     if (label.wire >= 0) return wireDOf(s);
-    return diameterOf(s);
+    double extent = diameterOf(s)*0.5;
+    if (s.covering.isEmpty()) for (const auto& position : wireLayout(wiresOf(s),wireDOf(s)))
+        extent = std::max(extent,std::hypot(position.first,position.second)+wireDOf(s)*0.5);
+    return extent*2.0;
 }
 
 std::vector<V3> Route3D::stiffenedPath(const RouteSegment3D& s, const std::vector<V3>& path) const {
@@ -451,7 +534,33 @@ std::vector<std::pair<double, double>> Route3D::wireLayout(int n, double d) {
     return out;
 }
 
-double Route3D::bendRadiusOf(const RouteSegment3D& s) const { return bendRadius > 0.0 ? bendRadius : 6.0 * diameterOf(s); }
+double Route3D::constructionBendRadiusOf(const RouteSegment3D& s) const {
+    const double d = labelDiameterOf(s,RouteLabel3D{}); // actual wire envelope, or the jacket's overall diameter
+    const double conductor = s.conductorAreaMm2 > 0 ? std::sqrt(4*s.conductorAreaMm2/kPi) : wireDOf(s)*0.5;
+    // WHAT EACH COVERING ADDS, less as much of it as has given way to a pull.
+    double covered = (s.jacket || s.covering == QLatin1String("cable")) ? 2.0 : 0.0;
+    if (s.braidedShield || s.covering == QLatin1String("braid")) covered += 2.0;
+    if (s.heatshrink || s.covering == QLatin1String("heatshrink")) covered += 1.5;
+    double factor = 4.0 + covered * (1.0 - std::clamp(s.coverYield, 0.0, 1.0));
+    factor += 0.2*std::log2(1.0+std::max(1,wiresOf(s))) + 0.2*std::sqrt(conductor);
+    return std::max({s.minimumBendRadius, bendRadius, d*factor});
+}
+
+double Route3D::tensionReferenceOf(const RouteSegment3D& s) const {
+    const double area = s.conductorAreaMm2 > 0 ? s.conductorAreaMm2 : kPi*std::pow(wireDOf(s)*0.25,2);
+    double reference = std::max(2.0,area*std::max(1,wiresOf(s))*0.5);
+    if (s.braidedShield || s.covering == QLatin1String("braid")) reference *= 1.35;
+    if (s.heatshrink || s.covering == QLatin1String("heatshrink")) reference *= 1.2;
+    if (s.jacket || s.covering == QLatin1String("cable")) reference *= 1.25;
+    return reference;
+}
+
+double Route3D::bendRadiusOf(const RouteSegment3D& s) const {
+    const double base = constructionBendRadiusOf(s);
+    const double pull = s.tension >= 0.0 ? s.tension : std::max(0.0, tension);
+    // Geometric routing estimate, not a cable qualification or tensile load rating.
+    return base * (1.0 + 0.35 * std::log1p(pull / tensionReferenceOf(s)));
+}
 
 double Route3D::housingLength(const RouteNode3D& n) const {
     return n.formL > 0.0 ? n.formL : std::max(0.5 * std::max(0.0, lead), 1.0);
@@ -476,13 +585,21 @@ std::vector<V3> Route3D::corners(const RouteSegment3D& s) const {
     };
     if (a->kind == RouteNodeKind::Connector) {
         add(a->at);
-        add(a->at + exitOf(*a) * leadOf(*a, r));
+        const double pull = s.tension >= 0.0 ? s.tension : tension;
+        const V3 toward=s.via.empty() ? b->at-a->at : s.via.front().at-a->at;
+        const double reach = pull > 0.0 && dot3(toward.normalized(),exitOf(*a))>0.25
+            ? std::min(bendRadiusOf(s)*1.25, toward.length()*0.3)*pull/(pull+tensionReferenceOf(s)) : 0.0;
+        add(a->at + exitOf(*a) * std::max(leadOf(*a, r), reach));
     } else {
         add(a->at + a->normal * r);
     }
     for (const RouteVia3D& v : s.via) add(v.at + v.normal * r);
     if (b->kind == RouteNodeKind::Connector) {
-        add(b->at + exitOf(*b) * leadOf(*b, r));
+        const double pull = s.tension >= 0.0 ? s.tension : tension;
+        const V3 toward=s.via.empty() ? a->at-b->at : s.via.back().at-b->at;
+        const double reach = pull > 0.0 && dot3(toward.normalized(),exitOf(*b))>0.25
+            ? std::min(bendRadiusOf(s)*1.25, toward.length()*0.3)*pull/(pull+tensionReferenceOf(s)) : 0.0;
+        add(b->at + exitOf(*b) * std::max(leadOf(*b, r), reach));
         add(b->at);
     } else {
         add(b->at + b->normal * r);
@@ -665,7 +782,44 @@ std::vector<V3> Route3D::centreline(const RouteSegment3D& s, int* tight) const {
     const RouteNode3D* na = node(s.a);
     const RouteNode3D* nb = node(s.b);
     const bool ca = na && na->kind == RouteNodeKind::Connector, cb = nb && nb->kind == RouteNodeKind::Connector;
+    if(s.throughPinpoints) {
+        const auto anchors=corners(s);
+        if(anchors.size()<2)return anchors;
+        std::vector<V3> tangent(anchors.size());
+        for(size_t i=0;i<anchors.size();++i) {
+            if(i==0)tangent[i]=(anchors[1]-anchors[0]);
+            else if(i+1==anchors.size())tangent[i]=anchors[i]-anchors[i-1];
+            else tangent[i]=(anchors[i+1]-anchors[i-1]).normalized()*std::min((anchors[i]-anchors[i-1]).length(),(anchors[i+1]-anchors[i]).length());
+        }
+        if(ca && anchors.size()>2)tangent[1]=exitOf(*na)*std::min((anchors[2]-anchors[1]).length(),bendRadiusOf(s));
+        if(cb && anchors.size()>2)tangent[anchors.size()-2]=exitOf(*nb)*-std::min((anchors[anchors.size()-2]-anchors[anchors.size()-3]).length(),bendRadiusOf(s));
+        std::vector<V3> path{anchors.front()};
+        for(size_t i=1;i<anchors.size();++i) {
+            const bool leadSpan=(ca && i==1) || (cb && i+1==anchors.size());
+            const V3 chord=anchors[i]-anchors[i-1];
+            V3 side=cross3(chord,{0,0,1}).normalized();if(side.length()<1e-8)side={1,0,0};
+            const int steps=leadSpan ? 1 : std::clamp(int(chord.length()/std::max(0.25,bendRadiusOf(s)/12)),24,512);
+            for(int k=1;k<=steps;++k) {
+                const double t=double(k)/steps,t2=t*t,t3=t2*t;
+                const V3 p=leadSpan ? anchors[i-1]+chord*t :
+                    anchors[i-1]*(2*t3-3*t2+1)+tangent[i-1]*(t3-2*t2+t)+anchors[i]*(-2*t3+3*t2)+tangent[i]*(t3-t2)+
+                    side*(s.pinpointSlack*16*t2*(1-t)*(1-t));
+                path.push_back(p);
+            }
+        }
+        // Pinpoints are hard constraints; stiffness must not displace them.
+        return path;
+    }
     std::vector<V3> p = solids ? overSolids(corners(s), cornerNormals(s), diameterOf(s) / 2.0, ca, cb) : corners(s);
+    // Pulling inserts intermediate points along straight spans. They must not consume
+    // the space available for a broad radius at the next actual turn.
+    for(size_t i=ca ? 2 : 1; !solids && i+1+(cb ? 1 : 0)<p.size();) {
+        const V3 before=p[i]-p[i-1], after=p[i+1]-p[i];
+        if(before.length()<1e-8 || after.length()<1e-8 ||
+           dot3(before.normalized(),after.normalized())>1.0-1e-8)
+            p.erase(p.begin()+static_cast<long long>(i));
+        else ++i;
+    }
     // OUT OF THE END OF A CONNECTOR'S BODY, STRAIGHT: a point where the body ends, on the way to the lead's end, so a bend
     // there starts past the body and the cable comes out of its end face - never through its side.
     // The bend there may take all the way back to the end of the body - nothing bends at that point itself.
@@ -742,7 +896,47 @@ std::vector<V3> Route3D::centreline(const RouteSegment3D& s, int* tight) const {
         out.insert(out.end(), arc.begin(), arc.end());
     }
     out.push_back(p.back());
+    const double pull=s.tension>=0 ? s.tension : tension;
+    bool needsFairing=false;
+    if(pull>0.0)for(size_t i=1;i+1<out.size();++i) {
+        V3 centre;double actual;
+        if(bendCircle(out[i-1],out[i],out[i+1],centre,actual) && actual<bend*0.95){needsFairing=true;break;}
+    }
+    if(needsFairing) {
+        auto fair=fairTensionBends(out,bend,ca ? leadOf(*na,diameterOf(s)*0.5) : 0.0,cb ? leadOf(*nb,diameterOf(s)*0.5) : 0.0);
+        // A callback can be installed even with no environment loaded. Check actual
+        // intersections rather than treating the callback's existence as an obstacle.
+        if(!solids || arcClear(fair))out=std::move(fair);
+    }
     return stiffenedPath(s, out);
+}
+
+std::vector<V3> Route3D::previewCentreline(const QString& from, const std::vector<RouteVia3D>& via,
+                                            const V3& at, const V3& normal, const QString& endNode) const {
+    const auto* start = node(from);
+    if (!start) return {};
+    // Copy only the settings and endpoints needed for this cable, not the scene's
+    // other routes or their obstacle caches, on every pointer movement.
+    Route3D preview;
+    preview.diameter = diameter;
+    preview.bendRadius = bendRadius;
+    preview.lead = lead;
+    preview.tension = tension;
+    preview.wires = wires;
+    preview.wireD = wireD;
+    preview.solids = solids;
+    preview.insideSolid = insideSolid;
+    preview.nodes.push_back(*start);
+    QString end;
+    if (const auto* target = node(endNode); target && target->id != from) {
+        preview.nodes.push_back(*target);
+        end = target->id;
+    } else {
+        end = preview.addNode(RouteNodeKind::Branch, at, normal);
+    }
+    const auto id = preview.addSegment(from, end, via);
+    const auto* cable = preview.segment(id);
+    return cable ? preview.centreline(*cable) : std::vector<V3>{};
 }
 
 double Route3D::length(const RouteSegment3D& s) const {
@@ -750,6 +944,48 @@ double Route3D::length(const RouteSegment3D& s) const {
     double l = 0.0;
     for (size_t i = 1; i < c.size(); ++i) l += (c[i] - c[i - 1]).length();
     return l;
+}
+
+bool Route3D::stretchThrough(const QString& id,const std::vector<V3>& points,double& required,QString& reason) {
+    auto* segment=this->segment(id);required=0;reason.clear();
+    if(!segment || points.empty()){reason=QStringLiteral("Select a cable and place at least one pinpoint.");return false;}
+    const RouteSegment3D before=*segment;
+    segment->via.clear();segment->throughPinpoints=true;segment->pinpointSlack=0;
+    for(V3 p:points) {
+        if(!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)){*segment=before;reason=QStringLiteral("A pinpoint has invalid coordinates.");return false;}
+        segment->via.push_back({p,{0,0,0}});
+    }
+    solidsChanged();required=length(*segment);
+    if(segment->fixedLength>0 && required>segment->fixedLength+0.1) {
+        reason=QStringLiteral("Fixed cable: %1 mm. This route through all pinpoints needs %2 mm (%3 mm more). Move the points closer or allow a longer cable.")
+            .arg(segment->fixedLength,0,'f',1).arg(required,0,'f',1).arg(required-segment->fixedLength,0,'f',1);
+        *segment=before;solidsChanged();return false;
+    }
+    if(segment->fixedLength>required+0.05) {
+        double lo=0,hi=std::max(1.0,segment->fixedLength);
+        for(int i=0;i<40;++i){segment->pinpointSlack=(lo+hi)*0.5;if(length(*segment)<segment->fixedLength)lo=segment->pinpointSlack;else hi=segment->pinpointSlack;}
+        if(std::abs(length(*segment)-segment->fixedLength)>0.1){*segment=before;solidsChanged();reason=QStringLiteral("The fixed cable length cannot fit this pinpoint route.");return false;}
+    }
+    // The same solid intersection contract used by interactive routing.
+    if(solids) {
+        const auto path=centreline(*segment);
+        for(size_t i=1;i<path.size();++i){const V3 d=path[i]-path[i-1];V3 hit;
+            if(d.length()>1e-6 && solids(path[i-1],d.normalized(),d.length(),hit)){
+                *segment=before;solidsChanged();reason=QStringLiteral("This pinpoint route intersects the environment. Move the points clear of the solid.");return false;
+            }
+        }
+    }
+    return true;
+}
+
+double Route3D::minimumRadiusOf(const RouteSegment3D& s) const {
+    const auto path=centreline(s);
+    double smallest=std::numeric_limits<double>::max();
+    for(size_t i=1;i+1<path.size();++i) {
+        V3 centre; double radius;
+        if(bendCircle(path[i-1],path[i],path[i+1],centre,radius))smallest=std::min(smallest,radius);
+    }
+    return smallest==std::numeric_limits<double>::max() ? 0.0 : smallest;
 }
 
 QJsonObject Route3D::toJson() const {
@@ -798,12 +1034,20 @@ QJsonObject Route3D::toJson() const {
         if (s.wires > 0) j[QStringLiteral("wires")] = s.wires;
         if (s.wireD > 0.0) j[QStringLiteral("wireD")] = s.wireD;
         if (s.fixedLength > 0.0) j[QStringLiteral("fixedLength")] = s.fixedLength;
+        if(s.throughPinpoints){j[QStringLiteral("throughPinpoints")]=true;j[QStringLiteral("pinpointSlack")]=s.pinpointSlack;}
         if (s.designLength > 0.0) j[QStringLiteral("designLength")] = s.designLength;
         if (s.bodyDiameter > 0.0) j[QStringLiteral("bodyDiameter")] = s.bodyDiameter;
+        j[QStringLiteral("conductorAreaMm2")] = s.conductorAreaMm2;
+        j[QStringLiteral("minimumBendRadius")] = s.minimumBendRadius;
+        j[QStringLiteral("braidedShield")] = s.braidedShield;
+        j[QStringLiteral("heatshrink")] = s.heatshrink;
+        j[QStringLiteral("jacket")] = s.jacket;
         QJsonArray labels;
-        for (const auto& l : s.labels) labels.append(QJsonObject{{"id", l.id}, {"text", l.text},
-            {"position", l.position}, {"length", l.length}, {"wire", l.wire}, {"clearShrink", l.clearShrink},
-            {"flexible", l.flexible}, {"stiffness", l.stiffness}});
+        for (const auto& l : s.labels) labels.append(QJsonObject{{"id", l.id}, {"text", l.text}, {"brick", l.brick},
+            {"color", l.color.name()}, {"textColor", l.textColor.name()},
+            {"position", l.position}, {"length", l.length}, {"textHeight", l.textHeight}, {"wire", l.wire}, {"clearShrink", l.clearShrink},
+            {"flexible", l.flexible}, {"stiffness", l.stiffness}, {"textAlwaysVisible", l.textAlwaysVisible},
+            {"textVisibilityOverride", l.textVisibilityOverride}, {"stiffnessOverride",l.stiffnessOverride}});
         if (!labels.isEmpty()) j[QStringLiteral("labels")] = labels;
         if (!s.designCable.isEmpty()) j[QStringLiteral("designCable")] = s.designCable;
         if (!s.covering.isEmpty()) {
@@ -811,6 +1055,7 @@ QJsonObject Route3D::toJson() const {
             j[QStringLiteral("coverStart")] = s.coverStart;
             j[QStringLiteral("coverFinish")] = s.coverFinish;
         }
+        if (s.coverYield > 0.0) j[QStringLiteral("coverYield")] = s.coverYield;
         if (s.wireSame) j[QStringLiteral("wireSame")] = true;
         if (!s.wireColors.empty()) {
             QJsonArray colours;
@@ -881,17 +1126,31 @@ Route3D Route3D::fromJson(const QJsonObject& o) {
         s.diameter = j.value(QStringLiteral("diameter")).toDouble(0.0);
         if (j.contains(QStringLiteral("color"))) s.color = QColor(j.value(QStringLiteral("color")).toString());
         s.tension = j.value(QStringLiteral("tension")).toDouble(-1.0);
+        s.conductorAreaMm2 = j.value(QStringLiteral("conductorAreaMm2")).toDouble();
+        s.minimumBendRadius = j.value(QStringLiteral("minimumBendRadius")).toDouble();
+        s.braidedShield = j.value(QStringLiteral("braidedShield")).toBool();
+        s.heatshrink = j.value(QStringLiteral("heatshrink")).toBool();
+        s.jacket = j.value(QStringLiteral("jacket")).toBool();
         s.wires = j.value(QStringLiteral("wires")).toInt(0);
         s.wireD = j.value(QStringLiteral("wireD")).toDouble(0.0);
         s.fixedLength = std::max(0.0, j.value(QStringLiteral("fixedLength")).toDouble());
+        s.throughPinpoints=j.value(QStringLiteral("throughPinpoints")).toBool();
+        s.pinpointSlack=std::max(0.0,j.value(QStringLiteral("pinpointSlack")).toDouble());
         s.designLength = std::max(0.0, j.value(QStringLiteral("designLength")).toDouble(s.fixedLength));
         s.bodyDiameter = std::max(0.0, j.value(QStringLiteral("bodyDiameter")).toDouble());
         for (const auto& value : j.value(QStringLiteral("labels")).toArray()) {
             const QJsonObject o = value.toObject();
             RouteLabel3D l;
             l.id = o.value("id").toString(); l.text = o.value("text").toString();
+            l.brick = o.value("brick").toString();
+            if (QColor c(o.value("color").toString()); c.isValid()) l.color = c;
+            if (QColor c(o.value("textColor").toString()); c.isValid()) l.textColor = c;
             l.position = std::clamp(o.value("position").toDouble(0.5), 0.0, 1.0);
             l.length = std::max(0.1, o.value("length").toDouble(12.0)); l.wire = o.value("wire").toInt(-1);
+            l.textHeight = std::max(0.0, o.value("textHeight").toDouble());
+            l.textAlwaysVisible = o.value("textAlwaysVisible").toBool(true);
+            l.textVisibilityOverride = o.value("textVisibilityOverride").toBool();
+            l.stiffnessOverride = o.value("stiffnessOverride").toBool();
             l.clearShrink = o.value("clearShrink").toBool(); l.flexible = o.value("flexible").toBool(true);
             l.stiffness = std::clamp(o.value("stiffness").toDouble(1.0), 0.0, 1.0);
             s.labels.push_back(l);
@@ -900,12 +1159,13 @@ Route3D Route3D::fromJson(const QJsonObject& o) {
         s.covering = j.value(QStringLiteral("covering")).toString();
         s.coverStart = std::max(0.0, j.value(QStringLiteral("coverStart")).toDouble());
         s.coverFinish = std::max(0.0, j.value(QStringLiteral("coverFinish")).toDouble());
+        s.coverYield = std::clamp(j.value(QStringLiteral("coverYield")).toDouble(0.0), 0.0, 1.0);
         s.wireSame = j.value(QStringLiteral("wireSame")).toBool(false);
         for (const QJsonValue& c : j.value(QStringLiteral("wireColors")).toArray())
             s.wireColors.push_back(c.toString().isEmpty() ? QColor() : QColor(c.toString()));
         for (const QJsonValue& w : j.value(QStringLiteral("via")).toArray()) {
             const QJsonObject k = w.toObject();
-            s.via.push_back({v3From(k.value(QStringLiteral("at"))), unitOr(v3From(k.value(QStringLiteral("normal")), {0, 0, 1}), {0, 0, 1})});
+            s.via.push_back({v3From(k.value(QStringLiteral("at"))), s.throughPinpoints ? V3{} : unitOr(v3From(k.value(QStringLiteral("normal")), {0, 0, 1}), {0, 0, 1})});
         }
         // A bundle to a node that is not there is dropped, not kept dangling.
         if (!s.id.isEmpty() && r.node(s.a) && r.node(s.b) && s.a != s.b) r.segments.push_back(std::move(s));

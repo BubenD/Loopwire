@@ -2413,6 +2413,7 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
     new SpaceRepeatFilter(this, editor_, canvas_);
     connect(editor_,&Editor::drawingDetailsChanged,this,[this]{
         Document* owner=editor_->drawingOwner();if(!owner)return;
+        if(view3dPane_ && doc_==owner && !preview3dOn_)view3dPane_->reloadRouting();
         for(auto& entry:paperDocs_)if(entry.first.first==owner&&entry.second.get()!=editor_->document()){
             const int index=entry.first.second;if(index>=0&&index<static_cast<int>(owner->layouts().size())){
                 entry.second->entities()=owner->layouts()[static_cast<size_t>(index)].paperEntities;
@@ -2584,6 +2585,15 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
     connect(editor_, &Editor::selectionTransformed, this,
             [this](const std::vector<QString>& ids, const std::function<Vec2(const Vec2&)>& map) {
                 if (!doc_ || !map) return;
+                if (view3dPane_) {
+                    const QSet<QString> transformed(ids.begin(),ids.end());
+                    bool whole = true, any = false;
+                    for (const auto& entity:doc_->entities()) {
+                        const bool harness=entity.type==EntityType::TwistedPair || entity.type==EntityType::Wire || entity.type==EntityType::Connector || !harness3DPartKey(entity).isEmpty();
+                        if(harness){any=true;if(!transformed.contains(entity.id)){whole=false;break;}}
+                    }
+                    if (whole && any) view3dPane_->transformDrawingRoute(map);
+                }
                 const bool libraryMech = libraryPartEdits_.contains(doc_) &&
                                          libraryPartEditKind_.value(doc_) == LibraryPartDrawing::Mechanical;
                 const bool modelMech = mechModelEdits_.contains(doc_) && !mechModelEditSchematic_.value(doc_, false);
@@ -6989,6 +6999,11 @@ void MainWindow::beginArrayCommand(ArrayKind kind) {
 }
 
 void MainWindow::buildStatusControls() {
+    auto* draftingControls=new QWidget(statusBar());
+    draftingControls->setObjectName(QStringLiteral("draftingStatusControls"));
+    auto* statusFields=new QHBoxLayout(draftingControls);
+    statusFields->setContentsMargins(0,0,0,0);statusFields->setSpacing(3);
+    statusBar()->addPermanentWidget(draftingControls);
     // "Repeat last command" button: re-activates the last draw/modify function (the
     // app returns to Select after each object; this button — like Space/Enter — starts
     // the last tool again). Its label tracks whatever that tool is.
@@ -7019,7 +7034,7 @@ void MainWindow::buildStatusControls() {
         updateRepeat();
     });
     repeatBtn_->setEnabled(false);
-    statusBar()->addPermanentWidget(repeatBtn_);
+    statusFields->addWidget(repeatBtn_);
 
     const QString toggleQss =
         QStringLiteral("QToolButton{padding:2px;border:none;}"
@@ -7069,7 +7084,7 @@ void MainWindow::buildStatusControls() {
             hl->addWidget(sepLine(12, QStringLiteral("#5a5f68"))); // short: button | fall-menu
             hl->addWidget(arrow);
         }
-        statusBar()->addPermanentWidget(field);
+        statusFields->addWidget(field);
     };
 
     // Grid size field.
@@ -7088,8 +7103,8 @@ void MainWindow::buildStatusControls() {
                 canvas_->setGridSize(v);
                 editor_->snapSettings().gridSize = v;
             });
-    statusBar()->addPermanentWidget(gridLbl);
-    statusBar()->addPermanentWidget(gridSpin);
+    statusFields->addWidget(gridLbl);
+    statusFields->addWidget(gridSpin);
 
     // Build a "fall menu" arrow button for a field (does not add it to the bar;
     // addField joins it to its toggle).
@@ -7650,8 +7665,11 @@ void MainWindow::buildMenus() {
         if (systemView_ && centralStack_ && centralStack_->currentWidget() == systemView_) {
             systemView_->deleteSelected();
         } else if (preview3dOn_ && view3dPane_) {
-            QKeyEvent del(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
-            QApplication::sendEvent(view3dPane_->canvas(), &del);
+            // Sending another Delete key re-enters this QAction's shortcut and
+            // recurses before the canvas can handle it. Dispatch the command.
+            auto* canvas=view3dPane_->canvas();
+            if(canvas->selectedMeasure()>=0)canvas->removeMeasure(canvas->selectedMeasure());
+            else canvas->removeRouteItem(canvas->selectedNode(),canvas->selectedSegment());
         } else {
             editor_->deleteSelected();
         }
@@ -9260,6 +9278,47 @@ void MainWindow::showOptions(const QString& page) {
     df->addRow(QStringLiteral("Grid size"), gridStep);
     tabs->addTab(disp, QStringLiteral("Display"));
 
+    // ===== 3D View: the navigation wheel and the default part display =====
+    auto* view3d = new QWidget(tabs);
+    auto* v3f = new QFormLayout(view3d);
+    auto* wheelShown = new QCheckBox(QStringLiteral("Show navigation wheel"), view3d);
+    wheelShown->setChecked(view3dPane_ ? view3dPane_->navigationWheelShown()
+                                       : QSettings().value(QStringLiteral("view3d/wheelShown"), true).toBool());
+    v3f->addRow(QString(), wheelShown);
+    auto* wheelSize = new QSpinBox(view3d);
+    wheelSize->setRange(50, 200);
+    wheelSize->setSuffix(QStringLiteral(" %"));
+    wheelSize->setValue(NavWheel::globalSizePercent());
+    wheelSize->setToolTip(QStringLiteral("Size of the 3D navigation wheel"));
+    v3f->addRow(QStringLiteral("Wheel size"), wheelSize);
+    auto* enlargeWheel = new QCheckBox(QStringLiteral("Enlarge wheel while hovered"), view3d);
+    enlargeWheel->setChecked(NavWheel::globalEnlargeOnHover());
+    v3f->addRow(QString(), enlargeWheel);
+    auto* hoverScale = new QDoubleSpinBox(view3d);
+    hoverScale->setRange(1.05, 2.00);
+    hoverScale->setSingleStep(0.05);
+    hoverScale->setDecimals(2);
+    hoverScale->setValue(NavWheel::globalHoverScale());
+    hoverScale->setSuffix(QStringLiteral(" x"));
+    hoverScale->setEnabled(enlargeWheel->isChecked());
+    connect(enlargeWheel, &QCheckBox::toggled, hoverScale, &QWidget::setEnabled);
+    hoverScale->setToolTip(QStringLiteral("Wheel size multiplier while the pointer is over it"));
+    v3f->addRow(QStringLiteral("Hover size"), hoverScale);
+    auto* wheelStep = new QComboBox(view3d);
+    for (const int step : {5, 15, 45, 90}) wheelStep->addItem(QStringLiteral("%1 degrees").arg(step), step);
+    const int stepIndex = wheelStep->findData(view3dPane_ ? view3dPane_->wheelTurnStep()
+                                                            : QSettings().value(QStringLiteral("view3d/wheelStep"), 15).toInt());
+    wheelStep->setCurrentIndex(std::max(0, stepIndex));
+    v3f->addRow(QStringLiteral("Wheel turn per click"), wheelStep);
+    auto* partLook = new QComboBox(view3d);
+    partLook->addItems({QStringLiteral("Boxes"), QStringLiteral("Turned from drawing"), QStringLiteral("Extruded from drawing")});
+    partLook->setCurrentIndex(std::clamp(QSettings().value(QStringLiteral("view3d/partLook"), 1).toInt(), 0, 2));
+    v3f->addRow(QStringLiteral("Unmodelled parts"), partLook);
+    auto* wireframe = new QCheckBox(QStringLiteral("Wireframe by default"), view3d);
+    wireframe->setChecked(QSettings().value(QStringLiteral("view3d/wireframe"), false).toBool());
+    v3f->addRow(QString(), wireframe);
+    tabs->addTab(view3d, QStringLiteral("3D View"));
+
     // ===== Drafting (snapping) =====
     auto* draft = new QWidget(tabs);
     auto* gf = new QFormLayout(draft);
@@ -9444,6 +9503,23 @@ void MainWindow::showOptions(const QString& page) {
         }
         canvas_->setCanvasBrightness(brightWas);   // the light went on as it was dragged
         return;
+    }
+
+    QSettings().setValue(QStringLiteral("view3d/wheelSizePercent"), wheelSize->value());
+    QSettings().setValue(QStringLiteral("view3d/wheelEnlargeOnHover"), enlargeWheel->isChecked());
+    QSettings().setValue(QStringLiteral("view3d/wheelHoverScale"), hoverScale->value());
+    QSettings().setValue(QStringLiteral("view3d/wheelStep"), wheelStep->currentData().toInt());
+    QSettings().setValue(QStringLiteral("view3d/partLook"), partLook->currentIndex());
+    QSettings().setValue(QStringLiteral("view3d/wheelShown"), wheelShown->isChecked());
+    QSettings().setValue(QStringLiteral("view3d/wireframe"), wireframe->isChecked());
+    NavWheel::setGlobalAppearance(wheelSize->value(), enlargeWheel->isChecked(), hoverScale->value());
+    if (view3dPane_) {
+        view3dPane_->setNavigationWheelShown(wheelShown->isChecked());
+        view3dPane_->setWheelTurnStep(wheelStep->currentData().toInt());
+        view3dPane_->setPartLook(partLook->currentIndex() == 0 ? PartLook::Box :
+                                 partLook->currentIndex() == 1 ? PartLook::Revolved : PartLook::Extruded);
+        if (auto* wire = view3dPane_->findChild<QCheckBox*>(QStringLiteral("view3dWireframe")))
+            wire->setChecked(wireframe->isChecked());
     }
 
     // The drawing's bill-of-materials configuration, as set on the BOM page.
@@ -11309,12 +11385,25 @@ void MainWindow::refreshProperties() {
         // outline names none of them.
         const bool isSleeve = isDoublePoly && mv(QStringLiteral("shrunkEnds")).toBool();
         if (isSleeve) {
-            addHeader(QStringLiteral("Heatshrink"));
+            const bool braid = mv(QStringLiteral("shrinkBraid")).toBool();
+            addHeader(braid ? QStringLiteral("Braided sleeve") : QStringLiteral("Heatshrink"));
             const double across = mv(QStringLiteral("gap")).toDouble(6.0);
             const bool endsOnly = mv(QStringLiteral("shrinkEndsOnly")).toBool();
             addNum(QStringLiteral("Line spacing"), across, [this](double v) {
                 editor_->setSelectionSleeveAcross(std::max(0.2, v));
             });
+            // A CABLE OR A BRAID OVER THE RUN: woven or plain, and heatshrink over its ends or not - the sleeves' own
+            // lengths, faces and recovery then in the end sections below.
+            const bool squareCable = mv(QStringLiteral("shrinkTaperStart")).toDouble(-1.0) == 0.0 &&
+                                     mv(QStringLiteral("shrinkTaperEnd")).toDouble(-1.0) == 0.0 &&
+                                     mv(QStringLiteral("shrinkFaceStart")).toDouble(-1.0) >= across - 1e-6;
+            if (!mv(QStringLiteral("shrinkTransition")).toBool() && (endsOnly || braid || squareCable)) {
+                addCombo(QStringLiteral("Braided"), {QStringLiteral("No"), QStringLiteral("Yes")}, braid ? QStringLiteral("Yes") : QStringLiteral("No"),
+                         false, [this](const QString& v) { editor_->setSelectionBraided(v == QLatin1String("Yes")); });
+                addCombo(QStringLiteral("Heatshrink on ends"), {QStringLiteral("No"), QStringLiteral("Yes")},
+                         endsOnly ? QStringLiteral("Yes") : QStringLiteral("No"), false,
+                         [this](const QString& v) { editor_->setSelectionEndSleeves(v == QLatin1String("Yes")); });
+            }
             if (endsOnly) {
                 addNum(QStringLiteral("Cable width"),
                        mv(QStringLiteral("shrinkCableWidth")).toDouble(across * 0.82),
@@ -11453,6 +11542,28 @@ void MainWindow::refreshProperties() {
         };
         propsTable_->setCellWidget(row, 1, edit);
         propsTable_->setRowHeight(row, 78);
+        double currentHeight = 2.5;
+        const QString group = mv(QStringLiteral("labelGroup")).toString();
+        if (doc_) for (const Entity& part : doc_->entities())
+            if (part.meta.value(QStringLiteral("labelGroup")).toString() == group &&
+                part.meta.value(QStringLiteral("labelCaptionEntity")).toBool()) {
+                currentHeight = part.meta.value(QStringLiteral("height")).toDouble(2.5);
+                break;
+            }
+        addNum(QStringLiteral("Text height"), mv(QStringLiteral("labelTextHeight")).toDouble(currentHeight),
+               [this](double v) { editor_->setLabelTextHeight(std::max(0.1, v)); });
+        const int visibilityRow = propsTable_->rowCount();
+        propsTable_->insertRow(visibilityRow);
+        putKey(visibilityRow, QStringLiteral("3D text"));
+        auto* visibleText = new QCheckBox(QStringLiteral("Text always visible"), propsTable_);
+        visibleText->setObjectName(QStringLiteral("specialLabelTextAlwaysVisible"));
+        visibleText->setChecked(mv(QStringLiteral("labelTextAlwaysVisible")).toBool(true));
+        visibleText->setToolTip(QStringLiteral("Checked: text faces the viewer. Unchecked: text rotates with the harness."));
+        connect(visibleText, &QCheckBox::toggled, this, [this](bool on) {
+            if (!refreshing_ && !applyingPropEdit_)
+                deferredPropApply([this, on] { editor_->setLabelTextAlwaysVisible(on); });
+        });
+        propsTable_->setCellWidget(visibilityRow, 1, visibleText);
     }
 
     // --- Picture section: what it is, how big it was, and how big it is now. ---
@@ -17177,6 +17288,9 @@ QDockWidget* MainWindow::makeView3DPanel() {
     dock->setAllowedAreas(Qt::AllDockWidgetAreas);
     dock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable | QDockWidget::DockWidgetClosable);
     view3dPane_ = new View3DPane(dock);
+    connect(view3dPane_, &View3DPane::saveDrawingRequested, this, [this] {
+        if (doc_) saveDocument(activeIndex(), false);
+    });
     dock->setManaged(new DockTitleBar(dock, QStringLiteral("3D VIEW")), view3dPane_);
     // FROM THE SHEET, or from the harness wizard when it is open.
     view3dPane_->setSources([this] { return doc_ ? doc_->entities() : std::vector<Entity>{}; },
@@ -17252,6 +17366,10 @@ QDockWidget* MainWindow::makeView3DPanel() {
         catalog->openRemembered();
         view3dPane_->rebuild(true);
     });
+    connect(editor_, &Editor::changed, view3dPane_, [this] {
+        if (view3dPane_ && view3dPane_->isVisible())
+            QTimer::singleShot(0, view3dPane_, [this] { if (view3dPane_ && view3dPane_->isVisible()) view3dPane_->rebuild(false); });
+    });
     view3dPane_->reloadRouting();
     // AT THE SIDE, THE PICTURE ALONE; BELOW, EVERYTHING - and a button over each to go to the other.
     connect(dock, &QDockWidget::dockLocationChanged, this, [this](Qt::DockWidgetArea area) {
@@ -17301,7 +17419,7 @@ QDockWidget* MainWindow::makeView3DPanel() {
     // The 3D Preview tab's route tools say which one the 3D view has.
     connect(view3dPane_, &View3DPane::routeToolChanged, this, [this](RouteTool tool) {
         for (const auto& pair : preview3dTools_)
-            if (pair.second && pair.first == static_cast<int>(tool)) {
+            if (pair.second && pair.first == static_cast<int>(tool==RouteTool::Pinpoints ? RouteTool::Stretch : tool)) {
                 const QSignalBlocker hold(pair.second);
                 pair.second->setChecked(true);
             }

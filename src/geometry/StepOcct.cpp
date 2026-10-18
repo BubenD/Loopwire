@@ -5,7 +5,17 @@
 #include <IMeshTools_Parameters.hxx>
 #include <Message_ProgressIndicator.hxx>
 #include <Message_ProgressScope.hxx>
+#include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepBuilderAPI_MakeSolid.hxx>
+#include <BRepBuilderAPI_Sewing.hxx>
+#include <BRepLib.hxx>
+#include <BRepPrimAPI_MakeRevol.hxx>
+#include <ShapeFix_Face.hxx>
+#include <TopoDS_Shell.hxx>
+#include <TopoDS_Solid.hxx>
+#include <gp_Ax1.hxx>
 #include <BRepBuilderAPI_GTransform.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
@@ -104,6 +114,73 @@ private:
     QString stage_;
 };
 
+// A CLOSED OUTLINE IN A SKETCH'S PLANE, as a wire - one way round (counter-clockwise looking down its third direction)
+// or the other.
+TopoDS_Wire sketchWire(const OcctSolid& s, std::vector<std::pair<double, double>> loop, bool counter, double lift) {
+    double area = 0.0;
+    for (size_t i = 0; i < loop.size(); ++i) {
+        const auto& p = loop[i];
+        const auto& q = loop[(i + 1) % loop.size()];
+        area += p.first * q.second - q.first * p.second;
+    }
+    if ((area > 0.0) != counter) std::reverse(loop.begin(), loop.end());
+    BRepBuilderAPI_MakePolygon outline;
+    int corners = 0;
+    for (const auto& [pu, pv] : loop) {
+        const V3 p = s.u * pu + s.v * pv + s.w * lift;
+        outline.Add(gp_Pnt(p.x, p.y, p.z));
+        ++corners;
+    }
+    if (corners < 3) return {};
+    outline.Close();
+    if (!outline.IsDone()) return {};
+    return outline.Wire();
+}
+
+// A SKETCH'S FACE: its outline, its holes taken out of it.
+TopoDS_Face sketchFace(const OcctSolid& s, double lift) {
+    const TopoDS_Wire outer = sketchWire(s, s.profile, true, lift);
+    if (outer.IsNull()) return {};
+    BRepBuilderAPI_MakeFace face(outer, true);
+    if (!face.IsDone()) return {};
+    for (const auto& hole : s.holes) {
+        const TopoDS_Wire inner = sketchWire(s, hole, false, lift);
+        if (!inner.IsNull()) face.Add(inner);
+    }
+    if (!face.IsDone()) return {};
+    ShapeFix_Face fix(face.Face());
+    fix.FixOrientation();
+    fix.Perform();
+    return TopoDS::Face(fix.Face());
+}
+
+// TRIANGLES SEWN INTO A SOLID: each a face, joined where they meet. Null where they do not close.
+TopoDS_Shape sewnSolid(const Mesh3D& m) {
+    V3 lo, hi;
+    if (!m.bounds(lo, hi)) return {};
+    BRepBuilderAPI_Sewing sew(std::max(1e-4, (hi - lo).length() * 1e-5));
+    for (const auto& t : m.f) {
+        const V3 &a = m.v[static_cast<size_t>(t[0])], &b = m.v[static_cast<size_t>(t[1])], &c = m.v[static_cast<size_t>(t[2])];
+        if (cross3(b - a, c - a).length() < 1e-12) continue;
+        BRepBuilderAPI_MakePolygon tri(gp_Pnt(a.x, a.y, a.z), gp_Pnt(b.x, b.y, b.z), gp_Pnt(c.x, c.y, c.z), true);
+        if (!tri.IsDone()) continue;
+        BRepBuilderAPI_MakeFace face(tri.Wire(), true);
+        if (face.IsDone()) sew.Add(face.Face());
+    }
+    sew.Perform();
+    const TopoDS_Shape sewn = sew.SewedShape();
+    BRepBuilderAPI_MakeSolid solid;
+    int shells = 0;
+    for (TopExp_Explorer ex(sewn, TopAbs_SHELL); ex.More(); ex.Next()) {
+        solid.Add(TopoDS::Shell(ex.Current()));
+        ++shells;
+    }
+    if (!shells || !solid.IsDone()) return {};
+    TopoDS_Solid made = solid.Solid();
+    BRepLib::OrientClosedSolid(made);
+    return made;
+}
+
 TopoDS_Shape occtShapeOf(const OcctSolid& s) {
     const double a = std::max(0.01, s.a), b = std::max(0.01, s.b), c = std::max(0.0, s.c);
     const gp_Ax2 alongX(gp_Pnt(-a / 2.0, 0, 0), gp_Dir(1, 0, 0));
@@ -132,22 +209,29 @@ TopoDS_Shape occtShapeOf(const OcctSolid& s) {
             shape = BRepPrimAPI_MakePrism(BRepBuilderAPI_MakeFace(hex.Wire()).Face(), gp_Vec(a, 0, 0)).Shape();
             break;
         }
+        case 7:
+        case 8:
+            // MADE FROM THE PART'S DRAWING: its triangles sewn into a solid.
+            if (!s.mesh) return {};
+            shape = sewnSolid(*s.mesh);
+            if (shape.IsNull()) return {};
+            break;
         case 10: {
-            // A SKETCH: its outline in its plane, given depth toward the one who drew it.
-            BRepBuilderAPI_MakePolygon outline;
-            int corners = 0;
-            for (const auto& [pu, pv] : s.profile) {
-                const V3 p = s.u * pu + s.v * pv;
-                outline.Add(gp_Pnt(p.x, p.y, p.z));
-                ++corners;
-            }
-            if (corners < 3) return {};
-            outline.Close();
-            if (!outline.IsDone()) return {};
-            const BRepBuilderAPI_MakeFace face(outline.Wire(), true);
-            if (!face.IsDone()) return {};
+            // A SKETCH: its outline in its plane, its holes through it, given depth toward the one who drew it - or
+            // half of it each way.
+            const TopoDS_Face face = sketchFace(s, s.both ? -s.a / 2.0 : 0.0);
+            if (face.IsNull()) return {};
             const V3 d = s.w * s.a;
-            shape = BRepPrimAPI_MakePrism(face.Face(), gp_Vec(d.x, d.y, d.z)).Shape();
+            shape = BRepPrimAPI_MakePrism(face, gp_Vec(d.x, d.y, d.z)).Shape();
+            break;
+        }
+        case 12: {
+            // A SKETCH TURNED round one of its plane's two directions, through the plane's origin, by its angle.
+            const TopoDS_Face face = sketchFace(s, 0.0);
+            if (face.IsNull()) return {};
+            const V3 d = s.axis == 1 ? s.v : s.u;
+            const double turnBy = std::clamp(std::abs(s.a), 0.5, 360.0) * M_PI / 180.0;
+            shape = BRepPrimAPI_MakeRevol(face, gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(d.x, d.y, d.z)), turnBy, true).Shape();
             break;
         }
         case 11:
@@ -205,9 +289,42 @@ TopoDS_Shape occtShapeOf(const OcctSolid& s) {
 }
 } // namespace
 
+namespace {
+// A FEATURE'S SHAPE: its own, with what is combined with it - each made the same way first - in turn.
+TopoDS_Shape featureShape(const OcctFeature& f, QString* why) {
+    TopoDS_Shape shape = occtShapeOf(f.solid);
+    if (shape.IsNull()) return shape;
+    for (const OcctFeature& g : f.with) {
+        const TopoDS_Shape tool = featureShape(g, why);
+        if (tool.IsNull()) {
+            if (why) *why = QStringLiteral("a solid combined with another could not be made");
+            continue;
+        }
+        TopoDS_Shape made;
+        if (g.op == 1) {
+            BRepAlgoAPI_Fuse op(shape, tool);
+            if (op.IsDone()) made = op.Shape();
+        } else if (g.op == 2) {
+            BRepAlgoAPI_Cut op(shape, tool);
+            if (op.IsDone()) made = op.Shape();
+        } else if (g.op == 3) {
+            BRepAlgoAPI_Common op(shape, tool);
+            if (op.IsDone()) made = op.Shape();
+        }
+        if (!made.IsNull()) shape = made;
+        else if (why) *why = QStringLiteral("two solids could not be combined");
+    }
+    return shape;
+}
+} // namespace
+
 bool occtCutSolid(const OcctSolid& solid, const std::vector<OcctSolid>& cuts, Mesh3D& out, QString* why) {
+    return occtBuildFeature(OcctFeature{solid, 0, {}}, cuts, out, why);
+}
+
+bool occtBuildFeature(const OcctFeature& feature, const std::vector<OcctSolid>& cuts, Mesh3D& out, QString* why) {
     try {
-        TopoDS_Shape shape = occtShapeOf(solid);
+        TopoDS_Shape shape = featureShape(feature, why);
         if (shape.IsNull()) return false;
         for (const OcctSolid& c : cuts) {
             const TopoDS_Shape hole = occtShapeOf(c);
