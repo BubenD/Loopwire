@@ -1587,13 +1587,23 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
                     const QJsonArray rr = e.meta.value("cornerRadii").toArray();
                     // Interior knees only. The first and last are the ENDS: rounding those would blunt
                     // the necks, which are the one feature that says what the sleeve is.
+                    // A BRAID IS ROUNDED ROUND ONE CENTRE, the radius on the inside of the knee and that plus its
+                    // width on the outside - the bend its weave follows, so the hatch stays inside it.
+                    const bool concentric = sleeveIsBraid(e);
+                    const double across = e.meta.value("gap").toDouble(e.meta.value("shrinkWidth").toDouble(6.0));
                     for (int i = 1; i + 1 < n && i < rr.size(); ++i) {
                         const double r = rr[i].toDouble();
                         if (r <= 0.0) continue;
                         const size_t outA = static_cast<size_t>(1 + i);
                         const size_t outB = static_cast<size_t>(2 * n + 2 - i);
-                        if (outA < radii.size()) radii[outA] = r;
-                        if (outB < radii.size()) radii[outB] = r;
+                        double rA = r, rB = r;
+                        if (concentric) {
+                            const Vec2 in = e.points[i] - e.points[i - 1], out = e.points[i + 1] - e.points[i];
+                            const bool leftTurn = in.x * out.y - in.y * out.x > 0.0;
+                            (leftTurn ? rB : rA) = r + across;
+                        }
+                        if (outA < radii.size()) radii[outA] = rA;
+                        if (outB < radii.size()) radii[outB] = rB;
                         anyKnee = true;
                     }
                 }

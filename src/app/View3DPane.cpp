@@ -3459,7 +3459,9 @@ void View3DPane::rebuild(bool fit) {
     // a valid schematic invisible or reporting that no harness exists.
     if (!systemLinked_ && fromWizard && ents.empty() && drawing_) { ents = drawing_(); fromWizard = false; }
     const bool wasEmpty = scene_.runs == 0 && scene_.parts == 0;
-    scene_ = buildHarness3D(ents, modelOf_, partLook_, pinsOf_);
+    // THE SHEET'S PARTS' COLOURS, by the bill: what each run, sleeve and cable is drawn in.
+    const QHash<QString, QColor> colours = coloursOf_ && !fromWizard ? coloursOf_() : QHash<QString, QColor>();
+    scene_ = buildHarness3D(ents, modelOf_, partLook_, pinsOf_, colours);
     // NOTHING ON THE SHEET TO SHOW - no run, no part: the wizard's harness, if one is open. A connector put on the
     // sheet by itself is something to show, and is shown.
     bool fell = false;
@@ -3471,6 +3473,12 @@ void View3DPane::rebuild(bool fit) {
     if (!systemLinked_ && !fromWizard && !fell && !route_.segments.empty()) {
         const QJsonObject before = route_.toJson();
         addDrawingToRoute(route_, ents, false, true);
+        // A routed cable's covering in its part's colour, where the bill gives one.
+        for (RouteSegment3D& s : route_.segments)
+            if (s.designCable.startsWith(QLatin1String("drawing:run:"))) {
+                const QColor c = colours.value(s.designCable.mid(12));
+                if (c.isValid()) s.coverColor = c;
+            }
         if (route_.toJson() != before) {
             route_.solidsChanged();
             saveRouting();
@@ -4461,7 +4469,7 @@ void View3DPane::transformDrawingRoute(const std::function<Vec2(const Vec2&)>& m
             for(auto& via:segment.via){via.at=point(via.at);via.normal=direction(via.normal);}
             segment.fixedLength*=scale;segment.designLength*=scale;segment.diameter*=scale;
             segment.bodyDiameter*=scale;segment.wireD*=scale;segment.minimumBendRadius*=scale;
-            segment.coverStart*=scale;segment.coverFinish*=scale;segment.conductorAreaMm2*=scale*scale;segment.pinpointSlack*=scale;
+            segment.coverStart*=scale;segment.coverFinish*=scale;segment.endShrinkStart*=scale;segment.endShrinkFinish*=scale;segment.conductorAreaMm2*=scale*scale;segment.pinpointSlack*=scale;
             for(auto& label:segment.labels){label.length*=scale;label.textHeight*=scale;}
         }
         route.solidsChanged();
@@ -5865,10 +5873,37 @@ void View3DCanvas::buildRouteMeshes() const {
             if (covered.size() >= 2) {
                 // A BRAID WOVEN, as the harness's own 3D view draws it.
                 const bool braid = s.covering == QLatin1String("braid");
-                const QColor body = s.id == selSegment_ ? lit : braid ? QColor(150, 154, 162)
+                const QColor body = s.id == selSegment_ ? lit : s.coverColor.isValid() ? s.coverColor
+                    : braid ? QColor(150, 154, 162)
                     : s.covering == QLatin1String("heatshrink") ? QColor(42, 42, 46) : QColor(70, 74, 82);
                 routeMeshes_.push_back({tubeMesh(covered, route_->diameterOf(s) / 2.0, 24, true), body,
                     braid ? Texture3D::Braid : Texture3D::Matte, QString(), s.id});
+                // HEATSHRINK ON THE ENDS OF THE COVERING: a black sleeve over each end of it, a little over it.
+                double coveredLength = 0.0;
+                for (size_t i = 1; i < covered.size(); ++i) coveredLength += (covered[i] - covered[i - 1]).length();
+                auto piece = [&](double lo, double hi) {
+                    std::vector<V3> out;
+                    double walked = 0.0;
+                    for (size_t i = 1; i < covered.size(); ++i) {
+                        const double length = (covered[i] - covered[i - 1]).length();
+                        const double a = std::max(lo, walked), b = std::min(hi, walked + length);
+                        if (b > a && length > 1e-9) {
+                            if (out.empty()) out.push_back(covered[i - 1] + (covered[i] - covered[i - 1]) * ((a - walked) / length));
+                            out.push_back(covered[i - 1] + (covered[i] - covered[i - 1]) * ((b - walked) / length));
+                        }
+                        walked += length;
+                    }
+                    return out;
+                };
+                const double sleeveR = route_->diameterOf(s) / 2.0 + 0.35;
+                for (const auto& [lo, hi] : {std::pair<double, double>{0.0, std::min(s.endShrinkStart, coveredLength)},
+                                              std::pair<double, double>{std::max(0.0, coveredLength - s.endShrinkFinish), coveredLength}}) {
+                    if (hi - lo < 0.2) continue;
+                    const std::vector<V3> span = piece(lo, hi);
+                    if (span.size() >= 2)
+                        routeMeshes_.push_back({tubeMesh(span, sleeveR, 24, true), s.id == selSegment_ ? lit : QColor(32, 32, 35),
+                                                Texture3D::Matte, QString(), s.id});
+                }
             }
         }
         if (nw <= 1) {

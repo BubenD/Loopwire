@@ -1591,11 +1591,18 @@ void BrickWizardDialog::buildUi() {
     {
         navBox_ = new QWidget(canvas_);
         navBox_->setObjectName(QStringLiteral("brickNav"));
+        // NO BACKGROUND OF ITS OWN: the wheel and the list under it sit straight on the pane.
+        navBox_->setAttribute(Qt::WA_TranslucentBackground);
+        navBox_->setAutoFillBackground(false);
+        navBox_->setStyleSheet(QStringLiteral("QWidget#brickNav{background:transparent;}"));
         auto* vl = new QVBoxLayout(navBox_);
         vl->setContentsMargins(0, 0, 0, 0);
         vl->setSpacing(4);
         navWheel_ = new NavWheel(navBox_);
         navWheel_->setObjectName(QStringLiteral("brickNavWheel"));
+        // Kept its size in the corner of the pane: grown under the pointer it ran off the pane's edge.
+        navWheel_->setEnlargeOnHover(false);
+        connect(navWheel_, &NavWheel::geometryChanged, this, [this] { placeNav(); });
         auto press = [this](const char* name) {
             return [this, name] {
                 if (auto* b = findChild<QPushButton*>(QLatin1String(name))) b->click();

@@ -89,6 +89,12 @@ const QStringList kMetals = {QStringLiteral("Copper"),
                              QStringLiteral("Stainless steel"),
                              QStringLiteral("Aluminium")};
 
+// THE OUTER COLOURS a sleeve, a jacket or a braid is sold in - what the 3D view draws it in. Others can be typed.
+const QStringList kOuterColours = {QStringLiteral("Black"),  QStringLiteral("White"),  QStringLiteral("Grey"),
+                                   QStringLiteral("Red"),    QStringLiteral("Blue"),   QStringLiteral("Green"),
+                                   QStringLiteral("Yellow"), QStringLiteral("Orange"), QStringLiteral("Brown"),
+                                   QStringLiteral("Violet"), QStringLiteral("Pink"),   QStringLiteral("Silver"),
+                                   QStringLiteral("Clear")};
 const QStringList kPolymers = {QStringLiteral("Polyolefin"),
                                QStringLiteral("PVC"),
                                QStringLiteral("PTFE"),
@@ -827,7 +833,7 @@ std::vector<PartField> partFields(PartKind kind) {
             // is saved, copied and duplicated with the part like every other parameter.
             return {num("od", "Outer diameter", "mm"),
                     choice("jacket", "Jacket material", kPolymers),
-                    text("jacketColour", "Jacket colour"),
+                    choice("jacketColour", "Jacket colour", kOuterColours),
                     choice("material", "Conductor material", kMetals),
                     choice("conductor", "Conductors",
                            {QStringLiteral("Stranded"), QStringLiteral("Solid")}),
@@ -930,7 +936,7 @@ std::vector<PartField> partFields(PartKind kind) {
                     text("ratio", "Shrink ratio"),
                     num("wall", "Recovered wall thickness", "mm"),
                     num("shrinkTemp", "Minimum shrink temperature", "C"),
-                    text("colour", "Colour"),
+                    choice("colour", "Colour", kOuterColours),
                     text("temp", "Temperature range", "C"),
                     text("spec", "Specification")};
         case PartKind::HeatshrinkBoot:
@@ -974,6 +980,8 @@ std::vector<PartField> partFields(PartKind kind) {
                     choice("material", "Material", kMetals),
                     text("coverage", "Coverage", "%"),
                     num("bendRadius", "Minimum bend radius", "mm"),
+                    // ITS OUTER COLOUR, as the 3D view shows it: a metal braid's, or a braided sleeve's strands.
+                    choice("colour", "Colour", kOuterColours),
                     text("spec", "Specification")};
         case PartKind::Grommet:
             return {text("size", "Size"),
@@ -994,7 +1002,7 @@ std::vector<PartField> partFields(PartKind kind) {
                     range("diameter", "Bundle diameter", "mm"),
                     num("wall", "Wall thickness", "mm"),
                     choice("material", "Material", kPolymers),
-                    text("colour", "Colour"),
+                    choice("colour", "Colour", kOuterColours),
                     text("spec", "Specification")};
         case PartKind::Conduit:
             return {text("size", "Nominal size"),

@@ -798,8 +798,8 @@ int run_drawingspace_tests() {
         for (QDockWidget* d : win.findChildren<QDockWidget*>())
             if (d->windowTitle() == QStringLiteral("PARTS")) partsList = d->findChild<QTreeWidget*>();
         check(partsList != nullptr, "view: the parts panel is a table of the library");
-        check(partsList && partsList->columnCount() == 4,
-              "view: the part, and a column each for the mechanical, schematic and fanout drawings");
+        check(partsList && partsList->columnCount() == 5,
+              "view: the part, a column each for the mechanical, schematic and fanout drawings, and its 3D model");
         QLineEdit* partsFilter = nullptr;
         for (QDockWidget* d : win.findChildren<QDockWidget*>())
             if (d->windowTitle() == QStringLiteral("PARTS")) partsFilter = d->findChild<QLineEdit*>();
@@ -1873,23 +1873,24 @@ int run_drawingspace_tests() {
             const QString allLabels = labels.join(QStringLiteral(" | "));
             // HEATSHRINK ON THE ENDS of a cable is a switch on the ribbon now, not a choice of its own; the braided
             // sleeve over the run took its place.
-            check(acts.size() == 4 &&
+            check(acts.size() == 5 &&
                       allLabels.contains(QStringLiteral("Braided sleeve over the run")) &&
+                      allLabels.contains(QStringLiteral("Braided shield over the run")) &&
                       !allLabels.contains(QStringLiteral("with heatshrink on ends")) &&
                       allLabels.contains(QStringLiteral("Transition heatshrink")),
-                  "special: braided sleeve and transition sleeves are both on the heatshrink menu");
+                  "special: braided sleeve, braided shield and transition sleeves are all on the heatshrink menu");
             // AND THE WHOLE-RUN CABLE IS CALLED WHAT IT IS. It was "cable over the run with
             // heatshrink", which is the NEXT choice down - the one with heatshrink on its ends -
             // and having the two of them share most of a name meant picking between them by
             // reading to the end of both.
             check(labels.contains(QStringLiteral("Cable over the run")),
                   "special: the whole-run cable is named for what it is, and only that");
-            bool distinctGlyphs = glyphs.size() == 4;
+            bool distinctGlyphs = glyphs.size() == 5;
             for (int i = 0; distinctGlyphs && i < glyphs.size(); ++i)
                 for (int j = i + 1; j < glyphs.size(); ++j)
                     distinctGlyphs = glyphs[i] != glyphs[j];
             check(distinctGlyphs, "special: each sleeve choice wears its own picture");
-            if (acts.size() == 4 && win.editorForTest()) {
+            if (acts.size() == 5 && win.editorForTest()) {
                 acts[1]->trigger();
                 auto* ends = win.findChild<QCheckBox*>(QStringLiteral("shrinkRouteEndSleeves"));
                 check(ends && !ends->isHidden() && !ends->isChecked() &&
@@ -1905,6 +1906,9 @@ int run_drawingspace_tests() {
                 check(win.editorForTest()->shrinkRouteMode() == ShrinkRouteMode::Braid,
                       "special: switched off - the braid cut square at its ends");
                 acts[3]->trigger();
+                check(win.editorForTest()->shrinkRouteMode() == ShrinkRouteMode::Shield,
+                      "special: choosing Braided shield draws a shield, square at its ends");
+                acts[4]->trigger();
                 check(!ends || ends->isHidden(), "special: a transition has no ends to switch");
                 check(win.editorForTest()->shrinkRouteMode() == ShrinkRouteMode::Transition,
                       "special: choosing Transition heatshrink sets its crossing-line mode");

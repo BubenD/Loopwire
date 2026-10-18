@@ -11386,7 +11386,8 @@ void MainWindow::refreshProperties() {
         const bool isSleeve = isDoublePoly && mv(QStringLiteral("shrunkEnds")).toBool();
         if (isSleeve) {
             const bool braid = mv(QStringLiteral("shrinkBraid")).toBool();
-            addHeader(braid ? QStringLiteral("Braided sleeve") : QStringLiteral("Heatshrink"));
+            const bool shield = braid && mv(QStringLiteral("shrinkShield")).toBool();
+            addHeader(shield ? QStringLiteral("Braided shield") : braid ? QStringLiteral("Braided sleeve") : QStringLiteral("Heatshrink"));
             const double across = mv(QStringLiteral("gap")).toDouble(6.0);
             const bool endsOnly = mv(QStringLiteral("shrinkEndsOnly")).toBool();
             addNum(QStringLiteral("Line spacing"), across, [this](double v) {
@@ -11400,6 +11401,11 @@ void MainWindow::refreshProperties() {
             if (!mv(QStringLiteral("shrinkTransition")).toBool() && (endsOnly || braid || squareCable)) {
                 addCombo(QStringLiteral("Braided"), {QStringLiteral("No"), QStringLiteral("Yes")}, braid ? QStringLiteral("Yes") : QStringLiteral("No"),
                          false, [this](const QString& v) { editor_->setSelectionBraided(v == QLatin1String("Yes")); });
+                // WHICH BRAID: a sleeve, woven; or a shield, a metal screen braid hatched herringbone.
+                if (braid)
+                    addCombo(QStringLiteral("Braid"), {QStringLiteral("Sleeve"), QStringLiteral("Shield")},
+                             shield ? QStringLiteral("Shield") : QStringLiteral("Sleeve"), false,
+                             [this](const QString& v) { editor_->setSelectionBraidShield(v == QLatin1String("Shield")); });
                 addCombo(QStringLiteral("Heatshrink on ends"), {QStringLiteral("No"), QStringLiteral("Yes")},
                          endsOnly ? QStringLiteral("Yes") : QStringLiteral("No"), false,
                          [this](const QString& v) { editor_->setSelectionEndSleeves(v == QLatin1String("Yes")); });
@@ -16363,8 +16369,9 @@ QDockWidget* MainWindow::makePartsPanel() {
     v->addWidget(head);
 
     partsPanelTree_ = new QTreeWidget(body);
-    partsPanelTree_->setColumnCount(4);
-    partsPanelTree_->setHeaderLabels({tr("Part"), tr("M"), tr("S"), tr("P")});
+    partsPanelTree_->setColumnCount(5);
+    partsPanelTree_->setHeaderLabels({tr("Part"), tr("M"), tr("S"), tr("P"), tr("3D")});
+    partsPanelTree_->headerItem()->setToolTip(4, tr("3D model"));
     // The three columns are what a part IS TO THE DRAWING, so they are named where they are read.
     partsPanelTree_->headerItem()->setToolTip(1, tr("Mechanical drawing"));
     partsPanelTree_->headerItem()->setToolTip(2, tr("Schematic symbol"));
@@ -16397,9 +16404,9 @@ QDockWidget* MainWindow::makePartsPanel() {
     // its LAST section, which gave the fanout column half the panel and the part's name none of it.
     partsPanelTree_->header()->setStretchLastSection(false);
     partsPanelTree_->header()->setSectionResizeMode(0, QHeaderView::Stretch);
-    for (int c = 1; c <= 3; ++c) {
+    for (int c = 1; c <= 4; ++c) {
         partsPanelTree_->header()->setSectionResizeMode(c, QHeaderView::Fixed);
-        partsPanelTree_->header()->resizeSection(c, 22);
+        partsPanelTree_->header()->resizeSection(c, c == 4 ? 28 : 22);
     }
     partsPanelTree_->setToolTip(QStringLiteral(
         "Every part of every library in view, and which drawings it has: M mechanical, S schematic, "
@@ -16426,6 +16433,11 @@ QDockWidget* MainWindow::makePartsPanel() {
                 const bool hasMech = item->data(0, Qt::UserRole + 1).toBool();
                 const bool hasAny = item->data(0, Qt::UserRole + 2).toBool();
                 const bool hasFan = item->data(0, Qt::UserRole + 3).toBool();
+                // The 3D column: the part in the library, its model in the live 3D view there.
+                if (column == 4) {
+                    showPartsLibraryAt(id);
+                    return;
+                }
                 // The COLUMN says which drawing: double-click the tick under S and the schematic symbol is
                 // what comes down. The columns are how the row says what it has, so they are also how it is
                 // asked for - a part with three drawings and one gesture had no way of saying which.
@@ -17137,6 +17149,13 @@ void MainWindow::refreshPartsPanel() {
                               .arg(part.wayCount());
             item->setToolTip(c + 1, cellTip);
         }
+        // ITS 3D MODEL, ticked the same way: what the 3D view shows it as.
+        const bool model = !part.value(QStringLiteral("model3d")).isEmpty();
+        item->setText(4, model ? QString(QChar(0x2713)) : QString());
+        item->setTextAlignment(4, Qt::AlignCenter);
+        item->setForeground(4, model ? Chrome::ink() : Chrome::subInk());
+        item->setToolTip(4, model ? tr("Has a 3D model - double-click to see it in the library")
+                                  : tr("No 3D model - double-click to make one in the library"));
         QStringList drawings;
         if (mech) drawings << tr("mechanical");
         if (schem) drawings << tr("schematic");
@@ -17304,6 +17323,12 @@ QDockWidget* MainWindow::makeView3DPanel() {
         return stored.isEmpty() ? QString() : DatasheetStore::pathOf(stored);
     });
     view3dPane_->setPinsLookup([catalog](const QString& libPart) { return partPinsOf(catalog->byId(libPart)); });
+    // EACH OBJECT'S COLOUR as its part has it - by the balloon on it and the bill line it numbers, or its own part.
+    view3dPane_->setColourLookup([this, catalog] {
+        if (!doc_) return QHash<QString, QColor>();
+        const PartsLibrary lib = catalog->merged();
+        return partColoursFromBom(*doc_, lib);
+    });
     // THE ROUTING IN 3D, kept with the drawing: the environment's file and the route through it.
     view3dPane_->setRoutingStore([this] { return doc_ ? doc_->routing3d() : QJsonObject(); },
                                  [this](const QJsonObject& o) {

@@ -37,6 +37,8 @@ public:
                                        const std::function<void(int axis, int sign)>& move,
                                        const std::function<void(int axis, int sign)>& turn);
     static void setGlobalAppearance(int sizePercent, bool enlargeOnHover, double hoverScale);
+    // THIS WHEEL NEVER GROWS under the pointer, whatever the setting says - where there is no room for it to.
+    void setEnlargeOnHover(bool on) { enlarge_ = on; updateDrawingSize(); }
     static int globalSizePercent();
     static bool globalEnlargeOnHover();
     static double globalHoverScale();
@@ -67,6 +69,7 @@ private:
     int hover_ = -1;
     int pressed_ = -1;
     bool pointerOver_ = false;
+    bool enlarge_ = true;
     QTimer shrinkTimer_;
     double drawingScale() const;
     void updateDrawingSize();

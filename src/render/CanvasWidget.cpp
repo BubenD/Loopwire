@@ -1000,6 +1000,18 @@ void CanvasWidget::paintEvent(QPaintEvent* event) {
         }
         p.restore();
     }
+    // PAUSE: Tab is holding what is being drawn. Gone again as soon as drawing carries on.
+    if(editor_ && editor_->drawingPaused()) {
+        p.save();
+        QFont font=p.font();font.setBold(true);font.setPointSizeF(font.pointSizeF()+1.0);p.setFont(font);
+        const QString label=QStringLiteral("Pause");
+        const QRect note(12,12,p.fontMetrics().horizontalAdvance(label)+28,26);
+        p.setRenderHint(QPainter::Antialiasing,true);
+        p.setPen(QColor("#ffd27a"));p.setBrush(QColor("#c77700"));
+        p.drawRoundedRect(note,5,5);
+        p.setPen(Qt::white);p.drawText(note,Qt::AlignCenter,label);
+        p.restore();
+    }
     // The crosshair is painted by the always-on-top `crosshairTop_` overlay (so it
     // stays visible above the inline text editor), not here.
     if (crosshairTop_) crosshairTop_->update(event->region());

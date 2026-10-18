@@ -41,6 +41,7 @@
 #include <QWidgetAction>
 
 #include <cmath>
+#include <map>
 
 namespace Loopwire {
 namespace {
@@ -1381,7 +1382,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                           const char* tip; };
             // A CABLE OR A BRAID OVER THE RUN, with heatshrink on its ends or without: the sort chosen here, the
             // ends switched on the parameters beside it (and on the panel, for one already drawn).
-            const Sort sorts[4] = {
+            const Sort sorts[5] = {
                 {ShrinkRouteMode::Sleeve, 0, "Heatshrink", "Heatshrink over the run",
                  "Heatshrink over the run: click along the stretch it covers, Enter finishes. Drawn "
                  "recovered - pulled in at both ends onto what it grips, and following the knees in "
@@ -1393,6 +1394,9 @@ void MainWindow::buildHarnessMechanicalTab() {
                 {ShrinkRouteMode::Braid, 4, "Braid", "Braided sleeve over the run",
                  "A braided sleeve over the run: one width, its weave drawn along it, cut square at each "
                  "end - or, Heatshrink on ends switched on, with a sleeve over each end."},
+                {ShrinkRouteMode::Shield, 5, "Shield", "Braided shield over the run",
+                 "A braided shield over the run: a metal screen braid, one width, hatched herringbone, cut "
+                 "square at each end - or, Heatshrink on ends switched on, with a sleeve over each end."},
                 {ShrinkRouteMode::Transition, 3, "Transition", "Transition heatshrink",
                  "Transition heatshrink: draw a line across the parallel lines it covers; the sleeve "
                  "is fitted at their closest end, using the longest line when their lengths differ."}};
@@ -1554,6 +1558,8 @@ void MainWindow::buildHarnessMechanicalTab() {
             double autoValue;
         };
         std::vector<Field> fields;
+        // THE CAPTIONS OF EACH COLUMN, so they can be made one width and the fields line up down it.
+        std::map<int, std::vector<QLabel*>> captions;
         auto actual = [this](const QString& key, double fallback) {
             Entity preview = editor_->shrinkRouteMode() == ShrinkRouteMode::Transition
                                  ? editor_->transitionPreview()
@@ -1570,6 +1576,7 @@ void MainWindow::buildHarnessMechanicalTab() {
             line->setSpacing(3);
             auto* caption = new QLabel(label, cell);
             caption->setStyleSheet(QStringLiteral("color:#e6e9ef;background:transparent;"));
+            captions[col].push_back(caption);
             auto* spin = new QDoubleSpinBox(cell);
             spin->setObjectName(name);
             spin->setRange(kind == 7 ? -360.0 : 0.0, maximum);
@@ -1603,14 +1610,18 @@ void MainWindow::buildHarnessMechanicalTab() {
                 canvas_->update();
             });
             fields.push_back({cell, spin, automatic, value, shown, write, kind, autoValue});
-            grid->addWidget(cell, row, col);
+            grid->addWidget(cell, row, col, Qt::AlignLeft);
         };
         field(QStringLiteral("Width"), QStringLiteral("shrinkRouteWidth"), 0, 0, 0, 500.0,
               [this]{ return editor_->shrinkWidth(); }, [this]{ return editor_->shrinkWidth(); },
               [this](double v){ editor_->setShrinkWidth(v); });
         field(QStringLiteral("Fillet"), QStringLiteral("shrinkRouteFillet"), 0, 1, 1, 500.0,
               [this]{ return editor_->cornerRadius(); }, [this]{ return editor_->cornerRadius(); },
-              [this](double v){ editor_->setCornerRadius(v); });
+              [this](double v){
+                  editor_->setCornerRadius(v);
+                  // A BRAID'S FILLET is every braid's in the drawing that has no radius of its own.
+                  if (shrinkModeIsBraid(editor_->shrinkRouteMode())) editor_->applyBraidDefaultFillet(v);
+              });
         field(QStringLiteral("Angle"), QStringLiteral("shrinkRouteAngle"), 0, 2, 7, 360.0,
               [this]{ return editor_->draftRouteAngle(); }, [this]{ return editor_->draftRouteAngle(); },
               [this](double v){ editor_->setDraftRouteAngle(v); });
@@ -1636,6 +1647,12 @@ void MainWindow::buildHarnessMechanicalTab() {
                   }
                   return actual(QStringLiteral("shrinkCoverStart"), 20.0);
               }, [this](double v){ editor_->setShrinkCover(v); }, true);
+        // EVERY FIELD OF A COLUMN STARTS WHERE THE ONE ABOVE IT DOES: its captions all as wide as the widest.
+        for (auto& [col, labels] : captions) {
+            int widest = 0;
+            for (QLabel* l : labels) widest = std::max(widest, l->sizeHint().width());
+            for (QLabel* l : labels) l->setMinimumWidth(widest);
+        }
         // HEATSHRINK ON THE ENDS of a cable or a braid over the run - and with it, the faces, recovery and cover length
         // of those sleeves.
         auto* endSleeves = new QCheckBox(QStringLiteral("Heatshrink on ends"), settings);
@@ -1671,7 +1688,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                 const QSignalBlocker hold(endSleeves);
                 endSleeves->setChecked(shrinkModeHasEndSleeves(mode));
             }
-            const bool squareEnds = mode == ShrinkRouteMode::Cable || mode == ShrinkRouteMode::Braid;
+            const bool squareEnds = shrinkModeIsSquare(mode);
             for (const Field& f : fields) {
                 const bool transition = mode == ShrinkRouteMode::Transition;
                 const bool visible = f.kind <= 1 ? !transition

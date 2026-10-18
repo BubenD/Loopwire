@@ -4,6 +4,7 @@
 #include "model/Entity.h"
 
 #include <QColor>
+#include <QHash>
 #include <QString>
 #include <QStringList>
 
@@ -91,7 +92,10 @@ PartPins partPinsOf(const LibraryPart* part);
 
 Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::function<QString(const QString& libPart)>& modelOf,
                               PartLook look = PartLook::Box,
-                              const std::function<PartPins(const QString& libPart)>& pinsOf = {});
+                              const std::function<PartPins(const QString& libPart)>& pinsOf = {},
+                              // Each object's part colour by entity id (see partColoursFromBom): its run, sleeve or
+                              // cable drawn in it.
+                              const QHash<QString, QColor>& colours = QHash<QString, QColor>());
 
 // A model file read once and kept while it is unchanged on disk.
 const Mesh3D& cachedMesh3D(const QString& path, QString* how = nullptr);

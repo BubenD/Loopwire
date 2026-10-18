@@ -163,6 +163,8 @@ bool sleeveEndCoverageOf(const Entity& e, double& start, double& end);
 // side to the other, a pitch apart, following the run round its knees. Its body is the whole run, or (heatshrink on its
 // ends) the stretch between the two sleeves. Empty for any other sleeve.
 bool sleeveIsBraid(const Entity& e);
+// A BRAIDED SHIELD (shrinkShield on a braid): a metal screen braid over the run, hatched herringbone rather than woven.
+bool sleeveIsShield(const Entity& e);
 std::vector<std::pair<Vec2, Vec2>> sleeveBraidStrokes(const Entity& e);
 std::vector<Vec2> entityOutline(const Entity& e);
 

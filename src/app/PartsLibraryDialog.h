@@ -6,6 +6,7 @@
 #include "harness/PartsLibrary.h"
 #include "harness/PartFromPdf.h"
 #include "geometry/PartModel3D.h"
+#include "harness/Harness3D.h"
 
 #include <QDialog>
 #include <QHash>
@@ -34,6 +35,7 @@ namespace Loopwire {
 
 class Editor;
 class DrawingPreview;
+class View3DCanvas;
 
 // The harness parts library: the raw materials a harness is built from, kept in one file and shown
 // by kind. A part carries what a purchase order needs (description, manufacturer, its part number)
@@ -153,6 +155,8 @@ public:
     void attachModel3D();
     void removeModel3D();
     void refreshModel3DRow();
+    // THE LIVE VIEW of its 3D model under the row, read again when the model is another or was saved since.
+    void refreshModelView();
     // THE SIZE a mechanical drawing drawn to proportion is put at - by its entry face (see partSizeFactor).
     void refreshSizeRow();
     // Which file is picked in the list, or the part's first when none is.
@@ -226,6 +230,9 @@ private:
     QLabel* model3dLabel_ = nullptr;
     QPushButton* model3dAttach_ = nullptr;
     QPushButton* model3dRemove_ = nullptr;
+    View3DCanvas* modelView_ = nullptr;
+    Harness3DScene modelScene_;   // what modelView_ shows
+    QString modelShown_;          // the file (and its time) it was read from
     QWidget* paramHost_ = nullptr;
     QVBoxLayout* paramLay_ = nullptr;
     QLabel* summary_ = nullptr;

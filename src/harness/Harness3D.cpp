@@ -760,8 +760,11 @@ const std::vector<ModelItem3D>& cachedPartModel(const QString& path, QString* ho
 } // namespace
 
 Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::function<QString(const QString&)>& modelOf,
-                              PartLook look, const std::function<PartPins(const QString&)>& pinsOf) {
+                              PartLook look, const std::function<PartPins(const QString&)>& pinsOf,
+                              const QHash<QString, QColor>& colours) {
     Harness3DScene scene;
+    // ITS PART'S OWN COLOUR, where the bill (by a balloon) or its own part gives one; else the colour it would have.
+    auto own = [&colours](const Entity& e, const QColor& otherwise) { return colours.value(e.id, otherwise); };
     // ---- THE RUNS ----------------------------------------------------------------------------------
     std::vector<Vec2> runEnds;
     QHash<QString, bool> isRun;   // a group (copy mark or brick) with a run in it is a run, not a part
@@ -846,7 +849,7 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
             Harness3DItem wire;
             wire.smoothContours = true; wire.mesh = tubeMesh(path, std::max(0.2, e.meta.value(QStringLiteral("gap")).toDouble(1.0)) / 2.0, 10, true);
             wire.what = QStringLiteral("wire");
-            wire.color = colourOf(e, 0);
+            wire.color = own(e, colourOf(e, 0));
             scene.items.push_back(std::move(wire));
             ++scene.runs;
             runEnds.push_back(path2.front());
@@ -908,7 +911,7 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
                     cab.smoothContours = true; cab.mesh = tubeMesh(fine, cable, 16, true);
                     // A BRAID BETWEEN THE TWO SLEEVES, woven; or a cable.
                     const bool braided = sleeveIsBraid(e);
-                    cab.color = braided ? kBraidColour : QColor(70, 74, 82);
+                    cab.color = own(e, braided ? (sleeveIsShield(e) ? kBraidShield : kBraidColour) : QColor(70, 74, 82));
                     cab.what = braided ? QStringLiteral("braid") : QStringLiteral("run");
                     cab.brick = brickOf(e);
                     scene.items.push_back(std::move(cab));
@@ -929,7 +932,10 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
             }
             // A BRAIDED SLEEVE over the whole run, woven.
             const bool braidRun = sleeve && sleeveIsBraid(e) && !e.meta.value(QStringLiteral("shrinkEndsOnly")).toBool();
-            wi.color = braidRun ? kBraidColour : sleeve ? QColor(32, 32, 35) : colourOf(e, 0);
+            const bool overEnds = sleeve && e.meta.value(QStringLiteral("shrinkEndsOnly")).toBool();
+            // (The sleeves over a cable's ends are heatshrink, black: the colour of the part is the cable's.)
+            wi.color = braidRun ? own(e, sleeveIsShield(e) ? kBraidShield : kBraidColour)
+                       : overEnds ? QColor(32, 32, 35) : sleeve ? own(e, QColor(32, 32, 35)) : own(e, colourOf(e, 0));
             wi.what = braidRun ? QStringLiteral("braid") : sleeve ? QStringLiteral("sleeve") : QStringLiteral("wire");
             wi.brick = brickOf(e);
             scene.items.push_back(std::move(wi));
@@ -955,7 +961,7 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
             Harness3DItem it;
             it.smoothContours = true; it.mesh = tubeMesh(stretch(route, fanA, total - fanB), bodyW / 2.0, 18, true);
             const bool braided = e.meta.value(QStringLiteral("twistBodyBraid")).toBool();
-            it.color = braided ? kBraidShield : body == QLatin1String("heatshrink") ? QColor(42, 42, 46) : QColor(70, 74, 82);
+            it.color = own(e, braided ? kBraidShield : body == QLatin1String("heatshrink") ? QColor(42, 42, 46) : QColor(70, 74, 82));
             it.what = braided ? QStringLiteral("braid") : body == QLatin1String("heatshrink") ? QStringLiteral("sleeve") : QStringLiteral("run");
             it.brick = brickOf(e);
             scene.items.push_back(std::move(it));

@@ -227,6 +227,11 @@ QString Route3D::splitSegment(const QString& id, const V3& at, const V3& normal,
         second->wireColors = original.wireColors;
         second->wireSame = original.wireSame;
         second->color = original.color;
+        second->coverColor = original.coverColor;
+        // Each end's heatshrink stays on the piece with that end.
+        segment(id)->endShrinkFinish = 0.0;
+        second->endShrinkStart = 0.0;
+        second->endShrinkFinish = original.endShrinkFinish;
         const double one = length(*segment(id)), two = length(*second);
         segment(id)->coverStart = std::min(original.coverStart, one);
         segment(id)->coverFinish = std::max(0.0, original.coverFinish - two);
@@ -1054,6 +1059,9 @@ QJsonObject Route3D::toJson() const {
             j[QStringLiteral("covering")] = s.covering;
             j[QStringLiteral("coverStart")] = s.coverStart;
             j[QStringLiteral("coverFinish")] = s.coverFinish;
+            if (s.endShrinkStart > 0.0) j[QStringLiteral("endShrinkStart")] = s.endShrinkStart;
+            if (s.endShrinkFinish > 0.0) j[QStringLiteral("endShrinkFinish")] = s.endShrinkFinish;
+            if (s.coverColor.isValid()) j[QStringLiteral("coverColor")] = s.coverColor.name();
         }
         if (s.coverYield > 0.0) j[QStringLiteral("coverYield")] = s.coverYield;
         if (s.wireSame) j[QStringLiteral("wireSame")] = true;
@@ -1159,6 +1167,9 @@ Route3D Route3D::fromJson(const QJsonObject& o) {
         s.covering = j.value(QStringLiteral("covering")).toString();
         s.coverStart = std::max(0.0, j.value(QStringLiteral("coverStart")).toDouble());
         s.coverFinish = std::max(0.0, j.value(QStringLiteral("coverFinish")).toDouble());
+        s.endShrinkStart = std::max(0.0, j.value(QStringLiteral("endShrinkStart")).toDouble());
+        s.endShrinkFinish = std::max(0.0, j.value(QStringLiteral("endShrinkFinish")).toDouble());
+        if (j.contains(QStringLiteral("coverColor"))) s.coverColor = QColor(j.value(QStringLiteral("coverColor")).toString());
         s.coverYield = std::clamp(j.value(QStringLiteral("coverYield")).toDouble(0.0), 0.0, 1.0);
         s.wireSame = j.value(QStringLiteral("wireSame")).toBool(false);
         for (const QJsonValue& c : j.value(QStringLiteral("wireColors")).toArray())

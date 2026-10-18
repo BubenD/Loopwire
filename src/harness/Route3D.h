@@ -87,6 +87,10 @@ struct RouteSegment3D {
     double minimumBendRadius = 0.0; // a specified/library minimum, independent of the estimate
     bool braidedShield = false, heatshrink = false, jacket = false;
     double coverStart = 0.0, coverFinish = 0.0; // exposed fan lengths, mm
+    // HEATSHRINK OVER EACH END OF ITS COVERING (a cable or braid with heatshrink on its ends), mm along it; 0 none.
+    double endShrinkStart = 0.0, endShrinkFinish = 0.0;
+    // THE COLOUR OF ITS COVERING - the jacket, braid or sleeve - from its part; none: the covering's usual colour.
+    QColor coverColor;
     // HOW FAR ITS COVERING'S STIFFNESS HAS GIVEN WAY TO A PULL: 0 none - bent as wide as the jacket, braid and heatshrink
     // over it want - to 1, bent as the wires alone are. A covering stiffens a cable; it does not stop it being moved.
     double coverYield = 0.0;

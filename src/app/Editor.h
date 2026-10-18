@@ -51,10 +51,19 @@ struct ValidationIssue {
 // square-cut width for the whole run; CableEnds leaves the cable visible in the middle and puts an
 // editable sleeve over each end; Transition is fitted by crossing the parallel lines it covers.
 // BRAID: a braided sleeve over the run, square at its ends like a cable, its body woven; BRAIDENDS, with heatshrink over
-// its two ends.
-enum class ShrinkRouteMode { Sleeve, Cable, CableEnds, Transition, Braid, BraidEnds };
-inline bool shrinkModeHasEndSleeves(ShrinkRouteMode m) { return m == ShrinkRouteMode::CableEnds || m == ShrinkRouteMode::BraidEnds; }
-inline bool shrinkModeIsBraid(ShrinkRouteMode m) { return m == ShrinkRouteMode::Braid || m == ShrinkRouteMode::BraidEnds; }
+// its two ends. SHIELD and SHIELDENDS: the same for a braided shield, a metal screen braid hatched herringbone.
+enum class ShrinkRouteMode { Sleeve, Cable, CableEnds, Transition, Braid, BraidEnds, Shield, ShieldEnds };
+inline bool shrinkModeHasEndSleeves(ShrinkRouteMode m) {
+    return m == ShrinkRouteMode::CableEnds || m == ShrinkRouteMode::BraidEnds || m == ShrinkRouteMode::ShieldEnds;
+}
+inline bool shrinkModeIsShield(ShrinkRouteMode m) { return m == ShrinkRouteMode::Shield || m == ShrinkRouteMode::ShieldEnds; }
+inline bool shrinkModeIsBraid(ShrinkRouteMode m) {
+    return m == ShrinkRouteMode::Braid || m == ShrinkRouteMode::BraidEnds || shrinkModeIsShield(m);
+}
+// Cut square at both ends, with no heatshrink on them.
+inline bool shrinkModeIsSquare(ShrinkRouteMode m) {
+    return m == ShrinkRouteMode::Cable || m == ShrinkRouteMode::Braid || m == ShrinkRouteMode::Shield;
+}
 // A cable or a braid over the run - what can have heatshrink on its ends.
 inline bool shrinkModeIsOverRun(ShrinkRouteMode m) {
     return m == ShrinkRouteMode::Cable || m == ShrinkRouteMode::CableEnds || shrinkModeIsBraid(m);
@@ -363,6 +372,13 @@ public:
     // wandered to.
     Vec2 twistedHeldFor(const Vec2& p) const { return twistedHeld_ ? twistedHeldAt_ : p; }
     bool twistedFrozen() const { return twistedFrozen_; }
+    // DRAWING PAUSED BY TAB: whatever is being drawn held where it is while its settings are tried - a run, a sleeve,
+    // a break mark, a connector, a label, a shield or a twist. The canvas says "Pause" while it is.
+    bool drawingPaused() const {
+        return (twistedFrozen_ && isParameterRouteTool(tool_)) || (breakFrozen_ && tool_ == ToolId::LengthBreak) ||
+               (connectorFrozen_ && tool_ == ToolId::Connector && connectorArmed_) || (labelFrozen_ && labelPlacing_) ||
+               (screenFrozen_ && tool_ == ToolId::Wire && screenArm_) || (twistFrozen_ && !twistArmType_.isEmpty());
+    }
     static bool isParameterRouteTool(ToolId t) {
         return isTwistedTool(t) || t == ToolId::HeatshrinkRoute;
     }
@@ -401,6 +417,8 @@ public:
     void setShrinkEndSleeves(bool on) {
         if (shrinkMode_ == ShrinkRouteMode::Cable || shrinkMode_ == ShrinkRouteMode::CableEnds)
             shrinkMode_ = on ? ShrinkRouteMode::CableEnds : ShrinkRouteMode::Cable;
+        else if (shrinkModeIsShield(shrinkMode_))
+            shrinkMode_ = on ? ShrinkRouteMode::ShieldEnds : ShrinkRouteMode::Shield;
         else if (shrinkModeIsBraid(shrinkMode_))
             shrinkMode_ = on ? ShrinkRouteMode::BraidEnds : ShrinkRouteMode::Braid;
         emit overlayChanged();
@@ -410,6 +428,11 @@ public:
     // undo; and made braided or plain cable.
     void setSelectionEndSleeves(bool on);
     void setSelectionBraided(bool on);
+    // THE SELECTED BRAIDS made a braided shield (herringbone) or a braided sleeve (woven) - one change, to undo.
+    void setSelectionBraidShield(bool shield);
+    // THE FILLET OF EVERY BRAID IN THE DRAWING that has no radius of its own: each knee rounded to r (0 takes the
+    // rounding off). A braid whose knees were rounded by hand keeps its own. One change, to undo.
+    void applyBraidDefaultFillet(double r);
     // HOW WIDE A SLEEVE IS DRAWN, which the tool asks for as "Across" while one is being drawn.
     // Readable and settable so a drawing can be set up without typing into the canvas.
     // ENTRY FACES - the line a part is marked as connecting by (its connection line). Shift and a

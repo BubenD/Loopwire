@@ -1,4 +1,5 @@
 #include "app/PartsLibraryDialog.h"
+#include "harness/Bom.h"
 #include <QLayout>
 #include <QWidgetAction>
 #include <QAction>
@@ -8,6 +9,7 @@
 #include "harness/MechModels.h"
 #include "app/PartFromPdfDialog.h"
 #include "app/Part3DEditorDialog.h"
+#include "app/View3DPane.h"
 #include "geometry/PartModel3D.h"
 #include "harness/PartFromPdf.h"
 #include "io/PdfText.h"
@@ -931,6 +933,8 @@ void PartsLibraryDialog::buildUi() {
     // especially in a list of fifty where the eye has to come back to it after reading the form.
     tree_->setStyleSheet(treeStyle());
     tree_->setRootIsDecorated(true);
+    // SEVERAL PARTS AT ONCE, with Ctrl or Shift: the form shows the one clicked last, and its Unit is set on them all.
+    tree_->setSelectionMode(QAbstractItemView::ExtendedSelection);
     connect(tree_, &QTreeWidget::currentItemChanged, this,
             [this](QTreeWidgetItem* it, QTreeWidgetItem*) {
                 if (syncing_ || !it) return;
@@ -1063,9 +1067,29 @@ void PartsLibraryDialog::buildUi() {
     unitBox_->setToolTip(QStringLiteral(
         "The unit this part is bought and counted in. The bill of materials adds up quantities in "
         "it, and can only add units of the same kind (mm to m, never m to each)."));
+    unitBox_->setToolTip(unitBox_->toolTip() + QStringLiteral(
+        "\nWith several parts selected in the list (Ctrl or Shift + click), it is set on all of them."));
     connect(unitBox_, &QComboBox::currentIndexChanged, this, [this](int i) {
         if (syncing_ || i < 0) return;
-        if (LibraryPart* p = current()) { p->unit = unitBox_->itemData(i).toString(); touched(); }
+        const QString unit = unitBox_->itemData(i).toString();
+        // EVERY PART SELECTED IN THE LIST, each in the library it came from - or the one being shown.
+        QStringList ids;
+        if (tree_)
+            for (QTreeWidgetItem* it : tree_->selectedItems()) {
+                const QString id = it->data(0, Qt::UserRole).toString();
+                if (!id.isEmpty() && !ids.contains(id)) ids << id;
+            }
+        if (!ids.contains(currentId_)) ids << currentId_;
+        int set = 0;
+        for (const QString& id : ids) {
+            PartsLibrary* own = catalog_.byPath(catalog_.pathOf(id));
+            LibraryPart* p = own ? own->byId(id) : catalog_.active().byId(id);
+            if (!p) continue;
+            p->unit = unit;
+            ++set;
+        }
+        touched();
+        if (set > 1 && summary_) summary_->setText(QStringLiteral("Unit set to %1 on %2 parts").arg(unit).arg(set));
     });
     headRow(QStringLiteral("Unit"), unitBox_);
 
@@ -1166,7 +1190,26 @@ void PartsLibraryDialog::buildUi() {
         model3dRemove_->setObjectName(QStringLiteral("partModel3dRemove"));
         connect(model3dRemove_, &QPushButton::clicked, this, [this] { removeModel3D(); });
         rl->addWidget(model3dRemove_);
-        headRow(QStringLiteral("3D model"), row);
+        // AND THE MODEL ITSELF, LIVE: turned with a drag, zoomed with the wheel - the part
+        // as the 3D view will show it, without opening anything.
+        auto* column = new QWidget(head);
+        auto* cl = new QVBoxLayout(column);
+        cl->setContentsMargins(0, 0, 0, 0);
+        cl->setSpacing(4);
+        row->setParent(column);
+        cl->addWidget(row);
+        modelView_ = new View3DCanvas(column);
+        modelView_->setObjectName(QStringLiteral("partModel3dView"));
+        modelView_->setMinimumHeight(200);
+        modelView_->setToolTip(QStringLiteral("The part's 3D model: drag to turn it, the wheel to zoom"));
+        modelView_->setScene(&modelScene_);
+        cl->addWidget(modelView_);
+        auto* fitView = new QPushButton(QStringLiteral("Fit"), row);
+        fitView->setObjectName(QStringLiteral("partModel3dFit"));
+        fitView->setToolTip(QStringLiteral("The whole model in the view below"));
+        connect(fitView, &QPushButton::clicked, this, [this] { if (modelView_) { modelView_->fit(); modelView_->update(); } });
+        rl->addWidget(fitView);
+        headRow(QStringLiteral("3D model"), column);
     }
     rv->addWidget(head);
 
@@ -2487,6 +2530,17 @@ void PartsLibraryDialog::rebuildParamForm() {
                     box->insertSeparator(box->count());
                     box->addItems(mine);
                 }
+                // A COLOUR shows a swatch of itself beside its name.
+                if (f.key.contains(QLatin1String("olour"), Qt::CaseInsensitive))
+                    for (int i = 0; i < box->count(); ++i) {
+                        LibraryPart probe;
+                        probe.params.insert(QStringLiteral("colour"), box->itemText(i));
+                        const QColor c = partOuterColour(probe);
+                        if (!c.isValid()) continue;
+                        QPixmap swatch(14, 14);
+                        swatch.fill(c);
+                        box->setItemIcon(i, QIcon(swatch));
+                    }
                 box->setCurrentText(p->value(f.key));
                 box->setToolTip(QStringLiteral(
                     "Pick one, or type a new one — a new %1 is added to the list for every part.")
@@ -2747,6 +2801,44 @@ void PartsLibraryDialog::refreshModel3DRow() {
                                    : DatasheetStore::originalName(stored) + QStringLiteral("   (missing from the folder)"));
     if (model3dAttach_) model3dAttach_->setEnabled(p != nullptr);
     if (model3dRemove_) model3dRemove_->setEnabled(p && !stored.isEmpty());
+    refreshModelView();
+}
+
+void PartsLibraryDialog::refreshModelView() {
+    if (!modelView_) return;
+    const LibraryPart* p = current();
+    const QString stored = p ? p->value(QStringLiteral("model3d")) : QString();
+    const QString path = stored.isEmpty() ? QString() : DatasheetStore::pathOf(stored);
+    const QString shown = path.isEmpty() ? QString() : path + QLatin1Char('|') + QFileInfo(path).lastModified().toString(Qt::ISODateWithMs);
+    modelView_->setVisible(!path.isEmpty() && QFileInfo::exists(path));
+    // READ AGAIN ONLY WHEN IT IS ANOTHER FILE, or that file was saved since: building a model's solids takes a moment.
+    if (shown == modelShown_) return;
+    modelShown_ = shown;
+    modelScene_ = Harness3DScene();
+    if (modelView_->isVisible()) {
+        if (isPartModelFile(path)) {
+            PartModel3D model;
+            if (PartModel3D::load(path, model))
+                for (const ModelItem3D& it : modelItems(model)) {
+                    Harness3DItem h;
+                    h.mesh = it.mesh;
+                    h.color = it.color;
+                    h.texture = it.texture;
+                    h.alpha = it.alpha;
+                    h.what = it.body;
+                    modelScene_.items.push_back(std::move(h));
+                }
+        } else {
+            Harness3DItem h;
+            h.mesh = cachedMesh3D(path);
+            h.color = QColor(176, 182, 192);
+            h.ownLook = true;
+            if (!h.mesh.empty()) modelScene_.items.push_back(std::move(h));
+        }
+    }
+    modelView_->setScene(&modelScene_);
+    modelView_->fit();
+    modelView_->update();
 }
 
 void PartsLibraryDialog::refreshDatasheetRow() {

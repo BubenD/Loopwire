@@ -91,6 +91,8 @@ public:
     void setModelLookup(std::function<QString(const QString& libPart)> modelOf);
     // A connector's pins and gender, for its pinout on its front face.
     void setPinsLookup(std::function<PartPins(const QString& libPart)> pinsOf);
+    // Each object of the sheet's colour as its part has it, by entity id (see partColoursFromBom).
+    void setColourLookup(std::function<QHash<QString, QColor>()> coloursOf) { coloursOf_ = std::move(coloursOf); }
     // Built again from its source, and brought round to show the whole of it.
     void rebuild(bool fit = true);
     // The harness from one place only - the wizard's own view: no choice of where from.
@@ -303,6 +305,7 @@ private:
     std::function<std::vector<Entity>()> drawing_, wizard_;
     std::function<QString(const QString&)> modelOf_;
     std::function<PartPins(const QString&)> pinsOf_;
+    std::function<QHash<QString, QColor>()> coloursOf_;
     Harness3DScene scene_;
     QString sceneSaid_;
     View3DCanvas* canvas_ = nullptr;

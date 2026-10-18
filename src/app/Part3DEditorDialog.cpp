@@ -297,6 +297,11 @@ Part3DEditorDialog::Part3DEditorDialog(const LibraryPart& part, const PartModel3
     // that move the one selected.
     wheel_ = new NavWheel(canvas_);
     wheel_->setObjectName(QStringLiteral("part3dWheel"));
+    // KEPT IN THE TOP RIGHT CORNER as it grows under the pointer and shrinks again: placed only when the view was
+    // resized, it grew out past the view's right edge.
+    connect(wheel_, &NavWheel::geometryChanged, this, [this] {
+        if (wheel_ && canvas_) wheel_->move(canvas_->width() - wheel_->width() - 8, 8);
+    });
     viewWheel_ = {
         {QStringLiteral("up"), QStringLiteral("Tilt up"), QStringLiteral("Tilt the view up and over"), [this] { canvas_->nudge(0, wheelTurn_, 0); }, {}},
         {QStringLiteral("plus"), QStringLiteral("Zoom in"), QStringLiteral("Nearer"), [this] { canvas_->zoomBy(0.8); }, {}},

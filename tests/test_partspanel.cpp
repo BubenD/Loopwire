@@ -344,7 +344,8 @@ int run_partspanel_tests() {
         // A part is chosen off the shelf by what can be done with it, and that took opening it. There is a
         // column each now - M, S, F - ticked for the drawings the part has, so a shelf is read down its
         // columns rather than part by part.
-        check(list->columnCount() == 4, "columns: the part, and one column each for M, S and P");
+        check(list->columnCount() == 5, "columns: the part, one column each for M, S and P, and its 3D model");
+        check(list->headerItem()->text(4) == QStringLiteral("3D"), "columns: the 3D model's headed 3D");
         check(list->headerItem()->text(1) == QStringLiteral("M") &&
                   list->headerItem()->text(2) == QStringLiteral("S") &&
                   list->headerItem()->text(3) == QStringLiteral("P"),

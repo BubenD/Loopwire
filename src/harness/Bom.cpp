@@ -5,6 +5,7 @@
 #include "harness/MechanicalHarness.h"
 
 #include "harness/Harness.h"
+#include "geometry/Geometry.h"
 #include "model/Document.h"
 
 #include <QJsonArray>
@@ -496,6 +497,96 @@ std::vector<BomRow> bomFromDrawing(const Document& doc, const PartsLibrary& lib)
         r.ref = e.meta.value(QStringLiteral("wireLabel")).toString();
         r.fromDrawing = true;
         out.push_back(r);
+    }
+    return out;
+}
+
+QColor partOuterColour(const LibraryPart& part) {
+    for (const char* key : {"jacketColour", "colour", "color"}) {
+        const QString said = part.value(QLatin1String(key)).trimmed();
+        if (said.isEmpty()) continue;
+        if (said.compare(QLatin1String("clear"), Qt::CaseInsensitive) == 0 ||
+            said.compare(QLatin1String("transparent"), Qt::CaseInsensitive) == 0) return {};
+        const QString hex = leadColorHex(said);
+        if (!hex.isEmpty()) return QColor(hex);
+        const QString first = said.section(QLatin1Char('/'), 0, 0).trimmed();
+        if (first.compare(QLatin1String("black"), Qt::CaseInsensitive) == 0) return QColor(28, 28, 30);
+        const QColor named(first.startsWith(QLatin1Char('#')) ? first : first.toLower().remove(QLatin1Char(' ')));
+        if (named.isValid()) return named;
+    }
+    return {};
+}
+
+QHash<QString, QColor> partColoursFromBom(const Document& doc, const PartsLibrary& lib) {
+    QHash<QString, QColor> out;
+    // AN OBJECT WITH ITS OWN PART first; a balloon pointing at it below says which line of the bill it is, and wins.
+    for (const Entity& e : doc.entities()) {
+        const QString id = e.meta.value(QStringLiteral("libPart")).toString();
+        if (id.isEmpty()) continue;
+        if (const LibraryPart* part = lib.byId(id)) {
+            const QColor c = partOuterColour(*part);
+            if (c.isValid()) out.insert(e.id, c);
+        }
+    }
+    // THE BILL AS THE DRAWING SHOWS IT - the line numbers a balloon counts down.
+    BomTable table;
+    table.fromJson(doc.bom());
+    std::vector<BomRow> rows = table.rows;
+    if (table.config.includeDrawing) {
+        const std::vector<BomRow> drawn = bomFromDrawing(doc, lib);
+        rows.insert(rows.end(), drawn.begin(), drawn.end());
+    }
+    if (table.config.unify) rows = bomUnify(rows);
+    auto partOfRow = [&](const BomRow& r) -> const LibraryPart* {
+        if (!r.partId.isEmpty())
+            if (const LibraryPart* p = lib.byId(r.partId)) return p;
+        for (const LibraryPart& p : lib.parts)
+            if ((!r.mfrPn.isEmpty() && p.mfrPn.compare(r.mfrPn, Qt::CaseInsensitive) == 0) ||
+                (!r.internalPn.isEmpty() && p.internalPn.compare(r.internalPn, Qt::CaseInsensitive) == 0))
+                return &p;
+        return nullptr;
+    };
+    // WHAT A LEADER'S TIP IS ON: the object whose route passes nearest it, within half its width and a little more.
+    auto halfWidth = [](const Entity& e) {
+        for (const char* key : {"shrinkWidth", "gap", "twistBodyWidth", "twistWireWidth"}) {
+            const double w = e.meta.value(QLatin1String(key)).toDouble(0.0);
+            if (w > 0.0) return w / 2.0;
+        }
+        return 0.0;
+    };
+    auto pointedAt = [&](const Vec2& tip) -> QString {
+        QString best;
+        double bestGap = 1e300;
+        for (const Entity& e : doc.entities()) {
+            if (e.meta.value(QStringLiteral("balloon")).toBool() || e.type == EntityType::Text ||
+                e.type == EntityType::Dimension)
+                continue;
+            std::vector<Vec2> path = e.points.size() >= 2 ? e.points : std::vector<Vec2>{e.a, e.b};
+            if (e.type == EntityType::Circle) path = {e.center};
+            double gap = 1e300;
+            if (path.size() == 1) gap = distance(tip, path.front()) - e.radius;
+            for (size_t i = 1; i < path.size(); ++i)
+                gap = std::min(gap, closestPointOnSegment(tip, path[i - 1], path[i]).distance);
+            gap = std::max(0.0, gap - halfWidth(e));
+            if (gap < bestGap) { bestGap = gap; best = e.id; }
+        }
+        return bestGap <= 1.5 ? best : QString();
+    };
+    for (const Entity& b : doc.entities()) {
+        if (!b.meta.value(QStringLiteral("balloon")).toBool()) continue;
+        bool ok = false;
+        const int item = b.meta.value(QStringLiteral("text")).toString().trimmed().toInt(&ok);
+        if (!ok || item < 1 || item > static_cast<int>(rows.size())) continue;
+        const LibraryPart* part = partOfRow(rows[static_cast<size_t>(item - 1)]);
+        if (!part) continue;
+        const QColor c = partOuterColour(*part);
+        if (!c.isValid()) continue;
+        for (const QJsonValue& leader : b.meta.value(QStringLiteral("leaders")).toArray()) {
+            const QJsonArray at = leader.toArray();
+            if (at.size() < 2) continue;
+            const QString id = pointedAt({at[0].toDouble(), at[1].toDouble()});
+            if (!id.isEmpty()) out.insert(id, c);
+        }
     }
     return out;
 }

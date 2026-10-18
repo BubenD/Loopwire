@@ -2,6 +2,8 @@
 
 #include "harness/PartsLibrary.h"
 
+#include <QColor>
+#include <QHash>
 #include <QJsonObject>
 #include <QString>
 #include <QStringList>
@@ -155,5 +157,13 @@ std::function<int(const QString& libPart, PartKind kind, const QString& descript
 bomItemLookup(const Document& doc, const PartsLibrary& lib);
 // An id nothing in `rows` is using, for a row about to be added.
 QString bomNextRowId(const std::vector<BomRow>& rows);
+
+// THE OUTER COLOUR OF A PART: a cable's jacket colour, else its colour (heatshrink, wire, braid, sleeve) - a name ("Black",
+// "Green/Yellow" by its first colour) or "#rrggbb". Invalid when it has none, or it is clear.
+QColor partOuterColour(const LibraryPart& part);
+// THE COLOUR OF EACH OBJECT OF THE DRAWING AS ITS PART HAS IT, by entity id: an object a balloon points at takes the outer
+// colour of the part on the bill line the balloon numbers; one stamped with its own library part (libPart) takes that
+// part's. The bill is read as the drawing shows it, as bomItemLookup reads it. Only objects with a colour are in it.
+QHash<QString, QColor> partColoursFromBom(const Document& doc, const PartsLibrary& lib);
 
 } // namespace Loopwire

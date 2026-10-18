@@ -104,7 +104,7 @@ double NavWheel::globalHoverScale() { return wheelHoverScaleSetting(); }
 
 double NavWheel::drawingScale() const {
     const double base = wheelSizeSetting() / 100.0;
-    return base * (pointerOver_ && wheelHoverSetting() ? wheelHoverScaleSetting() : 1.0);
+    return base * (pointerOver_ && enlarge_ && wheelHoverSetting() ? wheelHoverScaleSetting() : 1.0);
 }
 
 void NavWheel::updateDrawingSize() {

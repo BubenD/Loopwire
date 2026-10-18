@@ -91,10 +91,15 @@ QIcon makeCadActionIcon(const QString& key, const QColor& ink) {
                 if(i==0)wire.moveTo(at);else wire.lineTo(at);
             }p.drawPath(wire);
         }
-    }else if(key=="fanout"||key=="wires"){
-        for(int k=0;k<3;++k){stroke(k==1?ink:accent,1.55);double out=5+k*7,center=9+k*3;QPainterPath wire;wire.moveTo(2,key=="fanout"?center:out);
-            if(key=="wires")wire.cubicTo(6,out,6,center,9,center);else wire.lineTo(8,center);
-            wire.cubicTo(15,center,15,out,20,out);wire.lineTo(22,out);p.drawPath(wire);}
+    }else if(key=="wires"){
+        // A HARNESS RUN: wires laid straight side by side, held by two ties.
+        for(int k=0;k<3;++k){stroke(k==1?ink:accent,1.55);line(2,7+k*5,22,7+k*5);}
+        stroke(ink,1.3);p.setBrush(wash);for(double x:{6.0,16.0})p.drawRoundedRect(QRectF(x,4,2.6,16),1,1);
+    }else if(key=="fanout"){
+        // A FANOUT: one bundle, its wires splaying out to their pins.
+        stroke(ink,1.3);p.setBrush(wash);p.drawRoundedRect(QRectF(1.5,9,7,6),2,2);
+        for(int k=0;k<3;++k){stroke(accent,1.55);const double out=4+k*8;QPainterPath wire;wire.moveTo(8.5,10.5+k*1.5);
+            wire.cubicTo(13,10.5+k*1.5,14,out,19,out);p.setBrush(Qt::NoBrush);p.drawPath(wire);p.setBrush(accent);p.drawEllipse(QPointF(20.5,out),1.6,1.6);}
     }else if(key=="autoroute"){
         box(2,3,5,6);box(17,16,5,6);stroke(accent,1.9);QPainterPath route;route.moveTo(7,6);route.lineTo(14,6);route.quadTo(19.5,6,19.5,12);route.lineTo(19.5,16);p.drawPath(route);arrow({10,6},{14,6},2.4);
     }else if(key.startsWith("heatshrink")){
@@ -103,6 +108,7 @@ QIcon makeCadActionIcon(const QString& key, const QColor& ink) {
         else if(key=="heatshrink2"){p.drawPolygon(QPolygonF{{3,14},{6,10},{9,10},{9,20},{6,20},{3,16}});p.drawPolygon(QPolygonF{{15,10},{18,10},{21,14},{21,16},{18,20},{15,20}});}
         else if(key=="heatshrink3")p.drawPolygon(QPolygonF{{4,10},{14,10},{20,14},{20,16},{14,20},{4,20}});
         else if(key=="heatshrink4"){p.drawRect(QRectF(4,10,16,10));stroke(ink,0.9);for(int i=0;i<4;++i){line(4+i*4,10,8+i*4,20);line(8+i*4,10,4+i*4,20);}stroke(accent);}
+        else if(key=="heatshrink5"){p.drawRect(QRectF(4,10,16,10));stroke(ink,0.9);for(int i=0;i<5;++i){line(4+i*3.2,10,7.2+i*3.2,15);line(4+i*3.2,20,7.2+i*3.2,15);}stroke(accent);}
         else p.drawPolygon(QPolygonF{{4,14},{8,10},{16,10},{20,14},{20,16},{16,20},{8,20},{4,16}});
         stroke(ink,1.25);for(int i=0;i<2;++i){QPainterPath wave;wave.moveTo(9+i*6,7);wave.cubicTo(6+i*6,5,12+i*6,4,9+i*6,2);p.drawPath(wave);}
     }else if(key=="lacingtie"){

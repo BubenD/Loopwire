@@ -35,6 +35,12 @@ void constructionFromDrawing(RouteSegment3D& segment,const Entity& entity) {
     if(entity.meta.contains(QStringLiteral("minimumBendRadius")))
         segment.minimumBendRadius=entity.meta.value(QStringLiteral("minimumBendRadius")).toDouble();
     if(entity.meta.value(QStringLiteral("twistBodyOverCable")).toBool())segment.jacket=true;
+    // HEATSHRINK ON THE ENDS of a cable or braid drawn over the run: how far each sleeve reaches along it.
+    double start=0.0,finish=0.0;
+    if(sleeveEndCoverageOf(entity,start,finish)) { segment.endShrinkStart=start; segment.endShrinkFinish=finish; }
+    else { segment.endShrinkStart=0.0; segment.endShrinkFinish=0.0; }
+    // A BRAID'S COLOUR: a shield tinned copper, a sleeve of plastic strands nearly black.
+    if(sleeveIsBraid(entity)) segment.coverColor=sleeveIsShield(entity) ? QColor(168,172,180) : QColor(58,62,70);
 }
 
 } // namespace
@@ -110,7 +116,10 @@ DrawingHarnessSource mechanicalDrawingSource(const std::vector<Entity>& entities
             if (!body.isEmpty() && body != QLatin1String("none"))
                 run->run.stack << (e.meta.value(QStringLiteral("twistBodyBraid")).toBool() ? QStringLiteral("braid") : body);
         } else if (e.meta.value(QStringLiteral("shrunkEnds")).toBool()) {
-            run->run.stack << (sleeveIsBraid(e) ? QStringLiteral("braid") : QStringLiteral("heatshrink"));
+            // A cable with heatshrink on its ends is routed as the cable, its sleeves over its ends.
+            run->run.stack << (sleeveIsBraid(e) ? QStringLiteral("braid")
+                               : e.meta.value(QStringLiteral("shrinkEndsOnly")).toBool() ? QStringLiteral("cable")
+                                                                                          : QStringLiteral("heatshrink"));
             run->run.bodyWidthMm = e.meta.value(QStringLiteral("shrinkWidth")).toDouble(run->run.wireWidthMm);
         }
         source.design.connect(a, id, nullptr, 0, kPortLeft);

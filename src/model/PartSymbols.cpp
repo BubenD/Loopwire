@@ -192,27 +192,52 @@ std::vector<Entity> partSymbolEntities(PartSymbol s, const Vec2& at) {
         break;
     }
     case PartSymbol::ThCapacitor: {
-        // A radial can from the side: 8 across, 10 tall with a domed top, the stripe down the negative
-        // side, and its two leads out of the bottom.
-        const double hx = 4.0, top = 4.0, bot = -5.0, lead = 5.0;
-        d.line(-hx, bot, -hx, top);
-        d.line(hx, bot, hx, top);
-        d.line(-hx, bot, hx, bot);
-        d.arc(0.0, top, hx, 0.0, 180.0);
-        d.line(hx - 1.4, bot, hx - 1.4, top + 1.0);   // the stripe
-        d.line(hx - 2.4, bot, hx - 2.4, top + 1.0);
-        d.line(-1.75, bot, -1.75, bot - lead);
-        d.line(1.75, bot, 1.75, bot - lead);
+        // AN ELECTROLYTIC CAN FROM THE SIDE, as one looks: 8 across and 10 tall, its corners rounded where the
+        // sleeve folds over them, the sleeve's edge across the top, the crimped groove near the bottom (pinched
+        // in at both sides), the negative stripe with its minus signs, and the two leads out of the bottom - the
+        // negative one shorter.
+        const double hx = 4.0, top = 5.0, bot = -5.0, r = 0.9, lead = 5.0;
+        const double groove = bot + 1.5, notch = 0.35;
+        d.line(-hx + r, top, hx - r, top);
+        d.line(-hx + r, bot, hx - r, bot);
+        d.arc(-hx + r, top - r, r, 90.0, 180.0);
+        d.arc(hx - r, top - r, r, 0.0, 90.0);
+        d.arc(-hx + r, bot + r, r, 180.0, 270.0);
+        d.arc(hx - r, bot + r, r, 270.0, 360.0);
+        // The sides, broken where the groove pinches them in.
+        for (const double side : {-1.0, 1.0}) {
+            d.line(side * hx, bot + r, side * hx, groove - notch);
+            d.arc(side * hx, groove, notch, side > 0 ? 90.0 : -90.0, side > 0 ? 270.0 : 90.0);
+            d.line(side * hx, groove + notch, side * hx, top - r);
+        }
+        d.line(-hx + notch, groove, hx - notch, groove);
+        d.line(-hx + 0.3, top - 0.7, hx - 0.3, top - 0.7);   // the sleeve's edge over the top
+        // The negative stripe, from the groove to the top, with its minus signs down it.
+        const double s0 = hx - 2.4, s1 = hx - 1.0;
+        d.line(s0, groove + notch, s0, top - 0.7);
+        d.line(s1, groove + notch, s1, top - 0.7);
+        for (const double y : {-1.6, 0.6, 2.8}) d.line(s0 + 0.35, y, s1 - 0.35, y);
+        d.line(-1.75, bot, -1.75, bot - lead);          // positive: the longer lead
+        d.line(1.75, bot, 1.75, bot - lead * 0.8);      // negative, under the stripe
         break;
     }
     case PartSymbol::ThCoil: {
-        // A wound bobbin from the side: the body, the turns across it, and a lead out of each end of
-        // the winding.
-        const double hx = 4.0, hy = 3.0, lead = 5.0;
-        d.rect(-hx, -hy, hx, hy);
-        for (int i = 1; i < 6; ++i) d.line(-hx + i * (2 * hx / 6), -hy, -hx + i * (2 * hx / 6), hy);
-        d.line(-2.0, -hy, -2.0, -hy - lead);
-        d.line(2.0, -hy, 2.0, -hy - lead);
+        // A WOUND COIL, ROUNDED AND FLAT, from the side: a body with flat top and bottom and round ends, the turns
+        // of its winding lying slanted across it, and a lead out of each end of the winding.
+        const double hx = 5.0, hy = 2.6, lead = 5.0;
+        d.line(-hx + hy, hy, hx - hy, hy);
+        d.line(-hx + hy, -hy, hx - hy, -hy);
+        d.arc(-hx + hy, 0.0, hy, 90.0, 270.0);
+        d.arc(hx - hy, 0.0, hy, -90.0, 90.0);
+        // The turns, across the flat between the two round ends.
+        constexpr int kTurns = 7;
+        const double from = -hx + hy, to = hx - hy - 0.8;
+        for (int i = 0; i < kTurns; ++i) {
+            const double x = from + (to - from) * (i + 0.5) / kTurns;
+            d.line(x, -hy, x + 0.8, hy);
+        }
+        d.line(-2.4, -hy, -2.4, -hy - lead);
+        d.line(2.4, -hy, 2.4, -hy - lead);
         break;
     }
     case PartSymbol::SmtResistor: {

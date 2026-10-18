@@ -454,6 +454,10 @@ bool sleeveIsBraid(const Entity& e) {
            e.meta.value(QLatin1String("shrinkBraid")).toBool() && e.points.size() >= 2;
 }
 
+bool sleeveIsShield(const Entity& e) {
+    return sleeveIsBraid(e) && e.meta.value(QLatin1String("shrinkShield")).toBool();
+}
+
 std::vector<std::pair<Vec2, Vec2>> sleeveBraidStrokes(const Entity& e) {
     std::vector<std::pair<Vec2, Vec2>> strokes;
     if (!sleeveIsBraid(e)) return strokes;
@@ -475,23 +479,41 @@ std::vector<std::pair<Vec2, Vec2>> sleeveBraidStrokes(const Entity& e) {
     for (size_t i = 1; i < centre.size(); ++i) at.push_back(at.back() + distance(centre[i - 1], centre[i]));
     const double length = at.back();
     if (length < 1e-7) return strokes;
-    // ONE SIDE OR THE OTHER at a point so far along it: the centre there, out square to the way it runs.
-    auto side = [&](double t, double sign) {
+    // THE TWO SIDES, MITRED AT EVERY KNEE, as the outline is. A point square out from the centre left a wedge
+    // on the outside of a sharp knee with no weave in it, and crossed over itself on the inside.
+    const std::vector<Vec2> left = offsetPolyline(centre, across / 2.0);
+    const std::vector<Vec2> right = offsetPolyline(centre, -across / 2.0);
+    if (left.size() != centre.size() || right.size() != centre.size()) return strokes;
+    // A POINT ACROSS IT so far along: -1 on the one side, +1 on the other, the share of the way between the
+    // two mitred sides there.
+    auto across01 = [&](double t, double sign) {
         t = std::clamp(t, 0.0, length);
         size_t k = 1;
         while (k + 1 < at.size() && at[k] < t) ++k;
-        const double span = std::max(1e-12, at[k] - at[k - 1]);
-        const Vec2 dir = (centre[k] - centre[k - 1]) * (1.0 / span);
-        const Vec2 p = centre[k - 1] + dir * (t - at[k - 1]);
-        return p + Vec2{-dir.y, dir.x} * (sign * across / 2.0);
+        const double u = std::clamp((t - at[k - 1]) / std::max(1e-12, at[k] - at[k - 1]), 0.0, 1.0);
+        const Vec2 l = left[k - 1] + (left[k] - left[k - 1]) * u;
+        const Vec2 r = right[k - 1] + (right[k] - right[k - 1]) * u;
+        return r + (l - r) * ((sign + 1.0) / 2.0);
     };
+    if (sleeveIsShield(e)) {
+        // A BRAIDED SHIELD, HERRINGBONE: rows of chevrons along it, each a V from one side to the middle and
+        // back, a pitch of about half its width - the hatch a metal screen braid is drawn with.
+        const int steps = std::max(1, static_cast<int>(std::round(length / std::clamp(across * 0.45, 0.25, 4.0))));
+        const double pitch = length / steps;
+        for (int k = 0; k < steps; ++k) {
+            const double t0 = k * pitch, t1 = (k + 1) * pitch;
+            strokes.emplace_back(across01(t0, 1.0), across01(t1, 0.0));
+            strokes.emplace_back(across01(t0, -1.0), across01(t1, 0.0));
+        }
+        return strokes;
+    }
     // A PITCH OF ABOUT THREE QUARTERS ITS WIDTH, fitted to its length so the weave meets both ends.
     const int steps = std::max(1, static_cast<int>(std::round(length / std::clamp(across * 0.75, 0.3, 6.0))));
     const double pitch = length / steps;
     for (int k = 0; k < steps; ++k) {
         const double t0 = k * pitch, t1 = (k + 1) * pitch;
-        strokes.emplace_back(side(t0, 1.0), side(t1, -1.0));
-        strokes.emplace_back(side(t0, -1.0), side(t1, 1.0));
+        strokes.emplace_back(across01(t0, 1.0), across01(t1, -1.0));
+        strokes.emplace_back(across01(t0, -1.0), across01(t1, 1.0));
     }
     return strokes;
 }

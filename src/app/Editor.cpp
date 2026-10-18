@@ -113,12 +113,13 @@ Entity heatshrinkFromRoute(const std::vector<Vec2>& route, double width,
     // A BRAID OVER THE RUN is drawn as a cable is - one width, square at its ends, or with heatshrink over them - and
     // its body woven.
     if (shrinkModeIsBraid(mode)) e.meta.insert(QStringLiteral("shrinkBraid"), true);
-    if (mode == ShrinkRouteMode::Cable || mode == ShrinkRouteMode::Braid) {
+    if (shrinkModeIsShield(mode)) e.meta.insert(QStringLiteral("shrinkShield"), true);
+    if (shrinkModeIsSquare(mode)) {
         e.meta.insert(QStringLiteral("shrinkFaceStart"), width);
         e.meta.insert(QStringLiteral("shrinkFaceEnd"), width);
         e.meta.insert(QStringLiteral("shrinkTaperStart"), 0.0);
         e.meta.insert(QStringLiteral("shrinkTaperEnd"), 0.0);
-    } else if (mode == ShrinkRouteMode::CableEnds || mode == ShrinkRouteMode::BraidEnds) {
+    } else if (shrinkModeHasEndSleeves(mode)) {
         // A cable with sleeve only over its ends. The route is still the object's points; the cable
         // itself is the narrower pair of rails between the two cover lengths, and each sleeve section
         // keeps the same recovered face and shrunk length the properties panel and end joints edit.
@@ -9874,6 +9875,7 @@ void Editor::applyEditDrag(const Vec2& target) {
                 QJsonArray radii = padded("cornerRadii");
                 radii[v] = back * std::tan(theta / 2.0);
                 e->meta.insert(QStringLiteral("cornerRadii"), radii);
+                e->meta.remove(QStringLiteral("braidFilletDefault"));
             }
             break;
         }
@@ -15828,6 +15830,7 @@ void Editor::applyCornerModAt(Entity& e, int knee, const std::vector<Vec2>& corn
         while (arr.size() < n) arr.append(0.0);
         arr[knee] = filletRadius_;
         e.meta.insert(QStringLiteral("cornerRadii"), arr);
+        e.meta.remove(QStringLiteral("braidFilletDefault"));   // rounded by hand: its own now
         if (e.meta.contains("cornerChamfers")) {
             QJsonArray c = e.meta.value("cornerChamfers").toArray();
             if (knee < c.size()) { c[knee] = 0.0; e.meta.insert(QStringLiteral("cornerChamfers"), c); }
@@ -18490,7 +18493,7 @@ Entity Editor::shrinkDraftEntity(const std::vector<Vec2>& route) const {
         radii[route.size() - 2] = cornerRadius_;
     }
     Entity e = heatshrinkFromRoute(route, draftShrinkWidth(), radii, shrinkMode_);
-    if (shrinkMode_ != ShrinkRouteMode::Cable && shrinkMode_ != ShrinkRouteMode::Braid) {
+    if (!shrinkModeIsSquare(shrinkMode_)) {
         for (int end = 0; end < 2; ++end) {
             const QString suffix = end ? QStringLiteral("End") : QStringLiteral("Start");
             if (shrinkFaces_[end] > 0.0) e.meta.insert(QStringLiteral("shrinkFace") + suffix, shrinkFaces_[end]);
@@ -19658,6 +19661,60 @@ void Editor::setSelectionBraided(bool on) {
     for (Entity* e : sleeves) {
         if (on) e->meta.insert(QStringLiteral("shrinkBraid"), true);
         else e->meta.remove(QStringLiteral("shrinkBraid"));
+    }
+    doc_->setDirty(true);
+    emit changed();
+}
+
+void Editor::setSelectionBraidShield(bool shield) {
+    std::vector<Entity*> braids;
+    for (Entity* e : selectedEntities())
+        if (sleeveIsBraid(*e) && sleeveIsShield(*e) != shield) braids.push_back(e);
+    if (braids.empty()) return;
+    pushUndo();
+    for (Entity* e : braids) {
+        if (shield) e->meta.insert(QStringLiteral("shrinkShield"), true);
+        else e->meta.remove(QStringLiteral("shrinkShield"));
+    }
+    doc_->setDirty(true);
+    emit changed();
+}
+
+void Editor::applyBraidDefaultFillet(double r) {
+    if (!doc_) return;
+    r = std::max(0.0, r);
+    // A BRAID WITH NO RADIUS OF ITS OWN: none at any knee, or the ones this put there (braidFilletDefault). A knee
+    // rounded by hand, with the Fillet tool or the panel, is that braid's own and is left as it is.
+    auto takes = [](const Entity& e) {
+        if (!sleeveIsBraid(e) || e.points.size() < 3) return false;
+        if (e.meta.value(QStringLiteral("braidFilletDefault")).toBool()) return true;
+        for (const QJsonValue& v : e.meta.value(QStringLiteral("cornerRadii")).toArray())
+            if (v.toDouble() > 0.0) return false;
+        return true;
+    };
+    auto already = [r](const Entity& e) {
+        const QJsonArray rr = e.meta.value(QStringLiteral("cornerRadii")).toArray();
+        for (int i = 1; i + 1 < static_cast<int>(e.points.size()); ++i)
+            if (std::abs((i < rr.size() ? rr[i].toDouble() : 0.0) - r) > 1e-9) return false;
+        return true;
+    };
+    bool any = false;
+    for (const Entity& e : doc_->entities())
+        if (takes(e) && !already(e)) any = true;
+    if (!any) return;
+    pushUndo();
+    for (Entity& e : doc_->entities()) {
+        if (!takes(e) || already(e)) continue;
+        if (r <= 0.0) {
+            e.meta.remove(QStringLiteral("cornerRadii"));
+            e.meta.remove(QStringLiteral("braidFilletDefault"));
+            continue;
+        }
+        QJsonArray radii;
+        for (size_t i = 0; i < e.points.size(); ++i)
+            radii.append(i == 0 || i + 1 == e.points.size() ? 0.0 : r);
+        e.meta.insert(QStringLiteral("cornerRadii"), radii);
+        e.meta.insert(QStringLiteral("braidFilletDefault"), true);
     }
     doc_->setDirty(true);
     emit changed();

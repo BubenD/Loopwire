@@ -11882,6 +11882,130 @@ void testCoveringsDrag3D() {
     }
 }
 
+// A BRAID AT A SHARP KNEE, A BRAIDED SHIELD, A BRAID'S DEFAULT FILLET, PART COLOURS FROM THE BILL, HEATSHRINK ON A
+// ROUTED BRAID'S ENDS, AND THE WHEEL THAT DOES NOT GROW.
+void testBraidShieldAndColours() {
+    Editor ed;
+    ed.setShrinkWidth(8.0);
+    const std::vector<Vec2> route{{0, 0}, {100, 0}, {100, 60}};
+    ed.setShrinkRouteMode(ShrinkRouteMode::Braid);
+    const Entity braid = ed.shrinkDraftEntity(route);
+    // ---- THE SHARP KNEE IS WOVEN: a stroke reaches the outside corner, where the outline is mitred ----
+    {
+        double nearest = 1e9;
+        for (const auto& [a, b] : sleeveBraidStrokes(braid))
+            nearest = std::min({nearest, distance(a, Vec2{104, -4}), distance(b, Vec2{104, -4})});
+        std::printf("  braid knee: the weave comes %.2f from the outside corner\n", nearest);
+        check(nearest < 2.0, "braid knee: the weave fills the outside of a sharp knee - no empty wedge");
+    }
+    // ---- A BRAIDED SHIELD: hatched herringbone - each pair of strokes a V meeting on the middle of the run ----
+    ed.setShrinkRouteMode(ShrinkRouteMode::Shield);
+    const Entity shield = ed.shrinkDraftEntity(route);
+    {
+        const auto strokes = sleeveBraidStrokes(shield);
+        bool chevrons = strokes.size() >= 40 && strokes.size() % 2 == 0;
+        for (size_t i = 0; chevrons && i + 1 < strokes.size(); i += 2)
+            chevrons = distance(strokes[i].second, strokes[i + 1].second) < 1e-6 && distance(strokes[i].first, strokes[i + 1].first) > 6.0;
+        check(sleeveIsBraid(shield) && sleeveIsShield(shield) && chevrons, "shield: a braid hatched herringbone - Vs meeting on the middle");
+        check(shield.meta.value(QStringLiteral("shrinkTaperStart")).toDouble(-1) == 0.0, "shield: cut square at its ends");
+        ed.setShrinkEndSleeves(true);
+        check(ed.shrinkRouteMode() == ShrinkRouteMode::ShieldEnds &&
+                  ed.shrinkDraftEntity(route).meta.value(QStringLiteral("shrinkEndsOnly")).toBool(),
+              "shield: heatshrink on its ends for the next one");
+        const Harness3DScene sc = buildHarness3D({shield}, {});
+        bool metal = false;
+        for (const Harness3DItem& it : sc.items) metal = metal || (it.what == QLatin1String("braid") && it.color == QColor(168, 172, 180));
+        check(metal, "shield 3D: woven in tinned copper, not a sleeve's black");
+    }
+    // ---- ON THE PANEL: made a shield, back to a sleeve, undone ----
+    Document doc;
+    Entity one = braid;
+    one.id = QStringLiteral("braid-one");
+    Entity two = braid;
+    two.id = QStringLiteral("braid-two");
+    two.meta.insert(QStringLiteral("cornerRadii"), QJsonArray{0.0, 5.0, 0.0});   // rounded by hand
+    doc.entities() = {one, two};
+    Editor edit;
+    edit.setDocument(&doc);
+    edit.selectById(one.id);
+    edit.setSelectionBraidShield(true);
+    check(sleeveIsShield(doc.entities()[0]), "shield panel: the braid made a shield");
+    edit.undo();
+    check(!sleeveIsShield(doc.entities()[0]), "shield panel: one undo - a sleeve again");
+    // ---- THE FILLET OF EVERY BRAID WITH NONE OF ITS OWN ----
+    edit.applyBraidDefaultFillet(10.0);
+    auto knee = [&](int i) { return doc.entities()[static_cast<size_t>(i)].meta.value(QStringLiteral("cornerRadii")).toArray().at(1).toDouble(); };
+    check(knee(0) == 10.0 && knee(1) == 5.0, "braid fillet: given to the braid with none; the one rounded by hand keeps its own");
+    edit.applyBraidDefaultFillet(12.0);
+    check(knee(0) == 12.0 && knee(1) == 5.0, "braid fillet: changed again - the braid that took it follows");
+    edit.undo();
+    check(knee(0) == 10.0, "braid fillet: one undo per change");
+    // ---- PART COLOURS FROM THE BILL: a balloon on the braid, numbering a line whose part is red ----
+    {
+        PartsLibrary lib;
+        LibraryPart& red = lib.add(PartKind::ShieldBraid);
+        red.params.insert(QStringLiteral("colour"), QStringLiteral("Red"));
+        const QString redId = red.id;
+        BomTable table;
+        table.config.includeDrawing = false;
+        BomRow row;
+        row.partId = redId;
+        row.description = QStringLiteral("Red braid");
+        table.rows.push_back(row);
+        Document bill;
+        bill.bom() = table.toJson();
+        Entity run = braid;
+        run.id = QStringLiteral("braid-red");
+        Entity ball;
+        ball.type = EntityType::Circle;
+        ball.id = QStringLiteral("balloon-1");
+        ball.center = {50, 30};
+        ball.radius = 4.0;
+        ball.meta.insert(QStringLiteral("balloon"), true);
+        ball.meta.insert(QStringLiteral("text"), QStringLiteral("1"));
+        QJsonArray tip;
+        tip.append(50.0);
+        tip.append(3.5);
+        QJsonArray leaders;
+        leaders.append(tip);
+        ball.meta.insert(QStringLiteral("leaders"), leaders);
+        bill.entities() = {run, ball};
+        const QHash<QString, QColor> colours = partColoursFromBom(bill, lib);
+        check(colours.value(run.id) == QColor(leadColorHex(QStringLiteral("Red"))) && !colours.contains(ball.id),
+              "part colour: the braid a balloon points at takes the colour of the part on its bill line");
+        const Harness3DScene sc = buildHarness3D({run}, {}, PartLook::Box, {}, colours);
+        bool redBraid = false;
+        for (const Harness3DItem& it : sc.items) redBraid = redBraid || (it.what == QLatin1String("braid") && it.color == colours.value(run.id));
+        check(redBraid, "part colour: and the 3D view draws it in that colour");
+        check(partFields(PartKind::ShieldBraid).end() != std::find_if(partFields(PartKind::ShieldBraid).begin(), partFields(PartKind::ShieldBraid).end(),
+                  [](const PartField& f) { return f.key == QLatin1String("colour") && f.type == PartField::Type::Choice; }),
+              "part colour: a braid has a Colour to pick in the library");
+    }
+    // ---- HEATSHRINK ON A ROUTED BRAID'S ENDS ----
+    {
+        ed.setShrinkRouteMode(ShrinkRouteMode::BraidEnds);
+        Entity ends = ed.shrinkDraftEntity(route);
+        ends.id = QStringLiteral("braid-ends");
+        Route3D r;
+        addDrawingToRoute(r, {ends}, false, false);
+        const RouteSegment3D* s = r.segments.empty() ? nullptr : &r.segments.front();
+        check(s && s->covering == QLatin1String("braid") && std::abs(s->endShrinkStart - 20.0) < 1e-6 && std::abs(s->endShrinkFinish - 20.0) < 1e-6,
+              "routed braid: its heatshrink ends carried into the route, so long each");
+        const Route3D back = Route3D::fromJson(r.toJson());
+        check(!back.segments.empty() && std::abs(back.segments.front().endShrinkStart - 20.0) < 1e-6 && back.segments.front().coverColor.isValid(),
+              "routed braid: saved with the route and read back");
+    }
+    // ---- THE WIZARD'S WHEEL STAYS ITS SIZE under the pointer ----
+    {
+        NavWheel wheel;
+        wheel.setEnlargeOnHover(false);
+        const int before = wheel.width();
+        QEnterEvent enter(QPointF(10, 10), QPointF(10, 10), QPointF(10, 10));
+        QApplication::sendEvent(&wheel, &enter);
+        check(wheel.width() == before, "wheel: one told not to grow keeps its size under the pointer");
+    }
+}
+
 // A BRAIDED SLEEVE OVER THE RUN: drawn as a cable is, its weave along it round its knees; heatshrink on its ends or not,
 // switched on the panel as one change; woven in 3D.
 void testBraidOverRun() {
@@ -11891,7 +12015,8 @@ void testBraidOverRun() {
     ed.setShrinkRouteMode(ShrinkRouteMode::Braid);
     const Entity braid = ed.shrinkDraftEntity(route);
     const auto strokes = sleeveBraidStrokes(braid);
-    // EVERY STROKE'S END NO FURTHER FROM THE RUN THAN ITS SIDES.
+    // EVERY STROKE'S END NO FURTHER FROM THE RUN THAN ITS SIDES - mitred at the knee, as the outline is: up to the
+    // corner of the mitre there, half its width times root two at this right-angled knee.
     auto offRun = [&](const Vec2& p) {
         double best = 1e9;
         for (size_t i = 0; i + 1 < route.size(); ++i) {
@@ -11902,7 +12027,7 @@ void testBraidOverRun() {
         return best;
     };
     bool inside = !strokes.empty();
-    for (const auto& [a, b] : strokes) inside = inside && offRun(a) <= 4.0 + 1e-6 && offRun(b) <= 4.0 + 1e-6;
+    for (const auto& [a, b] : strokes) inside = inside && offRun(a) <= 4.0 * std::sqrt(2.0) + 1e-6 && offRun(b) <= 4.0 * std::sqrt(2.0) + 1e-6;
     std::printf("  braid: %zu strokes along a run 160 long\n", strokes.size());
     check(sleeveIsBraid(braid) && strokes.size() >= 40 && inside, "braid: its weave drawn along it, inside its two sides, round the knee");
     check(braid.meta.value(QStringLiteral("shrinkTaperStart")).toDouble(-1) == 0.0 && !braid.meta.value(QStringLiteral("shrinkEndsOnly")).toBool(),
@@ -12144,6 +12269,7 @@ int run_brickharness_tests() {
     ROUND(testPartModelling);
     ROUND(testCoveringsDrag3D);
     ROUND(testBraidOverRun);
+    ROUND(testBraidShieldAndColours);
 #undef ROUND
     if (fails == 0) std::printf("  brick harness: OK\n");
     return fails;
