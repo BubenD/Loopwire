@@ -22,4 +22,14 @@ QIcon makeToolIcon(ToolId id, const QColor& ink = QColor("#d6dae1"), int variant
 // icon: the menu entry then cannot show anything other than what the entry places.
 QIcon makePartSymbolIcon(PartSymbol s, const QColor& ink = QColor("#d6dae1"));
 
+// THE WARM ICONS: while one of these is alive, every icon drawn is drawn with an orange accent instead of the blue -
+// and remembered as one, so it is drawn orange again whenever the scheme redraws the ribbon. Held round the building
+// of the Modify and Annotation tabs and the Special group.
+struct WarmRibbonIcons {
+    WarmRibbonIcons();
+    ~WarmRibbonIcons();
+    WarmRibbonIcons(const WarmRibbonIcons&) = delete;
+    WarmRibbonIcons& operator=(const WarmRibbonIcons&) = delete;
+};
+
 } // namespace Loopwire

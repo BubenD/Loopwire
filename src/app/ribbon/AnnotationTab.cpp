@@ -38,6 +38,7 @@ namespace Loopwire {
 
 // ---- ANNOTATION ----
 void MainWindow::buildAnnotationTab() {
+    const WarmRibbonIcons warm;   // Annotation's icons in the warm accent
     auto [page, lay] = makeTabPage();
     // The block arrow is one of these: a shape with a width that says which way a thing goes in or
     // which way it turns. It was on the harness tab under Special, which is where a person looks for a

@@ -4996,9 +4996,9 @@ void testRoundThirtyTwo() {
             const QString bare = dlg.addFromPalette(brickTypeKey(BrickType::End) + QLatin1Char('|') + partKindKey(PartKind::Ferrule));
             bool named = false, kind = false;
             for (int i = 0; i < about->count(); ++i) {
-                if (about->itemData(i).toString() == x && about->itemText(i) == QStringLiteral("Related symmetry: P7")) named = true;
+                if (about->itemData(i).toString() == x && about->itemText(i) == QStringLiteral("Symmetry: P7")) named = true;
                 if (about->itemData(i).toString() == bare &&
-                    about->itemText(i) == QStringLiteral("Related symmetry: ") + partKindName(PartKind::Ferrule))
+                    about->itemText(i) == QStringLiteral("Symmetry: ") + partKindName(PartKind::Ferrule))
                     kind = true;
             }
             check(named && kind, "symmetric list: a part by its designator (and P/N), one with neither by its kind");
@@ -12030,6 +12030,45 @@ void testBraidShieldAndColours() {
         bool red = false;
         for (const Harness3DItem& it : pane.scene().items) red = red || (it.brick == brick && it.color == QColor(200, 0, 0));
         check(red, "3D: but its part's own colour, once it has one, is what it is drawn in");
+    }
+    // ---- A DRAWN BRAID TAKEN HOLD OF WITH MOVE AND DRAGGED: the routed cable goes where the pointer goes ----
+    {
+        Entity drawn = braid;
+        drawn.id = QStringLiteral("drag-braid");
+        std::vector<Entity> sheet{drawn};
+        QJsonObject saved;
+        View3DPane pane;
+        pane.setSources([&] { return sheet; }, [] { return std::vector<Entity>{}; });
+        pane.setRoutingStore([&] { return saved; }, [&](const QJsonObject& o) { saved = o; });
+        pane.resize(1100, 750);
+        pane.show();
+        QApplication::processEvents();
+        pane.rebuild(true);
+        QApplication::processEvents();
+        View3DCanvas* canvas = pane.canvas();
+        pane.setRouteTool(RouteTool::Move);
+        QPointF from;
+        canvas->toScreen(V3{50, 0, 0}, from);
+        const QPointF by(0, -70);   // up the screen
+        auto send = [&](QEvent::Type type, const QPointF& at, Qt::MouseButton button, Qt::MouseButtons buttons) {
+            QMouseEvent ev(type, at, canvas->mapToGlobal(at), button, buttons, Qt::NoModifier);
+            QApplication::sendEvent(canvas, &ev);
+        };
+        send(QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
+        for (int i = 1; i <= 10; ++i) send(QEvent::MouseMove, from + by * (i / 10.0), Qt::NoButton, Qt::LeftButton);
+        send(QEvent::MouseButtonRelease, from + by, Qt::LeftButton, Qt::NoButton);
+        QApplication::processEvents();
+        // WHERE THE CABLE NOW PASSES nearest the point the pointer was let go.
+        double nearest = 1e9;
+        const QPointF to = from + by;
+        for (const RouteSegment3D& s : pane.route().segments)
+            for (const V3& p : pane.route().centreline(s)) {
+                QPointF q;
+                if (canvas->toScreen(p, q)) nearest = std::min(nearest, std::hypot(q.x() - to.x(), q.y() - to.y()));
+            }
+        std::printf("  3D drag: %zu segment(s) routed; the cable passes %.1f px from where the pointer was let go\n",
+                    pane.route().segments.size(), nearest);
+        check(!pane.route().segments.empty() && nearest < 20.0, "3D drag: a drawn braid dragged with Move - its cable follows the pointer");
     }
     // ---- THE WIZARD'S WHEEL STAYS ITS SIZE under the pointer ----
     {

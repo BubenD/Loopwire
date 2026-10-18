@@ -59,7 +59,7 @@ public:
     // a thing to work out afresh every time - having resized it once so nothing is clipped, somebody
     // should not have to do it again on the next opening.
     void closeEvent(QCloseEvent* e) override;
-    // SHIFT (or Ctrl) + CLICK in the parts list adds that part to the ones selected, or takes it off them.
+    // SHIFT + CLICK in the parts list adds that part to the ones selected; CTRL + CLICK takes it off them.
     bool eventFilter(QObject* watched, QEvent* event) override;
 
     // Holds every captioned button at the width its words need and sets the window's minimum to what the
@@ -219,7 +219,6 @@ private:
     QString capturingPart_;
     bool capturingMechanical_ = false;
 
-    QComboBox* libraryBox_ = nullptr;
     QTreeWidget* tree_ = nullptr;
     QTreeWidget* libraryList_ = nullptr;
     QLabel* libraryTotals_ = nullptr;

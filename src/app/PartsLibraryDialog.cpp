@@ -384,6 +384,42 @@ QIcon datasheetSignIcon(int attached, int onFile) {
     return QIcon(pm);
 }
 
+// A SCROLLER THAT ASKS FOR ALL OF WHAT IS IN IT: an ordinary one asks for no more than about two dozen lines, so a
+// section opened as tall as it likes still came up short of its last rows.
+class FullScrollArea : public QScrollArea {
+public:
+    using QScrollArea::QScrollArea;
+    QSize sizeHint() const override {
+        const int f = 2 * frameWidth();
+        return widget() ? widget()->sizeHint() + QSize(f, f) : QScrollArea::sizeHint();
+    }
+};
+
+// THE 3D SIGN: a dash for none; a cube for a model attached - struck through where its file has gone.
+QIcon model3dSignIcon(bool attached, bool onFile) {
+    QPixmap pm(16, 16);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    if (!attached) {
+        p.setPen(QPen(idleInk(), 1.6));
+        p.drawLine(4, 8, 12, 8);
+        return QIcon(pm);
+    }
+    const QColor ink(onFile ? ownInk() : missInk());
+    p.setPen(QPen(ink, 1.3));
+    p.setBrush(onFile ? QBrush(withAlpha(ownInk(), 70)) : QBrush(Qt::NoBrush));
+    p.drawPolygon(QPolygonF{{8.0, 1.5}, {14.0, 4.5}, {14.0, 11.5}, {8.0, 14.5}, {2.0, 11.5}, {2.0, 4.5}});
+    p.setBrush(Qt::NoBrush);
+    p.drawPolyline(QPolygonF{{2.0, 4.5}, {8.0, 7.5}, {14.0, 4.5}});
+    p.drawLine(QPointF(8.0, 7.5), QPointF(8.0, 14.5));
+    if (!onFile) {
+        p.setPen(QPen(warnInk(), 1.6));
+        p.drawLine(QPointF(2.0, 14.0), QPointF(14.0, 2.0));
+    }
+    return QIcon(pm);
+}
+
 } // namespace
 
 // The S / M / DS signs of one row: a symbol drawn for this part, the standard one its kind comes with,
@@ -476,8 +512,7 @@ void PartsLibraryDialog::setPartSigns(QTreeWidgetItem* item, const LibraryPart& 
                                              : QStringLiteral("No mechanical drawing yet"));
     // ITS 3D MODEL: ticked when one is attached, and said so where the file has gone.
     const QString model = part.value(QStringLiteral("model3d"));
-    item->setText(5, model.isEmpty() ? QString() : DatasheetStore::exists(model) ? QString(QChar(0x2713)) : QStringLiteral("!"));
-    item->setTextAlignment(5, Qt::AlignCenter);
+    item->setIcon(5, model3dSignIcon(!model.isEmpty(), DatasheetStore::exists(model)));
     item->setToolTip(5, model.isEmpty()                 ? QStringLiteral("No 3D model - shown as a box in the 3D view")
                         : DatasheetStore::exists(model) ? QStringLiteral("Has a 3D model: %1").arg(DatasheetStore::originalName(model))
                                                         : QStringLiteral("Its 3D model is missing from the folder"));
@@ -501,19 +536,17 @@ void PartsLibraryDialog::refreshLibraryList() {
         // again, renamed, backed up or sent to somebody - "parts-library" is not a thing you can look
         // for in a folder, "parts-library.plb" is. The whole path is on the tooltip.
         it->setText(0, QFileInfo(file).fileName());
-        it->setText(1, parts >= 0 ? QString::number(parts) : QStringLiteral("—"));
-        it->setText(2, !isConnected ? QStringLiteral("not connected")
-                                    : isActive ? QStringLiteral("connected — working here")
-                                               : QStringLiteral("connected"));
+        it->setText(1, parts >= 0 ? QString::number(parts) : QStringLiteral("-"));
         it->setData(0, Qt::UserRole, file);
         it->setData(1, Qt::UserRole, isConnected);
-        it->setToolTip(0, file);
+        it->setToolTip(0, isActive ? file + QStringLiteral("\nWorked in: new parts go into it")
+                                   : file + QStringLiteral("\nDouble-click to work in it"));
         if (isActive) {
             QFont f = it->font(0);
             f.setBold(true);
-            for (int c = 0; c < 3; ++c) it->setFont(c, f);
+            for (int c = 0; c < 2; ++c) it->setFont(c, f);
+            it->setForeground(0, ownInk());
         }
-        it->setForeground(2, isConnected ? (isActive ? ownInk() : infoInk()) : idleInk());
         return it;
     };
 
@@ -531,6 +564,7 @@ void PartsLibraryDialog::refreshLibraryList() {
         show->setCheckable(true);
         show->setChecked(!libraryHidden(file));
         show->setText(show->isChecked() ? QStringLiteral("ON") : QStringLiteral("OFF"));
+        show->setFixedSize(54, 18);
         show->setToolTip(QStringLiteral("Show or hide the parts of %1 in the list").arg(QFileInfo(file).fileName()));
         show->setStyleSheet(QStringLiteral("QToolButton{padding:0 8px;border-radius:3px;background:#5a2f2f;color:#f2dede;}"
                                            "QToolButton:checked{background:#23663a;color:#e3f6e8;}"));
@@ -539,7 +573,12 @@ void PartsLibraryDialog::refreshLibraryList() {
             setLibraryHidden(file, !on);
             reloadTree();
         });
-        libraryList_->setItemWidget(it, 3, show);
+        // In a box of its own, so it sits in the middle of its column and keeps its size.
+        auto* cell = new QWidget(libraryList_);
+        auto* cellLay = new QHBoxLayout(cell);
+        cellLay->setContentsMargins(0, 0, 0, 0);
+        cellLay->addWidget(show, 0, Qt::AlignCenter);
+        libraryList_->setItemWidget(it, 2, cell);
     }
     if (libraryTotals_)
         libraryTotals_->setText(
@@ -621,46 +660,8 @@ void PartsLibraryDialog::disconnectSelectedLibrary() {
 // chosen, which is a step nobody should have to know about - picking an unconnected one here connects
 // it and works in it.
 void PartsLibraryDialog::refreshLibraryChooser() {
+    // The list is the chooser now: the library worked in is the one in bold, and another is worked in by double-clicking it.
     refreshLibraryList();
-    if (!libraryBox_) return;
-    syncing_ = true;
-    libraryBox_->clear();
-    for (const QString& p : catalog_.paths()) {
-        const PartsLibrary* lib = const_cast<PartsCatalog&>(catalog_).byPath(p);
-        libraryBox_->addItem(QStringLiteral("%1  (%2 parts)")
-                                 .arg(QFileInfo(p).fileName())
-                                 .arg(lib ? lib->parts.size() : 0),
-                             p);
-    }
-    {
-        // The others in the folder, marked as what they are. A file that will not load is still
-        // offered - being told it is there and broken beats it silently not existing.
-        QDir dir(AppPaths::libraryDir());
-        bool separated = false;
-        for (const QString& name :
-             dir.entryList({QStringLiteral("*.plb")}, QDir::Files, QDir::Name)) {
-            const QString file = dir.absoluteFilePath(name);
-            bool already = false;
-            for (const QString& c : catalog_.paths())
-                if (QFileInfo(c) == QFileInfo(file)) already = true;
-            if (already) continue;
-            if (!separated) {
-                libraryBox_->insertSeparator(libraryBox_->count());
-                separated = true;
-            }
-            PartsLibrary probe;
-            const bool ok = probe.load(file);
-            libraryBox_->addItem(
-                ok ? QStringLiteral("%1  (%2 parts — not connected)")
-                         .arg(name)
-                         .arg(probe.parts.size())
-                   : QStringLiteral("%1  (not a library)").arg(name),
-                file);
-        }
-    }
-    const int at = libraryBox_->findData(catalog_.activePath());
-    libraryBox_->setCurrentIndex(at >= 0 ? at : 0);
-    syncing_ = false;
 }
 
 namespace {
@@ -794,32 +795,10 @@ void PartsLibraryDialog::buildUi() {
     {
         auto* row = new QHBoxLayout;
         row->setContentsMargins(0, 0, 0, 0);
-        auto* cap = new QLabel(QStringLiteral("Working in"), left);
+        auto* cap = new QLabel(QStringLiteral("Libraries"), left);
         setRole(cap, "caption");
         row->addWidget(cap);
-        libraryBox_ = new QComboBox(left);
-        libraryBox_->setToolTip(QStringLiteral(
-            "The library a new part is added to. Every connected library is searched and listed; "
-            "a part is always edited in the library it came from."));
-        connect(libraryBox_, &QComboBox::currentIndexChanged, this, [this](int i) {
-            if (syncing_ || i < 0) return;
-            const QString file = libraryBox_->itemData(i).toString();
-            if (file.isEmpty()) return;   // the separator
-            // One that is not connected yet is connected by being chosen: "work in this one" is the
-            // whole of what a person means by picking it, and asking them to connect it first is a
-            // step that explains nothing.
-            catalog_.saveAll();
-            bool connected = false;
-            for (const QString& p : catalog_.paths())
-                if (QFileInfo(p) == QFileInfo(file)) connected = true;
-            if (!connected) catalog_.connectLibrary(file);
-            catalog_.setActivePath(file);
-            path_ = catalog_.activePath();
-            catalog_.remember();
-            refreshLibraryChooser();
-            reloadTree();
-        });
-        row->addWidget(libraryBox_, 1);
+        row->addStretch(1);
         auto* connectBtn = new QPushButton(QStringLiteral("Connect…"), left);
         connectBtn->setToolTip(QStringLiteral("Open another library alongside this one (.plb)"));
         connect(connectBtn, &QPushButton::clicked, this, [this] {
@@ -836,19 +815,8 @@ void PartsLibraryDialog::buildUi() {
         });
         row->addWidget(connectBtn);
         auto* dropBtn = new QPushButton(QStringLiteral("Disconnect"), left);
-        dropBtn->setToolTip(QStringLiteral("Stop working with the library shown here"));
-        connect(dropBtn, &QPushButton::clicked, this, [this] {
-            if (catalog_.paths().size() < 2) {
-                if (summary_)
-                    summary_->setText(QStringLiteral("The last library stays connected"));
-                return;
-            }
-            catalog_.saveAll();
-            catalog_.disconnectLibrary(catalog_.activePath());
-            path_ = catalog_.activePath();
-            refreshLibraryChooser();
-            reloadTree();
-        });
+        dropBtn->setToolTip(QStringLiteral("Stop working with the library picked in the list below - it leaves the list; the file stays"));
+        connect(dropBtn, &QPushButton::clicked, this, [this] { disconnectSelectedLibrary(); });
         row->addWidget(dropBtn);
         lv->addLayout(row);
     }
@@ -860,13 +828,17 @@ void PartsLibraryDialog::buildUi() {
     {
         libraryList_ = new QTreeWidget(left);
         libraryList_->setObjectName(QStringLiteral("libraryList"));
-        libraryList_->setHeaderLabels({QStringLiteral("Library"), QStringLiteral("Parts"),
-                                       QStringLiteral("State"), QStringLiteral("Show")});
+        libraryList_->setHeaderLabels({QStringLiteral("Library"), QStringLiteral("Parts"), QStringLiteral("Show")});
         libraryList_->setRootIsDecorated(false);
-        libraryList_->setColumnWidth(0, 190);
+        // THE NAME TAKES WHAT IS LEFT; the count and the ON/OFF keep their width however wide the window is.
+        libraryList_->header()->setStretchLastSection(false);
+        libraryList_->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+        libraryList_->header()->setSectionResizeMode(1, QHeaderView::Fixed);
+        libraryList_->header()->setSectionResizeMode(2, QHeaderView::Fixed);
         libraryList_->setColumnWidth(1, 52);
-        libraryList_->setColumnWidth(2, 150);
-        libraryList_->headerItem()->setToolTip(3, QStringLiteral("Its parts shown in the list below, or hidden"));
+        libraryList_->setColumnWidth(2, 64);
+        libraryList_->headerItem()->setToolTip(0, QStringLiteral("The library worked in - new parts go into it - is in bold"));
+        libraryList_->headerItem()->setToolTip(2, QStringLiteral("Its parts shown in the list below, or hidden"));
         // RIGHT-CLICK A LIBRARY to disconnect it: it leaves this list, and the file stays where it is.
         libraryList_->setContextMenuPolicy(Qt::CustomContextMenu);
         connect(libraryList_, &QTreeWidget::customContextMenuRequested, this, [this](const QPoint& at) {
@@ -908,7 +880,7 @@ void PartsLibraryDialog::buildUi() {
         setRole(libraryTotals_, "caption");
         libRow->addWidget(libraryTotals_, 1);
         // A NEW, EMPTY LIBRARY: a file in the library folder, connected and worked in at once.
-        auto* newLib = new QPushButton(QStringLiteral("New libraryâ¦"), left);
+        auto* newLib = new QPushButton(QStringLiteral("New library…"), left);
         newLib->setObjectName(QStringLiteral("newLibrary"));
         newLib->setToolTip(QStringLiteral("Make a new, empty part library, connect it and work in it"));
         connect(newLib, &QPushButton::clicked, this, [this] {
@@ -979,13 +951,40 @@ void PartsLibraryDialog::buildUi() {
     tree_->setColumnWidth(3, 30);
     tree_->setColumnWidth(4, 34);
     tree_->setColumnWidth(5, 30);
+    // EACH COLUMN SHOWN OR NOT: right-click the headings to switch one off or on again; the Part column always stays.
+    // Remembered between sessions.
+    {
+        const QList<QVariant> hidden = QSettings().value(QStringLiteral("partsLibrary/hiddenColumns")).toList();
+        for (const QVariant& c : hidden)
+            if (c.toInt() > 0 && c.toInt() < tree_->columnCount()) tree_->setColumnHidden(c.toInt(), true);
+        tree_->header()->setContextMenuPolicy(Qt::CustomContextMenu);
+        tree_->header()->setToolTip(QStringLiteral("Right-click to choose which columns are shown"));
+        connect(tree_->header(), &QHeaderView::customContextMenuRequested, this, [this](const QPoint& at) {
+            QMenu menu(tree_);
+            for (int c = 1; c < tree_->columnCount(); ++c) {
+                const QString tip = tree_->headerItem()->toolTip(c);
+                QAction* a = menu.addAction(tree_->headerItem()->text(c) + (tip.isEmpty() ? QString() : QStringLiteral("  -  ") + tip));
+                a->setCheckable(true);
+                a->setChecked(!tree_->isColumnHidden(c));
+                connect(a, &QAction::toggled, this, [this, c](bool on) {
+                    tree_->setColumnHidden(c, !on);
+                    QList<QVariant> off;
+                    for (int k = 1; k < tree_->columnCount(); ++k)
+                        if (tree_->isColumnHidden(k)) off << k;
+                    QSettings().setValue(QStringLiteral("partsLibrary/hiddenColumns"), off);
+                });
+            }
+            menu.exec(tree_->header()->mapToGlobal(at));
+        });
+    }
     // The selected part has to be obvious: a row highlighted in the theme's faintest grey is not,
     // especially in a list of fifty where the eye has to come back to it after reading the form.
     tree_->setStyleSheet(treeStyle());
     tree_->setRootIsDecorated(true);
-    // SEVERAL PARTS AT ONCE: held Shift (or Ctrl) and clicked, each part is added to the ones selected - see
-    // eventFilter. The form shows the one clicked last, and its Unit is set on them all.
-    tree_->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    // ONE PART A CLICK (a drag does not run on over others); SEVERAL ONLY ON PURPOSE: Shift + click adds a part to the
+    // ones selected, Ctrl + click takes one off them - see eventFilter. The form shows the one clicked last, and its
+    // Unit is set on them all.
+    tree_->setSelectionMode(QAbstractItemView::SingleSelection);
     tree_->viewport()->installEventFilter(this);
     connect(tree_, &QTreeWidget::currentItemChanged, this,
             [this](QTreeWidgetItem* it, QTreeWidgetItem*) {
@@ -1024,8 +1023,24 @@ void PartsLibraryDialog::buildUi() {
     rv->setContentsMargins(0, 0, 0, 0);
 
     auto* head = new QGroupBox(QStringLiteral("Part"), right);
-    auto* hg = new QGridLayout(head);
+    // ITS ROWS KEEP THEIR SIZE: pulled shorter by its grip, the section hides its last rows under the line (and
+    // scrolls to them) rather than squashing every row into the next; and it is never pulled taller than its rows
+    // need - see gripMaxToHint.
+    head->setProperty("gripMaxToHint", true);
+    auto* headOuter = new QVBoxLayout(head);
+    headOuter->setContentsMargins(0, 0, 0, 0);
+    auto* headScroll = new FullScrollArea(head);
+    headScroll->setObjectName(QStringLiteral("partHeadScroll"));
+    headScroll->setFrameShape(QFrame::NoFrame);
+    headScroll->setWidgetResizable(true);
+    headScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    headScroll->viewport()->setAutoFillBackground(false);
+    auto* headBody = new QWidget(headScroll);
+    headBody->setAutoFillBackground(false);
+    auto* hg = new QGridLayout(headBody);
     hg->setContentsMargins(8, 8, 8, 8);
+    headScroll->setWidget(headBody);
+    headOuter->addWidget(headScroll);
     hg->setHorizontalSpacing(8);
     int hr = 0;
     auto headRow = [&](const QString& label, QWidget* field) {
@@ -3276,10 +3291,13 @@ bool PartsLibraryDialog::eventFilter(QObject* watched, QEvent* event) {
         if (me->button() == Qt::LeftButton && (me->modifiers() & (Qt::ShiftModifier | Qt::ControlModifier))) {
             QTreeWidgetItem* it = tree_->itemAt(me->position().toPoint());
             if (it && !it->data(0, Qt::UserRole).toString().isEmpty()) {
-                // ONE PART MORE OR LESS, the rest kept - not the run of rows between, which is not what was pointed at.
-                const bool was = it->isSelected();
-                tree_->setCurrentItem(it, 0, QItemSelectionModel::NoUpdate);
-                it->setSelected(!was);
+                // ONE PART MORE (Shift) OR LESS (Ctrl), the rest kept - not the run of rows between.
+                if (me->modifiers() & Qt::ShiftModifier) {
+                    tree_->setCurrentItem(it, 0, QItemSelectionModel::NoUpdate);
+                    it->setSelected(true);
+                } else {
+                    it->setSelected(false);
+                }
                 return true;
             }
         }

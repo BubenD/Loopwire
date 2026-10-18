@@ -366,6 +366,10 @@ void MainWindow::buildView3DTab() {
         gl->addWidget(look, 1, 0);
         preview3dMirrors_.append({look, QStringLiteral("view3dPartLook")});
         row->addWidget(g);
+        // REFRESH: the 3D built again from the drawing as it is now.
+        big(w, row, "preview3dRefresh", QStringLiteral("Refresh"), QStringLiteral("refresh"),
+            QStringLiteral("Build the 3D again from the 2D drawing as it is now"),
+            [this] { if (view3dPane_) view3dPane_->rebuild(false); });
         QToolButton* harness = big(w, row, "preview3dHarness", QStringLiteral("Harness"), QStringLiteral("harness"),
                                    QStringLiteral("Show or hide the harness drawn on the sheet"), [] {});
         harness->setCheckable(true);

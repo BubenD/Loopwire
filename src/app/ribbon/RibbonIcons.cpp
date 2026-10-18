@@ -10,14 +10,28 @@
 
 #include <cmath>
 
+#include <QSet>
+
 namespace Loopwire {
+
+namespace {
+int& warmDepth() { static int d = 0; return d; }
+QSet<QString>& warmKeys() { static QSet<QString> k; return k; }
+} // namespace
+
+WarmRibbonIcons::WarmRibbonIcons() { ++warmDepth(); }
+WarmRibbonIcons::~WarmRibbonIcons() { --warmDepth(); }
 
 // Shared CAD pictograms: a 24-unit grid, consistent strokes, and an accent for the action.
 // Four raster pixels per logical pixel keep the ribbon sharp at Windows display scaling.
 QIcon makeCadActionIcon(const QString& key, const QColor& ink) {
     QPixmap pm(96,96);pm.setDevicePixelRatio(4);pm.fill(Qt::transparent);
     QPainter p(&pm);p.setRenderHint(QPainter::Antialiasing,true);
-    const QColor accent=ink.lightness()>145?QColor("#72b8f4"):QColor("#176ac1");
+    // ORANGE for the Modify, Annotation and Special icons (see WarmRibbonIcons), blue for the rest.
+    if(warmDepth()>0)warmKeys().insert(key);
+    const bool warm=warmKeys().contains(key);
+    const QColor accent=warm?(ink.lightness()>145?QColor("#f2a35e"):QColor("#c2611b"))
+                            :(ink.lightness()>145?QColor("#72b8f4"):QColor("#176ac1"));
     QColor wash=accent;wash.setAlpha(42);
     auto stroke=[&](const QColor& c,double width=1.65,Qt::PenStyle style=Qt::SolidLine){p.setPen(QPen(c,width,style,Qt::RoundCap,Qt::RoundJoin));p.setBrush(Qt::NoBrush);};
     auto line=[&](double x,double y,double xx,double yy){p.drawLine(QPointF(x,y),QPointF(xx,yy));};

@@ -678,6 +678,8 @@ public:
     // A CABLE, SLEEVE OR BRAID OF THE HARNESS DRAWN, TAKEN HOLD OF: the routed bundle now standing for it, held where it
     // was pressed - so the drag that put the harness in as a route goes on moving it with the pointer.
     bool takeHoldOfItem(const QPointF& at);
+    // A cable nothing holds (its ends and what it is joined to only points it was drawn to) taken hold of: moved whole.
+    void moveFreeCableWhole();
     void setMeasureFaces(bool on) { measureFaces_ = on; }
     bool measureFaces() const { return measureFaces_; }
     void setMeasureRadius(bool on) { measureRadius_ = on; clearMeasure(); }

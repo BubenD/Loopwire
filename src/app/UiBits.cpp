@@ -87,7 +87,10 @@ protected:
     void mouseMoveEvent(QMouseEvent* e) override {
         if (!(e->buttons() & Qt::LeftButton)) return;
         const int floor = WizardFlowSplitter::readableMinimum(section_);
-        const int want = std::max(floor, int(start_ + e->globalPosition().y() - from_));
+        int want = std::max(floor, int(start_ + e->globalPosition().y() - from_));
+        // NO TALLER THAN ITS CONTENTS NEED, for a section that says so: pulled further, its rows only spread apart.
+        if (section_->property("gripMaxToHint").toBool())
+            want = std::min(want, std::max(floor, section_->sizeHint().height()));
         int delta = want - section_->height();
         section_->setProperty("clipHeightManual", true);
         if (auto* flow = dynamic_cast<WizardFlowSplitter*>(section_); flow && flow->orientation() == Qt::Vertical)

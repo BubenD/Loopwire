@@ -3499,6 +3499,33 @@ void View3DPane::rebuild(bool fit) {
         const bool fromSheet = std::any_of(route_.segments.begin(), route_.segments.end(), [](const RouteSegment3D& s) {
             return s.designCable.startsWith(QLatin1String("drawing:run:"));
         });
+        // AND LETS GO OF WHAT HAS BEEN DELETED FROM IT: a cable whose run is no longer on the sheet, and the connectors
+        // and branches left with nothing on them that it was laid to.
+        if (fromSheet) {
+            QSet<QString> onSheet, partsOnSheet;
+            for (const Entity& e : ents) {
+                onSheet.insert(e.id);
+                const QString key = harness3DPartKey(e);
+                if (!key.isEmpty()) partsOnSheet.insert(key);
+            }
+            QSet<QString> leftAt;
+            std::vector<QString> gone;
+            for (const RouteSegment3D& s : route_.segments)
+                if (s.designCable.startsWith(QLatin1String("drawing:run:")) && !onSheet.contains(s.designCable.mid(12))) {
+                    gone.push_back(s.id);
+                    leftAt.insert(s.a);
+                    leftAt.insert(s.b);
+                }
+            for (const QString& id : gone) route_.removeSegment(id);
+            for (const QString& node : leftAt) {
+                const RouteNode3D* n = route_.node(node);
+                if (!n) continue;
+                const bool used = std::any_of(route_.segments.begin(), route_.segments.end(),
+                                              [&](const RouteSegment3D& s) { return s.a == node || s.b == node; });
+                const bool stillDrawn = !n->brick.isEmpty() && (partsOnSheet.contains(n->brick) || !n->brick.startsWith(QLatin1String("drawing:")));
+                if (!used && !stillDrawn) route_.removeNode(node);
+            }
+        }
         addDrawingToRoute(route_, ents, false, !fromSheet);
         // A routed cable's covering in its part's colour, where the bill gives one.
         for (RouteSegment3D& s : route_.segments)
@@ -7255,8 +7282,35 @@ bool View3DCanvas::takeHoldOfItem(const QPointF& at) {
     if (!route_) return false;
     routeRedraw();
     if (!beginItemDrag(at)) return false;
+    moveFreeCableWhole();
     setCursor(Qt::ClosedHandCursor);
     return true;
+}
+
+void View3DCanvas::moveFreeCableWhole() {
+    // A CABLE WITH NOTHING HOLDING IT: every end of it and of what it is joined to only a point it was drawn to, no part
+    // there - a sleeve, a cable or a braid drawn on the sheet by itself. Pulled, it moves whole with the pointer, as in
+    // Select: kept to its length between ends nothing holds, it was only pulled out of shape and lagged behind.
+    const RouteSegment3D* cable = route_ ? route_->segment(dragId_) : nullptr;
+    if (!cable || (dragKind_ != 2 && dragKind_ != 3)) return;
+    QSet<QString> joined{cable->a, cable->b};
+    for (bool more = true; more;) {
+        more = false;
+        for (const RouteSegment3D& s : route_->segments)
+            if ((joined.contains(s.a) || joined.contains(s.b)) && (!joined.contains(s.a) || !joined.contains(s.b))) {
+                joined.insert(s.a);
+                joined.insert(s.b);
+                more = true;
+            }
+    }
+    for (const QString& id : joined) {
+        const RouteNode3D* n = route_->node(id);
+        if (!n) return;
+        const bool placeholder = n->brick.startsWith(QLatin1String("drawing:end:"));
+        if (!placeholder && (n->kind == RouteNodeKind::Connector || n->kind == RouteNodeKind::Clip || !n->brick.isEmpty())) return;
+    }
+    dragNodes_ = joined;
+    dragKind_ = 6;
 }
 
 bool View3DCanvas::beginItemDrag(const QPointF& at) {
@@ -7338,7 +7392,10 @@ void View3DCanvas::mousePressEvent(QMouseEvent* e) {
     // nodes (a clip, a connector) pulled where it is dragged, its length kept unless pulling adds length.
     if (route_ && e->button() == Qt::LeftButton && (tool_ == RouteTool::Move || tool_ == RouteTool::Stretch)) {
         if (beginNodeDrag(e->position(), tool_ == RouteTool::Stretch)) setCursor(Qt::ClosedHandCursor);
-        else if (tool_ == RouteTool::Move && beginItemDrag(e->position())) setCursor(Qt::ClosedHandCursor);
+        else if (tool_ == RouteTool::Move && beginItemDrag(e->position())) {
+            moveFreeCableWhole();
+            setCursor(Qt::ClosedHandCursor);
+        }
         else if (tool_ == RouteTool::Move) {
             // A PART OF THE HARNESS DRAWN: to be moved - the harness put in as a route first, where it is not yet.
             int part = -1;

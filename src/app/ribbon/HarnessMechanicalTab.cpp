@@ -145,6 +145,7 @@ void MainWindow::buildHarnessMechanicalTab() {
     // they are not annotation; they are the conventions of this kind of drawing, so they have their own
     // place on the tab rather than being scattered among the general tools.
     {
+        const WarmRibbonIcons warm;   // the Special group's icons in the warm accent
         auto* lenW = new QWidget(page);
         // TWO ROWS, not one. Six wide buttons in a single row made this the widest group on the tab by a
         // long way, pushing the data group off the end of the ribbon on a narrow window. The pieces of
@@ -1644,7 +1645,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                   return actual(QStringLiteral("shrinkCoverStart"), 20.0);
               }, [this](double v){ editor_->setShrinkCover(v); }, true);
         // THE FINISH END'S HEATSHRINK, its own length while Both sides is off.
-        field(QStringLiteral("Finish cover"), QStringLiteral("shrinkRouteCoverEnd"), 1, 3, 8, 2000.0,
+        field(QStringLiteral("Finish cover"), QStringLiteral("shrinkRouteCoverEnd"), 2, 2, 8, 2000.0,
               [this]{ return editor_->shrinkCoverEnd(); },
               [actual]{ return actual(QStringLiteral("shrinkCoverEnd"), 20.0); },
               [this](double v){ editor_->setShrinkCoverEnd(v); }, true);
@@ -1677,20 +1678,12 @@ void MainWindow::buildHarnessMechanicalTab() {
             if (syncShrinkRibbon_) syncShrinkRibbon_();
             canvas_->update();
         });
-        grid->addWidget(bothSides, 2, 3);
-        auto* finish = new QToolButton(settings);
-        finish->setObjectName(QStringLiteral("shrinkRouteFinish"));
-        finish->setText(QStringLiteral("Finish (Enter)"));
-        finish->setToolTip(QStringLiteral("Finish the route at the endpoint held by Tab."));
-        connect(finish, &QToolButton::clicked, this, [this]{
-            canvas_->setFocus();
-            editor_->onKey(Qt::Key_Return, Qt::NoModifier);
-        });
-        grid->addWidget(finish, 2, 2);
+        grid->addWidget(bothSides, 1, 3);
+
         shrinkOptionsGroup_ = addGroupKeep(lay, QStringLiteral("Cable / heatshrink parameters"), settings);
         shrinkOptionsGroup_->setObjectName(QStringLiteral("shrinkRouteRibbonGroup"));
         mechGroups_ << shrinkOptionsGroup_;
-        syncShrinkRibbon_ = [this, fields, finish, endSleeves, bothSides] {
+        syncShrinkRibbon_ = [this, fields, endSleeves, bothSides] {
             const bool active = editor_->tool() == ToolId::HeatshrinkRoute;
             shrinkOptionsGroup_->setVisible(active);
             if (!active) return;
@@ -1730,7 +1723,7 @@ void MainWindow::buildHarnessMechanicalTab() {
                     f.automatic->setChecked(automatic);
                 }
             }
-            finish->setEnabled(editor_->twistedFrozen() || editor_->isDrafting());
+
         };
         // A pinned preview may get a new angle or width without a document edit.
         connect(editor_, &Editor::overlayChanged, this, [this]{

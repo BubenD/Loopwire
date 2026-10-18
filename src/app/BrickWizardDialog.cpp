@@ -54,6 +54,7 @@
 #include <QClipboard>
 #include <QGuiApplication>
 #include <QJsonDocument>
+#include <QCursor>
 #include <QTimer>
 #include <QUuid>
 #include <QToolTip>
@@ -1443,9 +1444,19 @@ void BrickWizardDialog::buildUi() {
     // ABOUT WHICH PART: Auto - the part alone at the main body's other end (of several there, the middle one).
     symRef_ = new QComboBox(this);
     symRef_->setObjectName(QStringLiteral("brickSymRef"));
-    symRef_->setToolTip(QStringLiteral("The part Symmetric lays the drawing out about. Auto: the part alone at the main "
-                                       "body's other end - of several there, the middle one"));
-    symRef_->addItem(QStringLiteral("Related symmetry: Auto"), QString());
+    // ITS NAME IN FULL, AFTER A MOMENT: held over it for a second and a half, "Related symmetry" and what it does -
+    // see eventFilter. Not an ordinary tooltip, which comes up at once over a box this small.
+    symRef_->setProperty("delayedTip", QStringLiteral("Related symmetry\nThe part Symmetric lays the drawing out about. Auto: the part "
+                                                      "alone at the main body's other end - of several there, the middle one"));
+    symRef_->installEventFilter(this);
+    symTip_ = new QTimer(this);
+    symTip_->setSingleShot(true);
+    symTip_->setInterval(1500);
+    connect(symTip_, &QTimer::timeout, this, [this] {
+        if (symRef_ && symRef_->underMouse())
+            QToolTip::showText(QCursor::pos(), symRef_->property("delayedTip").toString(), symRef_);
+    });
+    symRef_->addItem(QStringLiteral("Symmetry: Auto"), QString());
     nav << symRef_;
     // THE BRICKS TURN WITH THE DRAWING, or not: R and Space turn the part on the drawing, and - ticked - its brick's
     // connections round it on the pane too.
@@ -1628,9 +1639,9 @@ void BrickWizardDialog::buildUi() {
         symRef_->setParent(navBox_);
         symRef_->setStyleSheet(QStringLiteral("QComboBox{background:rgba(62,82,106,170);color:#e8eef5;"
                                               "border:1px solid rgba(150,172,196,120);border-radius:9px;padding:1px 8px;}"));
-        symRef_->setMaximumWidth(190);
+        symRef_->setMaximumWidth(150);
         symRef_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-        symRef_->setMinimumContentsLength(14);
+        symRef_->setMinimumContentsLength(10);
         vl->addWidget(symRef_, 0, Qt::AlignHCenter);
         for (QWidget* w : nav)
             if (w != symRef_) w->hide();
@@ -4302,6 +4313,13 @@ bool BrickWizardDialog::moveBomRow(int from, int gap) {
 
 bool BrickWizardDialog::eventFilter(QObject* o, QEvent* e) {
     if (o == canvas_ && (e->type() == QEvent::Resize || e->type() == QEvent::Show)) placeNav();
+    if (o == symRef_ && symTip_) {
+        if (e->type() == QEvent::Enter) symTip_->start();
+        else if (e->type() == QEvent::Leave || e->type() == QEvent::MouseButtonPress) {
+            symTip_->stop();
+            QToolTip::hideText();
+        }
+    }
     // A PART DRAGGED ON THE DRAWING: pressed on an end part in the preview and moved, its run's length follows -
     // along, and across (farther off, more cable) - and it goes up or down on the drawing with it.
     if (o == preview_) {
@@ -5181,10 +5199,10 @@ void BrickWizardDialog::refreshSymRef() {
     const QString keep = symRef_->currentData().toString();
     const QSignalBlocker hush(symRef_);
     symRef_->clear();
-    symRef_->addItem(QStringLiteral("Related symmetry: Auto"), QString());
+    symRef_->addItem(QStringLiteral("Symmetry: Auto"), QString());
     for (const Brick& b : design_.bricks)
         if (b.type == BrickType::End) {
-            symRef_->addItem(QStringLiteral("Related symmetry: ") + said(b), b.id);
+            symRef_->addItem(QStringLiteral("Symmetry: ") + said(b), b.id);
             symRef_->setItemData(symRef_->count() - 1, said(b), Qt::ToolTipRole);
         }
     symRef_->setCurrentIndex(std::max(0, symRef_->findData(keep)));

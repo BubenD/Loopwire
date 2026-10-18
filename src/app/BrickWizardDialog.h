@@ -24,6 +24,7 @@ class QFormLayout;
 class QMenu;
 class QPushButton;
 class QSpinBox;
+class QTimer;
 class QStackedWidget;
 class QSplitter;
 class QTabWidget;
@@ -544,6 +545,7 @@ private:
     QDoubleSpinBox* transLenFin2_ = nullptr;     // the finish's length, in its own frame
     QToolButton* transLenFin2Auto_ = nullptr;
     QComboBox* symRef_ = nullptr;                // the part Symmetric lays the drawing out about
+    QTimer* symTip_ = nullptr;                   // shows symRef_'s full name after a moment held over it
     QWidget* navBox_ = nullptr;                  // the wheel in the pane's top right corner, and the list under it
     // THE BRICKS OR THE HARNESS IN 3D, in the pane's place - chosen at the window's bottom left.
     QStackedWidget* paneStack_ = nullptr;
