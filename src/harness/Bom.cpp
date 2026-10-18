@@ -532,20 +532,7 @@ QColor partOuterColour(const LibraryPart& part) {
     return {};
 }
 
-QHash<QString, QColor> partColoursFromBom(const Document& doc, const PartsLibrary& lib) {
-    QHash<QString, QColor> out;
-    // AN OBJECT WITH ITS OWN PART first; a balloon pointing at it below says which line of the bill it is, and wins.
-    for (const Entity& e : doc.entities()) {
-        const QString id = e.meta.value(QStringLiteral("libPart")).toString();
-        if (id.isEmpty()) continue;
-        if (const LibraryPart* part = lib.byId(id)) {
-            const QColor c = partOuterColour(*part);
-            if (c.isValid()) out.insert(e.id, c);
-            const QColor ink = partTextColour(*part);
-            if (ink.isValid()) out.insert(e.id + QStringLiteral("|text"), ink);
-        }
-    }
-    // THE BILL AS THE DRAWING SHOWS IT - the line numbers a balloon counts down.
+std::vector<BomRow> bomShownRows(const Document& doc, const PartsLibrary& lib) {
     BomTable table;
     table.fromJson(doc.bom());
     std::vector<BomRow> rows = table.rows;
@@ -554,6 +541,13 @@ QHash<QString, QColor> partColoursFromBom(const Document& doc, const PartsLibrar
         rows.insert(rows.end(), drawn.begin(), drawn.end());
     }
     if (table.config.unify) rows = bomUnify(rows);
+    return rows;
+}
+
+QHash<QString, std::vector<PartLink>> partLinksOf(const Document& doc, const PartsLibrary& lib) {
+    QHash<QString, std::vector<PartLink>> out;
+    // THE BILL AS THE DRAWING SHOWS IT - the line numbers a balloon counts down.
+    const std::vector<BomRow> rows = bomShownRows(doc, lib);
     auto partOfRow = [&](const BomRow& r) -> const LibraryPart* {
         if (!r.partId.isEmpty())
             if (const LibraryPart* p = lib.byId(r.partId)) return p;
@@ -563,6 +557,19 @@ QHash<QString, QColor> partColoursFromBom(const Document& doc, const PartsLibrar
                 return &p;
         return nullptr;
     };
+    auto lineOf = [&](const LibraryPart& part) {
+        for (size_t i = 0; i < rows.size(); ++i)
+            if (partOfRow(rows[i]) == &part) return static_cast<int>(i) + 1;
+        return 0;
+    };
+    // AN OBJECT WITH ITS OWN PART first; a balloon pointing at it comes after.
+    // (A sleeve over the run with heatshrink on its ends has the heatshrink's as well: libPartEnds.)
+    for (const Entity& e : doc.entities())
+        for (const char* key : {"libPart", "libPartEnds"}) {
+            const QString id = e.meta.value(QLatin1String(key)).toString();
+            if (id.isEmpty()) continue;
+            if (const LibraryPart* part = lib.byId(id)) out[e.id].push_back({lineOf(*part), part->description, part, false});
+        }
     // WHAT A LEADER'S TIP IS ON: the object whose route passes nearest it, within half its width and a little more.
     auto halfWidth = [](const Entity& e) {
         for (const char* key : {"shrinkWidth", "gap", "twistBodyWidth", "twistWireWidth"}) {
@@ -594,20 +601,30 @@ QHash<QString, QColor> partColoursFromBom(const Document& doc, const PartsLibrar
         bool ok = false;
         const int item = b.meta.value(QStringLiteral("text")).toString().trimmed().toInt(&ok);
         if (!ok || item < 1 || item > static_cast<int>(rows.size())) continue;
-        const LibraryPart* part = partOfRow(rows[static_cast<size_t>(item - 1)]);
-        if (!part) continue;
-        const QColor c = partOuterColour(*part);
-        const QColor ink = partTextColour(*part);
-        if (!c.isValid() && !ink.isValid()) continue;
+        const BomRow& row = rows[static_cast<size_t>(item - 1)];
+        const LibraryPart* part = partOfRow(row);
         for (const QJsonValue& leader : b.meta.value(QStringLiteral("leaders")).toArray()) {
             const QJsonArray at = leader.toArray();
             if (at.size() < 2) continue;
             const QString id = pointedAt({at[0].toDouble(), at[1].toDouble()});
-            if (id.isEmpty()) continue;
-            if (c.isValid()) out.insert(id, c);
-            if (ink.isValid()) out.insert(id + QStringLiteral("|text"), ink);
+            if (!id.isEmpty()) out[id].push_back({item, row.description, part, true});
         }
     }
+    return out;
+}
+
+QHash<QString, QColor> partColoursFromBom(const Document& doc, const PartsLibrary& lib) {
+    QHash<QString, QColor> out;
+    // Its own part, then the parts its balloons number - the last with a colour is the one.
+    const QHash<QString, std::vector<PartLink>> links = partLinksOf(doc, lib);
+    for (auto it = links.cbegin(); it != links.cend(); ++it)
+        for (const PartLink& l : it.value()) {
+            if (!l.part) continue;
+            const QColor c = partOuterColour(*l.part);
+            if (c.isValid()) out.insert(it.key(), c);
+            const QColor ink = partTextColour(*l.part);
+            if (ink.isValid()) out.insert(it.key() + QStringLiteral("|text"), ink);
+        }
     return out;
 }
 

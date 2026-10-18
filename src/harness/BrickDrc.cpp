@@ -1,4 +1,6 @@
 #include "harness/BrickDrc.h"
+#include "harness/Bom.h"
+#include "model/Document.h"
 
 #include <QHash>
 #include <QRegularExpression>
@@ -444,7 +446,10 @@ const std::vector<BrickDrcRule>& brickDrcRules() {
         static const QSet<QString> warn = {
 QStringLiteral("nopart"), QStringLiteral("nodesig"), QStringLiteral("shortrun"),
                                            QStringLiteral("nolayerpn"), QStringLiteral("transpn"), QStringLiteral("fanshrinkpn"),
-                                           QStringLiteral("notonbom"), QStringLiteral("compat-contacts"), QStringLiteral("compat-data")};
+                                           QStringLiteral("notonbom"), QStringLiteral("compat-contacts"), QStringLiteral("compat-data"),
+                                           QStringLiteral("sleeve-nopart"), QStringLiteral("sleeve-endshrink"),
+                                           QStringLiteral("sleeve-unchecked"), QStringLiteral("sleeve-size"),
+                                           QStringLiteral("sleeve-notonbom")};
         const QString key = QString::fromLatin1(id);
         return BrickDrcRule{key, QString::fromUtf8(label), QString::fromLatin1(group), QString::fromUtf8(text),
                             warn.contains(key) ? 1 : 2};
@@ -487,6 +492,22 @@ QStringLiteral("nopart"), QStringLiteral("nodesig"), QStringLiteral("shortrun"),
              "Heatshrink over the wire ends with no part number."),
         rule("notonbom", "Part not on BOM", "Logical",
              "A part used on the harness that is not on the bill of materials. Add it to the BOM."),
+        // A SLEEVE DRAWN ON THE SHEET: heatshrink, a cable, a braided sleeve or shield over the run, a transition.
+        rule("sleeve-nopart", "Drawn sleeve without a part", "Logical",
+             "Heatshrink, a cable, a braid or a shield drawn over the run with no part linked to it. Point a balloon at it "
+             "from its line on the bill of materials, or pick its part in Properties."),
+        rule("sleeve-partkind", "Drawn sleeve linked to the wrong kind of part", "Logical",
+             "The part linked to a drawn sleeve is not a kind it can be - a connector on a heatshrink, a cable on a braid."),
+        rule("sleeve-endshrink", "Heatshrink on the ends without a part", "Logical",
+             "A cable or braid with heatshrink on its ends, and no heatshrink part linked to it. Put the heatshrink on the "
+             "bill and point its balloon at the run or its ends."),
+        rule("sleeve-unchecked", "Drawn sleeve's bill line names no library part", "Logical",
+             "The bill line a balloon links to a drawn sleeve was typed in, against no part in the library - so what it is, "
+             "and its size, cannot be checked."),
+        rule("sleeve-size", "Drawn sleeve's width outside its part's size", "Compatibility",
+             "A drawn sleeve wider or narrower than the size range of the part linked to it."),
+        rule("sleeve-notonbom", "Drawn sleeve's part not on the BOM", "Logical",
+             "A drawn sleeve's own part is not on the bill of materials. Add it to the BOM, and point a balloon at it."),
         // COMPATIBILITY VALIDATION: mechanical fit and electrical suitability.
         rule("compat-stack", "Stack-up interference", "Compatibility",
              "A run's layers do not fit one over another - a sleeve smaller than what it covers, or too big to recover onto it."),
@@ -916,6 +937,132 @@ std::vector<BrickIssue> drawingConnectivity(const std::vector<Entity>& ents) {
         i.atX = (p.box.min.x + p.box.max.x) / 2.0;
         i.atY = (p.box.min.y + p.box.max.y) / 2.0;
         out.push_back(i);
+    }
+    return out;
+}
+
+bool isDrawnSleeve(const Entity& e) {
+    return e.type == EntityType::Polyline && e.meta.value(QStringLiteral("shrunkEnds")).toBool() && e.points.size() >= 2;
+}
+
+namespace {
+bool drawnSquare(const Entity& e) {
+    return e.meta.value(QStringLiteral("shrinkTaperStart")).toDouble(-1.0) == 0.0 &&
+           e.meta.value(QStringLiteral("shrinkTaperEnd")).toDouble(-1.0) == 0.0;
+}
+double drawnWidth(const Entity& e) {
+    return e.meta.value(QStringLiteral("gap")).toDouble(e.meta.value(QStringLiteral("shrinkWidth")).toDouble(0.0));
+}
+} // namespace
+
+QString drawnSleeveName(const Entity& e) {
+    if (e.meta.value(QStringLiteral("shrinkTransition")).toBool()) return QStringLiteral("transition heatshrink");
+    if (sleeveIsShield(e)) return QStringLiteral("braided shield over the run");
+    if (sleeveIsBraid(e)) return QStringLiteral("braided sleeve over the run");
+    if (drawnSquare(e) || e.meta.value(QStringLiteral("shrinkEndsOnly")).toBool()) return QStringLiteral("cable over the run");
+    return QStringLiteral("heatshrink over the run");
+}
+
+std::vector<PartKind> drawnSleeveBodyKinds(const Entity& e) {
+    if (e.meta.value(QStringLiteral("shrinkTransition")).toBool())
+        return {PartKind::Heatshrink, PartKind::YSplit, PartKind::HeatshrinkBoot};
+    if (sleeveIsShield(e)) return {PartKind::ShieldBraid};
+    if (sleeveIsBraid(e)) return {PartKind::Sleeve, PartKind::ShieldBraid};
+    if (drawnSquare(e) || e.meta.value(QStringLiteral("shrinkEndsOnly")).toBool()) return {PartKind::Cable};
+    return {PartKind::Heatshrink};
+}
+
+double drawnSleeveFit(const Entity& e, const LibraryPart& p) {
+    const double width = drawnWidth(e);
+    if (width <= 0.0) return -1.0;
+    auto range = [&](const QString& key, double& lo, double& hi) {
+        bool okLo = false, okHi = false;
+        lo = p.value(key + QStringLiteral("Min")).toDouble(&okLo);
+        hi = p.value(key + QStringLiteral("Max")).toDouble(&okHi);
+        if (!okLo && !okHi) {
+            bool one = false;
+            lo = hi = p.value(key).toDouble(&one);
+            return one && lo > 0.0;
+        }
+        if (!okLo) lo = hi;
+        if (!okHi) hi = lo;
+        if (lo > hi) std::swap(lo, hi);
+        return hi > 0.0;
+    };
+    double lo = 0.0, hi = 0.0;
+    // A HEATSHRINK from its recovered to its supplied size; a braid or a sleeve over the bundles it is for; a cable
+    // about its own outside.
+    bool known = false;
+    if (p.kind == PartKind::Heatshrink || p.kind == PartKind::YSplit || p.kind == PartKind::HeatshrinkBoot) {
+        known = range(QStringLiteral("entry"), lo, hi);
+    } else if (p.kind == PartKind::ShieldBraid || p.kind == PartKind::Sleeve) {
+        known = range(QStringLiteral("diameter"), lo, hi);
+    } else if (p.kind == PartKind::Cable) {
+        const double od = p.value(QStringLiteral("od")).toDouble();
+        lo = od * 0.8;
+        hi = od * 1.2;
+        known = od > 0.0;
+    }
+    if (!known) return -1.0;
+    return width < lo ? lo - width : width > hi ? width - hi : 0.0;
+}
+
+std::vector<BrickIssue> drawingSleeveParts(const Document& doc, const PartsLibrary& lib) {
+    std::vector<BrickIssue> out;
+    const QHash<QString, std::vector<PartLink>> links = partLinksOf(doc, lib);
+    for (const Entity& e : doc.entities()) {
+        if (!isDrawnSleeve(e)) continue;
+        const QString name = drawnSleeveName(e);
+        const Vec2 at = e.points[e.points.size() / 2];
+        auto say = [&](int level, const char* rule, const QString& text) {
+            BrickIssue i;
+            i.rule = QString::fromLatin1(rule);
+            i.harness = QStringLiteral("Drawing");
+            i.brickId = e.id;
+            i.message = text;
+            i.level = level;
+            i.located = true;
+            i.atX = at.x;
+            i.atY = at.y;
+            i.key = QStringLiteral("Drawing|%1|%2|%3").arg(i.rule, e.id, text);
+            out.push_back(std::move(i));
+        };
+        const std::vector<PartKind> body = drawnSleeveBodyKinds(e);
+        const std::vector<PartLink> mine = links.value(e.id);
+        auto isBody = [&](const LibraryPart* p) { return p && std::find(body.begin(), body.end(), p->kind) != body.end(); };
+        const bool endShrink = e.meta.value(QStringLiteral("shrinkEndsOnly")).toBool();
+        if (mine.empty()) {
+            say(1, "sleeve-nopart", QStringLiteral("The %1 has no part - point a balloon at it from its line on the bill, or pick its part in Properties").arg(name));
+            continue;
+        }
+        bool haveBody = false, haveShrink = false;
+        for (const PartLink& l : mine) {
+            if (!l.part) {
+                say(1, "sleeve-unchecked", QStringLiteral("The %1: bill line %2 (%3) names no part in the library, so it cannot be checked")
+                                               .arg(name).arg(l.item).arg(l.description));
+                haveBody = true;   // what it is cannot be said; it is not said to be missing
+                continue;
+            }
+            const QString pn = l.part->mfrPn.isEmpty() ? l.part->description : l.part->mfrPn;
+            if (!l.byBalloon && l.item == 0)
+                say(1, "sleeve-notonbom", QStringLiteral("The %1's part %2 is not on the bill of materials").arg(name, pn));
+            if (isBody(l.part)) {
+                haveBody = true;
+                const double off = drawnSleeveFit(e, *l.part);
+                if (off > 0.05)
+                    say(1, "sleeve-size", QStringLiteral("The %1 is drawn %2 mm wide - %3 mm outside the size of %4")
+                                              .arg(name).arg(drawnWidth(e), 0, 'f', 1).arg(off, 0, 'f', 1).arg(pn));
+            } else if (endShrink && l.part->kind == PartKind::Heatshrink) {
+                haveShrink = true;
+            } else {
+                say(2, "sleeve-partkind", QStringLiteral("The %1 is linked to %2, a %3 - not a part it can be")
+                                              .arg(name, pn, partKindName(l.part->kind).toLower()));
+            }
+        }
+        if (!haveBody)
+            say(1, "sleeve-nopart", QStringLiteral("The %1 has no %2 part linked to it").arg(name, partKindName(body.front()).toLower()));
+        if (endShrink && !haveShrink)
+            say(1, "sleeve-endshrink", QStringLiteral("The heatshrink on the ends of the %1 has no part - put it on the bill and point its balloon at the run").arg(name));
     }
     return out;
 }

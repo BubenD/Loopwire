@@ -183,6 +183,8 @@ void MechanicalValidationDialog::checkHarnesses() {
         if (!done.contains(it.key())) check(BrickDesign::fromJson(it.value().toObject()), it.key());
     // AND AS PLACED ON THE SHEET: a part moved off its wires there.
     for (BrickIssue& i : drawingConnectivity(doc->entities())) harnessIssues_.push_back(std::move(i));
+    // AND EVERY SLEEVE DRAWN ON IT against the part linked to it - by a balloon to its bill line, or its own.
+    for (BrickIssue& i : drawingSleeveParts(*doc, merged_)) harnessIssues_.push_back(std::move(i));
 }
 
 int MechanicalValidationDialog::severityOf(const QString& rule) const {

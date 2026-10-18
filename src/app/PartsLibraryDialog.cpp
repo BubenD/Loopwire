@@ -77,6 +77,7 @@
 #include <QScreen>
 #include <QGuiApplication>
 #include <QSplitter>
+#include <QCollator>
 #include <QTimer>
 #include <QTreeWidget>
 #include <QVBoxLayout>
@@ -384,14 +385,16 @@ QIcon datasheetSignIcon(int attached, int onFile) {
     return QIcon(pm);
 }
 
-// A SCROLLER THAT ASKS FOR ALL OF WHAT IS IN IT: an ordinary one asks for no more than about two dozen lines, so a
-// section opened as tall as it likes still came up short of its last rows.
+// A SCROLLER THAT ASKS FOR ALL OF WHAT IS IN IT, PACKED CLOSE: an ordinary one asks for no more than about two dozen
+// lines, so a section came up short of its last rows; asked for what its rows would like, it opened with them spread
+// apart. Every row, as tight as the rows go.
 class FullScrollArea : public QScrollArea {
 public:
     using QScrollArea::QScrollArea;
     QSize sizeHint() const override {
         const int f = 2 * frameWidth();
-        return widget() ? widget()->sizeHint() + QSize(f, f) : QScrollArea::sizeHint();
+        if (!widget()) return QScrollArea::sizeHint();
+        return QSize(widget()->sizeHint().width(), widget()->minimumSizeHint().height()) + QSize(f, f);
     }
 };
 
@@ -849,7 +852,7 @@ void PartsLibraryDialog::buildUi() {
             QAction* work = menu.addAction(QStringLiteral("Work in this library"));
             QAction* drop = menu.addAction(QStringLiteral("Disconnect"));
             QAction* picked = menu.exec(libraryList_->viewport()->mapToGlobal(at));
-            if (picked == drop) disconnectSelectedLibrary();
+            if (picked == drop) QTimer::singleShot(0, this, [this] { disconnectSelectedLibrary(); });
             else if (picked == work) emit libraryList_->itemDoubleClicked(it, 0);
         });
         libraryList_->setMinimumHeight(96);
@@ -861,16 +864,18 @@ void PartsLibraryDialog::buildUi() {
             if (!it) return;
             const QString file = it->data(0, Qt::UserRole).toString();
             if (file.isEmpty()) return;
-            catalog_.saveAll();
-            if (it->data(1, Qt::UserRole).toBool()) {   // connected: work in it
-                catalog_.setActivePath(file);
-            } else {
-                catalog_.connectLibrary(file);
-            }
-            path_ = catalog_.activePath();
-            catalog_.remember();
-            refreshLibraryChooser();
-            reloadTree();
+            const bool connected = it->data(1, Qt::UserRole).toBool();
+            // AFTER THE CLICK IS DONE WITH: the list is built again, and the row double-clicked goes with it - taken away
+            // while the list was still handling the click on it, the program came down.
+            QTimer::singleShot(0, this, [this, file, connected] {
+                catalog_.saveAll();
+                if (connected) catalog_.setActivePath(file);   // connected: work in it
+                else catalog_.connectLibrary(file);
+                path_ = catalog_.activePath();
+                catalog_.remember();
+                refreshLibraryChooser();
+                reloadTree();
+            });
         });
         lv->addWidget(libraryList_);
 
@@ -997,14 +1002,16 @@ void PartsLibraryDialog::buildUi() {
     auto* addRow = new QWidget(left);
     auto* ar = new QHBoxLayout(addRow);
     ar->setContentsMargins(0, 0, 0, 0);
-    auto* newKind = new QComboBox(addRow);
-    for (PartKind k : allPartKinds()) newKind->addItem(partKindName(k), partKindKey(k));
-    ar->addWidget(newKind, 1);
+    ar->addStretch(1);
+    // A NEW PART OF NO KIND YET: its Type reads "-" until one is picked for it in the form.
     auto* addBtn = makeAddButton(addRow, QStringLiteral("New part"),
-                                QStringLiteral("Add a part of the kind chosen beside"));
-    connect(addBtn, &QPushButton::clicked, this, [this, newKind] {
-        LibraryPart* p = addPart(partKindFromKey(newKind->currentData().toString()));
-        if (p) selectPart(p->id);
+                                QStringLiteral("Add a new part - then pick its Type in the form"));
+    addBtn->setObjectName(QStringLiteral("newPart"));
+    connect(addBtn, &QPushButton::clicked, this, [this] {
+        LibraryPart* p = addPart(PartKind::Other);
+        if (!p) return;
+        p->params.insert(QStringLiteral("kindUnset"), QStringLiteral("1"));
+        selectPart(p->id);
     });
     ar->addWidget(addBtn);
     auto* dupBtn = new QPushButton(QStringLiteral("Duplicate"), addRow);
@@ -1025,8 +1032,8 @@ void PartsLibraryDialog::buildUi() {
     auto* head = new QGroupBox(QStringLiteral("Part"), right);
     // ITS ROWS KEEP THEIR SIZE: pulled shorter by its grip, the section hides its last rows under the line (and
     // scrolls to them) rather than squashing every row into the next; and it is never pulled taller than its rows
-    // need - see gripMaxToHint.
-    head->setProperty("gripMaxToHint", true);
+    // need, packed close - see gripContent.
+
     auto* headOuter = new QVBoxLayout(head);
     headOuter->setContentsMargins(0, 0, 0, 0);
     auto* headScroll = new FullScrollArea(head);
@@ -1040,6 +1047,7 @@ void PartsLibraryDialog::buildUi() {
     auto* hg = new QGridLayout(headBody);
     hg->setContentsMargins(8, 8, 8, 8);
     headScroll->setWidget(headBody);
+    head->setProperty("gripContent", QVariant::fromValue<QObject*>(headBody));
     headOuter->addWidget(headScroll);
     hg->setHorizontalSpacing(8);
     int hr = 0;
@@ -1051,15 +1059,27 @@ void PartsLibraryDialog::buildUi() {
         ++hr;
     };
     kindBox_ = new QComboBox(head);
+    kindBox_->setObjectName(QStringLiteral("partKind"));
+    // "-": a new part whose kind is not picked yet.
+    kindBox_->addItem(QStringLiteral("-"), QString());
     for (PartKind k : allPartKinds()) kindBox_->addItem(partKindName(k), partKindKey(k));
     connect(kindBox_, &QComboBox::currentIndexChanged, this, [this](int) {
         if (syncing_) return;
+        const QString key = kindBox_->currentData().toString();
+        if (key.isEmpty()) return;   // "-" is not a kind to give a part
         if (LibraryPart* p = current()) {
-            p->kind = partKindFromKey(kindBox_->currentData().toString());
+            const bool wasUnset = p->params.remove(QStringLiteral("kindUnset")) > 0;
+            const bool moved = wasUnset || p->kind != partKindFromKey(key);
+            p->kind = partKindFromKey(key);
             // A different kind is issued differently: the unit follows unless it was set by hand.
-            if (p->unit.isEmpty()) p->unit = defaultUnitForKind(p->kind);
+            if (p->unit.isEmpty() || wasUnset) p->unit = defaultUnitForKind(p->kind);
             rebuildParamForm(); // a different kind asks for different parameters
             touched();
+            // AND IT GOES UNDER ITS KIND in the list.
+            if (moved) {
+                const QString id = p->id;
+                QTimer::singleShot(0, this, [this, id] { reloadTree(); selectPart(id); });
+            }
         }
     });
     headRow(QStringLiteral("Type"), kindBox_);
@@ -2281,6 +2301,18 @@ void PartsLibraryDialog::reloadTree() {
                 p->mfrName.contains(needle, Qt::CaseInsensitive))
                 shown.push_back(p);
         }
+        // BY P/N, whatever library each comes from - so the same part in two libraries is listed side by side. Numbers
+        // in a P/N in their order (AI 2,5 before AI 10), letters without regard to case; the description where there
+        // is no P/N.
+        {
+            QCollator order;
+            order.setNumericMode(true);
+            order.setCaseSensitivity(Qt::CaseInsensitive);
+            auto pnOf = [](const LibraryPart* p) { return p->mfrPn.trimmed().isEmpty() ? p->title() : p->mfrPn.trimmed(); };
+            std::stable_sort(shown.begin(), shown.end(), [&](const LibraryPart* a, const LibraryPart* b) {
+                return order.compare(pnOf(a), pnOf(b)) < 0;
+            });
+        }
         // A kind with nothing in it is not listed - except the CONNECTOR CONTACTS, the pins and sockets a
         // connector is tied to: always there, so there is somewhere to put the first one.
         if (shown.empty() && (k != PartKind::ContactPin || !needle.isEmpty())) continue;
@@ -2408,7 +2440,10 @@ void PartsLibraryDialog::showPart(const QString& id) {
     const bool have = p != nullptr;
     if (kindBox_) {
         kindBox_->setEnabled(have);
-        if (have) kindBox_->setCurrentIndex(std::max(0, kindBox_->findData(partKindKey(p->kind))));
+        if (have)
+            kindBox_->setCurrentIndex(p->value(QStringLiteral("kindUnset")) == QLatin1String("1")
+                                          ? 0
+                                          : std::max(1, kindBox_->findData(partKindKey(p->kind))));
     }
     if (descEdit_) {
         descEdit_->setEnabled(have);
@@ -3286,6 +3321,18 @@ void PartsLibraryDialog::touched() {
 }
 
 bool PartsLibraryDialog::eventFilter(QObject* watched, QEvent* event) {
+    // SHIFT HELD AND DRAGGED: every part passed over is added to the ones selected.
+    if (tree_ && watched == tree_->viewport() && shiftSweep_) {
+        if (event->type() == QEvent::MouseMove) {
+            auto* me = static_cast<QMouseEvent*>(event);
+            if (me->buttons() & Qt::LeftButton) {
+                QTreeWidgetItem* it = tree_->itemAt(me->position().toPoint());
+                if (it && !it->data(0, Qt::UserRole).toString().isEmpty()) it->setSelected(true);
+                return true;
+            }
+        }
+        if (event->type() == QEvent::MouseButtonRelease) shiftSweep_ = false;
+    }
     if (tree_ && watched == tree_->viewport() && event->type() == QEvent::MouseButtonPress) {
         auto* me = static_cast<QMouseEvent*>(event);
         if (me->button() == Qt::LeftButton && (me->modifiers() & (Qt::ShiftModifier | Qt::ControlModifier))) {
@@ -3295,6 +3342,7 @@ bool PartsLibraryDialog::eventFilter(QObject* watched, QEvent* event) {
                 if (me->modifiers() & Qt::ShiftModifier) {
                     tree_->setCurrentItem(it, 0, QItemSelectionModel::NoUpdate);
                     it->setSelected(true);
+                    shiftSweep_ = true;
                 } else {
                     it->setSelected(false);
                 }

@@ -88,9 +88,13 @@ protected:
         if (!(e->buttons() & Qt::LeftButton)) return;
         const int floor = WizardFlowSplitter::readableMinimum(section_);
         int want = std::max(floor, int(start_ + e->globalPosition().y() - from_));
-        // NO TALLER THAN ITS CONTENTS NEED, for a section that says so: pulled further, its rows only spread apart.
-        if (section_->property("gripMaxToHint").toBool())
-            want = std::min(want, std::max(floor, section_->sizeHint().height()));
+        // NO TALLER THAN ITS ROWS NEED, packed as close as they go, for a section that names them (gripContent: what
+        // its scroller holds): pulled further, its rows only spread apart.
+        if (auto* content = qobject_cast<QWidget*>(section_->property("gripContent").value<QObject*>())) {
+            const QWidget* shownIn = content->parentWidget();   // the scroller's viewport
+            const int chrome = shownIn ? section_->height() - shownIn->height() : 0;
+            want = std::min(want, std::max(floor, content->minimumSizeHint().height() + chrome));
+        }
         int delta = want - section_->height();
         section_->setProperty("clipHeightManual", true);
         if (auto* flow = dynamic_cast<WizardFlowSplitter*>(section_); flow && flow->orientation() == Qt::Vertical)

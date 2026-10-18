@@ -37,7 +37,6 @@ namespace Loopwire {
 
 // ---- MODIFY ----
 void MainWindow::buildModifyTab() {
-    const WarmRibbonIcons warm;   // Modify's icons in the warm accent
     auto [page, lay] = makeTabPage();
     {
         // Move / Rotate / Mirror / Scale / Offset - and Array, which is the same idea repeated.

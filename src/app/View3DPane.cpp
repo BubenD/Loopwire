@@ -7515,7 +7515,12 @@ void View3DCanvas::mouseMoveEvent(QMouseEvent* e) {
         return;
     }
     const QPoint now = e->position().toPoint();
-    if ((now - pressedAt_).manhattanLength() > 3) moved_ = true;
+    // A CLICK THAT LAYS A POINT - a route's point, a connector, a branch, a clip, a ruler's end - forgives a hand that
+    // moves a little while it presses: held to three pixels, a slightly shaky click counted as a drag and laid nothing.
+    const bool placing = dragging_ == Qt::LeftButton &&
+                         (tool_ == RouteTool::Route || tool_ == RouteTool::Connector || tool_ == RouteTool::Branch ||
+                          tool_ == RouteTool::Clip || tool_ == RouteTool::Measure || tool_ == RouteTool::Pinpoints);
+    if ((now - pressedAt_).manhattanLength() > (placing ? 10 : 3)) moved_ = true;
     if (!moved_) return;
     // SOMETHING HELD, MOVED: across the view, at its own depth. The first move is one change, to undo as one.
     if (dragKind_ != 0 && route_) {

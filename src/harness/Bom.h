@@ -163,6 +163,20 @@ QString bomNextRowId(const std::vector<BomRow>& rows);
 QColor partOuterColour(const LibraryPart& part);
 // A LABEL'S PRINT COLOUR (textColour), the same way. In partColoursFromBom under "<entity id>|text".
 QColor partTextColour(const LibraryPart& part);
+// THE BILL AS THE DRAWING SHOWS IT: its typed lines, then what the drawing calls for, totalled if the sheet totals them -
+// line N of it is what a balloon saying N points to.
+std::vector<BomRow> bomShownRows(const Document& doc, const PartsLibrary& lib);
+// A PART LINKED TO AN OBJECT OF THE DRAWING: by a balloon pointing at it (the bill line it numbers), or by the object's
+// own library part (libPart). `item` is its line on the bill (0: not on it); `part` the library part that line names,
+// or none for a line typed in against nothing in the library - pointing into `lib`, so good while it lasts.
+struct PartLink {
+    int item = 0;
+    QString description;
+    const LibraryPart* part = nullptr;
+    bool byBalloon = false;
+};
+// Every object's links, by entity id: its own part first, then its balloons'.
+QHash<QString, std::vector<PartLink>> partLinksOf(const Document& doc, const PartsLibrary& lib);
 // THE COLOUR OF EACH OBJECT OF THE DRAWING AS ITS PART HAS IT, by entity id: an object a balloon points at takes the outer
 // colour of the part on the bill line the balloon numbers; one stamped with its own library part (libPart) takes that
 // part's. The bill is read as the drawing shows it, as bomItemLookup reads it. Only objects with a colour are in it.

@@ -145,7 +145,6 @@ void MainWindow::buildHarnessMechanicalTab() {
     // they are not annotation; they are the conventions of this kind of drawing, so they have their own
     // place on the tab rather than being scattered among the general tools.
     {
-        const WarmRibbonIcons warm;   // the Special group's icons in the warm accent
         auto* lenW = new QWidget(page);
         // TWO ROWS, not one. Six wide buttons in a single row made this the widest group on the tab by a
         // long way, pushing the data group off the end of the ribbon on a narrow window. The pieces of

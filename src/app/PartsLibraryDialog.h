@@ -61,6 +61,7 @@ public:
     void closeEvent(QCloseEvent* e) override;
     // SHIFT + CLICK in the parts list adds that part to the ones selected; CTRL + CLICK takes it off them.
     bool eventFilter(QObject* watched, QEvent* event) override;
+    bool shiftSweep_ = false;   // Shift held and pressed on a part: dragging adds every part passed over. Not saved.
 
     // Holds every captioned button at the width its words need and sets the window's minimum to what the
     // layouts then ask for (never more than the screen). Returns that need, unclamped.

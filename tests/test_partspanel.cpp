@@ -10,6 +10,7 @@
 #include <QLayout>
 #include <QAbstractButton>
 #include <QGroupBox>
+#include <QCollator>
 #include <QMouseEvent>
 #include <QTreeWidgetItemIterator>
 #include <QTableWidget>
@@ -2996,6 +2997,55 @@ int run_partspanel_tests() {
                     std::printf("  libraries: %d part(s) listed, %d with every library OFF\n", parts, hidden);
                     check(parts > 0 && hidden == 0 && countParts() == parts, "libraries: switched OFF their parts leave the list; ON, they are back");
                 }
+                // A LIBRARY DOUBLE-CLICKED: worked in, the list built again - and the program still standing.
+                if (auto* libs = dlg.findChild<QTreeWidget*>(QStringLiteral("libraryList")); libs && libs->topLevelItemCount() > 0) {
+                    const int rows = libs->topLevelItemCount();
+                    const QPoint at = libs->visualItemRect(libs->topLevelItem(0)).center();
+                    for (QEvent::Type t : {QEvent::MouseButtonPress, QEvent::MouseButtonRelease, QEvent::MouseButtonDblClick,
+                                           QEvent::MouseButtonRelease}) {
+                        QMouseEvent ev(t, at, libs->viewport()->mapToGlobal(at), Qt::LeftButton,
+                                       t == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton, Qt::NoModifier);
+                        QApplication::sendEvent(libs->viewport(), &ev);
+                    }
+                    QApplication::processEvents();
+                    check(libs->topLevelItemCount() == rows, "libraries: a library double-clicked is worked in, the list built again");
+                }
+                // THE PARTS OF A KIND BY THEIR P/N, whichever library each is in.
+                bool sorted = true;
+                QCollator order;
+                order.setNumericMode(true);
+                order.setCaseSensitivity(Qt::CaseInsensitive);
+                for (QTreeWidget* t : dlg.findChildren<QTreeWidget*>()) {
+                    if (t->objectName() == QLatin1String("libraryList")) continue;
+                    for (int g = 0; g < t->topLevelItemCount(); ++g) {
+                        QString last;
+                        for (int k = 0; k < t->topLevelItem(g)->childCount(); ++k) {
+                            const QString id = t->topLevelItem(g)->child(k)->data(0, Qt::UserRole).toString();
+                            const LibraryPart* lp = dlg.partForSession(id);
+                            if (!lp || lp->mfrPn.trimmed().isEmpty()) continue;
+                            if (!last.isEmpty() && order.compare(last, lp->mfrPn.trimmed()) > 0) sorted = false;
+                            last = lp->mfrPn.trimmed();
+                        }
+                    }
+                }
+                check(sorted, "libraries: each kind's parts listed by P/N");
+            }
+            // A NEW PART is of no kind until one is picked: its Type reads "-".
+            if (auto* add = dlg.findChild<QPushButton*>(QStringLiteral("newPart"))) {
+                add->click();
+                QApplication::processEvents();
+                auto* kind = dlg.findChild<QComboBox*>(QStringLiteral("partKind"));
+                check(kind && kind->currentText() == QStringLiteral("-"), "new part: its Type starts as -");
+                if (kind) {
+                    kind->setCurrentIndex(kind->findData(partKindKey(PartKind::Heatshrink)));
+                    QApplication::processEvents();
+                    check(kind->currentText() == partKindName(PartKind::Heatshrink), "new part: given a Type, it is that");
+                }
+                for (QPushButton* b : dlg.findChildren<QPushButton*>())
+                    if (b->text().contains(QStringLiteral("Delete"))) { b->click(); break; }
+                QApplication::processEvents();
+            } else {
+                check(false, "new part: there is a New part button");
             }
             // THE CONNECTOR CONTACTS always have their group, even with none in it yet; and the fold arrows are
             // drawn, so a picked group still shows its arrow.

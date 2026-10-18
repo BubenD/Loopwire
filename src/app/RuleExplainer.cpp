@@ -496,6 +496,13 @@ const QHash<QString, Scene>& scenes() {
             text(p, {155, 137}, fixed ? QStringLiteral("One cable per port side") : QStringLiteral("Two cables on one port side"), fixed ? kGood : kBad);
         });
         s.insert(QStringLiteral("PART-NUMBER"), s.value(QStringLiteral("nopart")));
+        // A SLEEVE DRAWN ON THE SHEET checked against its parts: the pictures of the rules they are the drawn kin of.
+        s.insert(QStringLiteral("sleeve-nopart"), s.value(QStringLiteral("nopart")));
+        s.insert(QStringLiteral("sleeve-partkind"), s.value(QStringLiteral("notinlib")));
+        s.insert(QStringLiteral("sleeve-endshrink"), s.value(QStringLiteral("fanshrinkpn")));
+        s.insert(QStringLiteral("sleeve-unchecked"), s.value(QStringLiteral("compat-data")));
+        s.insert(QStringLiteral("sleeve-size"), s.value(QStringLiteral("compat-entrysize")));
+        s.insert(QStringLiteral("sleeve-notonbom"), s.value(QStringLiteral("notonbom")));
         s.insert(QStringLiteral("DRAWING-LINK"), [](QPainter& p, bool fixed, double pulse) {
             part(p, {20, 25, 100, 55}, QStringLiteral("W1"));
             text(p, {70, 98}, QStringLiteral("rev A called for"), kInk);

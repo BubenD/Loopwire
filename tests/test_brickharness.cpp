@@ -85,6 +85,7 @@
 bool writeTestStepAssembly(const QString& path);
 #endif
 #include "harness/Bom.h"
+#include "harness/BrickDrc.h"
 #include "io/Dwx.h"
 #include <QDir>
 #include <QSettings>
@@ -12030,6 +12031,100 @@ void testBraidShieldAndColours() {
         bool red = false;
         for (const Harness3DItem& it : pane.scene().items) red = red || (it.brick == brick && it.color == QColor(200, 0, 0));
         check(red, "3D: but its part's own colour, once it has one, is what it is drawn in");
+    }
+    // ---- A DRAWN SLEEVE CHECKED AGAINST ITS PARTS: by a balloon to its bill line, or its own part ----
+    {
+        // Each part's id taken as it is added: adding the next may move the ones before it.
+        PartsLibrary lib;
+        QString braidId, shrinkId, plugId;
+        {
+            LibraryPart& p = lib.add(PartKind::ShieldBraid);
+            p.mfrPn = QStringLiteral("BRAID-8");
+            p.params.insert(QStringLiteral("diameterMin"), QStringLiteral("5"));
+            p.params.insert(QStringLiteral("diameterMax"), QStringLiteral("12"));
+            braidId = p.id;
+        }
+        {
+            LibraryPart& p = lib.add(PartKind::Heatshrink);
+            p.mfrPn = QStringLiteral("SHRINK-12");
+            p.params.insert(QStringLiteral("entryMin"), QStringLiteral("4"));
+            p.params.insert(QStringLiteral("entryMax"), QStringLiteral("12"));
+            shrinkId = p.id;
+        }
+        {
+            LibraryPart& p = lib.add(PartKind::Connector);
+            p.mfrPn = QStringLiteral("PLUG-1");
+            plugId = p.id;
+        }
+        ed.setShrinkRouteMode(ShrinkRouteMode::ShieldEnds);
+        Entity run = ed.shrinkDraftEntity(route);
+        run.id = QStringLiteral("checked-run");
+        auto balloonAt = [](const QString& id, int item, const Vec2& tip) {
+            Entity b;
+            b.type = EntityType::Circle;
+            b.id = id;
+            b.center = {tip.x, tip.y + 30.0};
+            b.radius = 4.0;
+            b.meta.insert(QStringLiteral("balloon"), true);
+            b.meta.insert(QStringLiteral("text"), QString::number(item));
+            QJsonArray p;
+            p.append(tip.x);
+            p.append(tip.y);
+            QJsonArray leaders;
+            leaders.append(p);
+            b.meta.insert(QStringLiteral("leaders"), leaders);
+            return b;
+        };
+        auto bill = [&](const std::vector<QString>& parts, bool typedLine) {
+            BomTable table;
+            table.config.includeDrawing = false;
+            for (const QString& id : parts) {
+                BomRow r;
+                r.partId = id;
+                r.description = id;
+                table.rows.push_back(r);
+            }
+            if (typedLine) {
+                BomRow r;
+                r.description = QStringLiteral("braid, as the customer calls it");
+                table.rows.push_back(r);
+            }
+            return table.toJson();
+        };
+        auto rules = [&](const Document& d) {
+            QStringList out;
+            for (const BrickIssue& i : drawingSleeveParts(d, lib)) out << i.rule;
+            std::printf("  sleeve check: %s\n", qPrintable(out.join(QStringLiteral(", "))));
+            return out;
+        };
+        Document d;
+        d.entities() = {run};
+        check(rules(d) == QStringList{QStringLiteral("sleeve-nopart")}, "sleeve check: a drawn shield with no part is warned of");
+        d.bom() = bill({braidId}, false);
+        d.entities() = {run, balloonAt(QStringLiteral("b1"), 1, {50, 3.5})};
+        check(rules(d) == QStringList{QStringLiteral("sleeve-endshrink")},
+              "sleeve check: linked by a balloon to its braid - and its end heatshrink still wants a part");
+        d.bom() = bill({braidId, shrinkId}, false);
+        d.entities() = {run, balloonAt(QStringLiteral("b1"), 1, {50, 3.5}), balloonAt(QStringLiteral("b2"), 2, {30, -3.5})};
+        check(rules(d).isEmpty(), "sleeve check: the braid and its end heatshrink both on the bill and pointed at - nothing to say");
+        d.bom() = bill({plugId}, false);
+        d.entities() = {run, balloonAt(QStringLiteral("b1"), 1, {50, 3.5})};
+        check(rules(d).contains(QStringLiteral("sleeve-partkind")), "sleeve check: a connector on a braid is the wrong kind of part");
+        d.bom() = bill({}, true);
+        check(rules(d).contains(QStringLiteral("sleeve-unchecked")), "sleeve check: a typed bill line names nothing it can check");
+        Entity own = run;
+        own.meta.insert(QStringLiteral("libPart"), braidId);
+        own.meta.insert(QStringLiteral("libPartEnds"), shrinkId);
+        d.bom() = bill({}, false);
+        d.entities() = {own};
+        check(rules(d) == QStringList({QStringLiteral("sleeve-notonbom"), QStringLiteral("sleeve-notonbom")}),
+              "sleeve check: its own parts picked - and not on the bill, said of each");
+        Entity wide = own;
+        wide.meta.insert(QStringLiteral("gap"), 20.0);
+        d.bom() = bill({braidId, shrinkId}, false);
+        d.entities() = {wide};
+        check(rules(d).contains(QStringLiteral("sleeve-size")), "sleeve check: drawn wider than its braid's size is warned of");
+        check(drawnSleeveFit(run, *lib.byId(braidId)) == 0.0 && drawnSleeveFit(run, *lib.byId(plugId)) < 0.0, "sleeve fit: 8 mm fits a 5-12 mm braid; a plug's size is not known");
     }
     // ---- A DRAWN BRAID TAKEN HOLD OF WITH MOVE AND DRAGGED: the routed cable goes where the pointer goes ----
     {

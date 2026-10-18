@@ -20,6 +20,7 @@
 #include "app/HarnessBuilderDialog.h"
 #include "app/BomDialog.h"
 #include "harness/Bom.h"
+#include "harness/BrickDrc.h"
 #include "harness/PartsLibrary.h"
 #include "app/PartsLibraryDialog.h"
 #include "app/PartViewDialog.h"
@@ -10174,13 +10175,29 @@ void MainWindow::refreshProperties() {
     };
 
     addHeader(QStringLiteral("General"));
+    // WHAT A DRAWN SLEEVE IS, beside its type: a double polyline whose flags make it heatshrink, a cable, a braided
+    // sleeve or shield over the run, a transition - and whether there is heatshrink on its ends.
+    auto typeOf = [](const Entity& x) {
+        QString name = x.type == EntityType::Text && x.meta.value(QStringLiteral("drawingDetailField")).toBool()
+                           ? QStringLiteral("Drawing Detail text (%1)").arg(drawingFieldTextType(x.meta.value(QStringLiteral("field")).toString()))
+                           : entityTypeDisplayName(x.type);
+        if (x.type == EntityType::Polyline && x.meta.value(QStringLiteral("shrunkEnds")).toBool()) {
+            const bool square = x.meta.value(QStringLiteral("shrinkTaperStart")).toDouble(-1.0) == 0.0 &&
+                                x.meta.value(QStringLiteral("shrinkTaperEnd")).toDouble(-1.0) == 0.0;
+            const bool ends = x.meta.value(QStringLiteral("shrinkEndsOnly")).toBool();
+            const QString what = x.meta.value(QStringLiteral("shrinkTransition")).toBool() ? QStringLiteral("transition heatshrink")
+                                 : sleeveIsShield(x)                                       ? QStringLiteral("braided shield over the run")
+                                 : sleeveIsBraid(x)                                        ? QStringLiteral("braided sleeve over the run")
+                                 : square || ends                                          ? QStringLiteral("cable over the run")
+                                                                                           : QStringLiteral("heatshrink over the run");
+            name = QStringLiteral("Double polyline (%1%2)").arg(what, ends ? QStringLiteral(", heatshrink on ends") : QString());
+        }
+        return name;
+    };
     addRow(QStringLiteral("Type"),
            sel.empty() ? QStringLiteral("No selection")
-                       : (multi ? QStringLiteral("%1 x %2")
-                                      .arg(sel.size())
-                                      .arg((e->type==EntityType::Text&&e->meta.value(QStringLiteral("drawingDetailField")).toBool()?QStringLiteral("Drawing Detail text (%1)").arg(drawingFieldTextType(e->meta.value(QStringLiteral("field")).toString())):entityTypeDisplayName(e->type)))
-                                : (e ? (e->type==EntityType::Text&&e->meta.value(QStringLiteral("drawingDetailField")).toBool()?QStringLiteral("Drawing Detail text (%1)").arg(drawingFieldTextType(e->meta.value(QStringLiteral("field")).toString())):entityTypeDisplayName(e->type))
-                                     : QStringLiteral("%1 objects (mixed)").arg(sel.size()))));
+                       : (multi ? QStringLiteral("%1 x %2").arg(sel.size()).arg(typeOf(*e))
+                                : (e ? typeOf(*e) : QStringLiteral("%1 objects (mixed)").arg(sel.size()))));
     if (gen) {
         QStringList layerNames;
         for (const auto& l : doc_->layers()) layerNames << l.name;
@@ -11409,6 +11426,52 @@ void MainWindow::refreshProperties() {
                 addCombo(QStringLiteral("Heatshrink on ends"), {QStringLiteral("No"), QStringLiteral("Yes")},
                          endsOnly ? QStringLiteral("Yes") : QStringLiteral("No"), false,
                          [this](const QString& v) { editor_->setSelectionEndSleeves(v == QLatin1String("Yes")); });
+            }
+            // ITS PART, PICKED FROM THE ONES THAT SUIT IT: the kinds it can be, those its width fits first - and, with
+            // heatshrink on its ends, the heatshrink's. What its balloons already link it to is said above them.
+            if (!several && e && isDrawnSleeve(*e)) {
+                if (!bomLibLoaded_) {
+                    bomCatalog_.openRemembered();
+                    bomLib_ = bomCatalog_.merged();
+                    bomLibLoaded_ = true;
+                }
+                const Entity sleeve = *e;
+                {
+                    const std::vector<PartLink> linked = partLinksOf(*doc_, bomLib_).value(sleeve.id);
+                    QStringList said;
+                    for (const PartLink& l : linked)
+                        if (l.byBalloon)
+                            said << QStringLiteral("item %1: %2").arg(l.item).arg(l.part && !l.part->mfrPn.isEmpty() ? l.part->mfrPn : l.description);
+                    addRow(QStringLiteral("Balloon links"), said.isEmpty() ? QStringLiteral("none") : said.join(QStringLiteral("; ")));
+                }
+                auto picker = [&](const QString& label, const QString& key, const std::vector<PartKind>& kinds) {
+                    struct Option { QString text, id; double fit; };
+                    std::vector<Option> options;
+                    for (const LibraryPart& p : bomLib_.parts) {
+                        if (std::find(kinds.begin(), kinds.end(), p.kind) == kinds.end()) continue;
+                        const double fit = drawnSleeveFit(sleeve, p);
+                        const QString pn = p.mfrPn.isEmpty() ? p.description : p.mfrPn + QStringLiteral(" - ") + p.description;
+                        const QString how = fit < 0.0 ? QStringLiteral("size not known")
+                                            : fit < 0.05 ? QStringLiteral("fits")
+                                                         : QStringLiteral("%1 mm out").arg(fit, 0, 'f', 1);
+                        options.push_back({QStringLiteral("%1   (%2)").arg(pn, how), p.id, fit < 0.0 ? 1e9 : fit});
+                    }
+                    std::stable_sort(options.begin(), options.end(), [](const Option& a, const Option& b) { return a.fit < b.fit; });
+                    QStringList items{QStringLiteral("-")};
+                    QHash<QString, QString> idOf;
+                    QString current = QStringLiteral("-");
+                    const QString own = sleeve.meta.value(key).toString();
+                    for (const Option& o : options) {
+                        items << o.text;
+                        idOf.insert(o.text, o.id);
+                        if (o.id == own) current = o.text;
+                    }
+                    addCombo(label, items, current, false, [this, key, idOf](const QString& v) {
+                        editor_->setSelectionMeta(key, idOf.value(v));
+                    });
+                };
+                picker(QStringLiteral("Part"), QStringLiteral("libPart"), drawnSleeveBodyKinds(sleeve));
+                if (endsOnly) picker(QStringLiteral("End heatshrink part"), QStringLiteral("libPartEnds"), {PartKind::Heatshrink});
             }
             if (endsOnly) {
                 addNum(QStringLiteral("Cable width"),
