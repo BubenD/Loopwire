@@ -12302,6 +12302,20 @@ void testBraidOverRun() {
         check(!shot.isNull(), "braid 3D: the routed braid drawn");
         if (std::getenv("LOOPWIRE_SHOTS")) shot.save(QStringLiteral("braid_route.png"));
     }
+    // PICTURES TO LOOK AT, asked for: the ribbon's tabs, their icons one blue.
+    if (std::getenv("LOOPWIRE_SHOTS")) {
+        MainWindow win;
+        win.resize(1700, 900);
+        win.show();
+        QApplication::processEvents();
+        for (QTabWidget* t : win.findChildren<QTabWidget*>())
+            for (int i = 0; i < t->count(); ++i)
+                if (t->tabText(i) == QLatin1String("Home") || t->tabText(i).contains(QLatin1String("Mechanical"))) {
+                    t->setCurrentIndex(i);
+                    QApplication::processEvents();
+                    t->grab().save(QStringLiteral("ribbon_%1.png").arg(i));
+                }
+    }
     // PICTURES TO LOOK AT, asked for: the braid drawn on the sheet, and in the harness's 3D view.
     if (std::getenv("LOOPWIRE_SHOTS")) {
         Entity a = braid, b = braidEnds;

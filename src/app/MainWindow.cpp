@@ -13841,7 +13841,7 @@ QToolButton* MainWindow::makePartsLibraryButton(QWidget* parent) {
         pm.fill(Qt::transparent);
         QPainter ip(&pm);
         ip.setRenderHint(QPainter::Antialiasing, true);
-        ip.setPen(QPen(QColor("#8fb7ff"), 1.7));
+        ip.setPen(QPen(QColor("#5a9bf0"), 1.7));
         ip.drawRect(4, 9, 24, 17);
         ip.drawLine(4, 15, 28, 15);
         ip.drawLine(12, 15, 12, 26);
@@ -13873,7 +13873,7 @@ QToolButton* MainWindow::makeVoltageDropButton(QWidget* parent) {
         pm.fill(Qt::transparent);
         QPainter ip(&pm);
         ip.setRenderHint(QPainter::Antialiasing, true);
-        ip.setPen(QPen(QColor("#8fb7ff"), 1.6));
+        ip.setPen(QPen(QColor("#5a9bf0"), 1.6));
         ip.drawLine(4, 8, 24, 8);                     // the supply
         ip.setPen(QPen(QColor("#e6b45a"), 1.8));
         ip.drawLine(4, 10, 24, 20);                   // the sag along the harness
@@ -13906,7 +13906,7 @@ QToolButton* MainWindow::makeCalculatorButton(QWidget* parent) {
         pm.fill(Qt::transparent);
         QPainter ip(&pm);
         ip.setRenderHint(QPainter::Antialiasing, true);
-        ip.setPen(QPen(QColor("#8fb7ff"), 1.5));
+        ip.setPen(QPen(QColor("#5a9bf0"), 1.5));
         ip.setBrush(Qt::NoBrush);
         ip.drawRoundedRect(6, 3, 16, 22, 2, 2);
         ip.drawRect(8, 6, 12, 4);
@@ -14653,7 +14653,7 @@ QToolButton* MainWindow::makeHarnessStepsButton(QWidget* parent) {
         pm.fill(Qt::transparent);
         QPainter ip(&pm);
         ip.setRenderHint(QPainter::Antialiasing, true);
-        ip.setPen(QPen(QColor("#8fb7ff"), 1.5));
+        ip.setPen(QPen(QColor("#5a9bf0"), 1.5));
         ip.drawLine(3, 12, 15, 12);           // the trunk, as two edges
         ip.drawLine(3, 17, 15, 17);
         ip.setPen(QPen(QColor("#7ee0a0"), 1.4));
@@ -14691,7 +14691,7 @@ QToolButton* MainWindow::makeMechanicalValidationButton(QWidget* parent) {
         pm.fill(Qt::transparent);
         QPainter ip(&pm);
         ip.setRenderHint(QPainter::Antialiasing, true);
-        ip.setPen(QPen(QColor("#8fb7ff"), 1.5));
+        ip.setPen(QPen(QColor("#5a9bf0"), 1.5));
         ip.drawLine(2, 11, 14, 11);
         ip.drawLine(2, 16, 14, 16);
         ip.setPen(QPen(QColor("#e6b45a"), 1.6));
@@ -14723,7 +14723,7 @@ QToolButton* MainWindow::makeBundleDiameterButton(QWidget* parent) {
         pm.fill(Qt::transparent);
         QPainter ip(&pm);
         ip.setRenderHint(QPainter::Antialiasing, true);
-        ip.setPen(QPen(QColor("#8fb7ff"), 1.5));
+        ip.setPen(QPen(QColor("#5a9bf0"), 1.5));
         ip.drawEllipse(QPointF(14, 14), 11.5, 11.5);
         ip.setPen(QPen(QColor("#7ee0a0"), 1.2));
         const double r = 5.2;
@@ -14755,7 +14755,7 @@ QToolButton* MainWindow::makeThermalButton(QWidget* parent) {
         pm.fill(Qt::transparent);
         QPainter ip(&pm);
         ip.setRenderHint(QPainter::Antialiasing, true);
-        ip.setPen(QPen(QColor("#8fb7ff"), 1.5));
+        ip.setPen(QPen(QColor("#5a9bf0"), 1.5));
         ip.drawEllipse(QPointF(10, 16), 7.0, 7.0);        // the bundle end-on
         ip.setPen(QPen(QColor("#e06c6c"), 1.4));
         for (int i = 0; i < 3; ++i) {                     // heat coming off it
@@ -14795,7 +14795,7 @@ QToolButton* MainWindow::makeDrcRulesButton(QWidget* parent) {
             ip.setPen(QPen(QColor("#7ee0a0"), 1.8));
             ip.drawLine(3, y, 5, y + 2);
             ip.drawLine(5, y + 2, 9, y - 2);
-            ip.setPen(QPen(QColor("#8fb7ff"), 1.6));
+            ip.setPen(QPen(QColor("#5a9bf0"), 1.6));
             ip.drawLine(12, y, 25, y);
         }
         ip.end();
@@ -14908,7 +14908,7 @@ QToolButton* MainWindow::makeBlockButton(QWidget* parent, BlockAction action) {
         ip.setRenderHint(QPainter::Antialiasing, true);
         // A block: a piece of drawing with a base point on it. Create shows it being made, Insert an
         // arrow bringing it in, Manage a shelf of them, Save a tick.
-        ip.setPen(QPen(QColor("#8fb7ff"), 1.5));
+        ip.setPen(QPen(QColor("#5a9bf0"), 1.5));
         if (action == BlockAction::Manage) {
             for (int i = 0; i < 3; ++i) ip.drawRect(3, 3 + i * 8, 22, 6);
         } else {
@@ -14926,7 +14926,7 @@ QToolButton* MainWindow::makeBlockButton(QWidget* parent, BlockAction action) {
                 ip.setPen(QPen(QColor("#e8e8e8"), 1.2));
                 ip.drawLine(15, 27, 17, 25);
             } else if (action == BlockAction::Insert) {
-                ip.setPen(QPen(QColor("#8fb7ff"), 1.6));
+                ip.setPen(QPen(QColor("#5a9bf0"), 1.6));
                 ip.drawLine(21, 6, 26, 11);
                 ip.drawLine(26, 11, 21, 11);
                 ip.drawLine(26, 11, 26, 6);
@@ -15190,11 +15190,11 @@ QToolButton* MainWindow::makeTemplateSessionButton(QWidget* parent, int which) {
         pm.fill(Qt::transparent);
         QPainter ip(&pm);
         ip.setRenderHint(QPainter::Antialiasing, true);
-        ip.setPen(QPen(QColor("#8fb7ff"), 1.5));
+        ip.setPen(QPen(QColor("#5a9bf0"), 1.5));
         ip.drawRect(4, 3, 16, 20);
         ip.setPen(QPen(QColor("#7b828c"), 1.0));
         ip.drawRect(7, 6, 10, 14);
-        ip.setBrush(QColor("#8fb7ff"));
+        ip.setBrush(QColor("#5a9bf0"));
         ip.setPen(Qt::NoPen);
         ip.drawRect(12, 17, 5, 3);          // the title block
         if (which == 2) {
@@ -16149,7 +16149,7 @@ QToolButton* MainWindow::makeMechModelsButton(QWidget* parent) {
         pm.fill(Qt::transparent);
         QPainter ip(&pm);
         ip.setRenderHint(QPainter::Antialiasing, true);
-        ip.setPen(QPen(QColor("#8fb7ff"), 1.6));
+        ip.setPen(QPen(QColor("#5a9bf0"), 1.6));
         ip.drawLine(4, 10, 24, 10);
         ip.drawLine(4, 16, 24, 16);
         ip.setPen(QPen(QColor("#e6b45a"), 1.6));

@@ -423,7 +423,7 @@ void MainWindow::buildSchematicBuildTab() {
         pm.fill(Qt::transparent);
         QPainter ip(&pm);
         ip.setRenderHint(QPainter::Antialiasing, true);
-        QPen pen(QColor("#8fb7ff"));
+        QPen pen(QColor("#5a9bf0"));
         pen.setWidthF(2.2);
         pen.setCapStyle(Qt::RoundCap);
         pen.setJoinStyle(Qt::RoundJoin);
@@ -474,7 +474,7 @@ void MainWindow::buildSchematicBuildTab() {
             pm.fill(Qt::transparent);
             QPainter ip(&pm);
             ip.setRenderHint(QPainter::Antialiasing, true);
-            QPen pen(QColor("#8fb7ff"));
+            QPen pen(QColor("#5a9bf0"));
             pen.setWidthF(1.7);
             ip.setPen(pen);
             ip.drawRect(3, 8, 6, 16);
@@ -508,7 +508,7 @@ void MainWindow::buildSchematicBuildTab() {
             pm.fill(Qt::transparent);
             QPainter ip(&pm);
             ip.setRenderHint(QPainter::Antialiasing, true);
-            ip.setPen(QPen(QColor("#8fb7ff"), 1.5));
+            ip.setPen(QPen(QColor("#5a9bf0"), 1.5));
             ip.drawRect(QRectF(5.5, 3.5, 21, 25));
             ip.setPen(QPen(QColor("#5f7fa8"), 1.0));
             for (int y = 10; y <= 24; y += 5) ip.drawLine(QPointF(6, y), QPointF(26, y));

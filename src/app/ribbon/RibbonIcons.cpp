@@ -17,7 +17,8 @@ namespace Loopwire {
 QIcon makeCadActionIcon(const QString& key, const QColor& ink) {
     QPixmap pm(96,96);pm.setDevicePixelRatio(4);pm.fill(Qt::transparent);
     QPainter p(&pm);p.setRenderHint(QPainter::Antialiasing,true);
-    const QColor accent=ink.lightness()>145?QColor("#72b8f4"):QColor("#176ac1");
+    // THE ONE BLUE of every drawn icon - the Draw tab's circle and arc - on a dark ribbon or a light one.
+    const QColor accent("#5a9bf0");
     QColor wash=accent;wash.setAlpha(42);
     auto stroke=[&](const QColor& c,double width=1.65,Qt::PenStyle style=Qt::SolidLine){p.setPen(QPen(c,width,style,Qt::RoundCap,Qt::RoundJoin));p.setBrush(Qt::NoBrush);};
     auto line=[&](double x,double y,double xx,double yy){p.drawLine(QPointF(x,y),QPointF(xx,yy));};

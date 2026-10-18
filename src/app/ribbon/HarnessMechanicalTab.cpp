@@ -1808,7 +1808,7 @@ void MainWindow::buildHarnessMechanicalTab() {
             pm.fill(Qt::transparent);
             QPainter ip(&pm);
             ip.setRenderHint(QPainter::Antialiasing, true);
-            ip.setPen(QPen(QColor("#8fb7ff"), 1.6));
+            ip.setPen(QPen(QColor("#5a9bf0"), 1.6));
             ip.drawRect(4, 4, 20, 20);
             ip.drawLine(4, 10, 24, 10);
             ip.setPen(QPen(QColor("#7ee0a0"), 1.4));

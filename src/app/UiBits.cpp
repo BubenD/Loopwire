@@ -544,7 +544,7 @@ QWidget* makeColorListEditor(QWidget* parent, const QStringList& codes, const QS
     // The swatch button: a menu of colours as circles, and one to define a new one. Picking appends,
     // because a list is built up one conductor at a time.
     auto* pick = new QToolButton(host);
-    pick->setIcon(colorCircleIcon(QStringLiteral("#8fb7ff")));
+    pick->setIcon(colorCircleIcon(QStringLiteral("#5a9bf0")));
     pick->setToolTip(QStringLiteral("Add a colour to the list, picked by eye"));
     pick->setPopupMode(QToolButton::InstantPopup);
     pick->setFixedWidth(30);

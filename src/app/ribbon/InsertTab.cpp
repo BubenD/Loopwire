@@ -62,7 +62,7 @@ void MainWindow::buildInsertTab() {
             QPainter ip(&pm);
             ip.setRenderHint(QPainter::Antialiasing, true);
             const QRect frame = clipboard ? QRect(3, 6, 18, 18) : QRect(3, 5, 22, 18);
-            ip.setPen(QPen(QColor("#8fb7ff"), 1.5));
+            ip.setPen(QPen(QColor("#5a9bf0"), 1.5));
             ip.setBrush(QColor(40, 52, 68));
             ip.drawRect(frame);
             ip.setPen(Qt::NoPen);
