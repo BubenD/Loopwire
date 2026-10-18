@@ -59,6 +59,8 @@ public:
     // a thing to work out afresh every time - having resized it once so nothing is clipped, somebody
     // should not have to do it again on the next opening.
     void closeEvent(QCloseEvent* e) override;
+    // SHIFT (or Ctrl) + CLICK in the parts list adds that part to the ones selected, or takes it off them.
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
     // Holds every captioned button at the width its words need and sets the window's minimum to what the
     // layouts then ask for (never more than the screen). Returns that need, unclamped.
@@ -188,6 +190,14 @@ private:
     // drawing is captured or cleared, so the row keeps up with the part.
     void setPartSigns(QTreeWidgetItem* item, const LibraryPart& part);
     void disconnectSelectedLibrary();
+    // A LIBRARY SWITCHED OFF in the list: its parts left out of the parts list. Remembered between sessions.
+    bool libraryHidden(const QString& file) const;
+    void setLibraryHidden(const QString& file, bool hidden);
+public:
+    // A NEW, EMPTY LIBRARY written to `file`, connected and made the one worked in. False when it is there already or
+    // cannot be written.
+    bool createLibrary(const QString& file);
+private:
     void showPart(const QString& id);
     void rebuildParamForm();
     LibraryPart* current();
@@ -309,7 +319,6 @@ private:
     QWidget* fanoutSideRow_ = nullptr;
     QComboBox* contactBox_ = nullptr;
     QListWidget* contactList_ = nullptr;   // every contact tied to the connector - there may be several
-    QComboBox* showLibBox_ = nullptr;      // which connected library the list shows: all of them, or one
     QHash<QString, QWidget*> paramWidgets_; // field key (or key+"Min"/"Max") -> editor
 };
 

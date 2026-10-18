@@ -1025,6 +1025,9 @@ std::vector<PartField> partFields(PartKind kind) {
                     range("entry", "Fits wire diameter", "mm"),
                     num("width", "Print width", "mm"),
                     choice("material", "Material", kPolymers),
+                    // THE LABEL'S COLOUR, and its print's: what the 3D view draws a label of this part in.
+                    choice("colour", "Colour", kOuterColours),
+                    choice("textColour", "Print colour", kOuterColours),
                     text("spec", "Specification")};
         case PartKind::Tape:
             return {choice("type", "Type",

@@ -4996,9 +4996,9 @@ void testRoundThirtyTwo() {
             const QString bare = dlg.addFromPalette(brickTypeKey(BrickType::End) + QLatin1Char('|') + partKindKey(PartKind::Ferrule));
             bool named = false, kind = false;
             for (int i = 0; i < about->count(); ++i) {
-                if (about->itemData(i).toString() == x && about->itemText(i) == QStringLiteral("about: P7")) named = true;
+                if (about->itemData(i).toString() == x && about->itemText(i) == QStringLiteral("Related symmetry: P7")) named = true;
                 if (about->itemData(i).toString() == bare &&
-                    about->itemText(i) == QStringLiteral("about: ") + partKindName(PartKind::Ferrule))
+                    about->itemText(i) == QStringLiteral("Related symmetry: ") + partKindName(PartKind::Ferrule))
                     kind = true;
             }
             check(named && kind, "symmetric list: a part by its designator (and P/N), one with neither by its kind");
@@ -11882,7 +11882,7 @@ void testCoveringsDrag3D() {
     }
 }
 
-// A BRAID AT A SHARP KNEE, A BRAIDED SHIELD, A BRAID'S DEFAULT FILLET, PART COLOURS FROM THE BILL, HEATSHRINK ON A
+// A BRAID AT A SHARP KNEE, A BRAIDED SHIELD, PART COLOURS FROM THE BILL, HEATSHRINK ON A
 // ROUTED BRAID'S ENDS, AND THE WHEEL THAT DOES NOT GROW.
 void testBraidShieldAndColours() {
     Editor ed;
@@ -11932,14 +11932,15 @@ void testBraidShieldAndColours() {
     check(sleeveIsShield(doc.entities()[0]), "shield panel: the braid made a shield");
     edit.undo();
     check(!sleeveIsShield(doc.entities()[0]), "shield panel: one undo - a sleeve again");
-    // ---- THE FILLET OF EVERY BRAID WITH NONE OF ITS OWN ----
-    edit.applyBraidDefaultFillet(10.0);
-    auto knee = [&](int i) { return doc.entities()[static_cast<size_t>(i)].meta.value(QStringLiteral("cornerRadii")).toArray().at(1).toDouble(); };
-    check(knee(0) == 10.0 && knee(1) == 5.0, "braid fillet: given to the braid with none; the one rounded by hand keeps its own");
-    edit.applyBraidDefaultFillet(12.0);
-    check(knee(0) == 12.0 && knee(1) == 5.0, "braid fillet: changed again - the braid that took it follows");
-    edit.undo();
-    check(knee(0) == 10.0, "braid fillet: one undo per change");
+    // ---- A KNEE WITH A RADIUS OF 0 WRITTEN STAYS SHARP, AND WOVEN TO ITS CORNER ----
+    {
+        Entity zero = braid;
+        zero.meta.insert(QStringLiteral("cornerRadii"), QJsonArray{0.0, 0.0, 0.0});
+        double nearest = 1e9;
+        for (const auto& [a, b] : sleeveBraidStrokes(zero))
+            nearest = std::min({nearest, distance(a, Vec2{104, -4}), distance(b, Vec2{104, -4})});
+        check(nearest < 2.0, "braid knee: a radius of 0 written on the knee - still sharp, woven to its corner");
+    }
     // ---- PART COLOURS FROM THE BILL: a balloon on the braid, numbering a line whose part is red ----
     {
         PartsLibrary lib;
@@ -11994,6 +11995,41 @@ void testBraidShieldAndColours() {
         const Route3D back = Route3D::fromJson(r.toJson());
         check(!back.segments.empty() && std::abs(back.segments.front().endShrinkStart - 20.0) < 1e-6 && back.segments.front().coverColor.isValid(),
               "routed braid: saved with the route and read back");
+    }
+    // ---- HEATSHRINK ON THE ENDS: one length for both, or each its own ----
+    {
+        Editor cov;
+        cov.setShrinkWidth(8.0);
+        cov.setShrinkRouteMode(ShrinkRouteMode::ShieldEnds);
+        cov.setShrinkCover(15.0);
+        cov.setShrinkCoverEnd(30.0);
+        const Entity both = cov.shrinkDraftEntity(route);
+        cov.setShrinkCoverBoth(false);
+        const Entity each = cov.shrinkDraftEntity(route);
+        check(both.meta.value(QStringLiteral("shrinkCoverStart")).toDouble() == 15.0 && both.meta.value(QStringLiteral("shrinkCoverEnd")).toDouble() == 15.0 &&
+                  each.meta.value(QStringLiteral("shrinkCoverStart")).toDouble() == 15.0 && each.meta.value(QStringLiteral("shrinkCoverEnd")).toDouble() == 30.0,
+              "end sleeves: Both sides - one length on both ends; off - the start and the finish each their own");
+    }
+    // ---- ONLY A SLEEVE DRAWN, no wire under it: something to see in 3D; and its colour picked there ----
+    {
+        Entity alone = braid;
+        alone.id = QStringLiteral("alone");
+        std::vector<Entity> sheet{alone};
+        View3DPane pane;
+        pane.setSources([&] { return sheet; }, [] { return std::vector<Entity>{}; });
+        pane.rebuild(true);
+        check(!pane.scene().items.empty(), "3D: a braid drawn by itself is shown");
+        QString brick;
+        for (const Harness3DItem& it : pane.scene().items) if (it.what == QLatin1String("braid")) brick = it.brick;
+        pane.setBrickColour(brick, QColor(10, 200, 30));
+        bool green = false;
+        for (const Harness3DItem& it : pane.scene().items) green = green || (it.brick == brick && it.color == QColor(10, 200, 30));
+        check(!brick.isEmpty() && green, "3D: a part with no colour from its part given one in the 3D view");
+        pane.setColourLookup([] { return QHash<QString, QColor>{{QStringLiteral("alone"), QColor(200, 0, 0)}}; });
+        pane.rebuild(false);
+        bool red = false;
+        for (const Harness3DItem& it : pane.scene().items) red = red || (it.brick == brick && it.color == QColor(200, 0, 0));
+        check(red, "3D: but its part's own colour, once it has one, is what it is drawn in");
     }
     // ---- THE WIZARD'S WHEEL STAYS ITS SIZE under the pointer ----
     {

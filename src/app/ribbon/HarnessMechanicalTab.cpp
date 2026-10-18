@@ -1554,7 +1554,7 @@ void MainWindow::buildHarnessMechanicalTab() {
             std::function<double()> value;
             std::function<double()> shown;
             std::function<void(double)> write;
-            int kind; // 0 = width, 1 = fillet, 2/3 = faces, 4/5 = recovery, 6 = length, 7 = angle
+            int kind; // 0 = width, 1 = fillet, 2/3 = faces, 4/5 = recovery, 6 = length, 7 = angle, 8 = finish cover
             double autoValue;
         };
         std::vector<Field> fields;
@@ -1617,11 +1617,7 @@ void MainWindow::buildHarnessMechanicalTab() {
               [this](double v){ editor_->setShrinkWidth(v); });
         field(QStringLiteral("Fillet"), QStringLiteral("shrinkRouteFillet"), 0, 1, 1, 500.0,
               [this]{ return editor_->cornerRadius(); }, [this]{ return editor_->cornerRadius(); },
-              [this](double v){
-                  editor_->setCornerRadius(v);
-                  // A BRAID'S FILLET is every braid's in the drawing that has no radius of its own.
-                  if (shrinkModeIsBraid(editor_->shrinkRouteMode())) editor_->applyBraidDefaultFillet(v);
-              });
+              [this](double v){ editor_->setCornerRadius(v); });
         field(QStringLiteral("Angle"), QStringLiteral("shrinkRouteAngle"), 0, 2, 7, 360.0,
               [this]{ return editor_->draftRouteAngle(); }, [this]{ return editor_->draftRouteAngle(); },
               [this](double v){ editor_->setDraftRouteAngle(v); });
@@ -1647,6 +1643,11 @@ void MainWindow::buildHarnessMechanicalTab() {
                   }
                   return actual(QStringLiteral("shrinkCoverStart"), 20.0);
               }, [this](double v){ editor_->setShrinkCover(v); }, true);
+        // THE FINISH END'S HEATSHRINK, its own length while Both sides is off.
+        field(QStringLiteral("Finish cover"), QStringLiteral("shrinkRouteCoverEnd"), 1, 3, 8, 2000.0,
+              [this]{ return editor_->shrinkCoverEnd(); },
+              [actual]{ return actual(QStringLiteral("shrinkCoverEnd"), 20.0); },
+              [this](double v){ editor_->setShrinkCoverEnd(v); }, true);
         // EVERY FIELD OF A COLUMN STARTS WHERE THE ONE ABOVE IT DOES: its captions all as wide as the widest.
         for (auto& [col, labels] : captions) {
             int widest = 0;
@@ -1666,6 +1667,17 @@ void MainWindow::buildHarnessMechanicalTab() {
             canvas_->update();
         });
         grid->addWidget(endSleeves, 0, 3);
+        // BOTH SIDES: one length of heatshrink on both ends; off, the start and the finish each their own.
+        auto* bothSides = new QCheckBox(QStringLiteral("Both sides"), settings);
+        bothSides->setObjectName(QStringLiteral("shrinkRouteCoverBoth"));
+        bothSides->setStyleSheet(QStringLiteral("QCheckBox{color:#e6e9ef;background:transparent;}"));
+        bothSides->setToolTip(QStringLiteral("The heatshrink on both ends the same length; off, each end's length is set on its own"));
+        connect(bothSides, &QCheckBox::toggled, this, [this](bool on) {
+            editor_->setShrinkCoverBoth(on);
+            if (syncShrinkRibbon_) syncShrinkRibbon_();
+            canvas_->update();
+        });
+        grid->addWidget(bothSides, 2, 3);
         auto* finish = new QToolButton(settings);
         finish->setObjectName(QStringLiteral("shrinkRouteFinish"));
         finish->setText(QStringLiteral("Finish (Enter)"));
@@ -1678,7 +1690,7 @@ void MainWindow::buildHarnessMechanicalTab() {
         shrinkOptionsGroup_ = addGroupKeep(lay, QStringLiteral("Cable / heatshrink parameters"), settings);
         shrinkOptionsGroup_->setObjectName(QStringLiteral("shrinkRouteRibbonGroup"));
         mechGroups_ << shrinkOptionsGroup_;
-        syncShrinkRibbon_ = [this, fields, finish, endSleeves] {
+        syncShrinkRibbon_ = [this, fields, finish, endSleeves, bothSides] {
             const bool active = editor_->tool() == ToolId::HeatshrinkRoute;
             shrinkOptionsGroup_->setVisible(active);
             if (!active) return;
@@ -1688,14 +1700,25 @@ void MainWindow::buildHarnessMechanicalTab() {
                 const QSignalBlocker hold(endSleeves);
                 endSleeves->setChecked(shrinkModeHasEndSleeves(mode));
             }
+            const bool ends = shrinkModeHasEndSleeves(mode);
+            bothSides->setVisible(ends);
+            {
+                const QSignalBlocker hold(bothSides);
+                bothSides->setChecked(editor_->shrinkCoverBoth());
+            }
             const bool squareEnds = shrinkModeIsSquare(mode);
             for (const Field& f : fields) {
                 const bool transition = mode == ShrinkRouteMode::Transition;
                 const bool visible = f.kind <= 1 ? !transition
                                      : f.kind == 7 ? !transition
                                      : f.kind == 6 ? transition || shrinkModeHasEndSleeves(mode)
+                                     : f.kind == 8 ? ends && !editor_->shrinkCoverBoth()
                                      : !squareEnds && (!transition || f.kind == 3 || f.kind == 5);
                 f.cell->setVisible(visible);
+                // The start's own cover, said so, while the finish has one of its own beside it.
+                if (f.kind == 6)
+                    if (auto* caption = f.cell->findChild<QLabel*>())
+                        caption->setText(ends && !editor_->shrinkCoverBoth() ? QStringLiteral("Start cover") : QStringLiteral("Cover / length"));
                 if (!visible) continue;
                 QSignalBlocker blocker(f.spin);
                 const double stored = f.value();

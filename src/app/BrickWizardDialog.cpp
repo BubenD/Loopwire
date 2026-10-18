@@ -1445,7 +1445,7 @@ void BrickWizardDialog::buildUi() {
     symRef_->setObjectName(QStringLiteral("brickSymRef"));
     symRef_->setToolTip(QStringLiteral("The part Symmetric lays the drawing out about. Auto: the part alone at the main "
                                        "body's other end - of several there, the middle one"));
-    symRef_->addItem(QStringLiteral("about: Auto"), QString());
+    symRef_->addItem(QStringLiteral("Related symmetry: Auto"), QString());
     nav << symRef_;
     // THE BRICKS TURN WITH THE DRAWING, or not: R and Space turn the part on the drawing, and - ticked - its brick's
     // connections round it on the pane too.
@@ -1628,9 +1628,9 @@ void BrickWizardDialog::buildUi() {
         symRef_->setParent(navBox_);
         symRef_->setStyleSheet(QStringLiteral("QComboBox{background:rgba(62,82,106,170);color:#e8eef5;"
                                               "border:1px solid rgba(150,172,196,120);border-radius:9px;padding:1px 8px;}"));
-        symRef_->setMaximumWidth(120);
+        symRef_->setMaximumWidth(190);
         symRef_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-        symRef_->setMinimumContentsLength(6);
+        symRef_->setMinimumContentsLength(14);
         vl->addWidget(symRef_, 0, Qt::AlignHCenter);
         for (QWidget* w : nav)
             if (w != symRef_) w->hide();
@@ -5181,10 +5181,10 @@ void BrickWizardDialog::refreshSymRef() {
     const QString keep = symRef_->currentData().toString();
     const QSignalBlocker hush(symRef_);
     symRef_->clear();
-    symRef_->addItem(QStringLiteral("about: Auto"), QString());
+    symRef_->addItem(QStringLiteral("Related symmetry: Auto"), QString());
     for (const Brick& b : design_.bricks)
         if (b.type == BrickType::End) {
-            symRef_->addItem(QStringLiteral("about: ") + said(b), b.id);
+            symRef_->addItem(QStringLiteral("Related symmetry: ") + said(b), b.id);
             symRef_->setItemData(symRef_->count() - 1, said(b), Qt::ToolTipRole);
         }
     symRef_->setCurrentIndex(std::max(0, symRef_->findData(keep)));

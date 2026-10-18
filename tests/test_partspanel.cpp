@@ -1337,6 +1337,7 @@ int run_partspanel_tests() {
                       "fanout place: and it is in FRONT of the symbol, not over it");
             }
             ed->onKey(Qt::Key_Escape, Qt::NoModifier);
+            toggle->setChecked(false);   // left off, as it starts: it is remembered, and the next run reads it
         }
 
         // Placing FROM THE LIBRARY WINDOW hides it so the sheet can take the click. Esc lets the ghost go,
@@ -2964,15 +2965,37 @@ int run_partspanel_tests() {
                     check(sp && !partIsNominal(*sp), "size: as drawn again, it is its real size");
                 }
             }
-            // THE LIBRARY EACH PART COMES FROM, and a choice of which libraries to show.
+            // THE LIBRARY EACH PART COMES FROM, and an ON/OFF on each library to show its parts or hide them.
             {
                 bool libShown = false;
+                int parts = 0;
+                auto countParts = [&] {
+                    int n = 0;
+                    for (QTreeWidget* t : dlg.findChildren<QTreeWidget*>())
+                        if (t->objectName() != QLatin1String("libraryList"))
+                            for (QTreeWidgetItemIterator it(t); *it; ++it)
+                                if ((*it)->parent() && !(*it)->data(0, Qt::UserRole).toString().isEmpty()) ++n;
+                    return n;
+                };
                 for (QTreeWidget* t : dlg.findChildren<QTreeWidget*>())
                     for (QTreeWidgetItemIterator it(t); *it; ++it)
-                        if ((*it)->parent() && !(*it)->text(5).isEmpty()) libShown = true;
-                auto* show = dlg.findChild<QComboBox*>(QStringLiteral("showLibrary"));
-                check(libShown && show && show->count() >= 2 && show->itemText(0) == QStringLiteral("All libraries"),
-                      "libraries: every part says its library, and Show picks all of them or one");
+                        if ((*it)->parent() && !(*it)->text(6).isEmpty()) libShown = true;
+                parts = countParts();
+                const QList<QToolButton*> shows = dlg.findChildren<QToolButton*>(QStringLiteral("libraryShow"));
+                check(libShown && !shows.isEmpty() && shows.front()->isChecked() && shows.front()->text() == QStringLiteral("ON") &&
+                          !dlg.findChild<QComboBox*>(QStringLiteral("showLibrary")),
+                      "libraries: every part says its library, and each library has its ON/OFF in place of Show");
+                if (!shows.isEmpty()) {
+                    for (QToolButton* b : shows) b->click();
+                    QApplication::processEvents();
+                    const int hidden = countParts();
+                    // The button may have been rebuilt with the list: find it again to switch it back.
+                    for (QToolButton* b : dlg.findChildren<QToolButton*>(QStringLiteral("libraryShow")))
+                        if (!b->isChecked()) b->click();
+                    QApplication::processEvents();
+                    std::printf("  libraries: %d part(s) listed, %d with every library OFF\n", parts, hidden);
+                    check(parts > 0 && hidden == 0 && countParts() == parts, "libraries: switched OFF their parts leave the list; ON, they are back");
+                }
             }
             // THE CONNECTOR CONTACTS always have their group, even with none in it yet; and the fold arrows are
             // drawn, so a picked group still shows its arrow.

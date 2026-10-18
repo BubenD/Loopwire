@@ -161,6 +161,8 @@ QString bomNextRowId(const std::vector<BomRow>& rows);
 // THE OUTER COLOUR OF A PART: a cable's jacket colour, else its colour (heatshrink, wire, braid, sleeve) - a name ("Black",
 // "Green/Yellow" by its first colour) or "#rrggbb". Invalid when it has none, or it is clear.
 QColor partOuterColour(const LibraryPart& part);
+// A LABEL'S PRINT COLOUR (textColour), the same way. In partColoursFromBom under "<entity id>|text".
+QColor partTextColour(const LibraryPart& part);
 // THE COLOUR OF EACH OBJECT OF THE DRAWING AS ITS PART HAS IT, by entity id: an object a balloon points at takes the outer
 // colour of the part on the bill line the balloon numbers; one stamped with its own library part (libPart) takes that
 // part's. The bill is read as the drawing shows it, as bomItemLookup reads it. Only objects with a colour are in it.

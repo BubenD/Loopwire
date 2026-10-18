@@ -1728,6 +1728,7 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
             emit canvas_->message(QStringLiteral("The harness put in as a route - drag each of its connectors to where it goes"));
         }
         if (!node.isEmpty()) canvas_->takeHoldOfNode(node, at);
+        else canvas_->takeHoldOfItem(at);   // a run, not a part: its routed bundle, where it was pressed
     });
     connect(canvas_, &View3DCanvas::harnessPartClicked, this, [this](const QString& brick) {
         for (int i = 0; i < parts_->count(); ++i)
@@ -1860,6 +1861,22 @@ View3DPane::View3DPane(QWidget* parent) : QWidget(parent) {
             see->setToolTip(name);
             see->setObjectName(QStringLiteral("view3dPartOpacity"));
             fillOpacityMenu(see, part, brick);
+            // ITS COLOUR, where its part gives it none: picked here, kept with the 3D view.
+            if (!brick.isEmpty()) {
+                const bool fromPart = brickColourFromPart(brick);
+                QAction* colour = menu.addAction(fromPart ? QStringLiteral("Colour - its part's") : QStringLiteral("Colour…"));
+                colour->setObjectName(QStringLiteral("view3dPartColour"));
+                colour->setEnabled(!fromPart);
+                colour->setToolTip(fromPart ? QStringLiteral("Its part in the library gives its colour") : QStringLiteral("Pick the colour it is drawn in"));
+                connect(colour, &QAction::triggered, this, [this, brick] {
+                    const QColor c = QColorDialog::getColor(ownColours_.value(brick, QColor(70, 74, 82)), this, QStringLiteral("Its colour"));
+                    if (c.isValid()) setBrickColour(brick, c);
+                });
+                if (ownColours_.contains(brick)) {
+                    QAction* reset = menu.addAction(QStringLiteral("Colour as it was"));
+                    connect(reset, &QAction::triggered, this, [this, brick] { setBrickColour(brick, QColor()); });
+                }
+            }
             menu.addSeparator();
         }
         QAction* all = menu.addAction(QStringLiteral("Show all"));
@@ -3458,21 +3475,31 @@ void View3DPane::rebuild(bool fit) {
     // A saved source choice can outlive its wizard. Show and route the open drawing rather than leaving
     // a valid schematic invisible or reporting that no harness exists.
     if (!systemLinked_ && fromWizard && ents.empty() && drawing_) { ents = drawing_(); fromWizard = false; }
-    const bool wasEmpty = scene_.runs == 0 && scene_.parts == 0;
+    // EMPTY: nothing at all to draw - a sleeve, a cable or a braid drawn by itself, with no wire under it, is something.
+    const bool wasEmpty = scene_.items.empty();
     // THE SHEET'S PARTS' COLOURS, by the bill: what each run, sleeve and cable is drawn in.
     const QHash<QString, QColor> colours = coloursOf_ && !fromWizard ? coloursOf_() : QHash<QString, QColor>();
+    partColours_ = colours;
     scene_ = buildHarness3D(ents, modelOf_, partLook_, pinsOf_, colours);
+    // AND THE COLOURS PICKED HERE, for what its part gives none.
+    for (Harness3DItem& it : scene_.items)
+        if (!it.ownLook && ownColours_.contains(it.brick) && !brickColourFromPart(it.brick)) it.color = ownColours_.value(it.brick);
     // NOTHING ON THE SHEET TO SHOW - no run, no part: the wizard's harness, if one is open. A connector put on the
     // sheet by itself is something to show, and is shown.
     bool fell = false;
-    if (!systemLinked_ && !fromWizard && wizard_ && scene_.runs == 0 && scene_.parts == 0) {
+    if (!systemLinked_ && !fromWizard && wizard_ && scene_.items.empty()) {
         ents = wizard_();
         scene_ = buildHarness3D(ents, modelOf_, partLook_, pinsOf_);
         fell = true;
     }
     if (!systemLinked_ && !fromWizard && !fell && !route_.segments.empty()) {
         const QJsonObject before = route_.toJson();
-        addDrawingToRoute(route_, ents, false, true);
+        // A ROUTE LAID FROM THE SHEET TAKES WHAT IS DRAWN ON IT SINCE: the drawn harness is hidden while the route stands in
+        // for it, so a run drawn afterwards was nowhere in 3D until Harness route was pressed again.
+        const bool fromSheet = std::any_of(route_.segments.begin(), route_.segments.end(), [](const RouteSegment3D& s) {
+            return s.designCable.startsWith(QLatin1String("drawing:run:"));
+        });
+        addDrawingToRoute(route_, ents, false, !fromSheet);
         // A routed cable's covering in its part's colour, where the bill gives one.
         for (RouteSegment3D& s : route_.segments)
             if (s.designCable.startsWith(QLatin1String("drawing:run:"))) {
@@ -3486,11 +3513,11 @@ void View3DPane::rebuild(bool fit) {
         }
     }
     // The first thing there is to see, brought into view.
-    if (wasEmpty && (scene_.runs > 0 || scene_.parts > 0)) fit = true;
+    if (wasEmpty && !scene_.items.empty()) fit = true;
     canvas_->setScene(&scene_);
     if (fit) canvas_->fit();
     canvas_->update();
-    QString said = scene_.runs == 0 && scene_.parts == 0
+    QString said = scene_.items.empty()
                        ? QStringLiteral("No harness to show - place one from the harness wizard, or open one in it.")
                        : QStringLiteral("%1 part(s), %2 with a 3D model, the rest %5; %3 run(s)%4.")
                              .arg(scene_.parts)
@@ -3773,7 +3800,7 @@ void View3DPane::saveRouting() {
         o[QStringLiteral("environment")] = QJsonObject{{QStringLiteral("path"), QFileInfo(envRef_).absoluteFilePath()},
                                                       {QStringLiteral("file"), QFileInfo(envRef_).fileName()}};
     // HOW IT IS SHOWN, with it: the view, gravity, what is hidden or see-through, the section, the rulers.
-    if (!o.isEmpty()) o[QStringLiteral("view")] = viewState();
+    if (!o.isEmpty() || !ownColours_.isEmpty()) o[QStringLiteral("view")] = viewState();
     QJsonObject root=loadRouting_ ? loadRouting_() : QJsonObject();
     if(systemLinked_) {
         o.insert(QStringLiteral("feeds"),systemFeeds_);
@@ -4673,10 +4700,32 @@ QJsonObject View3DPane::viewState() const {
     for (const View3DCanvas::Measure3D& m : canvas_->measures())
         rulers.append(QJsonArray{m.a.x, m.a.y, m.a.z, m.b.x, m.b.y, m.b.z, m.faces ? 1 : 0, m.radius});
     if (!rulers.isEmpty()) v[QStringLiteral("measures")] = rulers;
+    QJsonObject colours;
+    for (auto it = ownColours_.cbegin(); it != ownColours_.cend(); ++it) colours.insert(it.key(), it.value().name());
+    if (!colours.isEmpty()) v[QStringLiteral("partColours")] = colours;
     return v;
 }
 
+bool View3DPane::brickColourFromPart(const QString& brick) const {
+    // The drawing's own objects are keyed by their entity id after the "drawing:...:" a brick key starts with.
+    const QString id = brick.section(QLatin1Char(':'), -1);
+    return partColours_.contains(id) || partColours_.contains(brick);
+}
+
+void View3DPane::setBrickColour(const QString& brick, const QColor& colour) {
+    if (colour.isValid()) ownColours_.insert(brick, colour);
+    else ownColours_.remove(brick);
+    rebuild(false);
+    saveRouting();
+}
+
 void View3DPane::applyView(const QJsonObject& v) {
+    ownColours_.clear();
+    const QJsonObject colours = v.value(QStringLiteral("partColours")).toObject();
+    for (auto it = colours.constBegin(); it != colours.constEnd(); ++it) {
+        const QColor c(it.value().toString());
+        if (c.isValid()) ownColours_.insert(it.key(), c);
+    }
     if (v.contains(QStringLiteral("harnessVisible")) || (route_.segments.empty() && v.contains(QStringLiteral("harnessShown")))) {
         const QSignalBlocker block(harnessShown_);
         harnessShown_->setChecked(v.value(QStringLiteral("harnessVisible")).toBool(v.value(QStringLiteral("harnessShown")).toBool(true)));
@@ -7200,6 +7249,14 @@ void View3DCanvas::zoomBy(double factor) {
     cam_.distance = std::clamp(cam_.distance * factor, 1.0, 1e7);
     update();
     emit cameraChanged();
+}
+
+bool View3DCanvas::takeHoldOfItem(const QPointF& at) {
+    if (!route_) return false;
+    routeRedraw();
+    if (!beginItemDrag(at)) return false;
+    setCursor(Qt::ClosedHandCursor);
+    return true;
 }
 
 bool View3DCanvas::beginItemDrag(const QPointF& at) {

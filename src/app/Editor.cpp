@@ -9875,7 +9875,6 @@ void Editor::applyEditDrag(const Vec2& target) {
                 QJsonArray radii = padded("cornerRadii");
                 radii[v] = back * std::tan(theta / 2.0);
                 e->meta.insert(QStringLiteral("cornerRadii"), radii);
-                e->meta.remove(QStringLiteral("braidFilletDefault"));
             }
             break;
         }
@@ -15830,7 +15829,6 @@ void Editor::applyCornerModAt(Entity& e, int knee, const std::vector<Vec2>& corn
         while (arr.size() < n) arr.append(0.0);
         arr[knee] = filletRadius_;
         e.meta.insert(QStringLiteral("cornerRadii"), arr);
-        e.meta.remove(QStringLiteral("braidFilletDefault"));   // rounded by hand: its own now
         if (e.meta.contains("cornerChamfers")) {
             QJsonArray c = e.meta.value("cornerChamfers").toArray();
             if (knee < c.size()) { c[knee] = 0.0; e.meta.insert(QStringLiteral("cornerChamfers"), c); }
@@ -18498,8 +18496,10 @@ Entity Editor::shrinkDraftEntity(const std::vector<Vec2>& route) const {
             const QString suffix = end ? QStringLiteral("End") : QStringLiteral("Start");
             if (shrinkFaces_[end] > 0.0) e.meta.insert(QStringLiteral("shrinkFace") + suffix, shrinkFaces_[end]);
             if (shrinkRecover_[end] >= 0.0) e.meta.insert(QStringLiteral("shrinkTaper") + suffix, shrinkRecover_[end]);
-            if (shrinkModeHasEndSleeves(shrinkMode_) && shrinkCover_ > 0.0)
-                e.meta.insert(QStringLiteral("shrinkCover") + suffix, shrinkCover_);
+            // Each end its own length while Both sides is off; the start's for both while it is on.
+            const double cover = end == 1 && !shrinkCoverBoth_ ? shrinkCoverEnd_ : shrinkCover_;
+            if (shrinkModeHasEndSleeves(shrinkMode_) && cover > 0.0)
+                e.meta.insert(QStringLiteral("shrinkCover") + suffix, cover);
         }
     }
     return e;
@@ -19680,45 +19680,6 @@ void Editor::setSelectionBraidShield(bool shield) {
     emit changed();
 }
 
-void Editor::applyBraidDefaultFillet(double r) {
-    if (!doc_) return;
-    r = std::max(0.0, r);
-    // A BRAID WITH NO RADIUS OF ITS OWN: none at any knee, or the ones this put there (braidFilletDefault). A knee
-    // rounded by hand, with the Fillet tool or the panel, is that braid's own and is left as it is.
-    auto takes = [](const Entity& e) {
-        if (!sleeveIsBraid(e) || e.points.size() < 3) return false;
-        if (e.meta.value(QStringLiteral("braidFilletDefault")).toBool()) return true;
-        for (const QJsonValue& v : e.meta.value(QStringLiteral("cornerRadii")).toArray())
-            if (v.toDouble() > 0.0) return false;
-        return true;
-    };
-    auto already = [r](const Entity& e) {
-        const QJsonArray rr = e.meta.value(QStringLiteral("cornerRadii")).toArray();
-        for (int i = 1; i + 1 < static_cast<int>(e.points.size()); ++i)
-            if (std::abs((i < rr.size() ? rr[i].toDouble() : 0.0) - r) > 1e-9) return false;
-        return true;
-    };
-    bool any = false;
-    for (const Entity& e : doc_->entities())
-        if (takes(e) && !already(e)) any = true;
-    if (!any) return;
-    pushUndo();
-    for (Entity& e : doc_->entities()) {
-        if (!takes(e) || already(e)) continue;
-        if (r <= 0.0) {
-            e.meta.remove(QStringLiteral("cornerRadii"));
-            e.meta.remove(QStringLiteral("braidFilletDefault"));
-            continue;
-        }
-        QJsonArray radii;
-        for (size_t i = 0; i < e.points.size(); ++i)
-            radii.append(i == 0 || i + 1 == e.points.size() ? 0.0 : r);
-        e.meta.insert(QStringLiteral("cornerRadii"), radii);
-        e.meta.insert(QStringLiteral("braidFilletDefault"), true);
-    }
-    doc_->setDirty(true);
-    emit changed();
-}
 
 void Editor::setSelectionMetaBool(const QString& key, bool value) {
     auto sel = selectedEntities();

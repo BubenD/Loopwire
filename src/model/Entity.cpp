@@ -325,8 +325,10 @@ std::vector<double> routeSliceRadii(const Entity& e, const RouteSlice& slice, do
     const QJsonArray rr = e.meta.value(QLatin1String("cornerRadii")).toArray();
     for (size_t i = 0; i < slice.source.size(); ++i) {
         const size_t at = slice.source[i];
-        if (at != std::numeric_limits<size_t>::max() && at < static_cast<size_t>(rr.size()))
-            radii[i] = std::max(0.0, rr[static_cast<int>(at)].toDouble()) + add;
+        // A KNEE WITH NO RADIUS (0, or none written) STAYS SHARP, as the outline is mitred there: given half the width
+        // all the same, the weave and the cable rounded off a corner the outline kept square, and left it empty.
+        if (at != std::numeric_limits<size_t>::max() && at < static_cast<size_t>(rr.size()) && rr[static_cast<int>(at)].toDouble() > 0.0)
+            radii[i] = rr[static_cast<int>(at)].toDouble() + add;
     }
     return radii;
 }

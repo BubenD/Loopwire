@@ -93,6 +93,9 @@ public:
     void setPinsLookup(std::function<PartPins(const QString& libPart)> pinsOf);
     // Each object of the sheet's colour as its part has it, by entity id (see partColoursFromBom).
     void setColourLookup(std::function<QHash<QString, QColor>()> coloursOf) { coloursOf_ = std::move(coloursOf); }
+    // A PART OF THE DRAWN HARNESS GIVEN A COLOUR in the 3D view (an invalid colour takes it off) - only drawn so where
+    // its part gives it none. Kept with the 3D view.
+    void setBrickColour(const QString& brick, const QColor& colour);
     // Built again from its source, and brought round to show the whole of it.
     void rebuild(bool fit = true);
     // The harness from one place only - the wizard's own view: no choice of where from.
@@ -306,6 +309,9 @@ private:
     std::function<QString(const QString&)> modelOf_;
     std::function<PartPins(const QString&)> pinsOf_;
     std::function<QHash<QString, QColor>()> coloursOf_;
+    QHash<QString, QColor> partColours_;   // the sheet's colours from its parts, as last built (by entity id)
+    QHash<QString, QColor> ownColours_;    // colours picked in the 3D view, by brick, for what its part gives none
+    bool brickColourFromPart(const QString& brick) const;
     Harness3DScene scene_;
     QString sceneSaid_;
     View3DCanvas* canvas_ = nullptr;
@@ -669,6 +675,9 @@ public:
         setCursor(Qt::ClosedHandCursor);
         return true;
     }
+    // A CABLE, SLEEVE OR BRAID OF THE HARNESS DRAWN, TAKEN HOLD OF: the routed bundle now standing for it, held where it
+    // was pressed - so the drag that put the harness in as a route goes on moving it with the pointer.
+    bool takeHoldOfItem(const QPointF& at);
     void setMeasureFaces(bool on) { measureFaces_ = on; }
     bool measureFaces() const { return measureFaces_; }
     void setMeasureRadius(bool on) { measureRadius_ = on; clearMeasure(); }

@@ -1318,7 +1318,7 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
         if (length < 1e-6 || radius < 1e-6) continue;
         Harness3DItem label;
         label.mesh = sleeve({centre2.x, centre2.y, 0}, {axis2.x, axis2.y, 0}, length, radius, 0.12);
-        label.color = QColor(255, 215, 45); label.what = QStringLiteral("Label");
+        label.color = own(mask, QColor(255, 215, 45)); label.what = QStringLiteral("Label");
         label.ownLook = true; label.brick = brickOf(mask); scene.items.push_back(label);
         QString caption = mask.meta.value(QStringLiteral("labelCaption")).toString();
         double textHeight = mask.meta.value(QStringLiteral("labelTextHeight")).toDouble();
@@ -1335,7 +1335,7 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
         ink.textPath = {centre-along*(length*0.5),centre+along*(length*0.5)};
         ink.textRadius = radius+0.12; ink.textHeight = textHeight;
         ink.mesh = labelTextMesh3D({centre-along*(length*0.5),centre+along*(length*0.5)}, radius+0.12, caption, textHeight);
-        ink.color = Qt::black; ink.what = QStringLiteral("Label text"); ink.brick = label.brick; ink.ownLook = true;
+        ink.color = colours.value(mask.id + QStringLiteral("|text"), QColor(Qt::black)); ink.what = QStringLiteral("Label text"); ink.brick = label.brick; ink.ownLook = true;
         if (!ink.mesh.empty()) scene.items.push_back(std::move(ink));
         bool clear = false;
         const QString group = mask.meta.value(QStringLiteral("labelGroup")).toString();

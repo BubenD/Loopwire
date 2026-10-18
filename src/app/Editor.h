@@ -430,9 +430,6 @@ public:
     void setSelectionBraided(bool on);
     // THE SELECTED BRAIDS made a braided shield (herringbone) or a braided sleeve (woven) - one change, to undo.
     void setSelectionBraidShield(bool shield);
-    // THE FILLET OF EVERY BRAID IN THE DRAWING that has no radius of its own: each knee rounded to r (0 takes the
-    // rounding off). A braid whose knees were rounded by hand keeps its own. One change, to undo.
-    void applyBraidDefaultFillet(double r);
     // HOW WIDE A SLEEVE IS DRAWN, which the tool asks for as "Across" while one is being drawn.
     // Readable and settable so a drawing can be set up without typing into the canvas.
     // ENTRY FACES - the line a part is marked as connecting by (its connection line). Shift and a
@@ -460,6 +457,12 @@ public:
     void setShrinkFace(bool finish, double value) { shrinkFaces_[finish ? 1 : 0] = value; emit overlayChanged(); }
     void setShrinkRecover(bool finish, double value) { shrinkRecover_[finish ? 1 : 0] = value; emit overlayChanged(); }
     void setShrinkCover(double value) { shrinkCover_ = value; emit overlayChanged(); }
+    // THE HEATSHRINK ON EACH END OF A RUN, the same length both sides (Both sides) or each its own: the finish end's,
+    // used while Both sides is off. 0 = automatic.
+    bool shrinkCoverBoth() const { return shrinkCoverBoth_; }
+    void setShrinkCoverBoth(bool both) { shrinkCoverBoth_ = both; emit overlayChanged(); }
+    double shrinkCoverEnd() const { return shrinkCoverEnd_; }
+    void setShrinkCoverEnd(double value) { shrinkCoverEnd_ = value; emit overlayChanged(); }
     Entity shrinkDraftEntity(const std::vector<Vec2>& route) const;
     void setDraftRouteAngle(double degrees);
     double draftRouteAngle() const;
@@ -2318,6 +2321,8 @@ private:
     double shrinkFaces_[2] = {0.0, 0.0};     // 0 = automatic entry face
     double shrinkRecover_[2] = {-1.0, -1.0}; // negative = automatic recovery length
     double shrinkCover_ = 0.0;               // 0 = automatic cover/transition length
+    double shrinkCoverEnd_ = 0.0;            // the finish end's cover, while shrinkCoverBoth_ is off; 0 = automatic
+    bool shrinkCoverBoth_ = true;            // one cover length for both ends
     // WHICH SORT OF SLEEVE THE TOOL DRAWS. Sleeve recovers onto what it grips; Cable is square for
     // the whole run; CableEnds leaves the cable bare in the middle and keeps an editable sleeve at
     // each end.

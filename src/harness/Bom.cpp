@@ -501,6 +501,21 @@ std::vector<BomRow> bomFromDrawing(const Document& doc, const PartsLibrary& lib)
     return out;
 }
 
+namespace {
+QColor namedColour(const QString& text) {
+    const QString said = text.trimmed();
+    if (said.isEmpty() || said.compare(QLatin1String("clear"), Qt::CaseInsensitive) == 0 ||
+        said.compare(QLatin1String("transparent"), Qt::CaseInsensitive) == 0) return {};
+    const QString hex = leadColorHex(said);
+    if (!hex.isEmpty()) return QColor(hex);
+    const QString first = said.section(QLatin1Char('/'), 0, 0).trimmed();
+    if (first.compare(QLatin1String("black"), Qt::CaseInsensitive) == 0) return QColor(28, 28, 30);
+    return QColor(first.startsWith(QLatin1Char('#')) ? first : first.toLower().remove(QLatin1Char(' ')));
+}
+} // namespace
+
+QColor partTextColour(const LibraryPart& part) { return namedColour(part.value(QStringLiteral("textColour"))); }
+
 QColor partOuterColour(const LibraryPart& part) {
     for (const char* key : {"jacketColour", "colour", "color"}) {
         const QString said = part.value(QLatin1String(key)).trimmed();
@@ -526,6 +541,8 @@ QHash<QString, QColor> partColoursFromBom(const Document& doc, const PartsLibrar
         if (const LibraryPart* part = lib.byId(id)) {
             const QColor c = partOuterColour(*part);
             if (c.isValid()) out.insert(e.id, c);
+            const QColor ink = partTextColour(*part);
+            if (ink.isValid()) out.insert(e.id + QStringLiteral("|text"), ink);
         }
     }
     // THE BILL AS THE DRAWING SHOWS IT - the line numbers a balloon counts down.
@@ -580,12 +597,15 @@ QHash<QString, QColor> partColoursFromBom(const Document& doc, const PartsLibrar
         const LibraryPart* part = partOfRow(rows[static_cast<size_t>(item - 1)]);
         if (!part) continue;
         const QColor c = partOuterColour(*part);
-        if (!c.isValid()) continue;
+        const QColor ink = partTextColour(*part);
+        if (!c.isValid() && !ink.isValid()) continue;
         for (const QJsonValue& leader : b.meta.value(QStringLiteral("leaders")).toArray()) {
             const QJsonArray at = leader.toArray();
             if (at.size() < 2) continue;
             const QString id = pointedAt({at[0].toDouble(), at[1].toDouble()});
-            if (!id.isEmpty()) out.insert(id, c);
+            if (id.isEmpty()) continue;
+            if (c.isValid()) out.insert(id, c);
+            if (ink.isValid()) out.insert(id + QStringLiteral("|text"), ink);
         }
     }
     return out;
