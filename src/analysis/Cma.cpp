@@ -20,7 +20,7 @@ QString cmaUnitName(CmaUnit unit) {
     case CmaUnit::Awg: return QStringLiteral("AWG");
     case CmaUnit::Mm2: return QStringLiteral("mm2");
     case CmaUnit::Kcmil: return QStringLiteral("kcmil");
-    case CmaUnit::Cmil: return QStringLiteral("CM");
+    case CmaUnit::Cmil: return QStringLiteral("CMA");
     case CmaUnit::DiameterMm: return QStringLiteral("dia mm");
     }
     return QString();

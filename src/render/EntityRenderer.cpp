@@ -480,28 +480,39 @@ bool lsReferenceLine(const Entity& e, Vec2& a, Vec2& b) {
 // along the WHOLE run, not only in its first segment: a boundary that cuts a run past one of its knees
 // is an ordinary thing to trim to, and clipping the first segment alone left the knee sitting there
 // beyond the cut - which is why anything further along was refused rather than drawn.
+// THE CROSSING NEAREST THIS END, and only in this end's half of the run. A run that comes back to the line it started
+// on - or crosses it on the way - meets it again far along; taken from the far end, the start was moved to that far
+// crossing and the end to the near one, and the two lines of the run came to nothing between them.
 void extendRunStartToLine(std::vector<Vec2>& run, const Vec2& a, const Vec2& b) {
     if (run.size() < 2) return;
-    for (int i = static_cast<int>(run.size()) - 1; i >= 1; --i) {
+    const double half = polylineLength(run) / 2.0;
+    double along = 0.0;
+    for (int i = 1; i < static_cast<int>(run.size()) && along <= half; ++i) {
         if (auto x = segmentSegmentIntersection(run[i - 1], run[i], a, b)) {
+            if (along + distance(run[i - 1], *x) > half) break;
             run.erase(run.begin(), run.begin() + i);   // everything before the crossing goes
             run.insert(run.begin(), *x);
             return;
         }
+        along += distance(run[i - 1], run[i]);
     }
-    // The line does not cross the run at all: extend the first segment out to meet it, as before.
+    // The line does not cross this end of the run: extend the first segment out to meet it, as before.
     if (auto x = lineLineIntersection(run[0], run[1], a, b)) run[0] = *x;
 }
 // The same at the other end, so a trimmed run meets the cutting line exactly (a diagonal cap).
 void extendRunEndToLine(std::vector<Vec2>& run, const Vec2& a, const Vec2& b) {
     const int n = static_cast<int>(run.size());
     if (n < 2) return;
-    for (int i = 1; i < n; ++i) {
+    const double half = polylineLength(run) / 2.0;
+    double back = 0.0;
+    for (int i = n - 1; i >= 1 && back <= half; --i) {
         if (auto x = segmentSegmentIntersection(run[i - 1], run[i], a, b)) {
+            if (back + distance(run[i], *x) > half) break;
             run.resize(static_cast<size_t>(i));        // everything after the crossing goes
             run.push_back(*x);
             return;
         }
+        back += distance(run[i - 1], run[i]);
     }
     if (auto x = lineLineIntersection(run[n - 1], run[n - 2], a, b)) run[n - 1] = *x;
 }

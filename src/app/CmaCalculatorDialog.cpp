@@ -17,6 +17,8 @@
 #include <QTableWidget>
 #include <QVBoxLayout>
 
+#include <cmath>
+
 namespace Loopwire {
 
 namespace {
@@ -61,11 +63,12 @@ CmaCalculatorDialog::CmaCalculatorDialog(QWidget* parent) : QDialog(parent) {
     // ---- THE CONDUCTORS ----
     auto* list = new QGroupBox(QStringLiteral("Conductors"), this);
     auto* lv = new QVBoxLayout(list);
-    table_ = new QTableWidget(0, 7, list);
+    // Its diameter each, in inches and millimetres, as the solid round conductor its area is.
+    table_ = new QTableWidget(0, 9, list);
     table_->setObjectName(QStringLiteral("cmaTable"));
     table_->setHorizontalHeaderLabels({QStringLiteral("Conductor"), QStringLiteral("Size"), QStringLiteral("Unit"),
-                                       QStringLiteral("Qty"), QStringLiteral("CM each"), QStringLiteral("mm2 each"),
-                                       QStringLiteral("CM total")});
+                                       QStringLiteral("Qty"), QStringLiteral("D each (in)"), QStringLiteral("D each (mm)"),
+                                       QStringLiteral("CMA each"), QStringLiteral("mm2 each"), QStringLiteral("CMA total")});
     table_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     table_->verticalHeader()->setVisible(false);
     lv->addWidget(table_, 1);
@@ -199,7 +202,7 @@ void CmaCalculatorDialog::rebuildTable() {
             refresh();
         });
         table_->setCellWidget(r, 3, qty);
-        for (int col = 4; col < 7; ++col) {
+        for (int col = 4; col < 9; ++col) {
             auto* item = new QTableWidgetItem;
             item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
             item->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
@@ -215,9 +218,13 @@ void CmaCalculatorDialog::refresh() {
     for (int r = 0; r < static_cast<int>(rows_.size()) && r < table_->rowCount(); ++r) {
         const CmaConductor& c = rows_[static_cast<size_t>(r)];
         const double each = c.each();
-        if (auto* item = table_->item(r, 4)) item->setText(each > 0.0 ? cmText(each) : QStringLiteral("not a size"));
-        if (auto* item = table_->item(r, 5)) item->setText(each > 0.0 ? QString::number(mm2FromCma(each), 'f', 3) : QStringLiteral("-"));
-        if (auto* item = table_->item(r, 6)) item->setText(cmText(c.total()));
+        // The diameter of a solid round conductor of that area: its mils are the root of its circular mils.
+        const double inches = each > 0.0 ? std::sqrt(each) / 1000.0 : 0.0;
+        if (auto* item = table_->item(r, 4)) item->setText(each > 0.0 ? QString::number(inches, 'f', 4) : QStringLiteral("-"));
+        if (auto* item = table_->item(r, 5)) item->setText(each > 0.0 ? QString::number(inches * 25.4, 'f', 3) : QStringLiteral("-"));
+        if (auto* item = table_->item(r, 6)) item->setText(each > 0.0 ? cmText(each) : QStringLiteral("not a size"));
+        if (auto* item = table_->item(r, 7)) item->setText(each > 0.0 ? QString::number(mm2FromCma(each), 'f', 3) : QStringLiteral("-"));
+        if (auto* item = table_->item(r, 8)) item->setText(cmText(c.total()));
     }
     totals_->setText(summary());
     sizing_->setText(sizing());
@@ -229,7 +236,7 @@ QString CmaCalculatorDialog::summary() const {
     int count = 0;
     for (const CmaConductor& c : rows_) count += c.each() > 0.0 ? c.count : 0;
     const double metric = mm2ForCma(total);
-    return QStringLiteral("%1 conductor(s): %2 CM in all (%3 mm2). As one conductor: %4 AWG, or %5.")
+    return QStringLiteral("%1 conductor(s): CMA %2 in all (%3 mm2). As one conductor: %4 AWG, or %5.")
         .arg(count)
         .arg(cmText(total))
         .arg(mm2FromCma(total), 0, 'f', 3)
@@ -241,15 +248,15 @@ QString CmaCalculatorDialog::sizing() const {
     const double need = cmaRequired(amps_->value(), length_->value(), drop_->value(), material_->currentData().toDouble());
     if (need <= 0.0) return QStringLiteral("Give the current, the length and the drop allowed.");
     const double metric = mm2ForCma(need);
-    QString said = QStringLiteral("Needs %1 CM (%2 mm2): at least %3 AWG, or %4.")
+    QString said = QStringLiteral("Needs CMA %1 (%2 mm2): at least %3 AWG, or %4.")
                        .arg(cmText(need))
                        .arg(mm2FromCma(need), 0, 'f', 3)
                        .arg(awgName(awgForCma(need)))
                        .arg(metric > 0.0 ? QStringLiteral("%1 mm2").arg(metric) : QStringLiteral("more than 240 mm2"));
     const double have = cmaTotal(rows_);
     if (have > 0.0) {
-        said += have >= need ? QStringLiteral(" The conductors listed (%1 CM) carry it, %2 CM per amp.").arg(cmText(have)).arg(have / amps_->value(), 0, 'f', 0)
-                             : QStringLiteral(" The conductors listed (%1 CM) fall short by %2 CM.").arg(cmText(have)).arg(cmText(need - have));
+        said += have >= need ? QStringLiteral(" The conductors listed (CMA %1) carry it, CMA %2 per amp.").arg(cmText(have)).arg(have / amps_->value(), 0, 'f', 0)
+                             : QStringLiteral(" The conductors listed (CMA %1) fall short by CMA %2.").arg(cmText(have)).arg(cmText(need - have));
     }
     return said;
 }

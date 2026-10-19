@@ -1849,6 +1849,12 @@ void CanvasWidget::keyPressEvent(QKeyEvent* e) {
         // library, a generated harness: R turns it a quarter turn clockwise, Shift+R the other way, so
         // it goes in the way round it is wanted. Handled here, before an idle letter opens the command
         // box, for the same reason X and Y are.
+        // ALIGN BY 4 POINTS, waiting for where it goes: M mirrors it to the other side of the line it is lined up on.
+        if (editor_->alignFourPointPlacing() && e->key() == Qt::Key_M) {
+            editor_->toggleAlignMirror();
+            e->accept();
+            return;
+        }
         if (editor_->placementPreviewActive() && e->key() == Qt::Key_R) {
             editor_->rotatePlacementPreview(!(e->modifiers() & Qt::ShiftModifier));
             e->accept();

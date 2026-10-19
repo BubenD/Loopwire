@@ -4128,6 +4128,65 @@ int run_editor_tests() {
             const Entity& done = d9.entities().front();
             check(distance(done.a, Vec2{50, 45}) < 1e-6 && distance(done.b, Vec2{50, 55}) < 1e-6,
                   "align by 4 points: turned to run as the second pair does, its middle on the point clicked");
+            // SHIFT ON THE PLACING CLICK: the other way along the line.
+            d9.entities() = {moving};
+            e9.selectById(moving.id);
+            e9.alignSelection(Editor::AlignMode::FourPoint);
+            for (const Vec2& p : {Vec2{0, 0}, Vec2{10, 0}, Vec2{100, 100}, Vec2{100, 120}})
+                e9.onPointerPress(p, Qt::LeftButton, Qt::NoModifier);
+            e9.onPointerPress({50, 50}, Qt::LeftButton, Qt::ShiftModifier);
+            check(distance(d9.entities().front().a, Vec2{50, 55}) < 1e-6 && distance(d9.entities().front().b, Vec2{50, 45}) < 1e-6,
+                  "align by 4 points: Shift turns it round to run the other way");
+            // M: mirrored across the line it is lined up on - a triangle's point goes to the other side.
+            Entity tri;
+            tri.id = QStringLiteral("tri");
+            tri.type = EntityType::Polyline;
+            tri.points = {{0, 0}, {10, 0}, {5, 8}};
+            d9.entities() = {tri};
+            e9.selectById(tri.id);
+            e9.alignSelection(Editor::AlignMode::FourPoint);
+            for (const Vec2& p : {Vec2{0, 0}, Vec2{10, 0}, Vec2{0, 100}, Vec2{20, 100}})
+                e9.onPointerPress(p, Qt::LeftButton, Qt::NoModifier);
+            check(e9.alignFourPointPlacing(), "align by 4 points: waiting for where it goes");
+            e9.toggleAlignMirror();
+            e9.onPointerPress({5, 100}, Qt::LeftButton, Qt::NoModifier);
+            check(distance(d9.entities().front().points[2], Vec2{5, 92}) < 1e-6, "align by 4 points: M mirrors it to the other side of the line");
+        }
+        // A DOUBLE LINE THAT COMES BACK TO THE LINE IT STARTED ON: both of its lines kept whole, each end on that line.
+        {
+            Document d10;
+            Entity wall;
+            wall.id = QStringLiteral("wall");
+            wall.type = EntityType::Line;
+            wall.a = {0, -100};
+            wall.b = {0, 100};
+            d10.entities() = {wall};
+            Editor e10;
+            e10.setDocument(&d10);
+            e10.snapSettings().objectSnap = true;
+            e10.snapSettings().gridSnap = false;
+            e10.snapSettings().ortho = false;
+            e10.snapSettings().polar = false;
+            e10.setPixelTolerance(4);
+            e10.doubleLineGap() = 8.0;
+            e10.setTool(ToolId::DoublePolyline);
+            for (const Vec2& p : {Vec2{0, 40}, Vec2{120, 60}, Vec2{160, 0}, Vec2{0, -40}})
+                e10.onPointerPress(p, Qt::LeftButton, Qt::NoModifier);
+            e10.onKey(Qt::Key_Return, Qt::NoModifier);
+            const Entity* run = nullptr;
+            for (const Entity& e : d10.entities())
+                if (e.type == EntityType::Polyline && e.meta.value("double").toBool()) run = &e;
+            bool whole = run != nullptr;
+            if (run) {
+                const double h = run->meta.value("gap").toDouble() / 2.0;
+                for (const int side : {1, -1}) {
+                    std::vector<Vec2> rail = offsetPolyline(run->points, side * h);
+                    applyDoubleRunCuts(rail, *run, side);
+                    whole = whole && rail.size() >= 4 && polylineLength(rail) > 300.0 && std::abs(rail.front().x) < 1e-6 &&
+                            std::abs(rail.back().x) < 1e-6;
+                }
+            }
+            check(whole, "double line back to the line it started on: both lines whole, each end on that line");
         }
         // ESC AND SPACE: what is drawn up to the last point is kept, and the tool put down.
         for (const int key : {static_cast<int>(Qt::Key_Escape), static_cast<int>(Qt::Key_Space)})

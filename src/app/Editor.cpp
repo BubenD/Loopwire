@@ -5240,7 +5240,7 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
             return;
         }
         alignPick_ = 0;
-        applyFourPointAlign();
+        applyFourPointAlign(mods & Qt::ShiftModifier);
         return;
     }
     if (alignPick_ != 0) {
@@ -15421,6 +15421,7 @@ void Editor::alignSelection(AlignMode mode) {
     if (mode == AlignMode::FourPoint) {
         alignPick_ = 3;
         alignPts_.clear();
+        alignMirror_ = false;
         emit message(QStringLiteral("Align by 4 points: click the first of two points on the selection - Esc cancels"));
         emit overlayChanged();
         return;
@@ -15438,34 +15439,47 @@ void Editor::alignSelection(AlignMode mode) {
     alignSelectionTo(mode, 0.0);
 }
 
-void Editor::applyFourPointAlign() {
+void Editor::applyFourPointAlign(bool turnAround) {
     if (!doc_ || alignPts_.size() < 5) return;
     const Vec2 s1 = alignPts_[0], s2 = alignPts_[1], d1 = alignPts_[2], d2 = alignPts_[3], to = alignPts_[4];
-    alignPts_.clear();
     if (distance(s1, s2) < 1e-9 || distance(d1, d2) < 1e-9) {
+        alignPts_.clear();
+        alignMirror_ = false;
         emit message(QStringLiteral("Align by 4 points: each pair needs two different points"));
         return;
     }
-    // TURNED SO THE FIRST PAIR RUNS THE WAY THE SECOND DOES, about the middle of the first pair - and that middle put
-    // where it was asked to go.
+    // TURNED SO THE FIRST PAIR RUNS THE WAY THE SECOND DOES (or the other way, Shift), about the middle of the first
+    // pair - that middle put where it was asked to go - and mirrored across that line if M said so.
     const Vec2 mid = (s1 + s2) * 0.5;
-    const double turn = std::atan2(d2.y - d1.y, d2.x - d1.x) - std::atan2(s2.y - s1.y, s2.x - s1.x);
+    double turn = std::atan2(d2.y - d1.y, d2.x - d1.x) - std::atan2(s2.y - s1.y, s2.x - s1.x);
+    if (turnAround) turn += M_PI;
+    const bool mirror = alignMirror_;
     std::vector<Entity*> sel = selectedEntities();
     if (sel.empty()) return;
     pushUndo();
     std::vector<QString> ids;
+    const Vec2 along = (d2 - d1).normalized();
     for (Entity* e : sel) {
         rotateEntity(*e, mid, turn);
         translateEntity(*e, to - mid);
+        if (mirror) mirrorEntity(*e, to, to + along);
         ids.push_back(e->id);
     }
     const double c = std::cos(turn), s = std::sin(turn);
-    emit selectionTransformed(ids, [mid, to, c, s](const Vec2& p) {
+    emit selectionTransformed(ids, [mid, to, c, s, mirror, along](const Vec2& p) {
         const Vec2 d = p - mid;
-        return to + Vec2{d.x * c - d.y * s, d.x * s + d.y * c};
+        Vec2 out = to + Vec2{d.x * c - d.y * s, d.x * s + d.y * c};
+        if (mirror) {
+            const Vec2 off = out - to;
+            out = to + along * (2.0 * dot(off, along)) - off;
+        }
+        return out;
     });
+    alignPts_.clear();
+    alignMirror_ = false;
     doc_->setDirty(true);
-    emit message(QStringLiteral("Aligned by 4 points: turned %1 degrees").arg(turn * 180.0 / M_PI, 0, 'f', 2));
+    emit message(QStringLiteral("Aligned by 4 points: turned %1 degrees%2").arg(turn * 180.0 / M_PI, 0, 'f', 2)
+                     .arg(mirror ? QStringLiteral(", mirrored") : QString()));
     emit changed();
     emit overlayChanged();
 }
@@ -21289,14 +21303,19 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         else if (alignPts_.size() == 3) p.drawLine(vt.toScreen(alignPts_[2]), vt.toScreen(cursor_));
         else if (alignPts_.size() == 1) p.drawLine(vt.toScreen(alignPts_[0]), vt.toScreen(cursor_));
         if (alignPts_.size() == 4 && distance(alignPts_[0], alignPts_[1]) > 1e-9 && distance(alignPts_[2], alignPts_[3]) > 1e-9) {
+            // Shift held: turned round the other way along the line; M: mirrored across it.
+            const bool turnAround = QApplication::keyboardModifiers() & Qt::ShiftModifier;
             const Vec2 mid = (alignPts_[0] + alignPts_[1]) * 0.5;
-            const double turn = std::atan2(alignPts_[3].y - alignPts_[2].y, alignPts_[3].x - alignPts_[2].x) -
-                                std::atan2(alignPts_[1].y - alignPts_[0].y, alignPts_[1].x - alignPts_[0].x);
+            double turn = std::atan2(alignPts_[3].y - alignPts_[2].y, alignPts_[3].x - alignPts_[2].x) -
+                          std::atan2(alignPts_[1].y - alignPts_[0].y, alignPts_[1].x - alignPts_[0].x);
+            if (turnAround) turn += M_PI;
+            const Vec2 along = (alignPts_[3] - alignPts_[2]).normalized();
             for (const QString& id : selected_)
                 if (const Entity* e = entityById(id)) {
                     Entity ghost = *e;
                     rotateEntity(ghost, mid, turn);
                     translateEntity(ghost, cursor_ - mid);
+                    if (alignMirror_) mirrorEntity(ghost, cursor_, cursor_ + along);
                     EntityRenderer::draw(p, ghost, *doc_, vt, QColor("#f0b44c"));
                 }
         }

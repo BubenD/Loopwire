@@ -276,15 +276,16 @@ QIcon makeToolIcon(ToolId id, const QColor& ink, int variant) {
     case ToolId::Line: p.drawLine(5, 18, 19, 6); break;
     case ToolId::DoubleLine: p.drawLine(4, 16, 17, 5); p.drawLine(7, 19, 20, 8); break;
     case ToolId::Polyline: {
-        // A polyline: a straight run into an arc, one object - a node at each end.
+        // A polyline: a straight run, an arc, and a straight run again after it - one object, a node at each end.
         QPainterPath path;
-        path.moveTo(4, 6);
+        path.moveTo(3, 6);
         path.lineTo(12, 6);
         path.arcTo(QRectF(6, 6, 12, 12), 90.0, -180.0);
+        path.lineTo(3, 18);
         p.drawPath(path);
         p.setBrush(p.pen().color());
-        p.drawEllipse(QPointF(4, 6), 1.6, 1.6);
-        p.drawEllipse(QPointF(12, 18), 1.6, 1.6);
+        p.drawEllipse(QPointF(3, 6), 1.6, 1.6);
+        p.drawEllipse(QPointF(3, 18), 1.6, 1.6);
         p.setBrush(Qt::NoBrush);
         break;
     }

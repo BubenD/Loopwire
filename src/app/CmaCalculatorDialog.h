@@ -16,7 +16,7 @@ namespace Loopwire {
 struct LibraryPart;
 
 // THE CMA CALCULATOR: conductors listed - from the parts list (a wire by its gauge, a cable by its cores and their
-// gauge) or typed in (AWG, mm2, kcmil, CM or a diameter), so many of each - and their circular mil area each and all
+// gauge) or typed in (AWG, mm2, kcmil, CMA or a diameter), so many of each - and their circular mil area each and all
 // together, with the one AWG and the one metric size that hold as much. And the other way round: the area a run needs
 // for a current over a length with no more than so much lost, the smallest AWG and metric size that give it, and whether
 // the conductors listed do. Modeless; nothing it does changes the drawing.

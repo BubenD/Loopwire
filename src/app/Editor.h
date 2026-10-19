@@ -261,6 +261,11 @@ public:
     enum class AlignMode { Left, Right, Top, Bottom, CursorX, CursorY, FourPoint };
     // The clicks a four-point align has had so far (0 to 4), for the overlay and the tests.
     const std::vector<Vec2>& alignPoints() const { return alignPts_; }
+    // BOTH PAIRS GIVEN, waiting for where it goes: Shift held on that click turns it round to run the other way along
+    // the line it is lined up on; M (toggled) mirrors it to the other side of that line.
+    bool alignFourPointPlacing() const { return alignPick_ == 3 && alignPts_.size() == 4; }
+    void toggleAlignMirror() { alignMirror_ = !alignMirror_; emit message(alignMirror_ ? QStringLiteral("Align: mirrored to the other side - M again to put it back") : QStringLiteral("Align: not mirrored")); emit overlayChanged(); }
+    bool alignMirrored() const { return alignMirror_; }
     // The four object ones act at once. The two cursor ones wait for the click that says where.
     void alignSelection(AlignMode mode);
     bool aligningToCursor() const { return alignPick_ != 0; }
@@ -2090,7 +2095,8 @@ private:
     bool continuePulling_ = false;
     int alignPick_ = 0;   // waiting for the click an align lines things up on: 1 an X, 2 a Y, 3 the four-point's
     std::vector<Vec2> alignPts_;   // the four-point align's clicks so far. Not saved.
-    void applyFourPointAlign();
+    bool alignMirror_ = false;     // M while placing: mirrored across the line it is lined up on. Not saved.
+    void applyFourPointAlign(bool turnAround);
     void alignSelectionTo(AlignMode mode, double at);
     Vec2 continuePressAt_;
     // Lay the knees of a route onto the run it continues, at the end it was taken from. Shared by the

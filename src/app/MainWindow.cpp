@@ -4269,17 +4269,30 @@ QWidget* MainWindow::operationsRow() {
             {"aligny", QStringLiteral("By Y-cursor"), Editor::AlignMode::CursorY},
             {"align", QStringLiteral("By 4 points (two on it, two on another, then where)"), Editor::AlignMode::FourPoint},
         };
+        // AS CIRCLE IS: the button does the way last picked, wearing its picture; its arrow picks another.
         auto* menu = new QMenu(b);
+        auto run = [this](Editor::AlignMode mode) {
+            editor_->alignSelection(mode);
+            canvas_->setFocus(Qt::OtherFocusReason);   // the click that says where goes there
+            canvas_->update();
+        };
         for (const Way& way : ways) {
             const Editor::AlignMode mode = way.mode;
-            menu->addAction(makeOpIcon(QString::fromLatin1(way.icon)), way.label, this, [this, mode] {
-                editor_->alignSelection(mode);
-                canvas_->setFocus(Qt::OtherFocusReason);   // the click that says where goes there
-                canvas_->update();
+            const QString icon = QString::fromLatin1(way.icon);
+            const QString label = way.label;
+            menu->addAction(makeOpIcon(icon), way.label, this, [b, run, mode, icon, label] {
+                b->setProperty("alignMode", static_cast<int>(mode));
+                b->setProperty("alignIcon", icon);
+                b->setIcon(makeOpIcon(icon));
+                b->setToolTip(QStringLiteral("Align - %1 (the arrow: another way)").arg(label));
+                run(mode);
             });
         }
+        b->setProperty("alignMode", static_cast<int>(Editor::AlignMode::Left));
+        b->setProperty("alignIcon", QStringLiteral("align"));
+        connect(b, &QToolButton::clicked, this, [b, run] { run(static_cast<Editor::AlignMode>(b->property("alignMode").toInt())); });
         b->setMenu(menu);
-        b->setPopupMode(QToolButton::InstantPopup);
+        b->setPopupMode(QToolButton::MenuButtonPopup);
         grid->addWidget(b, i / perRow, i % perRow);
         opButtons_.append({QStringLiteral("align"), b});   // so the theme re-tints it
         ++i;
@@ -8010,8 +8023,11 @@ void MainWindow::applyTheme(bool dark) {
                           static_cast<int>(editor_->shrinkRouteMode())));
     }
     // Modify "Operations" icon buttons follow the same ink as the tool icons.
-    for (const auto& ob : opButtons_)
-        ob.second->setIcon(makeOpIcon(ob.first, ink));
+    for (const auto& ob : opButtons_) {
+        // (Align wears the way last picked from it.)
+        const QString worn = ob.second->property("alignIcon").toString();
+        ob.second->setIcon(makeOpIcon(worn.isEmpty() ? ob.first : worn, ink));
+    }
 
     for(QToolButton* button:matchBtns_)if(button)button->setIcon(makeCadActionIcon(QStringLiteral("match"),ink));
     for(QToolButton* button:ribbon_->findChildren<QToolButton*>()){
@@ -14003,7 +14019,7 @@ QToolButton* MainWindow::makeCmaButton(QWidget* parent) {
     btn->setAutoRaise(true);
     btn->setFocusPolicy(Qt::NoFocus);
     btn->setToolTip(QStringLiteral(
-        "Circular mil area: conductors from the parts list or typed in (AWG, mm2, kcmil, CM, diameter), their area each "
+        "Circular mil area: conductors from the parts list or typed in (AWG, mm2, kcmil, CMA, diameter), their area each "
         "and in all, the one size that holds as much - and the area a run needs for its current, length and voltage drop"));
     {
         // Three conductor ends in a ring - what is added up.

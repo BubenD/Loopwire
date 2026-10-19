@@ -1708,8 +1708,8 @@ int run_drawingspace_tests() {
                                        QStringLiteral("By Y-cursor"),
                                        QStringLiteral("By 4 points (two on it, two on another, then where)")}),
                   "align: the seven ways, in that order, and only those");
-            check(align->popupMode() == QToolButton::InstantPopup,
-                  "align: one click opens them - there is no other thing the button does");
+            check(align->popupMode() == QToolButton::MenuButtonPopup,
+                  "align: as Circle - the button does the way last picked, its arrow picks another");
         }
     }
 
