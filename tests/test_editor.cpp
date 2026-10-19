@@ -3167,7 +3167,7 @@ int run_editor_tests() {
         check(ed.tool() == ToolId::Rect, "finish: Space repeats last tool");
     }
 
-    // --- A line is two points, and then the pointer comes back: the same as after every other drawing.
+    // --- A line is two points, and the next goes on from its end (AutoCAD's LINE) until Space, Enter or Esc.
     {
         Document d; d.entities().clear();
         Editor ed; ed.setDocument(&d); noSnap(ed);
@@ -3177,9 +3177,11 @@ int run_editor_tests() {
         check(d.entities().size() == 1, "line: two points make one line");
         check(near(d.entities()[0].a.x, 0.0) && near(d.entities()[0].b.x, 10.0),
               "line: between the two points that were clicked");
-        check(ed.tool() == ToolId::Select && !ed.isDrafting(),
-              "line: and the tool hands back the pointer, as every other drawing does");
-        // Space re-arms it, which is how several lines are drawn one after another.
+        check(ed.tool() == ToolId::Line && ed.isDrafting(),
+              "line: and the next goes on from its end - the tool still drawing");
+        // Space ends it - the line placed stays - and Space again re-arms it.
+        ed.onKey(Qt::Key_Space, Qt::NoModifier);
+        check(ed.tool() == ToolId::Select && d.entities().size() == 1, "line: Space ends it, the line placed kept");
         ed.onKey(Qt::Key_Space, Qt::NoModifier);
         check(ed.tool() == ToolId::Line, "line: Space draws another");
         ed.onPointerPress({20, 20}, Qt::LeftButton, Qt::NoModifier);   // a line with only its start
@@ -4091,8 +4093,105 @@ int run_editor_tests() {
                       qPrintable(QStringLiteral("%1 then %2: the three points drawn kept, the tool put down")
                                      .arg(toolLabel(tool), key == Qt::Key_Escape ? QStringLiteral("Esc") : QStringLiteral("Space"))));
             }
-        check(toolLabel(ToolId::Polyline) == QStringLiteral("Line") && toolLabel(ToolId::DoublePolyline) == QStringLiteral("Double line"),
-              "names: the polyline is the Line, the double polyline the Double line");
+        check(toolLabel(ToolId::Line) == QStringLiteral("Line") && toolLabel(ToolId::Polyline) == QStringLiteral("Polyline") &&
+                  toolLabel(ToolId::DoublePolyline) == QStringLiteral("Double line"),
+              "names: Line, Polyline, and the double polyline the Double line");
+        // ---- LINE: each segment placed as a line of its own, the next from its end ----
+        {
+            Document d5;
+            Editor e5;
+            e5.setDocument(&d5);
+            e5.snapSettings().objectSnap = false;
+            e5.snapSettings().gridSnap = false;
+            e5.setTool(ToolId::Line);
+            e5.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+            e5.onPointerPress({40, 0}, Qt::LeftButton, Qt::NoModifier);
+            e5.onPointerPress({40, 30}, Qt::LeftButton, Qt::NoModifier);
+            int lines = 0;
+            bool joined = false;
+            for (const Entity& e : d5.entities())
+                if (e.type == EntityType::Line) {
+                    ++lines;
+                    joined = joined || (distance(e.a, Vec2{40, 0}) < 1e-9 && distance(e.b, Vec2{40, 30}) < 1e-9);
+                }
+            check(lines == 2 && joined && e5.tool() == ToolId::Line, "line: two segments placed as two lines, the second from the first's end - still drawing");
+            e5.onKey(Qt::Key_Escape, Qt::NoModifier);
+            check(d5.entities().size() == 2 && e5.tool() == ToolId::Select, "line: Esc ends it, the lines placed stay");
+        }
+        // ---- DOUBLE LINE: on the sheet from its second point, one object growing ----
+        {
+            Document d6;
+            Editor e6;
+            e6.setDocument(&d6);
+            e6.snapSettings().objectSnap = false;
+            e6.snapSettings().gridSnap = false;
+            e6.setTool(ToolId::DoublePolyline);
+            e6.onPointerPress({0, 200}, Qt::LeftButton, Qt::NoModifier);
+            e6.onPointerPress({60, 200}, Qt::LeftButton, Qt::NoModifier);
+            const bool placedAtTwo = d6.entities().size() == 1 && d6.entities().front().points.size() == 2;
+            e6.onPointerPress({60, 260}, Qt::LeftButton, Qt::NoModifier);
+            const bool grew = d6.entities().size() == 1 && d6.entities().front().points.size() == 3;
+            check(placedAtTwo && grew, "double line: placed as it is drawn - one object, longer with each point");
+            e6.undo();
+            check(d6.entities().empty(), "double line: one undo takes the whole of it back");
+        }
+        // ---- A RAY, A CONSTRUCTION LINE, A RECTANGLE BY THREE POINTS, DIVIDE, A POLYLINE'S WIDTH AND WIPEOUT ----
+        {
+            Document d7;
+            Editor e7;
+            e7.setDocument(&d7);
+            e7.snapSettings().objectSnap = false;
+            e7.snapSettings().gridSnap = false;
+            e7.setTool(ToolId::Ray);
+            e7.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+            e7.onPointerPress({10, 0}, Qt::LeftButton, Qt::NoModifier);
+            e7.onPointerPress({0, 10}, Qt::LeftButton, Qt::NoModifier);
+            int rays = 0;
+            for (const Entity& e : d7.entities()) rays += lineIsInfinite(e) && e.meta.value(QStringLiteral("infinite")).toString() == QLatin1String("ray");
+            Vec2 from, to;
+            if (!d7.entities().empty()) lineReach(d7.entities().front(), from, to);
+            check(rays == 2 && distance(from, Vec2{0, 0}) < 1e-9 && to.x > 1000.0, "ray: two from one base, each running on from it");
+            e7.onKey(Qt::Key_Escape, Qt::NoModifier);
+            e7.setTool(ToolId::ConstructionLine);
+            e7.onPointerPress({0, 50}, Qt::LeftButton, Qt::NoModifier);
+            e7.onPointerPress({10, 50}, Qt::LeftButton, Qt::NoModifier);
+            e7.onKey(Qt::Key_Escape, Qt::NoModifier);
+            lineReach(d7.entities().back(), from, to);
+            check(d7.entities().back().meta.value(QStringLiteral("infinite")).toString() == QLatin1String("both") && from.x < -1000.0 && to.x > 1000.0,
+                  "construction line: on both ways");
+            e7.setTool(ToolId::Rect3Point);
+            e7.onPointerPress({100, 0}, Qt::LeftButton, Qt::NoModifier);
+            e7.onPointerPress({130, 30}, Qt::LeftButton, Qt::NoModifier);
+            e7.onPointerPress({120, 40}, Qt::LeftButton, Qt::NoModifier);
+            const Entity& rect = d7.entities().back();
+            const bool square = rect.points.size() == 5 && std::abs(dot(rect.points[1] - rect.points[0], rect.points[2] - rect.points[1])) < 1e-6 &&
+                                distance(rect.points[0], rect.points[4]) < 1e-9;
+            check(square, "rectangle by 3 points: four square corners at the angle of its first edge, closed");
+            Entity line;
+            line.type = EntityType::Line;
+            line.id = QStringLiteral("to-divide");
+            line.a = {0, -100};
+            line.b = {90, -100};
+            d7.entities().push_back(line);
+            e7.selectById(line.id);
+            check(e7.divideSelection(3) == 1, "divide: one line divided");
+            int pieces = 0;
+            for (const Entity& e : d7.entities())
+                if (e.type == EntityType::Line && std::abs(e.a.y + 100.0) < 1e-9 && std::abs(distance(e.a, e.b) - 30.0) < 1e-6) ++pieces;
+            check(pieces == 3, "divide: into three lines of 30 each");
+            e7.setTool(ToolId::Polyline);
+            e7.setPolylineWidth(2.0);
+            e7.onPointerPress({0, 300}, Qt::LeftButton, Qt::NoModifier);
+            e7.onPointerPress({50, 300}, Qt::LeftButton, Qt::NoModifier);
+            e7.onKey(Qt::Key_Space, Qt::NoModifier);
+            check(std::abs(d7.entities().back().meta.value(QStringLiteral("plineWidth")).toDouble() - 2.0) < 1e-9, "polyline: drawn with its width");
+            e7.setTool(ToolId::Polyline);
+            e7.onPointerPress({0, 400}, Qt::LeftButton, Qt::NoModifier);
+            e7.onPointerPress({50, 400}, Qt::LeftButton, Qt::NoModifier);
+            e7.onPointerPress({50, 450}, Qt::LeftButton, Qt::NoModifier);
+            check(e7.polylineAsWipeout() && d7.entities().back().type == EntityType::Wipeout && d7.entities().back().points.size() == 3,
+                  "polyline: what is drawn closed into a wipeout");
+        }
     }
 
     // --- Trimming ONE line of a double run: the fence crosses that line and not the centreline, so

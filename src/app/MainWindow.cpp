@@ -10193,7 +10193,10 @@ void MainWindow::refreshProperties() {
             name = QStringLiteral("Double line (%1%2)").arg(what, ends ? QStringLiteral(", heatshrink on ends") : QString());
         } else if (x.type == EntityType::Polyline) {
             // THE LINE AND THE DOUBLE LINE, as the tools that draw them are called.
-            name = x.meta.value(QStringLiteral("double")).toBool() ? QStringLiteral("Double line") : QStringLiteral("Line");
+            name = x.meta.value(QStringLiteral("double")).toBool() ? QStringLiteral("Double line") : QStringLiteral("Polyline");
+        } else if (x.type == EntityType::Line && lineIsInfinite(x)) {
+            name = x.meta.value(QStringLiteral("infinite")).toString() == QLatin1String("ray") ? QStringLiteral("Ray")
+                                                                                             : QStringLiteral("Construction line");
         } else if (x.type == EntityType::DoubleLine) {
             name = QStringLiteral("Double line");
         }
@@ -12242,9 +12245,14 @@ void MainWindow::buildCommands() {
     auto tool = [this](ToolId id) { return [this, id] { editor_->setTool(id); }; };
     commands_ = {
         // Draw
-        // LINE AND DOUBLE LINE: through every point clicked - the old polyline names still find them.
-        {{"line", "l", "pline", "lp", "pl", "polyline"}, "Draw", "Line", tool(ToolId::Polyline)},
+        // LINE (a line a segment, on from each end), DOUBLE LINE (one object through every point), POLYLINE (AutoCAD's
+        // PLINE), and the ray and the construction line.
+        {{"line", "l"}, "Draw", "Line", tool(ToolId::Line)},
+        {{"pline", "lp", "pl", "polyline"}, "Draw", "Polyline", tool(ToolId::Polyline)},
         {{"dline", "d", "dl", "ml", "dpline", "dp", "dpl", "mline"}, "Draw", "Double line", tool(ToolId::DoublePolyline)},
+        {{"ray"}, "Draw", "Ray", tool(ToolId::Ray)},
+        {{"xline", "xl", "construction"}, "Draw", "Construction line", tool(ToolId::ConstructionLine)},
+        {{"rect3", "rectangle3"}, "Draw", "Rectangle by 3 points", tool(ToolId::Rect3Point)},
         {{"rectang", "rec", "rectangle", "rect"}, "Draw", "Rectangle", tool(ToolId::Rect)},
         {{"polygon", "pol"}, "Draw", "Polygon", tool(ToolId::Polygon)},
         {{"circle", "c"}, "Draw", "Circle", tool(ToolId::Circle)},
@@ -12508,8 +12516,10 @@ std::vector<KeyRow> keyboardReference() {
     out.push_back(lit("(click on a line)", "Starting a double line on another object: both lines start flush on it, "
                                            "the second cut or carried to it - no Shift needed"));
     out.push_back(lit("Shift", "Ending a double line on a line: both lines end flush on it"));
-    out.push_back(lit("Space  /  Esc", "Drawing a line or double line: keep what is drawn up to the last point, and put "
-                                       "the tool down"));
+    out.push_back(lit("Space  /  Esc", "Drawing a line, double line or polyline: keep what is drawn up to the last "
+                                       "point, and put the tool down"));
+    out.push_back(lit("A  /  L  /  W  /  C  /  U", "Drawing a polyline: arc or line segments, its width, close it, take "
+                                                   "back the last point"));
     out.push_back(lit("Shift+1 to Shift+9", "Fanning wires out of a connector: add or drop that one "
                                        "pin's wire"));
     out.push_back(lit("Shift", "Fanning wires out of a connector: route one from every pin"));

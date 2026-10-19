@@ -411,6 +411,16 @@ public:
     // nearest - each only if that snap is switched on, like any other.
     // Which sort of run the Heatshrink tool draws next. The old square-end switch remains as a
     // compatibility spelling for callers and tests written before there was a third sort.
+    // THE POLYLINE'S WIDTH ([W]idth, as AutoCAD's PLINE): the next one drawn - and the one being drawn - that wide.
+    void setPolylineWidth(double mm) { plineWidth_ = std::max(0.0, mm); emit overlayChanged(); }
+    double polylineWidth() const { return plineWidth_; }
+    // THE POLYLINE BEING DRAWN, turned into something else from its options: a double line through the same points
+    // (carried on drawing), or a wipeout closed through them. False with nothing (or too little) drawn.
+    bool polylineAsDoubleLine();
+    bool polylineAsWipeout();
+    // DIVIDE: the selected lines (and plain polylines) each cut into so many equal pieces, one change to undo.
+    // Returns how many were divided.
+    int divideSelection(int pieces);
     void setShrinkRouteMode(ShrinkRouteMode mode) { shrinkMode_ = mode; }
     ShrinkRouteMode shrinkRouteMode() const { return shrinkMode_; }
     // HEATSHRINK ON THE ENDS of a cable or a braid over the run: the next one drawn with a sleeve over each end, or not.
@@ -2335,6 +2345,11 @@ private:
     bool drafting_ = false;
     // Shift held on the first / most-recent draft click of a double line/polyline:
     // caps that run-end flush to a line it lands on (finishDraw applies the caps).
+    // A DOUBLE LINE PLACED AS IT IS DRAWN: the object on the sheet that each click redraws longer, and whether the
+    // finish under way is one of those clicks rather than the end. Not saved.
+    QString draftLiveId_;
+    bool draftLive_ = false;
+    double plineWidth_ = 0.0;   // the next polyline's width ([W]idth); 0 = a plain line. Not saved.
     bool drawStartShift_ = false;
     // A double line's first click on another object - a line it is to start flush on.
     bool startsOnObject(const Vec2& p) const {

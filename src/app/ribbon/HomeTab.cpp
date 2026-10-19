@@ -19,6 +19,9 @@
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
+#include <QInputDialog>
+#include <QStatusBar>
+#include <QToolButton>
 #include <QIcon>
 #include <QLabel>
 #include <QLineEdit>
@@ -97,15 +100,98 @@ QIcon modelMarksEyeIcon() {
 // words are read rather than guessed at, and the same for all five, so the row reads as one group.
 constexpr QSize kModelSessionCell(84, 66);
 
+// MORE DRAWING, under one button at the end of the Draw group: a ray, a construction line, a rectangle by three points,
+// and Divide - the selected lines cut into equal pieces.
+QToolButton* MainWindow::drawMoreButton(QWidget* parent) {
+    auto* more = new QToolButton(parent);
+    more->setObjectName(QStringLiteral("drawMore"));
+    more->setIcon(makeToolIcon(ToolId::ConstructionLine));
+    more->setToolTip(QStringLiteral("More: ray, construction line, rectangle by 3 points, divide"));
+    more->setPopupMode(QToolButton::InstantPopup);
+    more->setFixedSize(kRibbonCell);
+    more->setIconSize(QSize(28, 28));
+    more->setAutoRaise(true);
+    auto* menu = new QMenu(more);
+    for (ToolId id : {ToolId::Ray, ToolId::ConstructionLine, ToolId::Rect3Point}) {
+        QAction* a = menu->addAction(makeToolIcon(id), toolLabel(id));
+        a->setObjectName(QStringLiteral("drawMore") + toolLabel(id).remove(QLatin1Char(' ')));
+        connect(a, &QAction::triggered, this, [this, id] { if (editor_) editor_->setTool(id); });
+    }
+    menu->addSeparator();
+    QAction* divide = menu->addAction(QStringLiteral("Divide..."));
+    divide->setObjectName(QStringLiteral("drawMoreDivide"));
+    divide->setToolTip(QStringLiteral("Cut the selected lines and polylines into so many equal pieces"));
+    connect(divide, &QAction::triggered, this, [this] {
+        if (!editor_) return;
+        bool ok = false;
+        const int n = QInputDialog::getInt(this, QStringLiteral("Divide"), QStringLiteral("Into how many equal pieces:"), 2, 2, 1000, 1, &ok);
+        if (!ok) return;
+        if (editor_->divideSelection(n) == 0)
+            statusBar()->showMessage(QStringLiteral("Divide: select a line or a polyline first"), 5000);
+    });
+    more->setMenu(menu);
+    return more;
+}
+
+// THE POLYLINE'S OPTIONS (AutoCAD's PLINE), while it is being drawn: line or arc segments, its width, close it, take back
+// the last point - or turn what is drawn into a double line, or close it into a wipeout.
+QWidget* MainWindow::polylineOptionsGroup(QHBoxLayout* lay, QWidget* page) {
+    auto* w = new QWidget(page);
+    auto* grid = new QGridLayout(w);
+    grid->setContentsMargins(2, 0, 2, 0);
+    grid->setSpacing(2);
+    auto button = [&](const char* name, const QString& text, const QString& tip, int row, int col, std::function<void()> fn) {
+        auto* b = new QToolButton(w);
+        b->setObjectName(QLatin1String(name));
+        b->setText(text);
+        b->setToolTip(tip);
+        connect(b, &QToolButton::clicked, this, [fn] { fn(); });
+        grid->addWidget(b, row, col);
+        return b;
+    };
+    auto typed = [this](const QString& word) { return [this, word] { if (editor_) editor_->acceptCommandInput(word); }; };
+    button("plineLine", QStringLiteral("Line"), QStringLiteral("Straight segments from here [L]"), 0, 0, typed(QStringLiteral("l")));
+    button("plineArc", QStringLiteral("Arc"), QStringLiteral("Arc segments, each tangent to the last [A]"), 1, 0, typed(QStringLiteral("a")));
+    button("plineClose", QStringLiteral("Close"), QStringLiteral("Close it back to its start [C]"), 0, 1, typed(QStringLiteral("c")));
+    button("plineUndo", QStringLiteral("Undo point"), QStringLiteral("Take back the last point [U]"), 1, 1, typed(QStringLiteral("u")));
+    button("plineDouble", QStringLiteral("Double line"), QStringLiteral("Make what is drawn a double line, and carry on"), 0, 2,
+           [this] { if (editor_) editor_->polylineAsDoubleLine(); });
+    button("plineWipeout", QStringLiteral("Wipeout"), QStringLiteral("Close what is drawn into a wipeout"), 1, 2,
+           [this] { if (editor_) editor_->polylineAsWipeout(); });
+    auto* caption = new QLabel(QStringLiteral("Width"), w);
+    grid->addWidget(caption, 0, 3);
+    auto* width = new QDoubleSpinBox(w);
+    width->setObjectName(QStringLiteral("plineWidth"));
+    width->setRange(0.0, 500.0);
+    width->setDecimals(2);
+    width->setSuffix(QStringLiteral(" mm"));
+    width->setKeyboardTracking(false);
+    width->setToolTip(QStringLiteral("How wide the polyline is drawn on the sheet [W] - 0 a plain line"));
+    connect(width, &QDoubleSpinBox::valueChanged, this, [this](double v) { if (editor_) editor_->setPolylineWidth(v); });
+    grid->addWidget(width, 1, 3);
+    QWidget* group = addGroupKeep(lay, QStringLiteral("Polyline"), w);
+    group->setVisible(false);
+    connect(editor_, &Editor::toolChanged, group, [group, width, this](ToolId t) {
+        group->setVisible(t == ToolId::Polyline);
+        const QSignalBlocker hold(width);
+        width->setValue(editor_->polylineWidth());
+    });
+    return group;
+}
+
 // ---- HOME : Draw | Modify | Properties | AI ----
 void MainWindow::buildHomeTab() {
     auto [page, lay] = makeTabPage();
     QAction* sel = makeToolAction(QStringLiteral("Select"), ToolId::Select);
     sel->setChecked(true);
+    // LINE (a line a segment, going on from each end), DOUBLE LINE, POLYLINE - and the rest, a ray and a construction
+    // line among them under More.
     addGroup(lay, QStringLiteral("Draw"),
-             toolRow({ToolId::Polyline, ToolId::DoublePolyline, ToolId::Rect, ToolId::Circle,
+             toolRow({ToolId::Line, ToolId::DoublePolyline, ToolId::Polyline, ToolId::Rect, ToolId::Circle,
                       ToolId::Ellipse, ToolId::Arc, ToolId::Spline, ToolId::Polygon,
-                      ToolId::Hatch, ToolId::Wipeout}));
+                      ToolId::Hatch, ToolId::Wipeout},
+                     {drawMoreButton(page)}));
+    polylineOptionsGroup(lay, page);
     // The modify tools, Match, Array and Copy: twelve buttons in the same two rows of six. Array and Copy
     // used to stand beside the grid, each at its own width, and Match was dropped into a spare cell - three
     // ways of putting a button in a group, in one group.

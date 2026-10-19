@@ -2005,7 +2005,11 @@ double distanceToEntity(const Entity& e, const Vec2& p) {
                     best = std::min(best, segDist(run[i - 1], run[i]));
             break;
         }
-        best = segDist(e.a, e.b);
+        {
+            Vec2 from, to;
+            lineReach(e, from, to);   // a ray or a construction line is picked anywhere along it
+            best = segDist(from, to);
+        }
         break;
     case EntityType::TwistedPair: {
         // The two wires, not the line they were drawn along: the middle of a twisted pair is empty
@@ -10999,10 +11003,9 @@ void Editor::handleDrawPress(const Vec2& p) {
     }
     switch (tool_) {
     case ToolId::Line: {
-        // Two points make a line, and then the drawing is done with: back to Select, the same as after
-        // every other drawing this application makes. It used to keep the run going, AutoCAD-style,
-        // which left the tool armed after every single line - and a run of connected segments is what
-        // the polyline tool is for. Space re-arms this one for the next line.
+        // A LINE GOES ON FROM ITS END, as AutoCAD's does: each segment placed as a line of its own the moment it is
+        // clicked - on the sheet, there to be snapped to - and the next started where it finished, until Space,
+        // Enter or Esc puts the tool down. (A run that is one object is the polyline's.)
         draftPts_.push_back(p);
         drafting_ = true;
         if (draftPts_.size() >= 2) {
@@ -11013,13 +11016,11 @@ void Editor::handleDrawPress(const Vec2& p) {
             e.b = draftPts_[1];
             pushUndo();
             addEntity(std::move(e));
-            draftPts_.clear();
-            drafting_ = false;
-            setTool(ToolId::Select);
-            emit message(QStringLiteral("Line placed — Space draws another"));
+            draftPts_ = {draftPts_[1]};
+            emit message(QStringLiteral("Line placed - click the next point, Space, Enter or Esc to finish"));
             break;
         }
-        emit message(QStringLiteral("Line: click the second point — Esc exits"));
+        emit message(QStringLiteral("Line: click the next point - Esc exits"));
         break;
     }
     case ToolId::TwistedRoute:
@@ -11075,6 +11076,42 @@ void Editor::handleDrawPress(const Vec2& p) {
         drafting_ = true;
         emit message(QStringLiteral(
             "Harness run: click the next knee — Enter finishes the run, Esc exits"));
+        break;
+    // A RAY OR A CONSTRUCTION LINE: the base point, then a point it passes through - and another through-point
+    // after that from the same base, as many as are wanted, until Esc. Each one placed as it is clicked.
+    case ToolId::Ray:
+    case ToolId::ConstructionLine:
+        if (draftPts_.empty()) {
+            draftPts_.push_back(p);
+            drafting_ = true;
+            emit message(QStringLiteral("%1: click a point it passes through - Esc to finish").arg(toolLabel(tool_)));
+            break;
+        }
+        if (distance(draftPts_.front(), p) > 1e-9) {
+            Entity e;
+            e.type = EntityType::Line;
+            e.layer = doc_->activeLayer();
+            e.a = draftPts_.front();
+            e.b = p;
+            e.meta.insert(QStringLiteral("infinite"), tool_ == ToolId::Ray ? QStringLiteral("ray") : QStringLiteral("both"));
+            pushUndo();
+            e.id = uid();
+            addEntity(std::move(e));
+            doc_->setDirty(true);
+        }
+        emit message(QStringLiteral("%1 placed - click another through-point, Esc to finish").arg(toolLabel(tool_)));
+        break;
+    // A RECTANGLE BY THREE POINTS: two corners along one edge - which sets its angle and its length - and a third
+    // point that sets how far the opposite edge stands off it.
+    case ToolId::Rect3Point:
+        draftPts_.push_back(p);
+        drafting_ = true;
+        if (draftPts_.size() == 1)
+            emit message(QStringLiteral("Rectangle by 3 points: click the other end of the first edge"));
+        else if (draftPts_.size() == 2)
+            emit message(QStringLiteral("Rectangle by 3 points: click how far the opposite edge stands off"));
+        else
+            finishDraw();
         break;
     case ToolId::TwistedHarness:
     case ToolId::TwistedPair:
@@ -11255,9 +11292,16 @@ void Editor::handleDrawPress(const Vec2& p) {
             emit overlayChanged();
         }
         drafting_ = true;
-        emit message(QStringLiteral("%1: click next point — [A]rc/[L]ine, [C]lose, "
-                                    "[U]ndo, Enter to finish")
-                         .arg(toolLabel(tool_)));
+        // A DOUBLE LINE IS PLACED AS IT IS DRAWN: every point clicked puts what is drawn so far on the sheet - one
+        // object, its knees mitred - so the next point can be snapped to what is already there.
+        if (tool_ == ToolId::DoublePolyline && draftPts_.size() >= 2 && continueId_.isEmpty()) {
+            draftLive_ = true;
+            finishDraw();
+            draftLive_ = false;
+        }
+        emit message(tool_ == ToolId::Polyline
+                         ? QStringLiteral("Polyline: click next point - [A]rc/[L]ine, [W]idth, [C]lose, [U]ndo, Enter to finish")
+                         : QStringLiteral("%1: click next point - [C]lose, [U]ndo; Space or Esc keeps it and ends").arg(toolLabel(tool_)));
         break;
     }
     case ToolId::Wipeout:
@@ -12213,12 +12257,27 @@ void Editor::finishDraw() {
         }
         break;
     }
+    // THE RECTANGLE BY THREE POINTS: a closed run of four corners, at whatever angle its first edge was drawn.
+    case ToolId::Rect3Point: {
+        if (draftPts_.size() < 3) { cancelDraw(); return; }
+        const Vec2 a = draftPts_[0], b = draftPts_[1];
+        const Vec2 along = b - a;
+        if (along.length() < 1e-9) { cancelDraw(); return; }
+        const Vec2 n = along.normalized().perp();
+        const Vec2 off = n * dot(draftPts_[2] - b, n);
+        e.type = EntityType::Polyline;
+        e.points = {a, b, b + off, a + off, a};
+        e.meta.insert(QStringLiteral("closed"), true);
+        break;
+    }
     case ToolId::Polyline:
     case ToolId::DoublePolyline:
     case ToolId::Spline:
         if (draftPts_.size() < 2) { cancelDraw(); return; }
         e.type = (tool_ == ToolId::Spline) ? EntityType::Spline : EntityType::Polyline;
         e.points = draftPts_;
+        // A POLYLINE GIVEN A WIDTH ([W]idth, as AutoCAD's PLINE): drawn that wide on the sheet.
+        if (tool_ == ToolId::Polyline && plineWidth_ > 0.0) e.meta.insert(QStringLiteral("plineWidth"), plineWidth_);
         if (tool_ == ToolId::DoublePolyline) {
             e.points = faceFitting() ? draftPts_
                                      : doubleRunCentre(draftPts_, draftCableGap(), doubleSecondBelow());
@@ -12377,7 +12436,41 @@ void Editor::finishDraw() {
         }
         if (drawEndShift_) capDoubleEndAt(e, QStringLiteral("cutEnd"), endPt, doc_->entities());
     }
-    drawStartShift_ = drawEndShift_ = false;
+    // (Kept while a double line is being placed as it is drawn: its start stays flush on what it began on.)
+    if (!draftLive_) drawStartShift_ = drawEndShift_ = false;
+    else drawEndShift_ = false;
+
+    // A DOUBLE LINE PLACED AS IT IS DRAWN: the first point after the start puts it on the sheet - one change, to
+    // undo - and every point after that redraws the same object longer. The last of them (Space, Esc, Enter) ends it.
+    if (tool_ == ToolId::DoublePolyline && (draftLive_ || !draftLiveId_.isEmpty())) {
+        if (draftLiveId_.isEmpty()) {
+            pushUndo();
+            e.id = uid();
+            draftLiveId_ = e.id;
+            addEntity(std::move(e));
+        } else {
+            e.id = draftLiveId_;
+            bool found = false;
+            for (Entity& placed : doc_->entities())
+                if (placed.id == draftLiveId_) {
+                    placed = e;
+                    found = true;
+                    break;
+                }
+            if (!found) addEntity(std::move(e));   // undone while it was being drawn: put back
+        }
+        doc_->setDirty(true);
+        emit changed();
+        if (draftLive_) return;
+        draftLiveId_.clear();
+        draftPts_.clear();
+        drafting_ = false;
+        drawStartShift_ = false;
+        setTool(ToolId::Select);
+        if (filletTooBig)
+            emit message(QStringLiteral("Fillet radius %1 is too big for a corner — drawn with sharp corners").arg(cornerRadius_));
+        return;
+    }
 
     const bool keepWire = (tool_ == ToolId::Wire); // wire placement is continuous until Esc
     pushUndo();
@@ -12442,6 +12535,7 @@ void Editor::cancelDraw() {
     twistedHeld_ = false;     // nor held back
     lastHatchId_.clear(); // end the hatch live-edit session
     dimHasRef_ = false;   // forget any picked circle/arc for a radius/dia dimension
+    draftLiveId_.clear(); // a double line placed as it was drawn stays as it is
     dpolyLsArm_ = false;  // forget a pending/active line-start reference
     dpolyHasLsRef_ = false;
     dpolySwap_ = false;   // and which side the second line was put on
@@ -13371,8 +13465,19 @@ bool Editor::acceptCommandInput(const QString& text) {
             emit overlayChanged();
             return true;
         }
-        // Arc / Line segment mode (Polyline only).
+        // Arc / Line segment mode, and its width (Polyline only).
         if (tool_ == ToolId::Polyline) {
+            if (t.compare(QStringLiteral("w"), Qt::CaseInsensitive) == 0 ||
+                t.compare(QStringLiteral("width"), Qt::CaseInsensitive) == 0) {
+                emit message(QStringLiteral("Width: type it on the ribbon (Polyline - Width), or w=<mm>"));
+                return true;
+            }
+            if (t.startsWith(QStringLiteral("w="), Qt::CaseInsensitive)) {
+                bool ok = false;
+                const double w = t.mid(2).toDouble(&ok);
+                if (ok) setPolylineWidth(w);
+                return true;
+            }
             if (t.compare(QStringLiteral("a"), Qt::CaseInsensitive) == 0 ||
                 t.compare(QStringLiteral("arc"), Qt::CaseInsensitive) == 0) {
                 polyArcMode_ = true;
@@ -19668,6 +19773,107 @@ void Editor::setSelectionBraided(bool on) {
     emit changed();
 }
 
+bool Editor::polylineAsDoubleLine() {
+    if (tool_ != ToolId::Polyline || draftPts_.empty()) return false;
+    const std::vector<Vec2> pts = draftPts_;
+    const std::vector<double> radii = draftCornerRadii_;
+    setTool(ToolId::DoublePolyline);
+    draftPts_ = pts;
+    draftCornerRadii_ = radii;
+    draftBulges_.assign(pts.size(), 0.0);
+    drafting_ = true;
+    if (draftPts_.size() >= 2) {
+        draftLive_ = true;
+        finishDraw();
+        draftLive_ = false;
+    }
+    emit message(QStringLiteral("Double line through the points drawn - click on, Space or Esc to finish"));
+    emit overlayChanged();
+    return true;
+}
+
+bool Editor::polylineAsWipeout() {
+    if (tool_ != ToolId::Polyline || draftPts_.size() < 3 || !doc_) return false;
+    Entity w;
+    w.type = EntityType::Wipeout;
+    w.layer = doc_->activeLayer();
+    w.points = draftPts_;
+    w.id = uid();
+    pushUndo();
+    addEntity(std::move(w));
+    doc_->setDirty(true);
+    cancelDraw();
+    setTool(ToolId::Select);
+    emit message(QStringLiteral("Wipeout closed through the points drawn"));
+    emit changed();
+    return true;
+}
+
+int Editor::divideSelection(int pieces) {
+    if (!doc_ || pieces < 2) return 0;
+    // WHAT CAN BE DIVIDED: a line (not a ray or a construction line, which have no end to divide to), and a plain
+    // polyline - not a double run, a sleeve or one with arcs in it, whose pieces would not be what was drawn.
+    auto divisible = [](const Entity& e) {
+        if (e.type == EntityType::Line) return !lineIsInfinite(e) && distance(e.a, e.b) > 1e-9 && !e.meta.value(QStringLiteral("axisAngle")).toBool();
+        return e.type == EntityType::Polyline && e.points.size() >= 2 && !e.meta.value(QStringLiteral("double")).toBool() &&
+               !e.meta.value(QStringLiteral("shrunkEnds")).toBool() && !e.meta.contains(QStringLiteral("bulges"));
+    };
+    std::vector<QString> ids;
+    for (const Entity* e : selectedEntities())
+        if (divisible(*e)) ids.push_back(e->id);
+    if (ids.empty()) return 0;
+    pushUndo();
+    std::vector<Entity> made;
+    for (const QString& id : ids) {
+        const Entity* src = entityById(id);
+        if (!src) continue;
+        const Entity whole = *src;
+        const std::vector<Vec2> path = whole.type == EntityType::Line ? std::vector<Vec2>{whole.a, whole.b} : whole.points;
+        std::vector<double> at{0.0};
+        for (size_t i = 1; i < path.size(); ++i) at.push_back(at.back() + distance(path[i - 1], path[i]));
+        const double total = at.back();
+        auto pointAt = [&](double s) {
+            size_t k = 1;
+            while (k + 1 < at.size() && at[k] < s) ++k;
+            const double span = std::max(1e-12, at[k] - at[k - 1]);
+            return path[k - 1] + (path[k] - path[k - 1]) * std::clamp((s - at[k - 1]) / span, 0.0, 1.0);
+        };
+        for (int i = 0; i < pieces; ++i) {
+            const double s0 = total * i / pieces, s1 = total * (i + 1) / pieces;
+            Entity piece = whole;
+            piece.id = uid();
+            if (whole.type == EntityType::Line) {
+                piece.a = pointAt(s0);
+                piece.b = pointAt(s1);
+            } else {
+                // Its own corners within the stretch, kept; the cut points at either end.
+                piece.points = {pointAt(s0)};
+                for (size_t k = 1; k + 1 < path.size(); ++k)
+                    if (at[k] > s0 + 1e-9 && at[k] < s1 - 1e-9) piece.points.push_back(path[k]);
+                piece.points.push_back(pointAt(s1));
+                piece.a = piece.points.front();
+                piece.b = piece.points.back();
+                piece.meta.remove(QStringLiteral("cornerRadii"));
+                piece.meta.remove(QStringLiteral("cornerChamfers"));
+                piece.meta.remove(QStringLiteral("closed"));
+            }
+            made.push_back(std::move(piece));
+        }
+        auto& all = doc_->entities();
+        all.erase(std::remove_if(all.begin(), all.end(), [&](const Entity& e) { return e.id == id; }), all.end());
+    }
+    selected_.clear();
+    for (Entity& e : made) {
+        selected_.push_back(e.id);
+        addEntity(std::move(e));
+    }
+    doc_->setDirty(true);
+    emit selectionChanged();
+    emit changed();
+    emit message(QStringLiteral("Divided %1 object(s) into %2 equal pieces each").arg(ids.size()).arg(pieces));
+    return static_cast<int>(ids.size());
+}
+
 void Editor::setSelectionBraidShield(bool shield) {
     std::vector<Entity*> braids;
     for (Entity* e : selectedEntities())
@@ -22155,6 +22361,12 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             p.drawLine(vt.toScreen(r1[0]), vt.toScreen(r1[1]));
             p.drawLine(vt.toScreen(r2[0]), vt.toScreen(r2[1]));
         } else if (tool_ == ToolId::DoublePolyline && pts.size() >= 2) {
+            // ONCE IT IS ON THE SHEET (placed as it is drawn) only the stretch still following the pointer is a
+            // preview: what is placed is drawn as itself.
+            if (!draftLiveId_.isEmpty() && pts.size() > 2) {
+                pts = {pts[pts.size() - 2], pts.back()};
+                previewRadii = {0.0, 0.0};
+            }
             // Round each filleted corner of the centerline at radius + gap/2 so both
             // runs fillet, then offset.
             const double h = draftCableGap() / 2.0;
@@ -22176,6 +22388,28 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 for (const auto& v : run) poly << vt.toScreen(v);
                 p.drawPolyline(poly);
             }
+        } else if ((tool_ == ToolId::Ray || tool_ == ToolId::ConstructionLine) && pts.size() >= 2) {
+            // Through the pointer and on - off the view one way, or both ways.
+            Entity ghost;
+            ghost.type = EntityType::Line;
+            ghost.a = pts.front();
+            ghost.b = pts.back();
+            ghost.meta.insert(QStringLiteral("infinite"), tool_ == ToolId::Ray ? QStringLiteral("ray") : QStringLiteral("both"));
+            Vec2 from, to;
+            lineReach(ghost, from, to);
+            p.drawLine(vt.toScreen(from), vt.toScreen(to));
+        } else if (tool_ == ToolId::Rect3Point && pts.size() >= 2) {
+            // The first edge, and - with it down - the rectangle standing off it to the pointer.
+            const Vec2 a = pts[0], b = pts[1];
+            QPolygonF poly;
+            if (pts.size() >= 3 && (b - a).length() > 1e-9) {
+                const Vec2 n = (b - a).normalized().perp();
+                const Vec2 off = n * dot(pts[2] - b, n);
+                for (const Vec2& v : {a, b, b + off, a + off, a}) poly << vt.toScreen(v);
+            } else {
+                poly << vt.toScreen(a) << vt.toScreen(b);
+            }
+            p.drawPolyline(poly);
         } else if (tool_ == ToolId::Circle) {
             QPointF cc;
             double r = 0;

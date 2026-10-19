@@ -76,13 +76,19 @@ const std::vector<CommandDemoScript>& scripts() {
                          std::move(steps)});
         };
         // ---- Draw
-        add("line", "Line: one object through every point clicked; Space or Esc keeps what is drawn and puts the tool down.",
-            ToolId::Polyline,
+        add("line", "Line: each click places a line, and the next goes on from its end; Space or Esc puts the tool down.",
+            ToolId::Line,
             {move({25, 20}, "Line: the first point"), click({25, 20}, "Click: where it starts"),
+             move({80, 80}, "The line follows the pointer"), click({80, 80}, "Click: a line placed - the next starts here"),
+             move({130, 25}, "And on"), click({130, 25}, "Click: another line placed"),
+             key(Qt::Key_Space, "Space: the lines stay, and the tool is put down")});
+        add("pline", "Polyline: one object through every point; [A]rc, [L]ine, [W]idth, [C]lose, [U]ndo as it is drawn.",
+            ToolId::Polyline,
+            {move({25, 20}, "Polyline: the first point"), click({25, 20}, "Click: where it starts"),
              move({80, 80}, "To the next corner"), click({80, 80}, "Click: a corner"),
              move({130, 25}, "And the next"), click({130, 25}, "Click: another corner"),
              move({175, 70}, "The last point"), click({175, 70}, "Click: the last point"),
-             key(Qt::Key_Space, "Space: the line is kept as drawn, and the tool put down")});
+             key(Qt::Key_Space, "Space: the polyline is kept as drawn, and the tool put down")});
         add("dline", "Double line: two parallel lines through every point clicked; started on another object, both "
                      "start flush on it. Space or Esc keeps what is drawn.",
             ToolId::DoublePolyline,

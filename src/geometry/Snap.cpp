@@ -51,9 +51,12 @@ void entitySegments(const Entity& e, std::vector<std::pair<Vec2, Vec2>>& out) {
         return;
     }
     switch (e.type) {
-    case EntityType::Line:
-        out.emplace_back(e.a, e.b);
+    case EntityType::Line: {
+        Vec2 from, to;
+        lineReach(e, from, to);   // a ray or a construction line snapped to anywhere along it
+        out.emplace_back(from, to);
         break;
+    }
     case EntityType::ConnectionPin:
         if (connectionPinIsStub(e)) out.emplace_back(e.a, e.b);   // the stub is a line
         break;

@@ -165,6 +165,11 @@ bool sleeveEndCoverageOf(const Entity& e, double& start, double& end);
 bool sleeveIsBraid(const Entity& e);
 // A BRAIDED SHIELD (shrinkShield on a braid): a metal screen braid over the run, hatched herringbone rather than woven.
 bool sleeveIsShield(const Entity& e);
+// A RAY OR A CONSTRUCTION LINE: a Line marked infinite - "ray" from its first point on through its second, "both"
+// through both and on either way. lineReach gives the stretch of it to draw, pick and snap along (an ordinary line's
+// own two ends); the stored points stay what was clicked, so it measures and saves as the two points it is.
+bool lineIsInfinite(const Entity& e);
+void lineReach(const Entity& e, Vec2& a, Vec2& b);
 std::vector<std::pair<Vec2, Vec2>> sleeveBraidStrokes(const Entity& e);
 std::vector<Vec2> entityOutline(const Entity& e);
 

@@ -456,6 +456,23 @@ bool sleeveIsBraid(const Entity& e) {
            e.meta.value(QLatin1String("shrinkBraid")).toBool() && e.points.size() >= 2;
 }
 
+bool lineIsInfinite(const Entity& e) {
+    if (e.type != EntityType::Line) return false;
+    const QString how = e.meta.value(QLatin1String("infinite")).toString();
+    return how == QLatin1String("ray") || how == QLatin1String("both");
+}
+
+void lineReach(const Entity& e, Vec2& a, Vec2& b) {
+    a = e.a;
+    b = e.b;
+    if (!lineIsInfinite(e) || distance(e.a, e.b) < 1e-9) return;
+    // As far as any sheet goes and well past it: drawn to here, a ray or a construction line runs off every view.
+    constexpr double kReach = 1.0e5;
+    const Vec2 d = (e.b - e.a).normalized();
+    b = e.a + d * kReach;
+    if (e.meta.value(QLatin1String("infinite")).toString() == QLatin1String("both")) a = e.a - d * kReach;
+}
+
 bool sleeveIsShield(const Entity& e) {
     return sleeveIsBraid(e) && e.meta.value(QLatin1String("shrinkShield")).toBool();
 }

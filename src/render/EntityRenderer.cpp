@@ -1325,6 +1325,14 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         pen.setDashPattern(dashes);
         pen.setCapStyle(Qt::FlatCap);
     }
+    // A POLYLINE WITH A WIDTH (AutoCAD's PLINE Width): drawn as wide on the sheet as it says, square at its ends and
+    // mitred at its corners, however far in or out the view is.
+    if (e.type == EntityType::Polyline && e.meta.value(QStringLiteral("plineWidth")).toDouble() > 0.0) {
+        pen.setWidthF(std::max(1.0, e.meta.value(QStringLiteral("plineWidth")).toDouble() * vt.scale()));
+        pen.setCosmetic(false);
+        pen.setCapStyle(Qt::FlatCap);
+        pen.setJoinStyle(Qt::MiterJoin);
+    }
     p.setPen(pen);
     p.setBrush(Qt::NoBrush);
 
@@ -1485,7 +1493,11 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             }
             break;
         }
-        p.drawLine(vt.toScreen(e.a), vt.toScreen(e.b));
+        {
+            Vec2 from, to;
+            lineReach(e, from, to);   // a ray or a construction line runs on off the view
+            p.drawLine(vt.toScreen(from), vt.toScreen(to));
+        }
         break;
 
     case EntityType::DoubleLine: {

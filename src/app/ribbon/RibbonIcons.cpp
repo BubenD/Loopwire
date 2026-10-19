@@ -275,7 +275,37 @@ QIcon makeToolIcon(ToolId id, const QColor& ink, int variant) {
     }
     case ToolId::Line: p.drawLine(5, 18, 19, 6); break;
     case ToolId::DoubleLine: p.drawLine(4, 16, 17, 5); p.drawLine(7, 19, 20, 8); break;
-    case ToolId::Polyline: { QPolygonF a({{4, 16}, {9, 9}, {14, 14}, {20, 6}}); p.drawPolyline(a); break; }
+    case ToolId::Polyline: {
+        // A polyline: straight runs and an arc, one object.
+        QPainterPath path;
+        path.moveTo(3, 18);
+        path.lineTo(9, 10);
+        path.lineTo(13, 14);
+        path.cubicTo(15, 6, 21, 6, 21, 12);
+        p.drawPath(path);
+        break;
+    }
+    case ToolId::Ray:
+        // From a base point, on and off the edge.
+        p.drawEllipse(QPointF(5, 18), 1.6, 1.6);
+        p.drawLine(QPointF(5, 18), QPointF(22, 4));
+        p.drawLine(QPointF(22, 4), QPointF(18.5, 4.6));
+        p.drawLine(QPointF(22, 4), QPointF(21.4, 7.5));
+        break;
+    case ToolId::ConstructionLine:
+        // Through a point and on both ways.
+        p.drawEllipse(QPointF(12, 12), 1.6, 1.6);
+        p.drawLine(QPointF(2, 20), QPointF(22, 4));
+        p.drawLine(QPointF(2, 20), QPointF(2.6, 16.5));
+        p.drawLine(QPointF(22, 4), QPointF(21.4, 7.5));
+        break;
+    case ToolId::Rect3Point: {
+        // A rectangle at an angle, its three points marked.
+        QPolygonF r({{4, 15}, {14, 5}, {20, 11}, {10, 21}});
+        p.drawPolygon(r);
+        for (const QPointF& c : {QPointF(4, 15), QPointF(14, 5), QPointF(20, 11)}) p.drawEllipse(c, 1.3, 1.3);
+        break;
+    }
     case ToolId::DoublePolyline: {
         QPolygonF a({{4, 14}, {9, 7}, {14, 12}, {20, 4}});
         QPolygonF b({{4, 19}, {9, 12}, {14, 17}, {20, 9}});

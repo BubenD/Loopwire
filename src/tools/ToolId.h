@@ -112,6 +112,12 @@ enum class ToolId {
     CenterLine,
     LacingTie, // appended so existing tool values remain unchanged
     Arrow,     // a plain arrow: drawn as a leader is, tip then tail, with no words
+    // A RAY and a CONSTRUCTION LINE (AutoCAD's XLINE): a base point and a point it passes through, the line running
+    // on from the base through it - one way, or both ways. Lines marked infinite (see lineReach).
+    Ray,
+    ConstructionLine,
+    // A RECTANGLE BY THREE POINTS: two corners along one edge, at any angle, and how far the opposite edge stands off.
+    Rect3Point,
 };
 
 inline bool isPickModifyTool(ToolId t) {
@@ -125,6 +131,9 @@ inline bool isDrawTool(ToolId t) {
     case ToolId::DoubleLine:
     case ToolId::Polyline:
     case ToolId::DoublePolyline:
+    case ToolId::Ray:
+    case ToolId::ConstructionLine:
+    case ToolId::Rect3Point:
     case ToolId::Rect:
     case ToolId::Polygon:
     case ToolId::Circle:
@@ -168,13 +177,15 @@ inline bool isPlacementTool(ToolId t) {
 inline QString toolLabel(ToolId t) {
     switch (t) {
     case ToolId::Select: return QStringLiteral("Select");
+    // THE LINE goes on from each end it places, a line a segment (AutoCAD's LINE); THE DOUBLE LINE is one object
+    // through every point, placed as it is drawn; THE POLYLINE is AutoCAD's PLINE - one object, with arcs and a width.
     case ToolId::Line: return QStringLiteral("Line");
-    case ToolId::DoubleLine: return QStringLiteral("Double line");
-    // THE LINE AND THE DOUBLE LINE ARE THE ONES DRAWN THROUGH EVERY POINT CLICKED: what used to be the polyline and
-    // the double polyline. The one-segment Line and Double line tools are off the ribbon; typed, "line" and "dline"
-    // draw these.
-    case ToolId::Polyline: return QStringLiteral("Line");
+    case ToolId::DoubleLine: return QStringLiteral("Double line segment");
+    case ToolId::Polyline: return QStringLiteral("Polyline");
     case ToolId::DoublePolyline: return QStringLiteral("Double line");
+    case ToolId::Ray: return QStringLiteral("Ray");
+    case ToolId::ConstructionLine: return QStringLiteral("Construction line");
+    case ToolId::Rect3Point: return QStringLiteral("Rectangle by 3 points");
     case ToolId::Rect: return QStringLiteral("Rectangle");
     case ToolId::Polygon: return QStringLiteral("Polygon");
     case ToolId::Circle: return QStringLiteral("Circle");
