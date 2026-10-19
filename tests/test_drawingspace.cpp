@@ -1710,7 +1710,18 @@ int run_drawingspace_tests() {
                   "align: the seven ways, in that order, and only those");
             check(align->popupMode() == QToolButton::MenuButtonPopup,
                   "align: as Circle - the button does the way last picked, its arrow picks another");
+            check(align->property("alignMode").toInt() == static_cast<int>(Editor::AlignMode::FourPoint),
+                  "align: the button itself aligns by 4 points until another way is picked");
         }
+        // TEXT: a button of variants as Circle is - Mtext, the text there was, and Stext, one line.
+        QMenu* textMenu = nullptr;
+        for (QMenu* m : win.findChildren<QMenu*>())
+            if (m->objectName() == QStringLiteral("textMenu")) textMenu = m;
+        QStringList texts;
+        if (textMenu)
+            for (QAction* a : textMenu->actions()) texts << a->text();
+        check(texts == QStringList({QStringLiteral("Mtext"), QStringLiteral("Stext")}),
+              "text: the Text button offers Mtext and Stext");
     }
 
     // ---- which ends wear the transition, and only a cable is asked ------------------------------

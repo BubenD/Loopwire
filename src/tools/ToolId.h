@@ -121,6 +121,8 @@ enum class ToolId {
     // A TRIANGLE ON A BASE: the base's two ends, a click on the side it stands on, then the angles at the two ends of
     // the base - the third is what is left of 180 degrees.
     Triangle,
+    // STEXT (AutoCAD's TEXT/DTEXT): one line of words at a point - Enter places it. Text is the Mtext beside it.
+    SText,
 };
 
 inline bool isPickModifyTool(ToolId t) {
@@ -145,6 +147,7 @@ inline bool isDrawTool(ToolId t) {
     case ToolId::Ellipse:
     case ToolId::Spline:
     case ToolId::Text:
+    case ToolId::SText:
     case ToolId::MText:
     case ToolId::Dimension:
     case ToolId::Hatch:
@@ -197,8 +200,9 @@ inline QString toolLabel(ToolId t) {
     case ToolId::Arc: return QStringLiteral("Arc");
     case ToolId::Ellipse: return QStringLiteral("Ellipse");
     case ToolId::Spline: return QStringLiteral("Spline");
-    case ToolId::Text: return QStringLiteral("Text");
-    case ToolId::MText: return QStringLiteral("Multiline text");
+    case ToolId::Text: return QStringLiteral("Mtext");
+    case ToolId::SText: return QStringLiteral("Stext");
+    case ToolId::MText: return QStringLiteral("Mtext box");
     case ToolId::Dimension: return QStringLiteral("Dimension");
     case ToolId::Hatch: return QStringLiteral("Hatch");
     case ToolId::Wipeout: return QStringLiteral("Wipeout");

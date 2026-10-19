@@ -1170,6 +1170,7 @@ private:
     int inlineConnectorPin_ = -1;      // connector pin label being inline-edited (-1 = none)
     QString inlineConnectorId_;        // the connector whose pin label is being edited
     bool inlineSingleLine_ = false;    // single-value edit (balloon number/cell): Enter commits
+    bool inlineOneLine_ = false;       // Stext: no line break at all, Shift+Enter included
 
     // On-canvas text editor overlay (children of the canvas).
     QPlainTextEdit* inlineEdit_ = nullptr;

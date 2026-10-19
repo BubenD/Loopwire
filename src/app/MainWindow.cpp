@@ -2827,6 +2827,8 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
         style.boxWidth = w;
         style.boxHeight = h;
         beginInlineText(QString(), QString(), style, tl);
+        // STEXT: one line - Enter places it, and Shift+Enter puts no break in.
+        inlineSingleLine_ = inlineOneLine_ = editor_->tool() == ToolId::SText;
     });
     // Double-clicking a copy of a block opens the block itself.
     connect(editor_, &Editor::editBlockRequested, this,
@@ -2869,6 +2871,7 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
         // callout's label - it is a label, not a paragraph.
         inlineSingleLine_ = found->meta.value(QStringLiteral("balloon")).toBool() ||
                             found->type == EntityType::Leader;
+        if (found->meta.value(QStringLiteral("singleLine")).toBool()) inlineSingleLine_ = inlineOneLine_ = true;
     });
     // Double-clicked a table cell: open the inline editor over that cell, writing back
     // to the cell (not a text object) on commit.
@@ -4055,14 +4058,17 @@ QWidget* MainWindow::toolRow(const QList<ToolId>& tools, const QList<QWidget*>& 
             });
             b->setMenu(menu);
             b->setPopupMode(QToolButton::MenuButtonPopup);
-        } else if (id == ToolId::Rect || id == ToolId::Ray) {
+        } else if (id == ToolId::Rect || id == ToolId::Ray || id == ToolId::Text) {
             // A BUTTON OF VARIANTS, laid out as the circle's methods are: the one picked from the menu is drawn with,
-            // and it is what the button arms from then on, wearing its picture. Ray's menu has Divide under them.
+            // and it is what the button arms from then on, wearing its picture. Ray's menu has Divide under them;
+            // Text's are Mtext (lines, Shift+Enter between them) and Stext (one line, Enter places it).
             auto* menu = new QMenu(b);
-            menu->setObjectName(id == ToolId::Rect ? QStringLiteral("rectMenu") : QStringLiteral("rayMenu"));
-            const QList<ToolId> variants = id == ToolId::Rect
-                                               ? QList<ToolId>{ToolId::Rect, ToolId::Rect3Point, ToolId::Triangle}
-                                               : QList<ToolId>{ToolId::Ray, ToolId::ConstructionLine};
+            menu->setObjectName(id == ToolId::Rect ? QStringLiteral("rectMenu")
+                                : id == ToolId::Ray ? QStringLiteral("rayMenu")
+                                                    : QStringLiteral("textMenu"));
+            const QList<ToolId> variants = id == ToolId::Rect  ? QList<ToolId>{ToolId::Rect, ToolId::Rect3Point, ToolId::Triangle}
+                                           : id == ToolId::Ray ? QList<ToolId>{ToolId::Ray, ToolId::ConstructionLine}
+                                                               : QList<ToolId>{ToolId::Text, ToolId::SText};
             for (ToolId v : variants) {
                 QAction* pick = menu->addAction(makeToolIcon(v), toolLabel(v), this, [this, act, b, v] {
                     act->setData(static_cast<int>(v));
@@ -4288,7 +4294,8 @@ QWidget* MainWindow::operationsRow() {
                 run(mode);
             });
         }
-        b->setProperty("alignMode", static_cast<int>(Editor::AlignMode::Left));
+        b->setProperty("alignMode", static_cast<int>(Editor::AlignMode::FourPoint));   // by 4 points until another is picked
+        b->setToolTip(QStringLiteral("Align - by 4 points (the arrow: another way)"));
         b->setProperty("alignIcon", QStringLiteral("align"));
         connect(b, &QToolButton::clicked, this, [b, run] { run(static_cast<Editor::AlignMode>(b->property("alignMode").toInt())); });
         b->setMenu(menu);
@@ -8228,6 +8235,7 @@ void MainWindow::beginInlineText(const QString& id, const QString& text,
     inlineConnectorPin_ = -1;   // ... or a connector pin-label edit sets it afterwards
     inlineConnectorId_.clear();
     inlineSingleLine_ = false;  // multi-line unless a single-value edit sets it afterwards
+    inlineOneLine_ = false;
     inlineStyle_ = style;
     inlineTopLeft_ = topLeft;
 
@@ -8684,7 +8692,7 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* e) {
         // all: a leader's words are a single-value edit, so plain Enter finishes them - and Shift+Enter
         // finished them too, because nothing looked at the Shift.
         if ((ke->key() == Qt::Key_Return || ke->key() == Qt::Key_Enter) &&
-            (ke->modifiers() & Qt::ShiftModifier) && !(ke->modifiers() & Qt::ControlModifier))
+            (ke->modifiers() & Qt::ShiftModifier) && !(ke->modifiers() & Qt::ControlModifier) && !inlineOneLine_)
             return false;   // the editor puts the line break in
         if ((ke->key() == Qt::Key_Return || ke->key() == Qt::Key_Enter) &&
             ((ke->modifiers() & Qt::ControlModifier) || inlineSingleLine_)) {
@@ -12361,7 +12369,8 @@ void MainWindow::buildCommands() {
         {{"arc", "a"}, "Draw", "Arc", tool(ToolId::Arc)},
         {{"ellipse", "el"}, "Draw", "Ellipse", tool(ToolId::Ellipse)},
         {{"spline", "spl"}, "Draw", "Spline", tool(ToolId::Spline)},
-        {{"text", "t", "dt"}, "Draw", "Single-line text", tool(ToolId::Text)},
+        {{"t", "mtxt"}, "Draw", "Mtext: text of one line or several", tool(ToolId::Text)},
+        {{"text", "dt", "stext", "dtext"}, "Draw", "Stext: single-line text", tool(ToolId::SText)},
         {{"dim", "dimlinear"}, "Draw", "Linear dimension", tool(ToolId::Dimension)},
         {{"balloon", "bl"}, "Annotation", "Numbered callout balloon", tool(ToolId::Balloon)},
         {{"leader", "ld", "mleader"}, "Annotation", "Text leader", tool(ToolId::TextLeader)},
@@ -12396,7 +12405,7 @@ void MainWindow::buildCommands() {
         {{"lacing", "tie", "lacingtie"}, "Harness", "Tie or lacing cord on a bundle", tool(ToolId::LacingTie)},
         {{"pin", "cpin", "connectionpin"}, "Harness", "Connection pin", tool(ToolId::ConnectionPin)},
         {{"axisangle", "aa"}, "Harness", "Axis angle between two runs", tool(ToolId::AxisAngle)},
-        {{"mtext", "mt"}, "Draw", "Multiline text", tool(ToolId::MText)},
+        {{"mtext", "mt"}, "Draw", "Mtext in a box", tool(ToolId::MText)},
         {{"hatch", "h"}, "Draw", "Hatch: click inside a closed shape", tool(ToolId::Hatch)},
         {{"wipeout", "wo"}, "Draw", "Wipeout: a mask over what is behind it", tool(ToolId::Wipeout)},
         {{"centermark", "cm", "centremark"}, "Annotation", "Centre mark on a circle or arc",

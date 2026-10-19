@@ -3206,6 +3206,36 @@ int run_editor_tests() {
         check(ed.tool() == ToolId::Line, "line-g: tool stays Line");
     }
 
+    // --- Stext: one line of words at a point; a break typed or pasted in becomes a space, and it is marked one line.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setTool(ToolId::SText);
+        ed.onPointerPress({10, 20}, Qt::LeftButton, Qt::NoModifier);
+        ed.commitText(QStringLiteral("One\nline"), Editor::TextStyle{});
+        check(d.entities().size() == 1 && d.entities()[0].type == EntityType::Text &&
+                  d.entities()[0].meta.value(QStringLiteral("text")).toString() == QLatin1String("One line") &&
+                  d.entities()[0].meta.value(QStringLiteral("singleLine")).toBool(),
+              "stext: one line of text placed at the point, marked single-line");
+        check(toolLabel(ToolId::Text) == QLatin1String("Mtext") && toolLabel(ToolId::SText) == QLatin1String("Stext"),
+              "stext: the text tools are called Mtext and Stext");
+    }
+
+    // --- Polyline: [D] and [WO] typed while drawing make it a double line or a wipeout, as the ribbon's buttons do.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setTool(ToolId::Polyline);
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({10, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({10, 10}, Qt::LeftButton, Qt::NoModifier);
+        check(ed.isDrawOptionChar(QLatin1Char('w')) && ed.isDrawOptionChar(QLatin1Char('d')), "pline: D and W are options of the polyline");
+        check(ed.acceptCommandInput(QStringLiteral("wo")), "pline: WO consumed");
+        bool wipeout = false;
+        for (const Entity& e : d.entities()) wipeout = wipeout || e.type == EntityType::Wipeout;
+        check(wipeout, "pline: WO closes what is drawn into a wipeout");
+    }
+
     // --- Text: place styled multiline text, then edit its content + style.
     {
         Document d; d.entities().clear();

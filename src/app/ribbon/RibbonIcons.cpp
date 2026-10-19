@@ -124,9 +124,12 @@ QIcon makeCadActionIcon(const QString& key, const QColor& ink) {
         stroke(ink,1.1,Qt::DashLine);line(3,12,21,12);line(12,3,12,21);stroke(accent,1.8);QPainterPath sweep;sweep.arcMoveTo(5,5,14,14,80);sweep.arcTo(5,5,14,14,80,-235);p.drawPath(sweep);arrow({6,17},{5.5,15},2.5);stroke(ink);p.drawEllipse(QPointF(12,12),1.5,1.5);
     }else if(key=="parts"){
         line(2,12,6,12);line(18,12,22,12);stroke(accent);box(6,7,12,10,true);stroke(ink,1.25);line(9,8,9,16);line(13,8,13,16);line(16,8,16,16);
-    }else if(key=="text"||key=="mtext"){
+    }else if(key=="text"||key=="mtext"||key=="stext"||key=="mtextbox"){
+        // Stext: the letter on one line under it. Mtext: lines of words beside it; in a box, framed.
         stroke(accent,1.8);p.drawPolyline(QPolygonF{{4,20},{10,4},{16,20}});line(6.5,14,13.5,14);
-        if(key=="mtext"){stroke(ink,1.3);line(17,7,22,7);line(18,12,22,12);line(19,17,22,17);}
+        if(key=="mtext"||key=="mtextbox"){stroke(ink,1.3);line(17,7,22,7);line(18,12,22,12);line(19,17,22,17);}
+        if(key=="stext"){stroke(ink,1.3);line(2,22.5,22,22.5);}
+        if(key=="mtextbox"){stroke(ink,1.0,Qt::DashLine);box(1.5,1.5,21,21);}
     }else if(key=="netlabel"){
         line(2,12,5,12);stroke(accent);p.setBrush(wash);p.drawPolygon(QPolygonF{{5,7},{17,7},{22,12},{17,17},{5,17}});stroke(ink,1.3);line(8,10,15,10);line(8,14,13,14);
     }else if(key=="volumearrow"){
@@ -233,8 +236,9 @@ QIcon makeToolIcon(ToolId id, const QColor& ink, int variant) {
     case ToolId::Fanout: action=QStringLiteral("fanout");break;
     case ToolId::WiresRun: action=QStringLiteral("wires");break;
     case ToolId::AxisAngle: action=QStringLiteral("axisangle");break;
-    case ToolId::Text:action=QStringLiteral("text");break;
-    case ToolId::MText:action=QStringLiteral("mtext");break;
+    case ToolId::Text:action=QStringLiteral("mtext");break;
+    case ToolId::SText:action=QStringLiteral("stext");break;
+    case ToolId::MText:action=QStringLiteral("mtextbox");break;
     case ToolId::Dimension:action=QStringLiteral("dimension0");break;
     case ToolId::NetLabel:action=QStringLiteral("netlabel");break;
     case ToolId::VolumeArrow:action=QStringLiteral("volumearrow");break;

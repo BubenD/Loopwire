@@ -11341,7 +11341,8 @@ void Editor::handleDrawPress(const Vec2& p) {
                                     "Enter to finish"));
         break;
     case ToolId::Text:
-        if(!drawingFieldPending_.isEmpty()){
+    case ToolId::SText:
+        if(tool_ == ToolId::Text && !drawingFieldPending_.isEmpty()){
             const QString key=drawingFieldPending_;pushUndo();Entity field;field.id=uid();field.type=EntityType::Text;field.layer=doc_->activeLayer();field.a=p;
             field.meta={{QStringLiteral("text"),effectiveDrawingDetails(*drawingOwner()).value(key)},{QStringLiteral("field"),key},
                         {QStringLiteral("fieldLabel"),drawingFieldLabel(key)},{QStringLiteral("drawingDetailField"),true},{QStringLiteral("drawingDetailTextType"),drawingFieldTextType(key)},{QStringLiteral("size"),5.0},{QStringLiteral("font"),QStringLiteral("Arial")}};
@@ -12759,9 +12760,11 @@ QString Editor::drawCommandHint() const {
     case ToolId::Line:
         return QStringLiteral("LINE: click points  ·  Enter ends the run  ·  Esc exits");
     case ToolId::Polyline:
-        return QStringLiteral("POLYLINE: %1  ·  [A] arc / [L] line  ·  [F] fillet%2  ·  [C] close  ·  [U] undo  ·  Enter")
+        return QStringLiteral("POLYLINE: %1  ·  [A] arc / [L] line  ·  [F] fillet%2  ·  [C] close  ·  [U] undo  ·  "
+                              "[D] double line  ·  [WO] wipeout  ·  a number: width%3  ·  Enter")
             .arg(polyArcMode_ ? QStringLiteral("ARC segments") : QStringLiteral("click points"),
-                 cornerRadius_ > 0 ? QStringLiteral(" r=%1 ([FC] off)").arg(cornerRadius_) : QString());
+                 cornerRadius_ > 0 ? QStringLiteral(" r=%1 ([FC] off)").arg(cornerRadius_) : QString(),
+                 plineWidth_ > 0 ? QStringLiteral(" (%1)").arg(plineWidth_) : QString());
     case ToolId::DoublePolyline:
         return QStringLiteral("DOUBLE POLYLINE: [G] gap  ·  [F] fillet%1  ·  [LS] line-start%2  ·  [C] close  ·  [U] undo  ·  Enter")
             .arg(cornerRadius_ > 0 ? QStringLiteral(" r=%1 ([FC] off)").arg(cornerRadius_) : QString(),
@@ -12854,7 +12857,9 @@ QString Editor::drawCommandHint() const {
                    : QStringLiteral("EXTEND: draw a line (two clicks) across objects to extend them to the "
                                     "boundary; Esc to finish");
     case ToolId::Text:
-        return QStringLiteral("TEXT: pick a point, then type the text");
+        return QStringLiteral("MTEXT: pick a point, then type the text  ·  Shift+Enter a new line  ·  Ctrl+Enter places it");
+    case ToolId::SText:
+        return QStringLiteral("STEXT: pick a point, then type one line of text  ·  Enter places it");
     case ToolId::Hatch:
         return hatchStyle_.boundary == HatchBoundary::SelectObject
                    ? QStringLiteral("HATCH: click a closed object to fill  ·  Esc exits")
@@ -12871,7 +12876,7 @@ QString Editor::drawCommandHint() const {
 bool Editor::isDrawOptionChar(QChar ch) const {
     const QChar c = ch.toLower();
     switch (tool_) {
-    case ToolId::Polyline:       return c == 'c' || c == 'u' || c == 'f' || c == 'a' || c == 'l';
+    case ToolId::Polyline:       return c == 'c' || c == 'u' || c == 'f' || c == 'a' || c == 'l' || c == 'd' || c == 'w';
     case ToolId::DoublePolyline: return c == 'c' || c == 'u' || c == 'f' || c == 'g' || c == 'l' || c == 's';
     case ToolId::Spline:         return c == 'c' || c == 'u';
     case ToolId::DoubleLine:     return c == 'g' || c == 'l' || c == 's';
@@ -13523,6 +13528,18 @@ bool Editor::acceptCommandInput(const QString& text) {
         }
         // Arc / Line segment mode, and its width (Polyline only).
         if (tool_ == ToolId::Polyline) {
+            // DOUBLE LINE AND WIPEOUT, typed as the ribbon's buttons do them: [D] makes what is drawn a double line
+            // and carries on; [WO] closes it into a wipeout.
+            if (t.compare(QStringLiteral("d"), Qt::CaseInsensitive) == 0 ||
+                t.compare(QStringLiteral("double"), Qt::CaseInsensitive) == 0) {
+                polylineAsDoubleLine();
+                return true;
+            }
+            if (t.compare(QStringLiteral("wo"), Qt::CaseInsensitive) == 0 ||
+                t.compare(QStringLiteral("wipeout"), Qt::CaseInsensitive) == 0) {
+                polylineAsWipeout();
+                return true;
+            }
             if (t.compare(QStringLiteral("w"), Qt::CaseInsensitive) == 0 ||
                 t.compare(QStringLiteral("width"), Qt::CaseInsensitive) == 0) {
                 emit message(QStringLiteral("Width: type it on the ribbon (Polyline - Width), or w=<mm>"));
@@ -13619,11 +13636,19 @@ static void writeTextStyle(Entity& e, const Editor::TextStyle& s) {
 }
 
 void Editor::commitText(const QString& text, const TextStyle& s) {
-    if ((tool_ == ToolId::Text || tool_ == ToolId::MText) && !draftPts_.empty() &&
+    if ((tool_ == ToolId::Text || tool_ == ToolId::SText || tool_ == ToolId::MText) && !draftPts_.empty() &&
         !text.isEmpty()) {
         Entity e;
         e.type = EntityType::Text;
         e.layer = doc_->activeLayer();
+        // STEXT IS ONE LINE: any break pasted in is a space, and it is marked so that editing it again keeps it one.
+        if (tool_ == ToolId::SText) {
+            QString line = text;
+            line.replace(QStringLiteral("\r\n"), QStringLiteral(" "));
+            line.replace(QLatin1Char('\n'), QLatin1Char(' '));
+            e.meta.insert("singleLine", true);
+            e.meta.insert("text", line);
+        }
         TextStyle s2 = s;
         if (tool_ == ToolId::MText && draftPts_.size() >= 2) {
             // Anchor at the box's top-left; box dims come from the style if set
@@ -13637,7 +13662,7 @@ void Editor::commitText(const QString& text, const TextStyle& s) {
         } else {
             e.a = draftPts_[0];
         }
-        e.meta.insert("text", text);
+        if (!e.meta.contains("text")) e.meta.insert("text", text);
         writeTextStyle(e, s2);
         pushUndo();
         addEntity(std::move(e));
