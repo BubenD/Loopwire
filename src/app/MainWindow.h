@@ -794,7 +794,7 @@ private:
     QToolButton* makeDrawingDetailsButton(QWidget* parent, bool iconOnly=false);
     // The Note mark button, its shapes and its leader switch - one for each tab that offers it.
     QToolButton* makeNoteMarkButton(QWidget* parent, const QString& name);
-    void showDrawingDetails();
+    bool showDrawingDetails(const QString& field = QString());
     // The harness DRC's rules and its bypass table, on the ribbon beside it.
     QToolButton* makeDrcRulesButton(QWidget* parent);
     QToolButton* makeDrcBypassButton(QWidget* parent);

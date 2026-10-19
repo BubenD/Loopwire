@@ -505,6 +505,8 @@ public:
     }
     bool shrinkSquareEnds() const { return shrinkMode_ == ShrinkRouteMode::Cable; }
 
+    using ReferenceSnapResolver = std::function<SnapResult(const Vec2&, const std::optional<Vec2>&, double, const SnapSettings&)>;
+    void setReferenceSnapResolver(ReferenceSnapResolver resolver) { referenceSnapResolver_ = std::move(resolver); }
     void setSnapRectangles(std::vector<Bounds> rects);
     const std::vector<Bounds>& snapRectangles() const { return snapRects_; }
 
@@ -2152,6 +2154,7 @@ private:
     Vec2 breakFrozenAt_{0.0, 0.0};
     // The sheet and its windows, as things to snap to. Empty in model space.
     std::vector<Bounds> snapRects_;
+    ReferenceSnapResolver referenceSnapResolver_;
     // The best of them for a point, or nothing within tolerance.
     SnapResult snapToRectangles(const Vec2& raw, double tol) const;
 

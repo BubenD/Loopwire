@@ -4838,6 +4838,11 @@ void Editor::onPointerMove(const Vec2& raw) {
         snap.ortho = false;
     }
     snapResult_ = resolveSnap(*doc_, raw, anchor, worldTolerance(), snap, ignore);
+    if(snap.objectSnap && referenceSnapResolver_) {
+        const auto reference=referenceSnapResolver_(raw,anchor,worldTolerance(),snap);
+        const bool object=snapResult_.snapped && snapResult_.kind!=SnapKind::Grid && snapResult_.kind!=SnapKind::Polar && snapResult_.kind!=SnapKind::Ortho;
+        if(reference.snapped && (!object || distance(reference.point,raw)<distance(snapResult_.point,raw)))snapResult_=reference;
+    }
     // A CIRCLE TOUCHED WHILE A COMMAND IS RUNNING IS REMEMBERED - see shownCentres_. The cross at its
     // middle then stays put while the cursor goes on, which is what makes it usable: the point is
     // touched, the hand moves away, and the mark is still there to aim at.
@@ -4878,7 +4883,7 @@ void Editor::onPointerMove(const Vec2& raw) {
     // The sheet's own edge and the frames of the windows on it, which are not entities and so are not in
     // the search above. Taken only when nothing else was caught, or when one of them is CLOSER than what
     // was - the drawing itself still wins a tie, since that is what is usually being lined up with.
-    if (const SnapResult rect = snapToRectangles(raw, worldTolerance()); rect.snapped) {
+    if (const SnapResult rect = snap.objectSnap ? snapToRectangles(raw, worldTolerance()) : SnapResult{}; rect.snapped) {
         const double toRect = std::hypot(rect.point.x - raw.x, rect.point.y - raw.y);
         const double toFound = snapResult_.snapped
                                    ? std::hypot(snapResult_.point.x - raw.x,
@@ -18893,6 +18898,8 @@ void Editor::writeBundleMeta(Entity& e, bool straight) const {
     if (straight && twistBodyKind_ != RunBody::Wires) {
         e.meta.insert(QStringLiteral("twistBody"), twistBodyKind_ == RunBody::Cable
                                                        ? QStringLiteral("cable")
+                                                       : twistBodyKind_ == RunBody::BraidedSleeve ? QStringLiteral("braid")
+                                                       : twistBodyKind_ == RunBody::Shield ? QStringLiteral("shield")
                                                        : QStringLiteral("heatshrink"));
         // Each figure only where it has been said, so a cable drawn without touching any of them
         // carries nothing extra and is the cable the drawing would have made of it anyway.

@@ -95,22 +95,10 @@ void MainWindow::buildSystemTab() {
             tools->addButton(b, static_cast<int>(t.tool));
             if (t.tool == SysTool::Select) b->setChecked(true);
             if (t.tool == SysTool::Select) {
-                b->setPopupMode(QToolButton::MenuButtonPopup);
-                b->setToolTip(QStringLiteral("Select and drag objects. Drag an empty area to select a zone: blue encloses objects, green crosses them. The arrow chooses the zone mode."));
-                auto* menu = new QMenu(b);
-                auto* modes = new QActionGroup(menu);
-                const std::pair<const char*, SysSelectionMode> choices[] = {
-                    {"By drag direction (blue / green)", SysSelectionMode::Direction},
-                    {"Blue window: fully enclosed", SysSelectionMode::Window},
-                    {"Green crossing: touched objects", SysSelectionMode::Crossing}
-                };
-                for (const auto& choice : choices) {
-                    auto* action = menu->addAction(QString::fromLatin1(choice.first), this, [this, mode = choice.second] {
-                        systemView_->setTool(SysTool::Select); systemView_->canvas()->setSelectionMode(mode);
-                    });
-                    action->setCheckable(true); action->setChecked(choice.second == SysSelectionMode::Direction); modes->addAction(action);
-                }
-                b->setMenu(menu);
+                b->setToolTip(QStringLiteral("Select and drag objects. Drag left to right for a blue zone that selects fully enclosed objects; drag right to left for a green zone that also selects crossed objects."));
+                connect(b, &QToolButton::clicked, this, [this] {
+                    if(systemView_)systemView_->canvas()->setSelectionMode(SysSelectionMode::Direction);
+                });
             }
             // UNIT'S ARROW: what the units put next are.
             if (t.tool == SysTool::Unit) {

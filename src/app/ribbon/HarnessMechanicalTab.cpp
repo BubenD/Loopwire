@@ -108,7 +108,6 @@ void MainWindow::buildHarnessMechanicalTab() {
                                toolRow({ToolId::Line, ToolId::DoublePolyline, ToolId::Polyline, ToolId::Rect, ToolId::Circle,
                                         ToolId::Ellipse, ToolId::Arc, ToolId::Spline, ToolId::Polygon, ToolId::Ray,
                                         ToolId::Hatch, ToolId::Wipeout}));
-    polylineOptionsGroup(lay, page);
     // The modify tools, Match, Array and Copy: twelve buttons in the same two rows of six, as on Home.
     // Array and Copy standing beside the grid at their own widths is what made this group read as three
     // groups.
@@ -137,7 +136,7 @@ void MainWindow::buildHarnessMechanicalTab() {
         mechGroups_ << addGroupKeep(
             lay, QStringLiteral("Annotation"),
             toolRow({ToolId::Text, ToolId::Dimension, ToolId::Balloon, ToolId::TextLeader, ToolId::Note,
-                     ToolId::Revision, ToolId::DetailView, ToolId::VolumeArrow},
+                     ToolId::Revision, ToolId::DetailView},
                     {tb,makeDrawingDetailsButton(page,true)}));
     }
     // SPECIAL: the marks and symbols that belong to a harness drawing and to nothing else - the break
@@ -945,13 +944,16 @@ void MainWindow::buildHarnessMechanicalTab() {
                 twistBodyCombo_->addItem(QStringLiteral("Cable"), static_cast<int>(RunBody::Cable));
                 twistBodyCombo_->addItem(QStringLiteral("Hshrink"),
                                          static_cast<int>(RunBody::Heatshrink));
+                twistBodyCombo_->setObjectName(QStringLiteral("harnessRunBody"));
+                twistBodyCombo_->addItem(QStringLiteral("Braided sleeve"),static_cast<int>(RunBody::BraidedSleeve));
+                twistBodyCombo_->addItem(QStringLiteral("Shield"),static_cast<int>(RunBody::Shield));
                 twistBodyCombo_->setMinimumWidth(96);
                 twistBodyCombo_->setToolTip(QStringLiteral(
                     "What the stretch between the two fans is made of. Hook-up wires: the lines the "
                     "wires themselves make. Cable: one body cut square at each end, with a "
                     "transition heatshrink flaring out over the first of each fan - a breakout. "
                     "Heatshrink: a length of tubing over the run, shrunk onto what it grips at each "
-                    "end, and no boot. The fans are unchanged by all three."));
+                    "end, and no boot. Braided sleeve: a woven protective cover. Shield: a metallic screen braid. The fans keep their settings."));
                 bg->addWidget(bodyLabel, 0, 0);
                 bg->addWidget(twistBodyCombo_, 0, 1);
                 connect(twistBodyCombo_, &QComboBox::currentIndexChanged, this, [this](int at) {

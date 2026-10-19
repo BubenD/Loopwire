@@ -1,4 +1,5 @@
 #include "harness/Harness3D.h"
+#include "harness/StockParts3D.h"
 #include "geometry/Geometry.h"
 
 #include "harness/Harness.h"
@@ -77,7 +78,7 @@ QString harness3DPartKey(const Entity& e) {
         const QString id = e.meta.value(QLatin1String(key)).toString();
         if (!id.isEmpty()) return id;
     }
-    for (const char* key : {"partCopy", "blockInst"}) {
+    for (const char* key : {"partCopy", "blockInst", "symbolInst"}) {
         const QString id = e.meta.value(QLatin1String(key)).toString();
         if (!id.isEmpty()) return QStringLiteral("drawing:") + id;
     }
@@ -1020,8 +1021,8 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
         if (covered && total > fanA + fanB + 0.5) {
             Harness3DItem it;
             it.smoothContours = true; it.mesh = tubeMesh(stretch(route, fanA, total - fanB), bodyW / 2.0, 18, true);
-            const bool braided = e.meta.value(QStringLiteral("twistBodyBraid")).toBool();
-            it.color = own(e, braided ? kBraidShield : body == QLatin1String("heatshrink") ? QColor(42, 42, 46) : QColor(70, 74, 82));
+            const bool braided = body==QLatin1String("braid") || body==QLatin1String("shield") || e.meta.value(QStringLiteral("twistBodyBraid")).toBool();
+            it.color = own(e, braided ? (body==QLatin1String("braid") ? kBraidColour : kBraidShield) : body == QLatin1String("heatshrink") ? QColor(42, 42, 46) : QColor(70, 74, 82));
             it.what = braided ? QStringLiteral("braid") : body == QLatin1String("heatshrink") ? QStringLiteral("sleeve") : QStringLiteral("run");
             it.brick = brickOf(e);
             scene.items.push_back(std::move(it));
@@ -1340,6 +1341,7 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
             }
         }
     }
+    appendStockParts3D(scene, ents);
     // LABELS AND LACING ARE FITTINGS ON A RUN, rather than grey solids made from their 2D lines.
     auto sleeve = [](const V3& centre, const V3& axis, double length, double radius, double wall) {
         Mesh3D mesh;
@@ -1423,39 +1425,6 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
             scene.items.push_back(cover);
         }
     }
-    std::vector<const Entity*> tieMasks;
-    for (const auto& e : ents) if (e.type == EntityType::Wipeout && e.meta.value(QStringLiteral("lacingTie")).toBool()) tieMasks.push_back(&e);
-    for (const auto& e : ents) {
-        if (e.type != EntityType::Polyline || !e.meta.value(QStringLiteral("lacingTie")).toBool() || e.points.size() < 2) continue;
-        const Entity* mask = nullptr; double nearest = 1e300;
-        for (const auto* candidate : tieMasks) {
-            const Bounds box = candidate->bounds();
-            const double d = distance(e.points.front(), (box.min + box.max) * 0.5);
-            if (d < nearest) { nearest = d; mask = candidate; }
-        }
-        if (!mask || mask->points.size() < 4) continue;
-        const Vec2 centre2 = (mask->points[0] + mask->points[2]) * 0.5;
-        const Vec2 along = (mask->points[1] - mask->points[0]).normalized(), across = along.perp();
-        const double radius = std::max(0.4, distance(mask->points[1], mask->points[2]) * 0.5);
-        const double cord = std::clamp(radius * 0.06, 0.25, 0.8);
-        std::vector<V3> path;
-        if (e.points.size() == 2) {
-            const double x0 = dot(e.points[0] - centre2, along), x1 = dot(e.points[1] - centre2, along);
-            const bool turn = std::abs(dot(e.points[1] - e.points[0], across)) > radius;
-            if (turn) for (int k = 0; k <= 48; ++k) {
-                const double t = k / 48.0, angle = 2 * M_PI * t;
-                const Vec2 xy = centre2 + along * (x0 + (x1 - x0) * t) + across * ((radius + cord) * std::cos(angle));
-                path.push_back({xy.x, xy.y, (radius + cord) * std::sin(angle)});
-            }
-        }
-        if (path.empty()) for (const Vec2& q : e.points) {
-            const double offset = dot(q - centre2, across);
-            path.push_back({q.x, q.y, std::sqrt(std::max(0.0, radius * radius - offset * offset)) + cord});
-        }
-        Harness3DItem tie; tie.smoothContours = true; tie.mesh = tubeMesh(path, cord, 10, true);
-        tie.color = QColor(225, 215, 185); tie.what = QStringLiteral("Lacing tie"); tie.ownLook = true;
-        tie.brick = brickOf(e); scene.items.push_back(tie);
-    }
     // ---- THE PARTS ---------------------------------------------------------------------------------
     struct Part {
         Bounds box;
@@ -1467,6 +1436,7 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
     QStringList order;
     for (const Entity& e : ents) {
         const QString g = groupOf(e);
+        if (!e.meta.value(QStringLiteral("partSymbol")).toString().isEmpty()) continue;
         if (e.meta.value(QStringLiteral("labelMask")).toBool() ||
             !e.meta.value(QStringLiteral("labelGroup")).toString().isEmpty() ||
             e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("label") ||
@@ -1753,6 +1723,7 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
             it.texture = Texture3D::Matte;
         else it.texture = Texture3D::Metal;
     }
+    appendLacingTies3D(scene, ents);
     return scene;
 }
 

@@ -805,7 +805,7 @@ bool twistFrames(const Entity& pair, TwistFrames& f) {
             const double boot = finish ? f.bootB : f.bootA;
             // What the wires actually meet: the recovered mouth of the boot where there is one, the
             // shrunk end of a sleeve laid along the run, or the square face of a bare cable.
-            const bool cut = f.body == RunBody::Cable || f.bodyOverCable;
+            const bool cut = f.body != RunBody::Heatshrink || f.bodyOverCable;
             const double face = (boot > 1e-9 || !cut) ? (finish ? f.bodyFaceB : f.bodyFace)
                                                       : f.bodyHalf;
             const double want = std::max(0.0, face - f.thick);
@@ -1593,7 +1593,7 @@ const TwistCached* twistCached(const Entity& pair) {
     // length of tubing is fitted OVER - both stop at a face square across them, and what takes
     // either down to the wires is the boot. A sleeve laid ALONG the run is the cover itself and is
     // recovered at each end, because there is nothing else there to do it.
-    const bool squareBody = f.body == RunBody::Cable || f.bodyOverCable;
+    const bool squareBody = f.body != RunBody::Heatshrink || f.bodyOverCable;
     // THE COVER IS ALWAYS DRAWN. A cable is a cable at every bend it is taken round.
     //
     // It used to be built here, LOOKED AT, and thrown away where a point of it had run too far from
@@ -1895,7 +1895,24 @@ RunBody runBodyOf(const Entity& pair) {
     const QString said = pair.meta.value(QStringLiteral("twistBody")).toString();
     if (said == QLatin1String("cable")) return RunBody::Cable;
     if (said == QLatin1String("heatshrink")) return RunBody::Heatshrink;
+    if (said == QLatin1String("braid")) return RunBody::BraidedSleeve;
+    if (said == QLatin1String("shield")) return RunBody::Shield;
     return RunBody::Wires;
+}
+
+std::vector<std::pair<Vec2,Vec2>> twistedPairBodyBraid(const Entity& pair) {
+    const auto kind=runBodyOf(pair);
+    if(kind!=RunBody::BraidedSleeve && kind!=RunBody::Shield && !pair.meta.value("twistBodyBraid").toBool())return {};
+    const auto f=twistedPairFigures(pair);if(!f.ok)return {};
+    std::vector<Vec2> route=pair.points.size()>=2?pair.points:std::vector<Vec2>{pair.a,pair.b};
+    double total=0;for(size_t i=1;i<route.size();++i)total+=distance(route[i-1],route[i]);
+    const double from=f.spreadStart?f.fanLen:0,to=total-(f.spreadFinish?f.fanLenFinish:0);
+    Entity cover;cover.type=EntityType::Polyline;double acc=0;
+    for(size_t i=1;i<route.size();++i){const double len=distance(route[i-1],route[i]);if(len<1e-9)continue;
+        if(acc+len>=from && acc<=to){if(cover.points.empty())cover.points.push_back(route[i-1]+(route[i]-route[i-1])*std::clamp((from-acc)/len,0.,1.));
+            cover.points.push_back(route[i-1]+(route[i]-route[i-1])*std::clamp((to-acc)/len,0.,1.));}acc+=len;}
+    cover.meta={{"shrunkEnds",true},{"shrinkBraid",true},{"shrinkShield",kind==RunBody::Shield},{"shrinkWidth",f.bodyWidth},{"gap",f.bodyWidth}};
+    return sleeveBraidStrokes(cover);
 }
 
 bool runRouteCarries(const std::vector<Vec2>& route, double bundleWidth, double fanStart,

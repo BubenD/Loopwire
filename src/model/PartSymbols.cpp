@@ -80,6 +80,9 @@ private:
 
 QString partSymbolName(PartSymbol s) {
     switch (s) {
+    case PartSymbol::Splice: return QStringLiteral("Splice");
+    case PartSymbol::SpliceHeatshrink: return QStringLiteral("Splice with heatshrink");
+    case PartSymbol::ThLed: return QStringLiteral("LED, through hole");
     case PartSymbol::ThResistor: return QStringLiteral("Resistor, through hole");
     case PartSymbol::ThCapacitor: return QStringLiteral("Capacitor, through hole");
     case PartSymbol::ThCoil: return QStringLiteral("Coil, through hole");
@@ -99,6 +102,12 @@ QString partSymbolName(PartSymbol s) {
 
 QString partSymbolTip(PartSymbol s) {
     switch (s) {
+    case PartSymbol::Splice:
+        return QStringLiteral("An inline crimp splice, 8 mm long and 2.4 mm across, with a wire at each end.");
+    case PartSymbol::SpliceHeatshrink:
+        return QStringLiteral("An inline crimp splice inside a 16 mm heatshrink sleeve. Hidden lines show the joint inside.");
+    case PartSymbol::ThLed:
+        return QStringLiteral("A 5 mm through-hole LED from the side, with a domed lens, flange and two leads; the cathode lead is shorter.");
     case PartSymbol::ThResistor:
         return QStringLiteral("An axial resistor from the side, at size: 7 by 2.6 mm with its leads.");
     case PartSymbol::ThCapacitor:
@@ -150,7 +159,8 @@ bool partSymbolIsSchematic(PartSymbol s) {
 std::vector<PartSymbol> mechanicalPartSymbols() {
     return {PartSymbol::ThResistor,  PartSymbol::ThCapacitor,      PartSymbol::ThCoil,
             PartSymbol::SmtResistor, PartSymbol::SmtCapacitor,     PartSymbol::SmtCoil,
-            PartSymbol::FerriteRingSide, PartSymbol::FerriteRingTop};
+            PartSymbol::FerriteRingSide, PartSymbol::FerriteRingTop,
+            PartSymbol::Splice, PartSymbol::SpliceHeatshrink, PartSymbol::ThLed};
 }
 
 std::vector<PartSymbol> schematicPartSymbols() {
@@ -161,6 +171,30 @@ std::vector<PartSymbol> schematicPartSymbols() {
 std::vector<Entity> partSymbolEntities(PartSymbol s, const Vec2& at) {
     Draw d(at, partSymbolName(s));
     switch (s) {
+    case PartSymbol::Splice:
+    case PartSymbol::SpliceHeatshrink: {
+        const bool covered=s==PartSymbol::SpliceHeatshrink;
+        d.line(-10,0,-4,0);d.line(4,0,10,0);
+        d.line(-4,-1.2,4,-1.2,covered);d.line(-4,1.2,4,1.2,covered);
+        d.line(-4,-1.2,-4,1.2,covered);d.line(4,-1.2,4,1.2,covered);
+        for(double x:{-2.0,2.0})d.line(x,-1.2,x,1.2,covered);
+        if(covered) {
+            d.poly({{-8,-0.55},{-7,-1.7},{7,-1.7},{8,-0.55}});
+            d.poly({{-8,0.55},{-7,1.7},{7,1.7},{8,0.55}});
+            d.line(-8,-0.55,-8,0.55);d.line(8,-0.55,8,0.55);
+        }
+        break;
+    }
+    case PartSymbol::ThLed: {
+        // A 5 mm lens, a 5.8 mm flange, and 2.54 mm lead pitch.
+        d.arc(0,2.0,2.5,0,180);
+        d.line(-2.5,-3.0,-2.5,2.0);d.line(2.5,-3.0,2.5,2.0);
+        d.rect(-2.9,-4.0,2.9,-3.0);
+        d.line(-1.27,-4.0,-1.27,-9.0);d.line(1.27,-4.0,1.27,-7.5);
+        d.line(0.7,-3.0,0.7,0.4);d.line(0.7,0.4,-0.5,0.4);
+        d.line(-1.27,-3.0,-1.27,-0.8);d.line(-1.27,-0.8,-0.5,0.4);
+        break;
+    }
     case PartSymbol::ThResistor: {
         // Axial, from the side, and shaped like one: the body is WAISTED - full at both ends where the
         // caps are, narrower through the middle - with a domed end each side, its bands, and a lead out

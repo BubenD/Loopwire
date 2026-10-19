@@ -4042,6 +4042,13 @@ QWidget* MainWindow::toolRow(const QList<ToolId>& tools, const QList<QWidget*>& 
             act->setIcon(makeCircleMethodIcon(0)); // default = first fall-menu method
             b->setMenu(menu);
             b->setPopupMode(QToolButton::MenuButtonPopup);
+        } else if (id == ToolId::TextLeader) {
+            auto* menu = new QMenu(b);
+            menu->addAction(makeToolIcon(ToolId::TextLeader), QStringLiteral("Leader (text only)"), this, [this] { editor_->setTool(ToolId::TextLeader); });
+            menu->addAction(makeToolIcon(ToolId::Arrow), QStringLiteral("Arrow (no text)"), this, [this] { editor_->setTool(ToolId::Arrow); });
+            menu->addAction(makeToolIcon(ToolId::VolumeArrow), QStringLiteral("Block arrow"), this, [this] { editor_->setTool(ToolId::VolumeArrow); });
+            b->setMenu(menu);
+            b->setPopupMode(QToolButton::MenuButtonPopup);
         } else if (id == ToolId::ConnectionPin) {
             // THE TWO PINS: the numbered ring, or a pin as a connector has one - a stub with its number on it
             // and a connection point on its free end that a wire snaps to and is joined at. The one chosen is
@@ -4487,8 +4494,8 @@ QToolButton* MainWindow::makePartSymbolButton(QWidget* parent, bool schematic) {
     btn->setToolTip(schematic
                         ? QStringLiteral("The stock symbols: resistor, capacitor, coil, ferrite. Pick "
                                          "one and it follows the cursor - R turns it, a click drops it.")
-                        : QStringLiteral("The stock parts, drawn at size: resistors, capacitors, coils "
-                                         "and ferrite rings. Pick one and it follows the cursor - R "
+                        : QStringLiteral("The stock parts, drawn at size: resistors, capacitors, coils, "
+                                         "ferrite rings, splices, heatshrink-covered splices and through-hole LEDs. Pick one and it follows the cursor - R "
                                          "turns it, a click drops it."));
     auto* menu = new QMenu(btn);
     btn->setMenu(menu);
@@ -10290,7 +10297,9 @@ void MainWindow::refreshProperties() {
     auto typeOf = [](const Entity& x) {
         QString name = x.type == EntityType::Text && x.meta.value(QStringLiteral("drawingDetailField")).toBool()
                            ? QStringLiteral("Drawing Detail text (%1)").arg(drawingFieldTextType(x.meta.value(QStringLiteral("field")).toString()))
-                           : entityTypeDisplayName(x.type);
+                           : x.type == EntityType::Text
+                               ? (x.meta.value(QStringLiteral("singleLine")).toBool() ? QStringLiteral("Single-line text") : QStringLiteral("Multiline text"))
+                               : entityTypeDisplayName(x.type);
         if (x.type == EntityType::Polyline && x.meta.value(QStringLiteral("shrunkEnds")).toBool()) {
             const bool square = x.meta.value(QStringLiteral("shrinkTaperStart")).toDouble(-1.0) == 0.0 &&
                                 x.meta.value(QStringLiteral("shrinkTaperEnd")).toDouble(-1.0) == 0.0;
@@ -10312,9 +10321,12 @@ void MainWindow::refreshProperties() {
         }
         return name;
     };
+    bool sameDisplayType=true;
+    for(const Entity* item:selEnts)if(gen && typeOf(*item)!=typeOf(*gen))sameDisplayType=false;
     addRow(QStringLiteral("Type"),
            sel.empty() ? QStringLiteral("No selection")
-                       : (multi ? QStringLiteral("%1 x %2").arg(sel.size()).arg(typeOf(*e))
+                       : (!sameDisplayType ? QStringLiteral("%1 objects (mixed)").arg(sel.size())
+                          : multi ? QStringLiteral("%1 x %2").arg(sel.size()).arg(typeOf(*e))
                                 : (e ? typeOf(*e) : QStringLiteral("%1 objects (mixed)").arg(sel.size()))));
     if (gen) {
         QStringList layerNames;
@@ -10729,16 +10741,20 @@ void MainWindow::refreshProperties() {
             const bool covered = kind != RunBody::Wires;
             const QString kindName = kind == RunBody::Cable        ? QStringLiteral("Cable")
                                      : kind == RunBody::Heatshrink ? QStringLiteral("Hshrink")
+                                     : kind == RunBody::BraidedSleeve ? QStringLiteral("Braided sleeve")
+                                     : kind == RunBody::Shield ? QStringLiteral("Shield")
                                                                    : QStringLiteral("Hook-up wires");
             addCombo(QStringLiteral("Between the fans"),
                      {QStringLiteral("Hook-up wires"), QStringLiteral("Cable"),
-                      QStringLiteral("Hshrink")},
+                      QStringLiteral("Hshrink"),QStringLiteral("Braided sleeve"),QStringLiteral("Shield")},
                      mv(QStringLiteral("twistBody")).isVaries() ? QStringLiteral("#Value") : kindName,
                      false, [this](const QString& t) {
                          editor_->setSelectionMeta(
                              QStringLiteral("twistBody"),
                              t == QLatin1String("Cable")     ? QStringLiteral("cable")
                              : t == QLatin1String("Hshrink") ? QStringLiteral("heatshrink")
+                             : t == QLatin1String("Braided sleeve") ? QStringLiteral("braid")
+                             : t == QLatin1String("Shield") ? QStringLiteral("shield")
                                                              : QString());
                      });
             // AND WHAT THAT CABLE IS DRAWN TO, while there is one: how wide, and at each end how far
@@ -12369,8 +12385,8 @@ void MainWindow::buildCommands() {
         {{"arc", "a"}, "Draw", "Arc", tool(ToolId::Arc)},
         {{"ellipse", "el"}, "Draw", "Ellipse", tool(ToolId::Ellipse)},
         {{"spline", "spl"}, "Draw", "Spline", tool(ToolId::Spline)},
-        {{"t", "mtxt"}, "Draw", "Mtext: text of one line or several", tool(ToolId::Text)},
-        {{"text", "dt", "stext", "dtext"}, "Draw", "Stext: single-line text", tool(ToolId::SText)},
+        {{"t", "mtxt"}, "Draw", "Multiline text", tool(ToolId::Text)},
+        {{"text", "dt", "stext", "dtext"}, "Draw", "Single-line text", tool(ToolId::SText)},
         {{"dim", "dimlinear"}, "Draw", "Linear dimension", tool(ToolId::Dimension)},
         {{"balloon", "bl"}, "Annotation", "Numbered callout balloon", tool(ToolId::Balloon)},
         {{"leader", "ld", "mleader"}, "Annotation", "Text leader", tool(ToolId::TextLeader)},
@@ -12405,7 +12421,7 @@ void MainWindow::buildCommands() {
         {{"lacing", "tie", "lacingtie"}, "Harness", "Tie or lacing cord on a bundle", tool(ToolId::LacingTie)},
         {{"pin", "cpin", "connectionpin"}, "Harness", "Connection pin", tool(ToolId::ConnectionPin)},
         {{"axisangle", "aa"}, "Harness", "Axis angle between two runs", tool(ToolId::AxisAngle)},
-        {{"mtext", "mt"}, "Draw", "Mtext in a box", tool(ToolId::MText)},
+        {{"mtext", "mt"}, "Draw", "Multiline text in a box", tool(ToolId::MText)},
         {{"hatch", "h"}, "Draw", "Hatch: click inside a closed shape", tool(ToolId::Hatch)},
         {{"wipeout", "wo"}, "Draw", "Wipeout: a mask over what is behind it", tool(ToolId::Wipeout)},
         {{"centermark", "cm", "centremark"}, "Annotation", "Centre mark on a circle or arc",
@@ -14256,10 +14272,14 @@ QToolButton* MainWindow::makeDrawingDetailsButton(QWidget* parent,bool iconOnly)
     button->setToolTip(QStringLiteral("Fill the drawing P/N, revision and title; the arrow places each value as a checked field on the canvas"));
     button->setPopupMode(QToolButton::MenuButtonPopup);connect(button,&QToolButton::clicked,this,[this]{showDrawingDetails();});
     auto* menu=new QMenu(button);
+    menu->addAction(QStringLiteral("Drawing details..."),this,[this]{showDrawingDetails();});
+    menu->addSeparator();
     for(const QString& key:{QStringLiteral("drawingNo"),QStringLiteral("revision"),QStringLiteral("title")})
         menu->addAction(QStringLiteral("Place %1 field").arg(drawingFieldLabel(key)),this,[this,key]{
-            if(!editor_->placeDrawingField(key)){showDrawingDetails();editor_->placeDrawingField(key);}
-            canvas_->setFocus();
+            if(showDrawingDetails(key)) {
+                editor_->placeDrawingField(key);
+                canvas_->setFocus();
+            }
         });
     menu->addSeparator();
     auto* show=menu->addAction(QStringLiteral("Show details on canvas"));
@@ -14269,26 +14289,51 @@ QToolButton* MainWindow::makeDrawingDetailsButton(QWidget* parent,bool iconOnly)
     connect(menu,&QMenu::aboutToShow,this,[this,show]{QSignalBlocker block(show);show->setChecked(canvas_->drawingDetailsVisible());});
     button->setMenu(menu);return button;
 }
-void MainWindow::showDrawingDetails() {
-    if(!doc_||!editor_)return;
-    QDialog dialog(this);dialog.setObjectName(QStringLiteral("drawingDetailsDialog"));dialog.setWindowTitle(QStringLiteral("Drawing details"));
-    auto* layout=new QVBoxLayout(&dialog);auto* explanation=new QLabel(QStringLiteral("These values are saved with this drawing. Applying them updates every P/N, revision and title field on the model and sheets. Historical revision tables remain a history."),&dialog);
-    explanation->setWordWrap(true);layout->addWidget(explanation);auto* form=new QFormLayout;
+bool MainWindow::showDrawingDetails(const QString& field) {
+    if(!doc_||!editor_)return false;
+    const QString chosen=drawingFieldKey(field);
+    const bool placing=!chosen.isEmpty();
+    QDialog dialog(this);
+    dialog.setObjectName(QStringLiteral("drawingDetailsDialog"));
+    dialog.setWindowTitle(placing ? QStringLiteral("Place %1 field").arg(drawingFieldLabel(chosen)) : QStringLiteral("Drawing details"));
+    auto* layout=new QVBoxLayout(&dialog);
+    auto* explanation=new QLabel(placing
+        ? QStringLiteral("Enter %1, then click OK and choose its position in the drawing.").arg(drawingFieldLabel(chosen))
+        : QStringLiteral("Edit the drawing details without placing text. These values are saved with this drawing and update their fields on the model and sheets. Historical revision tables remain a history."),&dialog);
+    explanation->setWordWrap(true);layout->addWidget(explanation);
+    auto* form=new QFormLayout;
     flushPaperSpace();
-    const QJsonObject details=effectiveDrawingDetails(*doc_);QHash<QString,QLineEdit*> entries;
+    const QJsonObject details=effectiveDrawingDetails(*doc_);
+    QHash<QString,QLineEdit*> entries;
     for(const QString& key:{QStringLiteral("drawingNo"),QStringLiteral("revision"),QStringLiteral("title")}){
-        auto* entry=new QLineEdit(details.value(key).toString(),&dialog);entry->setObjectName(QStringLiteral("drawingDetails_")+key);
+        if(placing && key!=chosen)continue;
+        auto* entry=new QLineEdit(details.value(key).toString(),&dialog);
+        entry->setObjectName(QStringLiteral("drawingDetails_")+key);
         form->addRow(drawingFieldLabel(key),entry);entries[key]=entry;
     }
     layout->addLayout(form);
-    auto* show=new QCheckBox(QStringLiteral("Show details on canvas"),&dialog);
-    show->setObjectName(QStringLiteral("drawingDetailsCanvasToggle"));show->setChecked(canvas_->drawingDetailsVisible());
-    layout->addWidget(show);connect(show,&QCheckBox::toggled,canvas_,&CanvasWidget::setDrawingDetailsVisible);
-    auto* buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel,&dialog);layout->addWidget(buttons);
-    connect(buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
-    if(dialog.exec()!=QDialog::Accepted)return;
-    QJsonObject updated;for(auto it=entries.begin();it!=entries.end();++it)updated[it.key()]=it.value()->text().trimmed();
-    editor_->setDrawingOwner(doc_);editor_->setDrawingDetails(updated);refreshPanels();
+    QCheckBox* show=nullptr;
+    if(!placing) {
+        show=new QCheckBox(QStringLiteral("Show details on canvas"),&dialog);
+        show->setObjectName(QStringLiteral("drawingDetailsCanvasToggle"));
+        show->setChecked(canvas_->drawingDetailsVisible());layout->addWidget(show);
+    }
+    auto* buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel,&dialog);
+    layout->addWidget(buttons);
+    connect(buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);
+    connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+    if(placing) {
+        auto* entry=entries.value(chosen);
+        buttons->button(QDialogButtonBox::Ok)->setEnabled(!entry->text().trimmed().isEmpty());
+        connect(entry,&QLineEdit::textChanged,&dialog,[buttons](const QString& text){buttons->button(QDialogButtonBox::Ok)->setEnabled(!text.trimmed().isEmpty());});
+        entry->selectAll();entry->setFocus();
+    }
+    if(dialog.exec()!=QDialog::Accepted)return false;
+    QJsonObject updated=details;
+    for(auto it=entries.begin();it!=entries.end();++it)updated[it.key()]=it.value()->text().trimmed();
+    editor_->setDrawingOwner(doc_);editor_->setDrawingDetails(updated);
+    if(show)canvas_->setDrawingDetailsVisible(show->isChecked());
+    refreshPanels();return true;
 }
 
 void MainWindow::showValidation(bool revalidate) {

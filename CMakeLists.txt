@@ -209,6 +209,7 @@ add_library(loopwire_core STATIC
     src/geometry/Environment3D.cpp
     src/harness/Harness3D.h
     src/harness/Harness3D.cpp
+    src/harness/StockParts3D.cpp
     src/harness/Route3D.h
     src/harness/Route3D.cpp
     src/harness/RouteLink.h

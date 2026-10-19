@@ -32,6 +32,9 @@
 #include <QPushButton>
 #include <QSpinBox>
 #include <QSplitter>
+#include <QScrollArea>
+#include <QScreen>
+#include <QGuiApplication>
 #include <QTableWidget>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -49,6 +52,9 @@ QLabel* caption(QWidget* parent, const QString& text) {
 
 TemplateDialog::TemplateDialog(Editor* editor, QWidget* parent) : QDialog(parent), editor_(editor) {
     setWindowTitle(QStringLiteral("Drawing template"));
+    setSizeGripEnabled(true);
+    setWindowFlags(windowFlags() | Qt::WindowMaximizeButtonHint);
+    setMinimumSize(640, 420);
     resize(1080, 780);
     // A new template is a bordered A3 sheet with a title block, not an empty form.
     tpl_.name = QStringLiteral("House A3");
@@ -59,6 +65,7 @@ TemplateDialog::TemplateDialog(Editor* editor, QWidget* parent) : QDialog(parent
     writeToControls();
     refreshInstalled();
     refreshPreview();
+    if(auto* screen=QGuiApplication::primaryScreen())resize(size().boundedTo(screen->availableGeometry().size()*0.9));
 }
 
 void TemplateDialog::buildUi() {
@@ -477,7 +484,13 @@ void TemplateDialog::buildUi() {
     dGrid->addWidget(snapChk_, r, 1);
     dGrid->addWidget(awgChk_, r++, 2, 1, 2);
     addSection(defBox, 3);
-    split->addWidget(leftSplit);
+    leftSplit->setMinimumWidth(455);
+    leftSplit->setMinimumHeight(std::max(1000,leftSplit->minimumSizeHint().height()));
+    auto* settingsScroll=new QScrollArea(split);
+    settingsScroll->setObjectName(QStringLiteral("templateSettingsScroll"));
+    settingsScroll->setWidgetResizable(true);settingsScroll->setFrameShape(QFrame::NoFrame);
+    settingsScroll->setMinimumWidth(220);settingsScroll->setWidget(leftSplit);
+    split->addWidget(settingsScroll);
 
     // ---- The sheet as it will look, and the templates already saved ----
     auto* right = new QWidget(split);
@@ -487,18 +500,18 @@ void TemplateDialog::buildUi() {
     preview_->setEmptyText(QStringLiteral("nothing on the sheet yet"));
     rightLay->addWidget(preview_, 2);
 
-    auto* contentBtns = new QHBoxLayout;
+    auto* contentBtns = new QGridLayout;
     auto* captureBtn = new QPushButton(QStringLiteral("Capture the sheet"), right);
     captureBtn->setToolTip(QStringLiteral(
         "Take everything drawn on the sheet as this template's content - draw the border and the "
         "title block with the ordinary tools, then capture it here"));
     connect(captureBtn, &QPushButton::clicked, this, [this] { captureFromDrawing(); });
-    contentBtns->addWidget(captureBtn);
+    contentBtns->addWidget(captureBtn,0,0);
     auto* resetBtn = new QPushButton(QStringLiteral("Plain bordered sheet"), right);
     resetBtn->setToolTip(QStringLiteral("Replace the content with a border and a title block for "
                                         "the sheet size above"));
     connect(resetBtn, &QPushButton::clicked, this, [this] { resetContent(); });
-    contentBtns->addWidget(resetBtn);
+    contentBtns->addWidget(resetBtn,0,1);
     auto* drawBtn = new QPushButton(QStringLiteral("Draw it on the sheet"), right);
     drawBtn->setToolTip(QStringLiteral(
         "Open the template on a tab of its own, on a tinted canvas, and lay the sheet out with the "
@@ -508,14 +521,13 @@ void TemplateDialog::buildUi() {
         layersFromTable();
         emit drawOnSheetRequested(tpl_.name);
     });
-    contentBtns->addWidget(drawBtn);
+    contentBtns->addWidget(drawBtn,1,0);
     auto* applyBtn = new QPushButton(QStringLiteral("Apply to this drawing"), right);
     applyBtn->setToolTip(QStringLiteral(
         "Put the layers, the defaults and the sheet into the drawing that is open. What is already "
         "drawn is kept."));
     connect(applyBtn, &QPushButton::clicked, this, [this] { applyToDrawing(); });
-    contentBtns->addWidget(applyBtn);
-    contentBtns->addStretch(1);
+    contentBtns->addWidget(applyBtn,1,1);
     rightLay->addLayout(contentBtns);
 
     auto* instBox = new QGroupBox(QStringLiteral("Templates"), right);
@@ -578,7 +590,9 @@ void TemplateDialog::buildUi() {
     split->addWidget(right);
     split->setStretchFactor(0, 4);
     split->setStretchFactor(1, 3);
-    root->addWidget(split, 1);
+    auto* bodyScroll=new QScrollArea(this);bodyScroll->setObjectName(QStringLiteral("templateBodyScroll"));
+    bodyScroll->setWidgetResizable(true);bodyScroll->setFrameShape(QFrame::NoFrame);
+    bodyScroll->setWidget(split);root->addWidget(bodyScroll,1);
 
     summary_ = new QLabel(QString(), this);
     summary_->setWordWrap(true);

@@ -19,6 +19,7 @@ QString titleOf(const Brick* b) {
 }
 
 void constructionFromDrawing(RouteSegment3D& segment,const Entity& entity) {
+    segment.braidedShield=sleeveIsShield(entity) || entity.meta.value(QStringLiteral("twistBody")).toString()==QLatin1String("shield") || entity.meta.value(QStringLiteral("twistBodyBraid")).toBool();
     for(const char* key:{"crossSectionMm2","areaMm2"}) {
         const auto value=entity.meta.value(QLatin1String(key));
         const double area=value.isDouble() ? value.toDouble() : value.toString().toDouble();
@@ -41,6 +42,11 @@ void constructionFromDrawing(RouteSegment3D& segment,const Entity& entity) {
     else { segment.endShrinkStart=0.0; segment.endShrinkFinish=0.0; }
     // A BRAID'S COLOUR: a shield tinned copper, a sleeve of plastic strands nearly black.
     if(sleeveIsBraid(entity)) segment.coverColor=sleeveIsShield(entity) ? QColor(168,172,180) : QColor(58,62,70);
+    const auto body=entity.meta.value(QStringLiteral("twistBody")).toString();
+    if(body==QLatin1String("braid") || body==QLatin1String("shield")) {
+        segment.braidedShield=body==QLatin1String("shield");
+        segment.coverColor=segment.braidedShield?QColor(168,172,180):QColor(58,62,70);
+    }
 }
 
 } // namespace
@@ -114,7 +120,7 @@ DrawingHarnessSource mechanicalDrawingSource(const std::vector<Entity>& entities
             const QString body = e.meta.value(QStringLiteral("twistBody")).toString();
             // A BRAID OVER IT is drawn as a cable is, and routed as a braid.
             if (!body.isEmpty() && body != QLatin1String("none"))
-                run->run.stack << (e.meta.value(QStringLiteral("twistBodyBraid")).toBool() ? QStringLiteral("braid") : body);
+                run->run.stack << (body==QLatin1String("shield") || e.meta.value(QStringLiteral("twistBodyBraid")).toBool() ? QStringLiteral("braid") : body);
         } else if (e.meta.value(QStringLiteral("shrunkEnds")).toBool()) {
             // A cable with heatshrink on its ends is routed as the cable, its sleeves over its ends.
             run->run.stack << (sleeveIsBraid(e) ? QStringLiteral("braid")

@@ -3217,8 +3217,8 @@ int run_editor_tests() {
                   d.entities()[0].meta.value(QStringLiteral("text")).toString() == QLatin1String("One line") &&
                   d.entities()[0].meta.value(QStringLiteral("singleLine")).toBool(),
               "stext: one line of text placed at the point, marked single-line");
-        check(toolLabel(ToolId::Text) == QLatin1String("Mtext") && toolLabel(ToolId::SText) == QLatin1String("Stext"),
-              "stext: the text tools are called Mtext and Stext");
+        check(toolLabel(ToolId::Text) == QLatin1String("Multiline text") && toolLabel(ToolId::SText) == QLatin1String("Single-line text"),
+              "text: the tools use descriptive multiline and single-line names");
     }
 
     // --- Polyline: [D] and [WO] typed while drawing make it a double line or a wipeout, as the ribbon's buttons do.

@@ -342,6 +342,23 @@ void CanvasWidget::positionBottomOverlay() {
 void CanvasWidget::setEditor(Editor* editor) {
     editor_ = editor;
     if (editor_) {
+        editor_->setReferenceSnapResolver([this](const Vec2& raw,const std::optional<Vec2>& anchor,double tolerance,const SnapSettings& settings) {
+            SnapResult best;
+            if(!layoutMode_ || activeViewport_>=0 || !drawingDocument() || !currentLayout())return best;
+            const auto paper=transform();const QPointF screen=paper.toScreen(raw);
+            SnapSettings objects=settings;objects.gridSnap=false;objects.ortho=false;objects.polar=false;
+            for(const auto& viewport:currentLayout()->viewports) {
+                const auto rect=viewportScreenRect(viewport,paper);
+                if(!rect.contains(screen))continue;
+                const auto model=viewportTransform(viewport,rect,paper);
+                const auto modelAnchor=anchor ? std::optional<Vec2>(model.toWorld(paper.toScreen(*anchor))) : std::nullopt;
+                const auto snap=resolveSnap(*drawingDocument(),model.toWorld(screen),modelAnchor,tolerance*paper.scale()/model.scale(),objects);
+                if(!snap.snapped || !rect.contains(model.toScreen(snap.point)))continue;
+                const auto point=paper.toWorld(model.toScreen(snap.point));
+                if(!best.snapped || distance(point,raw)<distance(best.point,raw))best={point,snap.kind,true};
+            }
+            return best;
+        });
         // Model changed -> rebuild the static scene cache and repaint.
         connect(editor_, &Editor::changed, this, [this] { invalidateScene(); });
         // Selection changed -> cache must re-include/exclude the selected set.

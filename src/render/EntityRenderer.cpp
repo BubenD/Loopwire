@@ -3029,6 +3029,7 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
             p.setPen(wirePen);
             stroke(outline);
         }
+        for(const auto& [a,b]:twistedPairBodyBraid(e))p.drawLine(vt.toScreen(a),vt.toScreen(b));
         break;
     }
 

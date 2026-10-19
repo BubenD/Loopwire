@@ -8,6 +8,8 @@
 #include "app/BrickWizardDialog.h"
 #include "app/DrawingPreview.h"
 #include "app/Editor.h"
+#include "app/TemplateDialog.h"
+#include <QTabBar>
 #include "app/MainWindow.h"
 #include "app/MechanicalValidationDialog.h"
 #include "app/RuleExplainer.h"
@@ -24,6 +26,7 @@
 #include "geometry/Environment3D.h"
 #include "geometry/Mesh3D.h"
 #include "harness/Harness3D.h"
+#include "harness/StockParts3D.h"
 #include "harness/Route3D.h"
 #include "harness/RouteGravity.h"
 #include "harness/RouteKeepOut.h"
@@ -35,6 +38,10 @@
 #include "harness/PartsLibrary.h"
 #include "model/Block.h"
 #include "model/Document.h"
+#include "model/PartSymbols.h"
+#include "app/ribbon/RibbonIcons.h"
+#include <QLineEdit>
+#include <QDialogButtonBox>
 
 #include <QApplication>
 #include <QEventLoop>
@@ -12342,6 +12349,241 @@ void testBraidOverRun() {
     }
 }
 
+void testLayoutSnapsTemplateBodies() {
+    MainWindow win;win.resize(1200,800);win.show();QApplication::processEvents();
+    auto* canvas=win.findChild<CanvasWidget*>();auto* editor=win.findChild<Editor*>();
+    check(canvas && editor,"Layout drafting: canvas and editor available");if(!canvas || !editor)return;
+    Document* drawing=editor->document();drawing->entities().clear();
+    Entity line;line.id="snap-model-line";line.type=EntityType::Line;line.a={-30,0};line.b={30,0};
+    Entity circle;circle.id="snap-model-circle";circle.type=EntityType::Circle;circle.center={0,20};circle.radius=5;
+    drawing->entities()={line,circle};
+    LayoutViewport viewport;viewport.x=100;viewport.y=60;viewport.width=160;viewport.height=100;viewport.modelScale=1;viewport.modelCenter={0,0};
+    drawing->layouts()[0].viewports={viewport};
+    QTabBar* spaces=nullptr;for(auto* bar:win.findChildren<QTabBar*>())if(bar->count()>1 && bar->tabText(0)==QLatin1String("Model"))spaces=bar;
+    check(spaces,"Layout drafting: sheet tabs available");if(!spaces)return;
+    spaces->setCurrentIndex(1);QApplication::processEvents();canvas->syncEditorScale();
+    const auto paper=canvas->inputTransform();const auto model=CanvasWidget::layoutViewportView(viewport,CanvasWidget::layoutViewportRect(viewport,paper),paper,Bounds{});
+    auto snapPoint=[&](Vec2 position){const auto p=paper.toWorld(model.toScreen(position));editor->onPointerMove(p+Vec2{.12,.09});return std::pair{p,editor->currentSnap()};};
+    auto& settings=editor->snapSettings();settings.objectSnap=true;settings.gridSnap=settings.polar=settings.ortho=false;
+    settings.snapEndpoint=true;settings.snapMidpoint=settings.snapCenter=settings.snapNearest=settings.snapIntersection=false;
+    auto end=snapPoint({30,0});check(end.second.kind==SnapKind::Endpoint && distance(end.first,end.second.point)<1e-7,"Layout snapping: catches the visible model endpoint in paper coordinates without entering its viewport");
+    settings.snapEndpoint=false;settings.snapMidpoint=true;auto mid=snapPoint({0,0});
+    check(mid.second.kind==SnapKind::Midpoint && distance(mid.first,mid.second.point)<1e-7,"Layout snapping: midpoint uses the same snap engine as the model canvas");
+    settings.snapMidpoint=false;settings.snapCenter=true;auto centre=snapPoint({0,20});
+    check(centre.second.kind==SnapKind::Center && distance(centre.first,centre.second.point)<1e-7,"Layout snapping: circle centre works through a layout viewport");
+    settings.objectSnap=false;settings.gridSnap=true;settings.gridSize=10;editor->onPointerMove({123,83});
+    check(editor->currentSnap().kind==SnapKind::Grid && editor->currentSnap().point==Vec2{120,80},"Layout snapping: grid remains in paper units and disabled object snaps stay disabled");
+    spaces->setCurrentIndex(0);editor->setTool(ToolId::Select);drawing->setDirty(false);
+    {
+        TemplateDialog dialog(editor);dialog.show();QApplication::processEvents();dialog.resize(760,560);QApplication::processEvents();
+        check(dialog.width()<=800 && dialog.height()<=600 && dialog.isSizeGripEnabled(),"Template window: can shrink to fit a small screen");
+        QPushButton* close=nullptr;for(auto* button:dialog.findChildren<QPushButton*>())if(button->text()==QLatin1String("Close"))close=button;
+        check(close && dialog.rect().contains(QRect(close->mapTo(&dialog,QPoint(0,0)),close->size())),"Template window: bottom actions stay inside the resized window");
+        const auto small=dialog.size();dialog.resize(1120,800);QApplication::processEvents();check(dialog.width()>small.width() && dialog.height()>small.height(),"Template window: can enlarge again");
+        const auto image=qEnvironmentVariable("LOOPWIRE_TEMPLATE_RESIZE_IMAGE");if(!image.isEmpty()){dialog.resize(760,560);QApplication::processEvents();dialog.grab().save(image);}
+    }
+    auto* body=win.findChild<QComboBox*>(QStringLiteral("harnessRunBody"));
+    check(body && body->findText(QStringLiteral("Braided sleeve"))>=0 && body->findText(QStringLiteral("Shield"))>=0,"Harness Special: Body offers braided sleeve and shield");
+    for(const auto kind:{RunBody::BraidedSleeve,RunBody::Shield}) {
+        Document harness;Editor create;create.setDocument(&harness);create.snapSettings().objectSnap=false;create.setTwistBodyKind(kind);create.setTool(ToolId::WiresRun);
+        create.onPointerPress({0,0},Qt::LeftButton,Qt::NoModifier);create.onPointerMove({150,0});
+        create.onPointerPress({150,0},Qt::LeftButton,Qt::NoModifier);create.onKey(Qt::Key_Return,Qt::NoModifier);
+        check(harness.entities().size()==1 && runBodyOf(harness.entities().front())==kind,"Harness Body: choosing the new kind persists when a run is actually drawn");
+        // Use the same saved entity representation used by the ribbon and properties.
+        Entity run;run.id=QStringLiteral("body-run");run.type=EntityType::TwistedPair;run.a={0,0};run.b={150,0};run.points={run.a,run.b};
+        run.meta={{"twistStraight",true},{"twistWires",4},{"twistBody",kind==RunBody::Shield?"shield":"braid"}};
+        check(runBodyOf(run)==kind && !twistedPairBody(run).empty() && !twistedPairBodyBraid(run).empty(),"Harness body: saved braid types produce an outline and a weave");
+        Route3D route;check(addDrawingToRoute(route,{run},false)==1 && route.segments.front().covering==QLatin1String("braid"),"Harness body: braid and shield remain covered in routed 3D");
+        if(!route.segments.empty())check(route.segments.front().braidedShield==(kind==RunBody::Shield),"Harness body: shielding construction stays distinct from a plastic sleeve");
+        const auto scene=buildHarness3D({run},{});bool braid=false;for(const auto& item:scene.items)braid|=item.what==QLatin1String("braid");check(braid,"Harness body: source 3D uses braid rendering");
+    }
+}
+
+void testStockPartsAndWrappedTies3D() {
+    std::vector<Entity> display;
+    int column=0;
+    for(const auto kind:mechanicalPartSymbols()) {
+        auto entities=partSymbolEntities(kind,{0,0});
+        const auto initial=buildHarness3D(entities,{});
+        check(initial.parts==1 && !initial.items.empty(),"Stock 3D: every Special stock part renders as one model");
+        bool depth=false;for(const auto& item:initial.items){V3 lo,hi;depth|=item.mesh.bounds(lo,hi) && hi.z-lo.z>.2;
+            check(item.what==partSymbolName(kind) && !item.brick.isEmpty() && !item.cube,"Stock 3D: materials share the part name and picking identity, without a generic box");}
+        check(depth,"Stock 3D: each stock part has real depth");
+        for(auto& e:entities){scaleEntity(e,{0,0},1.7);rotateEntity(e,{0,0},.61);mirrorEntity(e,{0,0},{0,1});translateEntity(e,{35,22});}
+        const auto transformed=buildHarness3D(entities,{},PartLook::Extruded);
+        bool matches=initial.items.size()==transformed.items.size();
+        if(kind!=PartSymbol::FerriteRingTop)for(size_t i=0;matches && i<initial.items.size();++i) {
+            matches=initial.items[i].mesh.v.size()==transformed.items[i].mesh.v.size();
+            for(size_t j=0;matches && j<initial.items[i].mesh.v.size();++j) {
+                const auto a=initial.items[i].mesh.v[j];
+                const V3 expected{35-1.7*(a.x*std::cos(.61)-a.y*std::sin(.61)),22+1.7*(a.x*std::sin(.61)+a.y*std::cos(.61)),1.7*a.z};
+                matches=(transformed.items[i].mesh.v[j]-expected).length()<1e-6;
+            }
+        }
+        check(matches,"Stock 3D: rotation, scale, reflection and position follow the actual 2D drawing");
+        auto placed=partSymbolEntities(kind,{(column%4)*30.,-(column/4)*25.});
+        display.insert(display.end(),placed.begin(),placed.end());++column;
+    }
+    const auto all=buildHarness3D(display,{});
+    check(all.parts==int(mechanicalPartSymbols().size()),"Stock 3D: all stock models coexist without merging or duplicating parts");
+    // Fit around a cable's actual round section, rather than across its top face.
+    Document doc;Entity cable;cable.type=EntityType::DoubleLine;cable.id=QStringLiteral("tie-cable");cable.a={-35,0};cable.b={35,0};cable.meta["gap"]=8.;doc.entities().push_back(cable);
+    Editor editor;editor.setDocument(&doc);
+    auto tie=editor.lacingTieFromBand({0,-12},{0,12});
+    for(size_t i=0;i<tie.size();++i)tie[i].id=QStringLiteral("tie-%1").arg(i);
+    doc.entities().insert(doc.entities().end(),tie.begin(),tie.end());
+    auto tied=buildHarness3D(doc.entities(),{});int ties=0;
+    for(const auto& item:tied.items)if(item.what==QLatin1String("Lacing tie")) {
+        ++ties;V3 lo,hi;item.mesh.bounds(lo,hi);
+        check(lo.z<-4 && hi.z>4,"Tie 3D: cord wraps underneath and above the cable");
+        double nearest=1e9;for(auto v:item.mesh.v)nearest=std::min(nearest,std::hypot(v.y,v.z));
+        std::printf("  wrapped tie: cable R4, nearest cord surface %.3f, Z %.2f to %.2f\n",nearest,lo.z,hi.z);
+        check(nearest>3.98,"Tie 3D: cord stays outside the cable body");
+    }
+    check(ties==1,"Tie 3D: each 2D tie becomes one wrapped fitting, including knot and tails");
+    Route3D original;original.diameter=8;
+    const auto a=original.addNode(RouteNodeKind::Branch,{-35,0,0},{0,0,1}),b=original.addNode(RouteNodeKind::Branch,{35,0,0},{0,0,1});
+    const auto segment=original.addSegment(a,b,{});original.segment(segment)->designCable=QStringLiteral("drawing:run:tie-cable");
+    Route3D moved=original;for(auto& n:moved.nodes)n.at.z+=25;
+    const auto fittings=routedStockAndTies3D(tied,moved,original);
+    check(fittings.size()==1 && fittings.front().segment==segment,"Tie 3D: linked routing retains the tie and its cable attachment");
+    if(!fittings.empty()){V3 lo,hi;fittings.front().item.mesh.bounds(lo,hi);check(lo.z>24 && hi.z>33,"Tie 3D: moving the cable carries the complete wrapped tie with it");}
+    const auto stock=routedStockAndTies3D(all,moved,original);
+    check(stock.size()==all.items.size(),"Stock 3D: unconnected stock parts remain visible when the routed harness replaces the source view");
+
+    // Wide flat group: wrap its width and actual depth instead of a radius guessed from its width.
+    Document wires;
+    for(double y:{-4.,4.}){Entity wire=cable;wire.id=QString::number(y);wire.a.y=wire.b.y=y;wire.meta["gap"]=2.;wires.entities().push_back(wire);}
+    editor.setDocument(&wires);auto lacing=editor.lacingTieFromBand({0,-12},{0,12});wires.entities().insert(wires.entities().end(),lacing.begin(),lacing.end());
+    const auto flat=buildHarness3D(wires.entities(),{});
+    for(const auto& item:flat.items)if(item.what==QLatin1String("Lacing tie")){V3 lo,hi;item.mesh.bounds(lo,hi);
+        check(lo.y<-5 && hi.y>5 && lo.z<-1 && hi.z>1 && hi.z-lo.z<5,"Tie 3D: wraps multiple wires with the correct shallow bundle depth");}
+    const QString gallery=qEnvironmentVariable("LOOPWIRE_STOCK_3D_IMAGE");
+    if(!gallery.isEmpty()) {
+        View3DCanvas canvas;canvas.resize(1100,800);canvas.setUseGpu(false);canvas.setScene(&all);canvas.viewFrom(QStringLiteral("iso"));canvas.fit();canvas.render(canvas.size()).save(gallery);
+    }
+    const QString tieImage=qEnvironmentVariable("LOOPWIRE_TIE_3D_IMAGE");
+    if(!tieImage.isEmpty()){View3DCanvas canvas;canvas.resize(1000,600);canvas.setUseGpu(false);canvas.setScene(&tied);canvas.viewFrom(QStringLiteral("iso"));canvas.fit();canvas.render(canvas.size()).save(tieImage);}
+}
+
+void testRibbonArrowPolylineGrouping() {
+    MainWindow win;auto* editor=win.findChild<Editor*>();
+    check(editor,"Ribbon grouping: editor available");if(!editor)return;
+    int checked=0;
+    for(auto* tabs:win.findChildren<QTabWidget*>())for(int i=0;i<tabs->count();++i) {
+        const auto name=tabs->tabText(i);
+        if(name!=QLatin1String("Home") && name!=QLatin1String("Harness mechanical") && name!=QLatin1String("Annotation"))continue;
+        auto* page=tabs->widget(i);++checked;
+        for(auto* label:page->findChildren<QLabel*>())check(label->text()!=QLatin1String("Polyline"),"Ribbon grouping: no standalone Polyline options section");
+        for(auto* button:page->findChildren<QToolButton*>())if(auto* action=button->defaultAction())
+            check(!action->data().isValid() || (action->data().toInt()!=int(ToolId::Arrow) && action->data().toInt()!=int(ToolId::VolumeArrow)),"Ribbon grouping: arrows have no separate ribbon buttons");
+        QAction* arrow=nullptr;QAction* blockArrow=nullptr;
+        for(auto* button:page->findChildren<QToolButton*>())if(button->menu() && button->toolTip().startsWith(QLatin1String("Leader")))
+            for(auto* action:button->menu()->actions()) {
+                if(action->text()==QLatin1String("Arrow (no text)"))arrow=action;
+                if(action->text()==QLatin1String("Block arrow"))blockArrow=action;
+            }
+        check(arrow && blockArrow,"Ribbon grouping: Leader menus offer plain and block arrows on all three tabs");
+        if(blockArrow){blockArrow->trigger();check(editor->tool()==ToolId::VolumeArrow,"Ribbon grouping: Block arrow menu action activates the tool");}
+        if(arrow){arrow->trigger();check(editor->tool()==ToolId::Arrow,"Ribbon grouping: Leader's Arrow action activates the drawing tool");}
+        const auto output=qEnvironmentVariable("LOOPWIRE_RIBBON_GROUPING_DIR");
+        if(!output.isEmpty()) {
+            tabs->setCurrentIndex(i);win.resize(1700,900);win.show();QApplication::processEvents();
+            page->grab().save(output+QStringLiteral("/")+name+QStringLiteral(".png"));
+        }
+    }
+    check(checked==3,"Ribbon grouping: checked Home, Harness mechanical and Annotation");
+    editor->document()->setDirty(false);
+}
+
+void testAnnotationDetailsStockParts() {
+    MainWindow win;
+    auto* editor=win.findChild<Editor*>();
+    auto* canvas=win.findChild<CanvasWidget*>();
+    auto* button=win.findChild<QToolButton*>(QStringLiteral("drawingDetailsButton"));
+    check(editor && canvas && button && button->menu(),"annotations: drawing details and editor available");
+    if(!editor || !canvas || !button || !button->menu())return;
+    Document* doc=editor->document();
+    editor->setTool(ToolId::Select);
+    const size_t initial=doc->entities().size();
+    QTimer::singleShot(0,[&]{
+        auto* dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        check(dialog && dialog->findChildren<QLineEdit*>().size()==3,"Drawing details: edit all three fields together");
+        if(!dialog)return;
+        dialog->findChild<QLineEdit*>(QStringLiteral("drawingDetails_drawingNo"))->setText(QStringLiteral("PN-42"));
+        dialog->findChild<QLineEdit*>(QStringLiteral("drawingDetails_revision"))->setText(QStringLiteral("A"));
+        dialog->findChild<QLineEdit*>(QStringLiteral("drawingDetails_title"))->setText(QStringLiteral("Test harness"));
+        dialog->accept();
+    });
+    button->menu()->actions().front()->trigger();
+    check(doc->drawingDetails().value("drawingNo").toString()==QLatin1String("PN-42") && doc->entities().size()==initial && editor->tool()==ToolId::Select,
+          "Drawing details: save all fields without adding text or starting placement");
+    QAction *revision=nullptr,*title=nullptr;
+    for(auto* action:button->menu()->actions()) {
+        if(action->text()==QLatin1String("Place Revision field"))revision=action;
+        if(action->text()==QLatin1String("Place Title field"))title=action;
+    }
+    check(revision && title,"Drawing details: individual field actions remain available");
+    if(!revision || !title)return;
+    QTimer::singleShot(0,[&]{
+        auto* dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        check(dialog && dialog->findChildren<QLineEdit*>().size()==1,"Place revision: only the revision field is shown");
+        if(!dialog)return;
+        auto* entry=dialog->findChild<QLineEdit*>(QStringLiteral("drawingDetails_revision"));
+        check(entry && entry->text()==QLatin1String("A"),"Place revision: prefill the saved value");
+        if(entry)entry->setText(QStringLiteral("B"));
+        dialog->accept();
+    });
+    revision->trigger();
+    check(doc->drawingDetails().value("drawingNo").toString()==QLatin1String("PN-42") && doc->drawingDetails().value("title").toString()==QLatin1String("Test harness"),
+          "Place revision: editing one field preserves the other drawing details");
+    editor->onPointerPress({40,30},Qt::LeftButton,Qt::NoModifier);
+    check(doc->entities().size()==initial+1 && doc->entities().back().meta.value("text").toString()==QLatin1String("B") && doc->entities().back().meta.value("field").toString()==QLatin1String("revision"),
+          "Place revision: clicking places the updated, linked field");
+    QTimer::singleShot(0,[&]{
+        auto* dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        if(dialog){dialog->findChild<QLineEdit*>(QStringLiteral("drawingDetails_title"))->setText(QStringLiteral("Discard me"));dialog->reject();}
+    });
+    title->trigger();
+    check(doc->drawingDetails().value("title").toString()==QLatin1String("Test harness") && editor->tool()==ToolId::Select,
+          "Place title: Cancel changes neither drawing details nor active tool");
+    Entity single;single.id=QStringLiteral("single-type");single.type=EntityType::Text;single.meta={{"text","One"},{"singleLine",true}};
+    Entity multi=single;multi.id=QStringLiteral("multi-type");multi.meta.remove("singleLine");multi.meta["text"]=QStringLiteral("One\nTwo");
+    editor->appendEntities({single,multi});
+    auto shownType=[&](const QString& id){
+        editor->selectById(id);QApplication::processEvents();
+        for(auto* table:win.findChildren<QTableWidget*>())for(int row=0;row<table->rowCount();++row)
+            if(table->item(row,0) && table->item(row,0)->text()==QLatin1String("Type") && table->item(row,1))return table->item(row,1)->text();
+        return QString();
+    };
+    check(shownType(single.id)==QLatin1String("Single-line text"),"Text properties: SText has its appropriate type name");
+    check(shownType(multi.id)==QLatin1String("Multiline text"),"Text properties: MText has its appropriate type name");
+    for(const auto part:{PartSymbol::Splice,PartSymbol::SpliceHeatshrink,PartSymbol::ThLed}) {
+        const auto entities=partSymbolEntities(part,{0,0});
+        check(!entities.empty() && !makePartSymbolIcon(part).isNull(),"Stock parts: new mechanical part has geometry and an icon");
+        QAction* place=nullptr;
+        for(auto* menu:win.findChildren<QMenu*>())for(auto* action:menu->actions())if(action->text()==partSymbolName(part)){place=action;break;}
+        check(place,"Stock parts: each new part is offered in the Parts menu");
+        if(place){const auto count=doc->entities().size();place->trigger();editor->onPointerPress({100,100},Qt::LeftButton,Qt::NoModifier);
+            check(doc->entities().size()==count+entities.size(),"Stock parts: ribbon action places the complete grouped part");}
+    }
+    bool hidden=false;for(const auto& e:partSymbolEntities(PartSymbol::SpliceHeatshrink,{0,0}))hidden|=e.meta.value("lineType").toString()==QLatin1String("dashed");
+    check(hidden,"Splice heatshrink: hidden inner contours distinguish the covered joint");
+    const auto image=qEnvironmentVariable("LOOPWIRE_STOCK_PARTS_IMAGE");
+    if(!image.isEmpty()) {
+        QImage board(900,280,QImage::Format_RGB32);board.fill(QColor("#202c35"));QPainter painter(&board);
+        painter.setRenderHint(QPainter::Antialiasing);int column=0;
+        for(const auto part:{PartSymbol::Splice,PartSymbol::SpliceHeatshrink,PartSymbol::ThLed}) {
+            painter.setPen(Qt::white);painter.drawText(QRect(column*300,10,300,35),Qt::AlignCenter,partSymbolName(part));
+            ViewTransform view;view.view.x=150+column*300;view.view.y=140;view.view.scale=10;
+            for(const auto& entity:partSymbolEntities(part,{0,0}))EntityRenderer::draw(painter,entity,*doc,view,QColor("#dddddd"));
+            ++column;
+        }
+        painter.end();board.save(image);
+    }
+    doc->setDirty(false);
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -12355,6 +12597,10 @@ int run_brickharness_tests() {
     };
 #define ROUND(f) \
     if (wanted(#f)) f()
+    ROUND(testLayoutSnapsTemplateBodies);
+    ROUND(testStockPartsAndWrappedTies3D);
+    ROUND(testRibbonArrowPolylineGrouping);
+    ROUND(testAnnotationDetailsStockParts);
     ROUND(testLinks);
     ROUND(testJson);
     ROUND(testRoutes);

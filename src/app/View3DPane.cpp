@@ -1,3 +1,4 @@
+#include "harness/StockParts3D.h"
 #include "app/View3DPane.h"
 
 #include "app/Icons3D.h"
@@ -6098,6 +6099,11 @@ void View3DCanvas::buildRouteMeshes() const {
             routeMeshes_.push_back({boxMesh(c - V3{h, h, h}, c + V3{h, h, h}), on ? lit : n.color.isValid() ? n.color : QColor(250, 210, 60),
                                     Texture3D::None, n.id});
         }
+    }
+    // Source fittings must remain in the linked routed view as well.
+    if(scene_)for(auto& fitting:routedStockAndTies3D(*scene_,*route_,originalRoute_)) {
+        auto& item=fitting.item;
+        routeMeshes_.push_back({std::move(item.mesh),item.color,item.texture,QString(),fitting.segment,item.alpha,item.brick});
     }
     // HEATSHRINK AT A BRANCH: a sleeve over the routed cable where it divides, and over each leg out of it - each as long
     // as three times the bundle's diameter from the branch, a little wider than the bundle.

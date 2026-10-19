@@ -164,7 +164,6 @@ void MainWindow::buildHomeTab() {
              toolRow({ToolId::Line, ToolId::DoublePolyline, ToolId::Polyline, ToolId::Rect, ToolId::Circle,
                       ToolId::Ellipse, ToolId::Arc, ToolId::Spline, ToolId::Polygon, ToolId::Ray,
                       ToolId::Hatch, ToolId::Wipeout}));
-    polylineOptionsGroup(lay, page);
     // The modify tools, Match, Array and Copy: twelve buttons in the same two rows of six. Array and Copy
     // used to stand beside the grid, each at its own width, and Match was dropped into a spare cell - three
     // ways of putting a button in a group, in one group.
@@ -196,7 +195,7 @@ void MainWindow::buildHomeTab() {
         leaderBtn->setFocusPolicy(Qt::NoFocus);
         leaderBtn->setToolTip(QStringLiteral(
             "Leader — click what it points at, then where its words go. The menu draws one with a "
-            "numbered balloon instead."));
+            "numbered balloon, or an arrow without text."));
         leaderBtn->setPopupMode(QToolButton::MenuButtonPopup);
         connect(leaderBtn, &QToolButton::clicked, this,
                 [this] { editor_->setTool(ToolId::TextLeader); });
@@ -208,13 +207,17 @@ void MainWindow::buildHomeTab() {
             a = lm->addAction(makeToolIcon(ToolId::Balloon),
                               QStringLiteral("Leader — with a numbered balloon"));
             connect(a, &QAction::triggered, this, [this] { editor_->setTool(ToolId::Balloon); });
+            a = lm->addAction(makeToolIcon(ToolId::Arrow), QStringLiteral("Arrow (no text)"));
+            connect(a, &QAction::triggered, this, [this] { editor_->setTool(ToolId::Arrow); });
+            a = lm->addAction(makeToolIcon(ToolId::VolumeArrow), QStringLiteral("Block arrow"));
+            connect(a, &QAction::triggered, this, [this] { editor_->setTool(ToolId::VolumeArrow); });
             leaderBtn->setMenu(lm);
         }
         // The centre marks belong here as well as on the Annotation tab: they are used while drawing, and
         // a tool that is only on a tab you have to go to is a tool nobody uses.
         addGroup(lay, QStringLiteral("Annotation"),
                  toolRow({ToolId::Text, ToolId::Dimension, ToolId::Note, ToolId::Revision,
-                          ToolId::CenterMark, ToolId::CenterLine, ToolId::DetailView, ToolId::Arrow},
+                          ToolId::CenterMark, ToolId::CenterLine, ToolId::DetailView},
                          {leaderBtn, makeNoteMarkButton(page, QStringLiteral("homeNoteMark")), tb,
                           makeDrawingDetailsButton(page, true)}));
     }

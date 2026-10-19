@@ -43,8 +43,7 @@ void MainWindow::buildAnnotationTab() {
     // which way it turns. It was on the harness tab under Special, which is where a person looks for a
     // break mark and not for a piece of writing.
     addGroup(lay, QStringLiteral("Annotate"),
-             toolRow({ToolId::Dimension, ToolId::Text, ToolId::MText, ToolId::NetLabel,
-                      ToolId::VolumeArrow, ToolId::Arrow}));
+             toolRow({ToolId::Dimension, ToolId::Text, ToolId::MText, ToolId::NetLabel}));
     // Where the middle of something is. Both are PICKED rather than drawn: the geometry already says where
     // the middle is, and making a drawing office find it with a cursor is asking them to do arithmetic the
     // program can do exactly.
@@ -56,7 +55,7 @@ void MainWindow::buildAnnotationTab() {
     {
         // Callouts + a Table button that asks rows/cols before you drag the grid.
         // Leader = a split-button: click places a TEXT leader (no circle); the
-        // fall-menu offers a Balloon leader plus the multileader operations.
+        // fall-menu offers an arrow without text, a balloon and the multileader operations.
         auto* balloonBtn = new QToolButton(page);
         balloonBtn->setProperty("cadActionIcon",QStringLiteral("leader"));
         balloonBtn->setIcon(makeToolIcon(ToolId::TextLeader));
@@ -64,7 +63,7 @@ void MainWindow::buildAnnotationTab() {
         balloonBtn->setToolButtonStyle(Qt::ToolButtonIconOnly);
         balloonBtn->setAutoRaise(true);
         balloonBtn->setFocusPolicy(Qt::NoFocus);
-        balloonBtn->setToolTip(QStringLiteral("Leader (text) — click the tip then the label"));
+        balloonBtn->setToolTip(QStringLiteral("Leader - click the tip then the text. Open the menu for Arrow (no text), Balloon and leader editing."));
         balloonBtn->setPopupMode(QToolButton::MenuButtonPopup);
         connect(balloonBtn, &QToolButton::clicked, this,
                 [this] { editor_->setTool(ToolId::TextLeader); });
@@ -77,6 +76,8 @@ void MainWindow::buildAnnotationTab() {
             connect(a, &QAction::triggered, this, [this] { editor_->beginBalloonShape(QStringLiteral("circle")); });
             a = lm->addAction(makeToolIcon(ToolId::Arrow), QStringLiteral("Arrow (no text)"));
             connect(a, &QAction::triggered, this, [this] { editor_->setTool(ToolId::Arrow); });
+            a = lm->addAction(makeToolIcon(ToolId::VolumeArrow), QStringLiteral("Block arrow"));
+            connect(a, &QAction::triggered, this, [this] { editor_->setTool(ToolId::VolumeArrow); });
             lm->addSeparator();
             a = lm->addAction(QStringLiteral("Add Leader"));
             connect(a, &QAction::triggered, this, [this] { editor_->addLeaderToSelection(); });

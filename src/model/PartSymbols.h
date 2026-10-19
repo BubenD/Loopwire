@@ -34,6 +34,9 @@ enum class PartSymbol {
     SchCapacitor,
     SchCoil,
     SchFerrite,       // a coil with its core: the ferrite bead / choke symbol
+    Splice,
+    SpliceHeatshrink,
+    ThLed,
 };
 
 // What it is called on the menu, and the longer word on hovering.

@@ -200,9 +200,9 @@ inline QString toolLabel(ToolId t) {
     case ToolId::Arc: return QStringLiteral("Arc");
     case ToolId::Ellipse: return QStringLiteral("Ellipse");
     case ToolId::Spline: return QStringLiteral("Spline");
-    case ToolId::Text: return QStringLiteral("Mtext");
-    case ToolId::SText: return QStringLiteral("Stext");
-    case ToolId::MText: return QStringLiteral("Mtext box");
+    case ToolId::Text: return QStringLiteral("Multiline text");
+    case ToolId::SText: return QStringLiteral("Single-line text");
+    case ToolId::MText: return QStringLiteral("Multiline text box");
     case ToolId::Dimension: return QStringLiteral("Dimension");
     case ToolId::Hatch: return QStringLiteral("Hatch");
     case ToolId::Wipeout: return QStringLiteral("Wipeout");

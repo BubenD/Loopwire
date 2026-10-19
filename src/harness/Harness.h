@@ -233,8 +233,9 @@ std::vector<std::vector<Vec2>> runDrawnLines(const Entity& pair);
 //              what it grips at each end, and no boot, because there is no transition to cover.
 //
 // The FANS are untouched by all three: what changes is the part between them.
-enum class RunBody { Wires, Cable, Heatshrink };
+enum class RunBody { Wires, Cable, Heatshrink, BraidedSleeve, Shield };
 RunBody runBodyOf(const Entity& pair);
+std::vector<std::pair<Vec2,Vec2>> twistedPairBodyBraid(const Entity& pair);
 
 // WHICH ENDS OF A CABLE WEAR THE TRANSITION. A breakout is a real part fitted to a real end, and a
 // loom is not symmetrical: one end goes into a connector and wants the boot, the other runs into a

@@ -1720,8 +1720,8 @@ int run_drawingspace_tests() {
         QStringList texts;
         if (textMenu)
             for (QAction* a : textMenu->actions()) texts << a->text();
-        check(texts == QStringList({QStringLiteral("Mtext"), QStringLiteral("Stext")}),
-              "text: the Text button offers Mtext and Stext");
+        check(texts == QStringList({QStringLiteral("Multiline text"), QStringLiteral("Single-line text")}),
+              "text: the Text button offers clearly named multiline and single-line text");
     }
 
     // ---- which ends wear the transition, and only a cable is asked ------------------------------
