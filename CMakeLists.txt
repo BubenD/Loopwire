@@ -99,6 +99,8 @@ add_library(loopwire_core STATIC
     src/harness/CableSpec.h
     src/harness/CableSpec.cpp
     src/analysis/VoltageDrop.h
+    src/analysis/Cma.h
+    src/analysis/Cma.cpp
     src/analysis/Thermal.h
     src/analysis/Thermal.cpp
     src/analysis/VoltageDrop.cpp
@@ -236,6 +238,7 @@ add_library(loopwire_core STATIC
     src/app/CommandDemo.h
     src/app/CommandDemo.cpp
     src/app/VoltageDropDialog.h
+    src/app/CmaCalculatorDialog.h
     src/app/CableBuilderDialog.h
     src/app/CableBuilderDialog.cpp
     src/app/PartViewDialog.h
@@ -246,6 +249,7 @@ add_library(loopwire_core STATIC
     src/app/WizardFlowSplitter.h
     src/app/UiBits.cpp
     src/app/VoltageDropDialog.cpp
+    src/app/CmaCalculatorDialog.cpp
 )
 
 target_include_directories(loopwire_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)

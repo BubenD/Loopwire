@@ -1,4 +1,5 @@
 #include "harness/Harness3D.h"
+#include "geometry/Geometry.h"
 
 #include "harness/Harness.h"
 #include "harness/PartsLibrary.h"
@@ -856,6 +857,34 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
             runEnds.push_back(path2.back());
             continue;
         }
+        // A POLYLINE GIVEN A WIDTH is a pipe that wide - along its arcs and round its filleted corners. One with no width
+        // is a line of the drawing (an outline, a boundary), not something there to be built, and is not shown.
+        if (e.type == EntityType::Polyline && !e.meta.value(QStringLiteral("double")).toBool() &&
+            e.meta.value(QStringLiteral("plineWidth")).toDouble() > 0.0 && e.points.size() >= 2 && groupOf(e).isEmpty()) {
+            const double half = e.meta.value(QStringLiteral("plineWidth")).toDouble() / 2.0;
+            std::vector<Vec2> along = e.points;
+            const QJsonArray bulges = e.meta.value(QStringLiteral("bulges")).toArray();
+            if (!bulges.isEmpty()) {
+                std::vector<double> b;
+                for (const QJsonValue& v : bulges) b.push_back(v.toDouble());
+                along = expandBulgePolyline(e.points, b);
+            } else if (e.meta.contains(QStringLiteral("cornerRadii"))) {
+                std::vector<double> radii;
+                for (const QJsonValue& v : e.meta.value(QStringLiteral("cornerRadii")).toArray()) radii.push_back(std::max(0.0, v.toDouble()));
+                radii.resize(e.points.size(), 0.0);
+                along = roundedPolylinePerCorner(e.points, radii, 16);
+            }
+            std::vector<V3> path;
+            for (const Vec2& q : along) path.push_back(at3(q));
+            Harness3DItem pipe;
+            pipe.smoothContours = true;
+            pipe.mesh = pipeMesh(path, half, 24);
+            pipe.color = colours.value(e.id, QColor(150, 156, 166));
+            pipe.what = QStringLiteral("pipe");
+            pipe.brick = brickOf(e);
+            if (!pipe.mesh.empty()) scene.items.push_back(std::move(pipe));
+            continue;
+        }
         // A RUN OF ONE WIRE is drawn as a wire - a double line, not a bundle: one tube along it. A HEATSHRINK SLEEVE drawn
         // on the sheet is one too: a black tube as wide as it is drawn.
         if (e.type == EntityType::Polyline && e.meta.value(QStringLiteral("double")).toBool() && e.points.size() >= 2) {
@@ -928,7 +957,20 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
                     }, 18, true);
                 }
             } else {
-                wi.smoothContours = true; wi.mesh = tubeMesh(path, std::max(0.2, across) / 2.0, 8, true);
+                // A PROPER PIPE: round (two dozen sides, smooth-shaded), bent round each filleted knee as it is drawn -
+                // its middle on the radius plus half its width - and mitre-free at a sharp one, closed at its ends.
+                const double half = std::max(0.2, across) / 2.0;
+                std::vector<double> radii(e.points.size(), 0.0);
+                const QJsonArray rr = e.meta.value(QStringLiteral("cornerRadii")).toArray();
+                bool rounded = false;
+                for (int i = 1; i + 1 < static_cast<int>(e.points.size()) && i < rr.size(); ++i)
+                    if (rr[i].toDouble() > 0.0) {
+                        radii[static_cast<size_t>(i)] = rr[i].toDouble() + half;
+                        rounded = true;
+                    }
+                std::vector<V3> pipe;
+                for (const Vec2& q : rounded ? roundedPolylinePerCorner(e.points, radii, 16) : e.points) pipe.push_back(at3(q));
+                wi.smoothContours = true; wi.mesh = pipeMesh(pipe, half, 24);
             }
             // A BRAIDED SLEEVE over the whole run, woven.
             const bool braidRun = sleeve && sleeveIsBraid(e) && !e.meta.value(QStringLiteral("shrinkEndsOnly")).toBool();

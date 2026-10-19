@@ -22406,17 +22406,22 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             capShiftStart(r2);
             p.drawLine(vt.toScreen(r1[0]), vt.toScreen(r1[1]));
             p.drawLine(vt.toScreen(r2[0]), vt.toScreen(r2[1]));
-        } else if (tool_ == ToolId::DoublePolyline && pts.size() >= 2) {
-            // ONCE IT IS ON THE SHEET (placed as it is drawn) only the stretch still following the pointer is a
-            // preview - but drawn on from the knee it leaves, through the corner it will make: the segment before
-            // it as well, so the two lines meet the placed ones and mitre round the corner with no gap.
-            const bool live = !draftLiveId_.isEmpty() && pts.size() > 2;
-            if (live) {
-                const size_t n = pts.size();
-                const double kneeRadius = previewRadii.size() >= n ? previewRadii[n - 2] : 0.0;
-                pts = {pts[n - 3], pts[n - 2], pts[n - 1]};
-                previewRadii = {0.0, kneeRadius, 0.0};
+        } else if (tool_ == ToolId::DoublePolyline && pts.size() >= 2 && entityById(draftLiveId_)) {
+            // ONCE IT IS ON THE SHEET (placed as it is drawn), THE WHOLE OF IT IS DRAWN HERE, on to the pointer: the
+            // sheet leaves it out meanwhile (doubleLineBeingDrawn), so the knee it is making - mitred or rounded -
+            // is one shape, and nothing of how it stood before the last point shows through.
+            Entity ghost = *entityById(draftLiveId_);
+            ghost.points = faceFitting() ? pts : doubleRunCentre(pts, draftCableGap(), doubleSecondBelow());
+            ghost.meta.remove(QStringLiteral("cutEnd"));
+            if (previewAnyFillet) {
+                QJsonArray radii;
+                for (double r : previewRadii) radii.append(r);
+                ghost.meta.insert(QStringLiteral("cornerRadii"), radii);
+            } else {
+                ghost.meta.remove(QStringLiteral("cornerRadii"));
             }
+            EntityRenderer::draw(p, ghost, *doc_, vt, paperInk(QColor("#ffffff")));
+        } else if (tool_ == ToolId::DoublePolyline && pts.size() >= 2) {
             // Round each filleted corner of the centerline at radius + gap/2 so both
             // runs fillet, then offset.
             const double h = draftCableGap() / 2.0;
@@ -22429,23 +22434,10 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 previewAnyFillet ? roundedPolylinePerCorner(shifted, centerRadii) : shifted;
             std::vector<Vec2> r1 = offsetPolyline(center, h);
             std::vector<Vec2> r2 = offsetPolyline(center, -h);
-            if (live) {
-                // From where each placed line stops - square across at the knee - through the mitre and on.
-                const Entity* placed = entityById(draftLiveId_);
-                if (placed && placed->points.size() >= 2 && previewRadii[1] <= 0.0 && r1.size() == 3 && r2.size() == 3) {
-                    const std::vector<Vec2> placedA = offsetPolyline(placed->points, h);
-                    const std::vector<Vec2> placedB = offsetPolyline(placed->points, -h);
-                    if (!placedA.empty() && !placedB.empty()) {
-                        r1[0] = placedA.back();
-                        r2[0] = placedB.back();
-                    }
-                }
-            } else {
-                extendLsStart(r1); // ls: start both runs on the reference line
-                extendLsStart(r2);
-                capShiftStart(r1); // Shift: and so does the line the run was started on
-                capShiftStart(r2);
-            }
+            extendLsStart(r1); // ls: start both runs on the reference line
+            extendLsStart(r2);
+            capShiftStart(r1); // Shift: and so does the line the run was started on
+            capShiftStart(r2);
             for (const auto& run : {r1, r2}) {
                 QPolygonF poly;
                 for (const auto& v : run) poly << vt.toScreen(v);

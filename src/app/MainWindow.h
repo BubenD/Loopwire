@@ -632,6 +632,7 @@ private:
     QToolButton* makeVoltageDropButton(QWidget* parent);
     // The calculator sits in the same shared Tools group on both harness tabs.
     QToolButton* makeCalculatorButton(QWidget* parent);
+    QToolButton* makeCmaButton(QWidget* parent);   // the CMA calculator, in the Tools groups
     HarnessBuilderDialog* harnessDlg_ = nullptr;
     PartsLibraryDialog* libraryDlg_ = nullptr;
     QWidget* captureTab_ = nullptr;
@@ -642,6 +643,7 @@ private:
     QShortcut* captureDropSc_ = nullptr;
     BomDialog* bomDlg_ = nullptr;
     VoltageDropDialog* voltageDropDlg_ = nullptr;
+    class CmaCalculatorDialog* cmaDlg_ = nullptr;
     HarnessStepsDialog* stepsDlg_ = nullptr;
     class MechWizardDialog* mechWizard_ = nullptr;
     class BrickWizardDialog* brickWizard_ = nullptr;

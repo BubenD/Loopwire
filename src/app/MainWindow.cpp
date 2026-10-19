@@ -41,6 +41,7 @@
 #include "model/Picture.h"
 #include "app/ThermalModelDialog.h"
 #include "app/VoltageDropDialog.h"
+#include "app/CmaCalculatorDialog.h"
 
 #include "app/Editor.h"
 #include "app/UiBits.h"
@@ -13988,6 +13989,42 @@ QToolButton* MainWindow::makeVoltageDropButton(QWidget* parent) {
         btn->setIcon(QIcon(pm));
     }
     connect(btn, &QToolButton::clicked, this, [this] { showVoltageDropDialog(); });
+    return btn;
+}
+
+QToolButton* MainWindow::makeCmaButton(QWidget* parent) {
+    auto* btn = new QToolButton(parent);
+    btn->setObjectName(QStringLiteral("cmaButton"));
+    btn->setText(QStringLiteral("CMA\ncalculator"));
+    btn->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    btn->setIconSize(QSize(26, 26));
+    btn->setMinimumWidth(84);
+    btn->setAutoRaise(true);
+    btn->setFocusPolicy(Qt::NoFocus);
+    btn->setToolTip(QStringLiteral(
+        "Circular mil area: conductors from the parts list or typed in (AWG, mm2, kcmil, CM, diameter), their area each "
+        "and in all, the one size that holds as much - and the area a run needs for its current, length and voltage drop"));
+    {
+        // Three conductor ends in a ring - what is added up.
+        QPixmap pm(28, 28);
+        pm.fill(Qt::transparent);
+        QPainter ip(&pm);
+        ip.setRenderHint(QPainter::Antialiasing, true);
+        ip.setPen(QPen(QColor("#5a9bf0"), 1.5));
+        ip.setBrush(Qt::NoBrush);
+        ip.drawEllipse(QPointF(14, 14), 11, 11);
+        ip.setPen(QPen(QColor("#e6b45a"), 1.2));
+        ip.setBrush(QColor(230, 180, 90, 90));
+        for (const QPointF& c : {QPointF(10, 11), QPointF(18, 11), QPointF(14, 18)}) ip.drawEllipse(c, 3.6, 3.6);
+        ip.end();
+        btn->setIcon(QIcon(pm));
+    }
+    connect(btn, &QToolButton::clicked, this, [this] {
+        if (!cmaDlg_) cmaDlg_ = new CmaCalculatorDialog(this);
+        cmaDlg_->show();
+        cmaDlg_->raise();
+        cmaDlg_->activateWindow();
+    });
     return btn;
 }
 

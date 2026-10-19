@@ -50,6 +50,9 @@ Mesh3D boxMesh(const V3& lo, const V3& hi);
 Mesh3D prismMesh(const std::vector<std::pair<double, double>>& profile, double depth);
 // A TUBE along a path - a round section of so many sides swept along it, closed at its ends.
 Mesh3D tubeMesh(const std::vector<V3>& path, double radius, int sides = 12, bool caps = true);
+// A PIPE along a path: round, its bore kept up to each knee and mitred there (the ring on the plane halving the bend,
+// stretched across it) rather than pinched; closed at both ends.
+Mesh3D pipeMesh(const std::vector<V3>& path, double radius, int sides = 24);
 // A TUBE WHOSE RADIUS CHANGES along it - by how far along the path (its length so far) each point is.
 Mesh3D tubeMeshVar(const std::vector<V3>& path, const std::function<double(double along)>& radius, int sides = 12,
                    bool caps = true);

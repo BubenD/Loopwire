@@ -1850,6 +1850,7 @@ void MainWindow::buildHarnessMechanicalTab() {
         tg->addWidget(makeBundleDiameterButton(tw), 0, 1);
         tg->addWidget(makeThermalButton(tw), 0, 2);
         tg->addWidget(makeCalculatorButton(tw), 0, 3);
+        tg->addWidget(makeCmaButton(tw), 0, 4);
         QWidget* toolsGroup = addGroupKeep(lay, QStringLiteral("Tools"), tw);
         mechGroups_ << toolsGroup;
         mechModelHiddenGroups_ << toolsGroup;

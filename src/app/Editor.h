@@ -224,6 +224,9 @@ public:
     // A RUN BEING CARRIED ON is drawn by the overlay as the whole run, longer - so the drawing leaves
     // it out while that is going on, or its old end would show through the ghost as a second one.
     const QString& runBeingCarriedOn() const { return continueId_; }
+    // THE DOUBLE LINE BEING DRAWN, on the sheet already (placed as it is drawn): the canvas leaves it out and the
+    // overlay draws it whole, on to the pointer. Empty when there is none.
+    const QString& doubleLineBeingDrawn() const { return draftLiveId_; }
     // THE TWO THINGS A ROUTE IS DRAWN WITH, each with its A. Below nought means the drawing's own:
     //   fillet - the radius every knee of the route is rounded on. Auto is what suits the object
     //            being routed: a harness keeps its own knee radius, a cable or sleeve is rounded in

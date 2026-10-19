@@ -1,6 +1,9 @@
 // Voltage drop: every case here has an answer that can be worked out by hand, so a wrong figure
 // shows up as a wrong figure rather than as a plausible one.
 #include "analysis/VoltageDrop.h"
+#include "analysis/Cma.h"
+#include "app/CmaCalculatorDialog.h"
+#include "harness/PartsLibrary.h"
 #include "harness/Harness.h"
 #include "model/Document.h"
 
@@ -558,5 +561,35 @@ int run_voltagedrop_tests() {
     }
 
     std::printf(failures == 0 ? "  -> ok\n" : "  -> %d failed\n", failures);
+    // ---- CIRCULAR MIL AREA: the figures in the tables, the size that holds them, the area a run needs ----
+    {
+        check(std::abs(cmaOf(10, CmaUnit::Awg) - 10383.0) < 5.0, "cma: 10 AWG is about 10380 CM");
+        check(std::abs(cmaOf(0, CmaUnit::Awg) - 105600.0) < 200.0, "cma: 1/0 is about 105600 CM");
+        check(near(cmaOf(1.0, CmaUnit::Mm2), 1973.525, 1e-6) && near(cmaOf(2.0, CmaUnit::Kcmil), 2000.0),
+              "cma: 1 mm2 is 1973.525 CM, 2 kcmil 2000");
+        check(std::abs(cmaOf(1.0, CmaUnit::DiameterMm) - 1550.0) < 1.0, "cma: a 1 mm round conductor is 1550 CM");
+        check(cmaOf(-1.0, CmaUnit::Mm2) < 0.0 && cmaOf(50, CmaUnit::Awg) < 0.0, "cma: a size that cannot be is said so");
+        check(awgForCma(10000.0) == 10 && awgForCma(10400.0) == 9 && awgName(-3) == QStringLiteral("4/0") && awgName(0) == QStringLiteral("1/0"),
+              "cma: the smallest AWG that holds it, and 0000 written 4/0");
+        check(near(mm2ForCma(cmaFromMm2(1.2)), 1.5) && mm2ForCma(cmaFromMm2(300.0)) < 0.0, "cma: the smallest metric size that holds it");
+        // 10 A over 5 m with 0.5 V allowed, copper: 2 x 10.75 x 10 x 16.404 / 0.5 = 7053.7 CM - 11 AWG, 4 mm2.
+        const double need = cmaRequired(10.0, 5.0, 0.5, kCmaCopperK);
+        check(std::abs(need - 7053.7) < 0.5 && awgForCma(need) == 11 && near(mm2ForCma(need), 4.0), "cma: the area a run needs");
+        check(cmaRequired(0.0, 5.0, 0.5, kCmaCopperK) < 0.0, "cma: no current, no answer");
+        // THE WINDOW: two 20 AWG and a library wire of 1 mm2 three times over, added up.
+        CmaCalculatorDialog dlg;
+        dlg.addConductor({QStringLiteral("manual"), 20.0, CmaUnit::Awg, 2});
+        LibraryPart wire;
+        wire.kind = PartKind::Wire;
+        wire.mfrPn = QStringLiteral("W-1MM");
+        wire.params.insert(QStringLiteral("gaugeMode"), QStringLiteral("mm2"));
+        wire.params.insert(QStringLiteral("gauge"), QStringLiteral("1"));
+        check(dlg.addPart(wire, 3), "cma window: a library wire added by its gauge");
+        const double expect = 2.0 * cmaOf(20, CmaUnit::Awg) + 3.0 * 1973.525;
+        check(std::abs(dlg.totalCma() - expect) < 1e-6, "cma window: the conductors added up");
+        dlg.setRun(10.0, 5.0, 0.5);
+        check(dlg.sizing().contains(QStringLiteral("11 AWG")) && dlg.sizing().contains(QStringLiteral("carry it")),
+              "cma window: sized for the run - and the conductors listed carry it");
+    }
     return failures;
 }

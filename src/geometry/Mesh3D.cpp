@@ -99,6 +99,64 @@ Mesh3D tubeMeshVar(const std::vector<V3>& pathIn, const std::function<double(dou
     return m;
 }
 
+Mesh3D pipeMesh(const std::vector<V3>& pathIn, double radius, int sides) {
+    Mesh3D m;
+    std::vector<V3> path;
+    for (const V3& p : pathIn)
+        if (path.empty() || (p - path.back()).length() > 1e-6) path.push_back(p);
+    if (path.size() < 2 || radius <= 0.0) return m;
+    sides = std::max(3, sides);
+    const size_t n = path.size();
+    std::vector<V3> tan(n);
+    for (size_t i = 0; i < n; ++i) {
+        const V3 a = path[i > 0 ? i - 1 : 0], b = path[i + 1 < n ? i + 1 : n - 1];
+        tan[i] = (b - a).normalized();
+    }
+    V3 nrm = std::abs(tan[0].z) < 0.9 ? cross3(tan[0], V3{0, 0, 1}).normalized() : cross3(tan[0], V3{1, 0, 0}).normalized();
+    for (size_t i = 0; i < n; ++i) {
+        if (i > 0) {
+            nrm = (nrm - tan[i] * dot3(nrm, tan[i])).normalized();
+            if (nrm.length() < 0.5) nrm = std::abs(tan[i].z) < 0.9 ? cross3(tan[i], V3{0, 0, 1}).normalized()
+                                                                   : cross3(tan[i], V3{1, 0, 0}).normalized();
+        }
+        const V3 bin = cross3(tan[i], nrm).normalized();
+        // THE MITRE AT A KNEE: the ring there lies on the plane halving the bend, stretched across the bend by one over
+        // the cosine of half of it - so both straight lengths keep their full bore up to the joint, as a mitred pipe
+        // does, instead of the tube pinching where it turns.
+        V3 bend{0, 0, 0};
+        double stretch = 1.0;
+        if (i > 0 && i + 1 < n) {
+            const V3 d1 = (path[i] - path[i - 1]).normalized(), d2 = (path[i + 1] - path[i]).normalized();
+            const double cosHalf = std::sqrt(std::max(0.0, (1.0 + dot3(d1, d2)) / 2.0));
+            const V3 across = d2 - d1;
+            if (cosHalf < 0.9999 && across.length() > 1e-9) {
+                bend = (across - tan[i] * dot3(across, tan[i])).normalized();
+                stretch = 1.0 / std::max(0.25, cosHalf);
+            }
+        }
+        for (int k = 0; k < sides; ++k) {
+            const double a = 2.0 * M_PI * k / sides;
+            V3 off = (nrm * std::cos(a) + bin * std::sin(a)) * radius;
+            if (stretch > 1.0) off = off + bend * (dot3(off, bend) * (stretch - 1.0));
+            m.addVertex(path[i] + off);
+        }
+    }
+    for (size_t i = 0; i + 1 < n; ++i)
+        for (int k = 0; k < sides; ++k) {
+            const int a = static_cast<int>(i) * sides + k, b = static_cast<int>(i) * sides + (k + 1) % sides;
+            const int c = a + sides, d = b + sides;
+            m.addTri(a, b, d);
+            m.addTri(a, d, c);
+        }
+    const int c0 = m.addVertex(path.front()), c1 = m.addVertex(path.back());
+    const int last = static_cast<int>(n - 1) * sides;
+    for (int k = 0; k < sides; ++k) {
+        m.addTri(c0, (k + 1) % sides, k);
+        m.addTri(c1, last + k, last + (k + 1) % sides);
+    }
+    return m;
+}
+
 // ---- STL and OBJ ---------------------------------------------------------------------------------
 
 Mesh3D loadStl(const QString& path, QString* how) {

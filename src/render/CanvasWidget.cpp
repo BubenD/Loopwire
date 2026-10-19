@@ -820,12 +820,15 @@ void CanvasWidget::drawSceneContent(QPainter& sp, const ViewTransform& vt, const
     const bool bakeSelection = editor_ && editor_->selectionIsBaked();
     // A run being carried on is drawn by the overlay, whole and longer - see runBeingCarriedOn.
     const QString carried = editor_ ? editor_->runBeingCarriedOn() : QString();
+    // And a double line being drawn, placed as it goes: the overlay draws it whole, on to the pointer.
+    const QString drawing = editor_ ? editor_->doubleLineBeingDrawn() : QString();
 
     for (const auto& e : doc_->entities()) {
         if (const Layer* layer = doc_->findLayer(e.layer); layer && !layer->visible) continue;
         const bool isSelected = selected.contains(e.id);
         if (isSelected && !bakeSelection) continue;   // the overlay will put it back
         if (!carried.isEmpty() && e.id == carried) continue;
+        if (!drawing.isEmpty() && e.id == drawing) continue;
         const Bounds b = drawnBounds(e);
         if (b.valid && (b.max.x < vMinX || b.min.x > vMaxX || b.max.y < vMinY || b.min.y > vMaxY))
             continue;
