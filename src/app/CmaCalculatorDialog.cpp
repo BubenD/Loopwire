@@ -64,10 +64,10 @@ CmaCalculatorDialog::CmaCalculatorDialog(QWidget* parent) : QDialog(parent) {
     auto* list = new QGroupBox(QStringLiteral("Conductors"), this);
     auto* lv = new QVBoxLayout(list);
     // Its diameter each, in inches and millimetres, as the solid round conductor its area is.
-    table_ = new QTableWidget(0, 9, list);
+    table_ = new QTableWidget(0, 8, list);
     table_->setObjectName(QStringLiteral("cmaTable"));
     table_->setHorizontalHeaderLabels({QStringLiteral("Conductor"), QStringLiteral("Size"), QStringLiteral("Unit"),
-                                       QStringLiteral("Qty"), QStringLiteral("D each (in)"), QStringLiteral("D each (mm)"),
+                                       QStringLiteral("Qty"), QStringLiteral("D in / mm"),
                                        QStringLiteral("CMA each"), QStringLiteral("mm2 each"), QStringLiteral("CMA total")});
     table_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     table_->verticalHeader()->setVisible(false);
@@ -97,8 +97,12 @@ CmaCalculatorDialog::CmaCalculatorDialog(QWidget* parent) : QDialog(parent) {
     buttons->addWidget(clear);
     buttons->addStretch(1);
     lv->addLayout(buttons);
+    // THE ANSWERS STAND OUT: bold, larger, on a panel of their own.
+    const QString answer = QStringLiteral("QLabel{font-weight:700;font-size:15px;color:#f4f7fb;background:#24476e;"
+                                          "border:1px solid #3d6a9c;border-radius:4px;padding:8px 10px;}");
     totals_ = new QLabel(list);
     totals_->setObjectName(QStringLiteral("cmaTotals"));
+    totals_->setStyleSheet(answer);
     totals_->setWordWrap(true);
     totals_->setTextInteractionFlags(Qt::TextSelectableByMouse);
     lv->addWidget(totals_);
@@ -131,6 +135,7 @@ CmaCalculatorDialog::CmaCalculatorDialog(QWidget* parent) : QDialog(parent) {
     form->addRow(QStringLiteral("Conductor"), material_);
     sizing_ = new QLabel(size);
     sizing_->setObjectName(QStringLiteral("cmaSizing"));
+    sizing_->setStyleSheet(answer);
     sizing_->setWordWrap(true);
     sizing_->setTextInteractionFlags(Qt::TextSelectableByMouse);
     form->addRow(sizing_);
@@ -202,7 +207,7 @@ void CmaCalculatorDialog::rebuildTable() {
             refresh();
         });
         table_->setCellWidget(r, 3, qty);
-        for (int col = 4; col < 9; ++col) {
+        for (int col = 4; col < 8; ++col) {
             auto* item = new QTableWidgetItem;
             item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
             item->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
@@ -220,11 +225,11 @@ void CmaCalculatorDialog::refresh() {
         const double each = c.each();
         // The diameter of a solid round conductor of that area: its mils are the root of its circular mils.
         const double inches = each > 0.0 ? std::sqrt(each) / 1000.0 : 0.0;
-        if (auto* item = table_->item(r, 4)) item->setText(each > 0.0 ? QString::number(inches, 'f', 4) : QStringLiteral("-"));
-        if (auto* item = table_->item(r, 5)) item->setText(each > 0.0 ? QString::number(inches * 25.4, 'f', 3) : QStringLiteral("-"));
-        if (auto* item = table_->item(r, 6)) item->setText(each > 0.0 ? cmText(each) : QStringLiteral("not a size"));
-        if (auto* item = table_->item(r, 7)) item->setText(each > 0.0 ? QString::number(mm2FromCma(each), 'f', 3) : QStringLiteral("-"));
-        if (auto* item = table_->item(r, 8)) item->setText(cmText(c.total()));
+        if (auto* item = table_->item(r, 4))
+            item->setText(each > 0.0 ? QStringLiteral("%1 / %2").arg(inches, 0, 'f', 4).arg(inches * 25.4, 0, 'f', 3) : QStringLiteral("-"));
+        if (auto* item = table_->item(r, 5)) item->setText(each > 0.0 ? cmText(each) : QStringLiteral("not a size"));
+        if (auto* item = table_->item(r, 6)) item->setText(each > 0.0 ? QString::number(mm2FromCma(each), 'f', 3) : QStringLiteral("-"));
+        if (auto* item = table_->item(r, 7)) item->setText(cmText(c.total()));
     }
     totals_->setText(summary());
     sizing_->setText(sizing());

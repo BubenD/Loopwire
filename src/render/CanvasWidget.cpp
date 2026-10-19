@@ -1855,6 +1855,12 @@ void CanvasWidget::keyPressEvent(QKeyEvent* e) {
             e->accept();
             return;
         }
+        // ...and Shift turns it round the other way along that line - pressed once, it stays; pressed again, back.
+        if (editor_->alignFourPointPlacing() && e->key() == Qt::Key_Shift && !e->isAutoRepeat()) {
+            editor_->toggleAlignTurn();
+            e->accept();
+            return;
+        }
         if (editor_->placementPreviewActive() && e->key() == Qt::Key_R) {
             editor_->rotatePlacementPreview(!(e->modifiers() & Qt::ShiftModifier));
             e->accept();

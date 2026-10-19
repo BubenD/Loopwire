@@ -1554,6 +1554,42 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         break;
 
     case EntityType::Polyline:
+        // A POLYLINE WHOSE WIDTH CHANGES ALONG IT (a width typed while it was drawn goes on from the last point): each
+        // stretch of one width drawn that wide - mitred within the stretch, square where the width changes.
+        if (const QJsonArray widths = e.meta.value(QStringLiteral("plineWidths")).toArray();
+            !widths.isEmpty() && e.points.size() >= 2) {
+            const QJsonArray bulgeArr = e.meta.value(QStringLiteral("bulges")).toArray();
+            const int segs = static_cast<int>(e.points.size()) - 1;
+            auto widthOf = [&](int i) { return i < widths.size() ? widths[i].toDouble() : widths.last().toDouble(); };
+            QPen wide = p.pen();
+            wide.setCosmetic(false);
+            wide.setCapStyle(Qt::FlatCap);
+            wide.setJoinStyle(Qt::MiterJoin);
+            const double thin = pen.widthF();
+            for (int start = 0; start < segs;) {
+                int end = start + 1;
+                while (end < segs && std::abs(widthOf(end) - widthOf(start)) < 1e-9) ++end;
+                std::vector<Vec2> pts(e.points.begin() + start, e.points.begin() + end + 1);
+                std::vector<double> bulges(pts.size(), 0.0);
+                for (size_t k = 1; k < pts.size(); ++k)
+                    if (start + static_cast<int>(k) < bulgeArr.size()) bulges[k] = bulgeArr[start + static_cast<int>(k)].toDouble();
+                QPolygonF poly;
+                for (const Vec2& v : expandBulgePolyline(pts, bulges)) poly << vt.toScreen(v);
+                const double w = widthOf(start);
+                if (w > 0.0) {
+                    wide.setWidthF(std::max(1.0, w * vt.scale()));
+                    p.setPen(wide);
+                } else {
+                    QPen plain = pen;
+                    plain.setWidthF(thin);
+                    p.setPen(plain);
+                }
+                p.drawPolyline(poly);
+                start = end;
+            }
+            p.setPen(pen);
+            break;
+        }
         if (e.meta.value(QStringLiteral("lacingTie")).toBool() &&
             e.meta.value(QStringLiteral("closed")).toBool() && e.points.size() > 2 &&
             distance(e.points.front(), e.points.back()) > 1e-9)

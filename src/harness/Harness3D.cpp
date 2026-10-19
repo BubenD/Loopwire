@@ -859,30 +859,48 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
         }
         // A POLYLINE GIVEN A WIDTH is a pipe that wide - along its arcs and round its filleted corners. One with no width
         // is a line of the drawing (an outline, a boundary), not something there to be built, and is not shown.
+        const QJsonArray stretchWidths = e.meta.value(QStringLiteral("plineWidths")).toArray();
         if (e.type == EntityType::Polyline && !e.meta.value(QStringLiteral("double")).toBool() &&
-            e.meta.value(QStringLiteral("plineWidth")).toDouble() > 0.0 && e.points.size() >= 2 && groupOf(e).isEmpty()) {
-            const double half = e.meta.value(QStringLiteral("plineWidth")).toDouble() / 2.0;
-            std::vector<Vec2> along = e.points;
+            (e.meta.value(QStringLiteral("plineWidth")).toDouble() > 0.0 || !stretchWidths.isEmpty()) && e.points.size() >= 2 &&
+            groupOf(e).isEmpty()) {
+            // EACH STRETCH OF ONE WIDTH A PIPE THAT WIDE (one width the whole way: one pipe).
+            const int segs = static_cast<int>(e.points.size()) - 1;
+            auto widthOf = [&](int i) {
+                if (stretchWidths.isEmpty()) return e.meta.value(QStringLiteral("plineWidth")).toDouble();
+                return i < stretchWidths.size() ? stretchWidths[i].toDouble() : stretchWidths.last().toDouble();
+            };
             const QJsonArray bulges = e.meta.value(QStringLiteral("bulges")).toArray();
-            if (!bulges.isEmpty()) {
-                std::vector<double> b;
-                for (const QJsonValue& v : bulges) b.push_back(v.toDouble());
-                along = expandBulgePolyline(e.points, b);
-            } else if (e.meta.contains(QStringLiteral("cornerRadii"))) {
-                std::vector<double> radii;
-                for (const QJsonValue& v : e.meta.value(QStringLiteral("cornerRadii")).toArray()) radii.push_back(std::max(0.0, v.toDouble()));
-                radii.resize(e.points.size(), 0.0);
-                along = roundedPolylinePerCorner(e.points, radii, 16);
+            const QJsonArray corners = e.meta.value(QStringLiteral("cornerRadii")).toArray();
+            for (int start = 0; start < segs;) {
+                int end = start + 1;
+                while (end < segs && std::abs(widthOf(end) - widthOf(start)) < 1e-9) ++end;
+                const double half = widthOf(start) / 2.0;
+                const std::vector<Vec2> pts(e.points.begin() + start, e.points.begin() + end + 1);
+                std::vector<Vec2> along = pts;
+                if (!bulges.isEmpty()) {
+                    std::vector<double> b(pts.size(), 0.0);
+                    for (size_t k = 1; k < pts.size(); ++k)
+                        if (start + static_cast<int>(k) < bulges.size()) b[k] = bulges[start + static_cast<int>(k)].toDouble();
+                    along = expandBulgePolyline(pts, b);
+                } else if (!corners.isEmpty()) {
+                    std::vector<double> radii(pts.size(), 0.0);
+                    for (size_t k = 1; k + 1 < pts.size(); ++k)
+                        if (start + static_cast<int>(k) < corners.size()) radii[k] = std::max(0.0, corners[start + static_cast<int>(k)].toDouble());
+                    along = roundedPolylinePerCorner(pts, radii, 16);
+                }
+                if (half > 0.0) {
+                    std::vector<V3> path;
+                    for (const Vec2& q : along) path.push_back(at3(q));
+                    Harness3DItem pipe;
+                    pipe.smoothContours = true;
+                    pipe.mesh = pipeMesh(path, half, 24);
+                    pipe.color = colours.value(e.id, QColor(150, 156, 166));
+                    pipe.what = QStringLiteral("pipe");
+                    pipe.brick = brickOf(e);
+                    if (!pipe.mesh.empty()) scene.items.push_back(std::move(pipe));
+                }
+                start = end;
             }
-            std::vector<V3> path;
-            for (const Vec2& q : along) path.push_back(at3(q));
-            Harness3DItem pipe;
-            pipe.smoothContours = true;
-            pipe.mesh = pipeMesh(path, half, 24);
-            pipe.color = colours.value(e.id, QColor(150, 156, 166));
-            pipe.what = QStringLiteral("pipe");
-            pipe.brick = brickOf(e);
-            if (!pipe.mesh.empty()) scene.items.push_back(std::move(pipe));
             continue;
         }
         // A RUN OF ONE WIRE is drawn as a wire - a double line, not a bundle: one tube along it. A HEATSHRINK SLEEVE drawn

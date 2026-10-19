@@ -266,6 +266,10 @@ public:
     bool alignFourPointPlacing() const { return alignPick_ == 3 && alignPts_.size() == 4; }
     void toggleAlignMirror() { alignMirror_ = !alignMirror_; emit message(alignMirror_ ? QStringLiteral("Align: mirrored to the other side - M again to put it back") : QStringLiteral("Align: not mirrored")); emit overlayChanged(); }
     bool alignMirrored() const { return alignMirror_; }
+    // SHIFT, PRESSED AND LET GO, turns it round to run the other way along the line - and pressed again, back. It
+    // stays as it was left; it is not held.
+    void toggleAlignTurn() { alignTurn_ = !alignTurn_; emit message(alignTurn_ ? QStringLiteral("Align: turned round - Shift again to turn it back") : QStringLiteral("Align: the way it was")); emit overlayChanged(); }
+    bool alignTurned() const { return alignTurn_; }
     // The four object ones act at once. The two cursor ones wait for the click that says where.
     void alignSelection(AlignMode mode);
     bool aligningToCursor() const { return alignPick_ != 0; }
@@ -2096,6 +2100,7 @@ private:
     int alignPick_ = 0;   // waiting for the click an align lines things up on: 1 an X, 2 a Y, 3 the four-point's
     std::vector<Vec2> alignPts_;   // the four-point align's clicks so far. Not saved.
     bool alignMirror_ = false;     // M while placing: mirrored across the line it is lined up on. Not saved.
+    bool alignTurn_ = false;       // Shift while placing (a toggle): turned round the other way along it. Not saved.
     void applyFourPointAlign(bool turnAround);
     void alignSelectionTo(AlignMode mode, double at);
     Vec2 continuePressAt_;
@@ -2374,6 +2379,7 @@ private:
     QString draftLiveId_;
     bool draftLive_ = false;
     double plineWidth_ = 0.0;   // the next polyline's width ([W]idth); 0 = a plain line. Not saved.
+    std::vector<double> draftWidths_;   // the polyline being drawn: the width each segment goes on at, by its first point. Not saved.
     bool drawStartShift_ = false;
     // A double line's first click on another object - a line it is to start flush on.
     bool startsOnObject(const Vec2& p) const {

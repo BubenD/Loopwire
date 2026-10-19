@@ -5240,7 +5240,7 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
             return;
         }
         alignPick_ = 0;
-        applyFourPointAlign(mods & Qt::ShiftModifier);
+        applyFourPointAlign(alignTurn_);
         return;
     }
     if (alignPick_ != 0) {
@@ -11299,6 +11299,8 @@ void Editor::handleDrawPress(const Vec2& p) {
             }
         }
         draftPts_.push_back(wp);
+        // THE WIDTH OF THE SEGMENT THIS POINT ENDS: the one set when it was placed - so a width typed goes on from the last point.
+        if (tool_ == ToolId::Polyline && draftPts_.size() > 1) draftWidths_.push_back(plineWidth_);
         draftBulges_.push_back(bulge);
         draftCornerRadii_.push_back(0.0); // this new vertex is an endpoint for now
         // Placing this point completes the corner at the PREVIOUS vertex; stamp it
@@ -12303,7 +12305,20 @@ void Editor::finishDraw() {
         e.type = (tool_ == ToolId::Spline) ? EntityType::Spline : EntityType::Polyline;
         e.points = draftPts_;
         // A POLYLINE GIVEN A WIDTH ([W]idth, as AutoCAD's PLINE): drawn that wide on the sheet.
-        if (tool_ == ToolId::Polyline && plineWidth_ > 0.0) e.meta.insert(QStringLiteral("plineWidth"), plineWidth_);
+        // ITS WIDTH, ONE OR A STRETCH EACH: each segment as wide as the width set when its first point was placed.
+        if (tool_ == ToolId::Polyline) {
+            std::vector<double> widths = draftWidths_;
+            widths.resize(std::max<size_t>(1, e.points.size() - 1), plineWidth_);
+            widths.resize(e.points.size() - 1);
+            const bool same = std::all_of(widths.begin(), widths.end(), [&](double w) { return std::abs(w - widths.front()) < 1e-9; });
+            if (same && !widths.empty() && widths.front() > 0.0) {
+                e.meta.insert(QStringLiteral("plineWidth"), widths.front());
+            } else if (!same) {
+                QJsonArray arr;
+                for (double w : widths) arr.append(w);
+                e.meta.insert(QStringLiteral("plineWidths"), arr);
+            }
+        }
         if (tool_ == ToolId::DoublePolyline) {
             e.points = faceFitting() ? draftPts_
                                      : doubleRunCentre(draftPts_, draftCableGap(), doubleSecondBelow());
@@ -12564,6 +12579,7 @@ void Editor::cancelDraw() {
     lastHatchId_.clear(); // end the hatch live-edit session
     dimHasRef_ = false;   // forget any picked circle/arc for a radius/dia dimension
     draftLiveId_.clear(); // a double line placed as it was drawn stays as it is
+    draftWidths_.clear();
     dpolyLsArm_ = false;  // forget a pending/active line-start reference
     dpolyHasLsRef_ = false;
     dpolySwap_ = false;   // and which side the second line was put on
@@ -13484,6 +13500,7 @@ bool Editor::acceptCommandInput(const QString& text) {
             if (!draftPts_.empty()) draftPts_.pop_back();
             if (!draftBulges_.empty()) draftBulges_.pop_back();
             if (!draftCornerRadii_.empty()) draftCornerRadii_.pop_back();
+            if (!draftPts_.empty() && draftWidths_.size() > draftPts_.size() - 1) draftWidths_.resize(draftPts_.size() - 1);
             // PLACED AS IT WAS DRAWN: the object on the sheet goes back with it - shorter, or, with a point left,
             // gone again.
             if (!draftLiveId_.isEmpty()) {
@@ -13535,6 +13552,17 @@ bool Editor::acceptCommandInput(const QString& text) {
         }
     }
 
+    // A NUMBER TYPED WHILE DRAWING A POLYLINE IS ITS WIDTH, from the last point placed on (AutoCAD's PLINE Width).
+    if (tool_ == ToolId::Polyline) {
+        bool isNumber = false;
+        const double w = t.toDouble(&isNumber);
+        if (isNumber) {
+            setPolylineWidth(w);
+            emit message(drafting_ ? QStringLiteral("Polyline: %1 wide from the last point").arg(w)
+                                   : QStringLiteral("Polyline: %1 wide").arg(w));
+            return true;
+        }
+    }
     // Typed reference value for the active dynamic-input field (Length/Angle,
     // Radius, Diameter, X/Y radius): a bare number feeds the current field and
     // builds the point. Coordinate entry ("x,y"/"@dx,dy") still falls through.
@@ -15422,6 +15450,7 @@ void Editor::alignSelection(AlignMode mode) {
         alignPick_ = 3;
         alignPts_.clear();
         alignMirror_ = false;
+        alignTurn_ = false;
         emit message(QStringLiteral("Align by 4 points: click the first of two points on the selection - Esc cancels"));
         emit overlayChanged();
         return;
@@ -15477,6 +15506,7 @@ void Editor::applyFourPointAlign(bool turnAround) {
     });
     alignPts_.clear();
     alignMirror_ = false;
+    alignTurn_ = false;
     doc_->setDirty(true);
     emit message(QStringLiteral("Aligned by 4 points: turned %1 degrees%2").arg(turn * 180.0 / M_PI, 0, 'f', 2)
                      .arg(mirror ? QStringLiteral(", mirrored") : QString()));
@@ -21303,8 +21333,8 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
         else if (alignPts_.size() == 3) p.drawLine(vt.toScreen(alignPts_[2]), vt.toScreen(cursor_));
         else if (alignPts_.size() == 1) p.drawLine(vt.toScreen(alignPts_[0]), vt.toScreen(cursor_));
         if (alignPts_.size() == 4 && distance(alignPts_[0], alignPts_[1]) > 1e-9 && distance(alignPts_[2], alignPts_[3]) > 1e-9) {
-            // Shift held: turned round the other way along the line; M: mirrored across it.
-            const bool turnAround = QApplication::keyboardModifiers() & Qt::ShiftModifier;
+            // Shift (pressed, a toggle): turned round the other way along the line; M: mirrored across it.
+            const bool turnAround = alignTurn_;
             const Vec2 mid = (alignPts_[0] + alignPts_[1]) * 0.5;
             double turn = std::atan2(alignPts_[3].y - alignPts_[2].y, alignPts_[3].x - alignPts_[2].x) -
                           std::atan2(alignPts_[1].y - alignPts_[0].y, alignPts_[1].x - alignPts_[0].x);
@@ -22824,8 +22854,19 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 for (double r : previewRadii) radii.append(r);
                 ghost.meta.insert(QStringLiteral("cornerRadii"), radii);
             }
-            if (plineWidth_ > 0.0) ghost.meta.insert(QStringLiteral("plineWidth"), plineWidth_);
-            else ghost.meta.remove(QStringLiteral("plineWidth"));
+            // Its widths as placed, and the one set now for the stretch to the pointer.
+            ghost.meta.remove(QStringLiteral("plineWidth"));
+            ghost.meta.remove(QStringLiteral("plineWidths"));
+            std::vector<double> widths = draftWidths_;
+            widths.resize(pts.size() - 1, plineWidth_);
+            const bool same = std::all_of(widths.begin(), widths.end(), [&](double w) { return std::abs(w - widths.front()) < 1e-9; });
+            if (same && widths.front() > 0.0) {
+                ghost.meta.insert(QStringLiteral("plineWidth"), widths.front());
+            } else if (!same) {
+                QJsonArray arr;
+                for (double w : widths) arr.append(w);
+                ghost.meta.insert(QStringLiteral("plineWidths"), arr);
+            }
             EntityRenderer::draw(p, ghost, *doc_, vt, paperInk(QColor("#ffffff")));
         } else if (tool_ == ToolId::Polyline &&
                    (polyArcMode_ ||

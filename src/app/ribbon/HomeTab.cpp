@@ -136,13 +136,20 @@ QWidget* MainWindow::polylineOptionsGroup(QHBoxLayout* lay, QWidget* page) {
     width->setToolTip(QStringLiteral("How wide the polyline is drawn on the sheet [W] - 0 a plain line"));
     connect(width, &QDoubleSpinBox::valueChanged, this, [this](double v) { if (editor_) editor_->setPolylineWidth(v); });
     grid->addWidget(width, 1, 3);
+    // ALWAYS ON THE RIBBON, where it is seen: its options for the polyline being drawn usable while one is, its Width
+    // the width the next one - or the rest of this one, from its last point - is drawn at (a number typed sets it too).
     QWidget* group = addGroupKeep(lay, QStringLiteral("Polyline"), w);
-    group->setVisible(false);
-    connect(editor_, &Editor::toolChanged, group, [group, width, this](ToolId t) {
-        group->setVisible(t == ToolId::Polyline);
+    group->setObjectName(QStringLiteral("polylineOptions"));
+    QList<QToolButton*> options = w->findChildren<QToolButton*>();
+    auto sync = [this, options, width] {
+        const bool drawing = editor_ && editor_->tool() == ToolId::Polyline;
+        for (QToolButton* b : options) b->setEnabled(drawing);
         const QSignalBlocker hold(width);
-        width->setValue(editor_->polylineWidth());
-    });
+        if (editor_) width->setValue(editor_->polylineWidth());
+    };
+    connect(editor_, &Editor::toolChanged, group, [sync](ToolId) { sync(); });
+    connect(editor_, &Editor::overlayChanged, group, [sync] { sync(); });
+    sync();
     return group;
 }
 

@@ -3424,6 +3424,44 @@ int run_editor_tests() {
               "pline: Close appends the start point (loop closed)");
     }
 
+    // --- Polyline: a number typed is its width, from the last point placed on; one width all along is one plineWidth.
+    {
+        Document d; d.entities().clear();
+        Editor ed; ed.setDocument(&d); noSnap(ed);
+        ed.setPolylineWidth(0.0);
+        ed.setTool(ToolId::Polyline);
+        check(ed.acceptCommandInput(QStringLiteral("2")), "pline-width: a number typed before the first point is taken");
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({10, 0}, Qt::LeftButton, Qt::NoModifier);
+        check(ed.acceptCommandInput(QStringLiteral("5")), "pline-width: a number typed mid-draw is taken as the width");
+        check(near(ed.polylineWidth(), 5.0), "pline-width: the width is now 5");
+        ed.onPointerPress({10, 10}, Qt::LeftButton, Qt::NoModifier);
+        ed.onPointerPress({20, 10}, Qt::LeftButton, Qt::NoModifier);
+        ed.onKey(Qt::Key_Return, Qt::NoModifier);
+        const Entity* pl = nullptr;
+        for (const Entity& e : d.entities()) if (e.type == EntityType::Polyline) pl = &e;
+        check(pl && pl->points.size() == 4, "pline-width: the polyline is placed with its 4 points");
+        if (pl) {
+            const QJsonArray ws = pl->meta.value(QStringLiteral("plineWidths")).toArray();
+            check(ws.size() == 3 && near(ws[0].toDouble(), 2.0) && near(ws[1].toDouble(), 5.0) && near(ws[2].toDouble(), 5.0),
+                  "pline-width: the first segment 2 wide, the rest 5 from the point it was typed at");
+        }
+        Document d2; d2.entities().clear();
+        Editor e2; e2.setDocument(&d2); noSnap(e2);
+        e2.setTool(ToolId::Polyline);
+        e2.acceptCommandInput(QStringLiteral("3"));
+        e2.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
+        e2.onPointerPress({10, 0}, Qt::LeftButton, Qt::NoModifier);
+        e2.onPointerPress({10, 10}, Qt::LeftButton, Qt::NoModifier);
+        e2.onKey(Qt::Key_Return, Qt::NoModifier);
+        const Entity* p2 = nullptr;
+        for (const Entity& e : d2.entities()) if (e.type == EntityType::Polyline) p2 = &e;
+        check(p2 && near(p2->meta.value(QStringLiteral("plineWidth")).toDouble(), 3.0) && !p2->meta.contains(QStringLiteral("plineWidths")),
+              "pline-width: one width all along is kept as plineWidth");
+        e2.setPolylineWidth(0.0);
+        ed.setPolylineWidth(0.0);
+    }
+
     // --- Picking a DRAW tool clears the selection; a MODIFY tool keeps it.
     {
         Document d; d.entities().clear();
@@ -4128,15 +4166,28 @@ int run_editor_tests() {
             const Entity& done = d9.entities().front();
             check(distance(done.a, Vec2{50, 45}) < 1e-6 && distance(done.b, Vec2{50, 55}) < 1e-6,
                   "align by 4 points: turned to run as the second pair does, its middle on the point clicked");
-            // SHIFT ON THE PLACING CLICK: the other way along the line.
+            // SHIFT PRESSED (A TOGGLE, NOT HELD): the other way along the line; pressed again, back.
             d9.entities() = {moving};
             e9.selectById(moving.id);
             e9.alignSelection(Editor::AlignMode::FourPoint);
             for (const Vec2& p : {Vec2{0, 0}, Vec2{10, 0}, Vec2{100, 100}, Vec2{100, 120}})
                 e9.onPointerPress(p, Qt::LeftButton, Qt::NoModifier);
-            e9.onPointerPress({50, 50}, Qt::LeftButton, Qt::ShiftModifier);
+            e9.toggleAlignTurn();
+            check(e9.alignTurned(), "align by 4 points: Shift once turns it round and it stays turned");
+            e9.onPointerPress({50, 50}, Qt::LeftButton, Qt::NoModifier);
             check(distance(d9.entities().front().a, Vec2{50, 55}) < 1e-6 && distance(d9.entities().front().b, Vec2{50, 45}) < 1e-6,
-                  "align by 4 points: Shift turns it round to run the other way");
+                  "align by 4 points: Shift turns it round to run the other way, without being held on the click");
+            check(!e9.alignTurned(), "align by 4 points: the next align starts the way it was");
+            d9.entities() = {moving};
+            e9.selectById(moving.id);
+            e9.alignSelection(Editor::AlignMode::FourPoint);
+            for (const Vec2& p : {Vec2{0, 0}, Vec2{10, 0}, Vec2{100, 100}, Vec2{100, 120}})
+                e9.onPointerPress(p, Qt::LeftButton, Qt::NoModifier);
+            e9.toggleAlignTurn();
+            e9.toggleAlignTurn();
+            e9.onPointerPress({50, 50}, Qt::LeftButton, Qt::ShiftModifier);
+            check(distance(d9.entities().front().a, Vec2{50, 45}) < 1e-6 && distance(d9.entities().front().b, Vec2{50, 55}) < 1e-6,
+                  "align by 4 points: Shift pressed again turns it back, and Shift held on the click no longer matters");
             // M: mirrored across the line it is lined up on - a triangle's point goes to the other side.
             Entity tri;
             tri.id = QStringLiteral("tri");
