@@ -1705,8 +1705,9 @@ int run_drawingspace_tests() {
                                        QStringLiteral("By object top"),
                                        QStringLiteral("By object bottom"),
                                        QStringLiteral("By X-cursor"),
-                                       QStringLiteral("By Y-cursor")}),
-                  "align: the six ways, in that order, and only those");
+                                       QStringLiteral("By Y-cursor"),
+                                       QStringLiteral("By 4 points (two on it, two on another, then where)")}),
+                  "align: the seven ways, in that order, and only those");
             check(align->popupMode() == QToolButton::InstantPopup,
                   "align: one click opens them - there is no other thing the button does");
         }

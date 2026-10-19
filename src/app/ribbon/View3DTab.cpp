@@ -538,8 +538,6 @@ void MainWindow::buildView3DTab() {
             QStringLiteral("Update the harness wizard's cable lengths from the measured 3D route. "
                            "This does not redraw an existing 2D mechanical drawing."),
             [this] { if (view3dPane_) view3dPane_->applyLengths(true); });
-        big(w, row, "preview3dRefresh", QStringLiteral("Refresh"), QStringLiteral("refresh"), QStringLiteral("Build the 3D harness again from the drawing"),
-            [this] { if (view3dPane_) view3dPane_->rebuild(false); });
     });
     // HELP, never folded away: every command explained, with recordings of it being done.
     {
@@ -627,7 +625,7 @@ void MainWindow::buildView3DTab() {
     stack({QStringLiteral("preview3dAddLoose"), QStringLiteral("preview3dAddLength")});
     stack({QStringLiteral("preview3dWorkPlaneHere")});
     stack({QStringLiteral("preview3dSaveRoute"),QStringLiteral("preview3dSystemLink"),QStringLiteral("preview3dAddDrawing"),
-           QStringLiteral("preview3dExportPlanes"),QStringLiteral("preview3dFromHarness"),QStringLiteral("preview3dLengths"),QStringLiteral("preview3dRefresh")});
+           QStringLiteral("preview3dExportPlanes"),QStringLiteral("preview3dFromHarness"),QStringLiteral("preview3dLengths")});
     for (QToolButton* b : page->findChildren<QToolButton*>())
         if (b->toolButtonStyle() == Qt::ToolButtonTextUnderIcon) b->setIconSize(QSize(26, 26));
     lay->addStretch(1);

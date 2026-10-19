@@ -256,7 +256,11 @@ public:
     // canvas, snapped the way any point is. An OBJECT is a group as much as a single line: a label,
     // a block, a part moves as the one thing it is, so what is lined up is the object and not the
     // pieces it is made of - lining up a label's pieces by their own left edges would take it apart.
-    enum class AlignMode { Left, Right, Top, Bottom, CursorX, CursorY };
+    // FOURPOINT: two points on the selection, two on another object, and where the middle of the first two goes - the
+    // selection turned so its two points run the way the other two do, and moved so their middle lands there.
+    enum class AlignMode { Left, Right, Top, Bottom, CursorX, CursorY, FourPoint };
+    // The clicks a four-point align has had so far (0 to 4), for the overlay and the tests.
+    const std::vector<Vec2>& alignPoints() const { return alignPts_; }
     // The four object ones act at once. The two cursor ones wait for the click that says where.
     void alignSelection(AlignMode mode);
     bool aligningToCursor() const { return alignPick_ != 0; }
@@ -420,6 +424,9 @@ public:
     // THE POLYLINE BEING DRAWN, turned into something else from its options: a double line through the same points
     // (carried on drawing), or a wipeout closed through them. False with nothing (or too little) drawn.
     bool polylineAsDoubleLine();
+    // The object placed as it was drawn, taken back off the sheet (fewer than two points left, or giving way to
+    // another). Not an undo of its own.
+    void dropLiveDraft();
     bool polylineAsWipeout();
     // DIVIDE: the selected lines (and plain polylines) each cut into so many equal pieces, one change to undo.
     // Returns how many were divided.
@@ -2081,7 +2088,9 @@ private:
     // Let go somewhere else and that is the first new knee - which is what pulling a run out of
     // its own end means.
     bool continuePulling_ = false;
-    int alignPick_ = 0;   // waiting for the click an align lines things up on: 1 an X, 2 a Y
+    int alignPick_ = 0;   // waiting for the click an align lines things up on: 1 an X, 2 a Y, 3 the four-point's
+    std::vector<Vec2> alignPts_;   // the four-point align's clicks so far. Not saved.
+    void applyFourPointAlign();
     void alignSelectionTo(AlignMode mode, double at);
     Vec2 continuePressAt_;
     // Lay the knees of a route onto the run it continues, at the end it was taken from. Shared by the
@@ -2362,7 +2371,7 @@ private:
     bool drawStartShift_ = false;
     // A double line's first click on another object - a line it is to start flush on.
     bool startsOnObject(const Vec2& p) const {
-        return doc_ && !cutSegmentsThrough(p, doc_->entities(), QString()).empty();
+        return doc_ && !cutSegmentsThrough(p, doc_->entities(), draftLiveId_).empty();   // not the run itself
     }
     bool drawEndShift_ = false;
     bool gapInputMode_ = false;    // command line is awaiting a gap value ("g")

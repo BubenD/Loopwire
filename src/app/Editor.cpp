@@ -1682,6 +1682,7 @@ void Editor::setTool(ToolId t) {
     freeMarkPreview_ = Entity();
     freeLabelPreview_.clear();
     alignPick_ = 0;   // a new tool is a new command: an align left waiting is given up
+    alignPts_.clear();
     fanoutShiftPresses_ = 0;
     cancelDraw();
     modifyPts_.clear();
@@ -4829,14 +4830,7 @@ void Editor::onPointerMove(const Vec2& raw) {
     // Ctrl is released.
     const bool ctrlSwapsSide = drafting_ && (tool_ == ToolId::DoubleLine ||
                                              tool_ == ToolId::DoublePolyline);
-    // Shift at ANY point while a double run is being drawn means "start both lines on the line this run
-    // began on". The moment you notice the second line hanging in the air is not the moment you
-    // clicked, so it arms then, and stays armed - pressing it is the answer to what is on screen.
-    if (ctrlSwapsSide && !drawStartShift_ &&
-        (QApplication::keyboardModifiers() & Qt::ShiftModifier)) {
-        drawStartShift_ = true;
-        emit message(QStringLiteral("Both lines will start on the line this run began on"));
-    }
+
     if ((QApplication::keyboardModifiers() & Qt::ControlModifier) && !ctrlSwapsSide) {
         snap.objectSnap = false;
         snap.gridSnap = false;
@@ -5232,6 +5226,23 @@ void Editor::onPointerPress(const Vec2& raw, Qt::MouseButton button,
     }
     // THE CLICK AN ALIGN WAS WAITING FOR takes the snapped point, as a rectangle pick does: a line
     // to hang things on belongs exactly on a point of the drawing when there is one to put it on.
+    if (alignPick_ == 3) {
+        // THE FOUR-POINT ALIGN'S CLICKS, snapped: two on the selection, two on the other object, and where to.
+        alignPts_.push_back(p);
+        static const char* const next[] = {
+            "Align by 4 points: click the second point on the selection",
+            "Align by 4 points: click the first of two points on the other object",
+            "Align by 4 points: click the second point on the other object",
+            "Align by 4 points: click where the middle of the first two points goes"};
+        if (alignPts_.size() < 5) {
+            emit message(QString::fromLatin1(next[alignPts_.size() - 1]));
+            emit overlayChanged();
+            return;
+        }
+        alignPick_ = 0;
+        applyFourPointAlign();
+        return;
+    }
     if (alignPick_ != 0) {
         const AlignMode m = alignPick_ == 1 ? AlignMode::CursorX : AlignMode::CursorY;
         alignPick_ = 0;
@@ -11145,10 +11156,11 @@ void Editor::handleDrawPress(const Vec2& p) {
     case ToolId::VolumeArrow:
     case ToolId::AxisAngle:
         if (tool_ == ToolId::DoubleLine) {
-            // Started on another object, both lines start flush on it - Shift not needed; Shift-click caps the
-            // end too (applied in finishDraw).
-            if (draftPts_.empty()) drawStartShift_ = (pressMods_ & Qt::ShiftModifier) || startsOnObject(p);
-            drawEndShift_ = (pressMods_ & Qt::ShiftModifier);
+            // On another object, both lines start - and end - flush on it; Shift held on the click draws it as it
+            // is, not lined up (applied in finishDraw).
+            const bool align = !(pressMods_ & Qt::ShiftModifier) && startsOnObject(p);
+            if (draftPts_.empty()) drawStartShift_ = align;
+            drawEndShift_ = align;
         }
         draftPts_.push_back(p);
         drafting_ = true;
@@ -11256,10 +11268,12 @@ void Editor::handleDrawPress(const Vec2& p) {
             bulge = tangentBulge(draftPts_.back(), p, prevDir);
         }
         if (tool_ == ToolId::DoublePolyline) {
-            // STARTED ON ANOTHER OBJECT, BOTH LINES START FLUSH ON IT: the second line is cut (or carried) to it as
-            // the first is, Shift not needed. Shift-click caps the end on a line too (applied in finishDraw).
-            if (draftPts_.empty()) drawStartShift_ = (pressMods_ & Qt::ShiftModifier) || startsOnObject(p);
-            drawEndShift_ = (pressMods_ & Qt::ShiftModifier);
+            // STARTED OR ENDED ON ANOTHER OBJECT, BOTH LINES MEET IT FLUSH: the second line is cut (or carried) to it
+            // as the first is - no Shift needed. SHIFT HELD on that click draws it as it is, not lined up with
+            // what it lands on (applied in finishDraw).
+            const bool align = !(pressMods_ & Qt::ShiftModifier) && startsOnObject(p);
+            if (draftPts_.empty()) drawStartShift_ = align;
+            drawEndShift_ = align;
         }
         // Starting a wire on a connector pin: remember the connector's pins so the fan-out
         // count can be set (Shift = all pins from here down; a number key = that many).
@@ -11304,9 +11318,9 @@ void Editor::handleDrawPress(const Vec2& p) {
             emit overlayChanged();
         }
         drafting_ = true;
-        // A DOUBLE LINE IS PLACED AS IT IS DRAWN: every point clicked puts what is drawn so far on the sheet - one
-        // object, its knees mitred - so the next point can be snapped to what is already there.
-        if (tool_ == ToolId::DoublePolyline && draftPts_.size() >= 2 && continueId_.isEmpty()) {
+        // A DOUBLE LINE AND A POLYLINE ARE PLACED AS THEY ARE DRAWN: every point clicked puts what is drawn so far
+        // on the sheet - one object, its knees as they will be - so the next point can be snapped to what is there.
+        if ((tool_ == ToolId::DoublePolyline || tool_ == ToolId::Polyline) && draftPts_.size() >= 2 && continueId_.isEmpty()) {
             draftLive_ = true;
             finishDraw();
             draftLive_ = false;
@@ -12426,8 +12440,10 @@ void Editor::finishDraw() {
         return;
     }
 
-    // Shift-clicking a run-end onto a line while drawing a double line/polyline caps
-    // that end flush to the line (both physical runs meet it), like the edit gesture.
+    // (The run being placed as it is drawn is its own id already, so it is never lined up against itself.)
+    if (!draftLiveId_.isEmpty() && e.id.isEmpty()) e.id = draftLiveId_;
+    // A run-end landing on a line while drawing a double line/polyline caps that end flush to the line (both
+    // physical runs meet it), like the edit gesture - unless Shift was held on that click.
     if (e.type == EntityType::DoubleLine ||
         (e.type == EntityType::Polyline && e.meta.value("double").toBool())) {
         // The line to start flush on is the one under the CLICK - which is on the rail the cursor rode,
@@ -12448,13 +12464,13 @@ void Editor::finishDraw() {
         }
         if (drawEndShift_) capDoubleEndAt(e, QStringLiteral("cutEnd"), endPt, doc_->entities());
     }
-    // (Kept while a double line is being placed as it is drawn: its start stays flush on what it began on.)
+    // (Kept while a double line is being placed as it is drawn: its start stays flush on what it began on, and its end
+    // on what the last click landed on - each click says that again.)
     if (!draftLive_) drawStartShift_ = drawEndShift_ = false;
-    else drawEndShift_ = false;
 
     // A DOUBLE LINE PLACED AS IT IS DRAWN: the first point after the start puts it on the sheet - one change, to
     // undo - and every point after that redraws the same object longer. The last of them (Space, Esc, Enter) ends it.
-    if (tool_ == ToolId::DoublePolyline && (draftLive_ || !draftLiveId_.isEmpty())) {
+    if ((tool_ == ToolId::DoublePolyline || tool_ == ToolId::Polyline) && (draftLive_ || !draftLiveId_.isEmpty())) {
         if (draftLiveId_.isEmpty()) {
             pushUndo();
             e.id = uid();
@@ -13468,6 +13484,17 @@ bool Editor::acceptCommandInput(const QString& text) {
             if (!draftPts_.empty()) draftPts_.pop_back();
             if (!draftBulges_.empty()) draftBulges_.pop_back();
             if (!draftCornerRadii_.empty()) draftCornerRadii_.pop_back();
+            // PLACED AS IT WAS DRAWN: the object on the sheet goes back with it - shorter, or, with a point left,
+            // gone again.
+            if (!draftLiveId_.isEmpty()) {
+                if (draftPts_.size() >= 2) {
+                    draftLive_ = true;
+                    finishDraw();
+                    draftLive_ = false;
+                } else {
+                    dropLiveDraft();
+                }
+            }
             if (draftPts_.empty()) {
                 cancelDraw();
                 emit message(QStringLiteral("Line cancelled"));
@@ -15391,6 +15418,13 @@ void Editor::alignSelection(AlignMode mode) {
     }
     // BY THE CURSOR, the line is wherever the next click says - snapped, so it can be put exactly
     // on a point of the drawing rather than near one. Nothing moves until then.
+    if (mode == AlignMode::FourPoint) {
+        alignPick_ = 3;
+        alignPts_.clear();
+        emit message(QStringLiteral("Align by 4 points: click the first of two points on the selection - Esc cancels"));
+        emit overlayChanged();
+        return;
+    }
     if (mode == AlignMode::CursorX || mode == AlignMode::CursorY) {
         alignPick_ = mode == AlignMode::CursorX ? 1 : 2;
         emit message(mode == AlignMode::CursorX
@@ -15402,6 +15436,38 @@ void Editor::alignSelection(AlignMode mode) {
         return;
     }
     alignSelectionTo(mode, 0.0);
+}
+
+void Editor::applyFourPointAlign() {
+    if (!doc_ || alignPts_.size() < 5) return;
+    const Vec2 s1 = alignPts_[0], s2 = alignPts_[1], d1 = alignPts_[2], d2 = alignPts_[3], to = alignPts_[4];
+    alignPts_.clear();
+    if (distance(s1, s2) < 1e-9 || distance(d1, d2) < 1e-9) {
+        emit message(QStringLiteral("Align by 4 points: each pair needs two different points"));
+        return;
+    }
+    // TURNED SO THE FIRST PAIR RUNS THE WAY THE SECOND DOES, about the middle of the first pair - and that middle put
+    // where it was asked to go.
+    const Vec2 mid = (s1 + s2) * 0.5;
+    const double turn = std::atan2(d2.y - d1.y, d2.x - d1.x) - std::atan2(s2.y - s1.y, s2.x - s1.x);
+    std::vector<Entity*> sel = selectedEntities();
+    if (sel.empty()) return;
+    pushUndo();
+    std::vector<QString> ids;
+    for (Entity* e : sel) {
+        rotateEntity(*e, mid, turn);
+        translateEntity(*e, to - mid);
+        ids.push_back(e->id);
+    }
+    const double c = std::cos(turn), s = std::sin(turn);
+    emit selectionTransformed(ids, [mid, to, c, s](const Vec2& p) {
+        const Vec2 d = p - mid;
+        return to + Vec2{d.x * c - d.y * s, d.x * s + d.y * c};
+    });
+    doc_->setDirty(true);
+    emit message(QStringLiteral("Aligned by 4 points: turned %1 degrees").arg(turn * 180.0 / M_PI, 0, 'f', 2));
+    emit changed();
+    emit overlayChanged();
 }
 
 void Editor::alignSelectionTo(AlignMode mode, double at) {
@@ -19785,10 +19851,21 @@ void Editor::setSelectionBraided(bool on) {
     emit changed();
 }
 
+void Editor::dropLiveDraft() {
+    if (draftLiveId_.isEmpty() || !doc_) return;
+    auto& all = doc_->entities();
+    const QString id = draftLiveId_;
+    all.erase(std::remove_if(all.begin(), all.end(), [&](const Entity& e) { return e.id == id; }), all.end());
+    draftLiveId_.clear();
+    doc_->setDirty(true);
+    emit changed();
+}
+
 bool Editor::polylineAsDoubleLine() {
     if (tool_ != ToolId::Polyline || draftPts_.empty()) return false;
     const std::vector<Vec2> pts = draftPts_;
     const std::vector<double> radii = draftCornerRadii_;
+    dropLiveDraft();   // the polyline placed so far gives way to the double line through the same points
     setTool(ToolId::DoublePolyline);
     draftPts_ = pts;
     draftCornerRadii_ = radii;
@@ -19811,7 +19888,15 @@ bool Editor::polylineAsWipeout() {
     w.layer = doc_->activeLayer();
     w.points = draftPts_;
     w.id = uid();
-    pushUndo();
+    // The polyline placed so far becomes the wipeout - one change with it, to undo.
+    if (!draftLiveId_.isEmpty()) {
+        auto& all = doc_->entities();
+        const QString id = draftLiveId_;
+        all.erase(std::remove_if(all.begin(), all.end(), [&](const Entity& e) { return e.id == id; }), all.end());
+        draftLiveId_.clear();
+    } else {
+        pushUndo();
+    }
     addEntity(std::move(w));
     doc_->setDirty(true);
     cancelDraw();
@@ -20661,6 +20746,7 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
     // back together (the page setup reopens either way).
     if (alignPick_ != 0 && key == Qt::Key_Escape) {
         alignPick_ = 0;
+        alignPts_.clear();
         emit message(QStringLiteral("Align cancelled"));
         emit overlayChanged();
         return true;
@@ -21182,6 +21268,40 @@ void Editor::updateHover() {
 }
 
 void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
+    // ALIGN BY 4 POINTS, under way: the points clicked, the pair on the selection and the pair on the other object each
+    // joined - and, both pairs given, the selection where it would go with its middle on the pointer.
+    if (alignPick_ == 3 && doc_) {
+        p.save();
+        QPen pen(QColor("#f0b44c"));
+        pen.setCosmetic(true);
+        pen.setWidthF(1.4);
+        p.setPen(pen);
+        p.setBrush(Qt::NoBrush);
+        for (size_t i = 0; i < alignPts_.size(); ++i) {
+            const QPointF s = vt.toScreen(alignPts_[i]);
+            p.drawEllipse(s, 4.0, 4.0);
+            p.drawText(s + QPointF(6, -6), QString::number(i + 1));
+        }
+        pen.setStyle(Qt::DashLine);
+        p.setPen(pen);
+        if (alignPts_.size() >= 2) p.drawLine(vt.toScreen(alignPts_[0]), vt.toScreen(alignPts_[1]));
+        if (alignPts_.size() >= 4) p.drawLine(vt.toScreen(alignPts_[2]), vt.toScreen(alignPts_[3]));
+        else if (alignPts_.size() == 3) p.drawLine(vt.toScreen(alignPts_[2]), vt.toScreen(cursor_));
+        else if (alignPts_.size() == 1) p.drawLine(vt.toScreen(alignPts_[0]), vt.toScreen(cursor_));
+        if (alignPts_.size() == 4 && distance(alignPts_[0], alignPts_[1]) > 1e-9 && distance(alignPts_[2], alignPts_[3]) > 1e-9) {
+            const Vec2 mid = (alignPts_[0] + alignPts_[1]) * 0.5;
+            const double turn = std::atan2(alignPts_[3].y - alignPts_[2].y, alignPts_[3].x - alignPts_[2].x) -
+                                std::atan2(alignPts_[1].y - alignPts_[0].y, alignPts_[1].x - alignPts_[0].x);
+            for (const QString& id : selected_)
+                if (const Entity* e = entityById(id)) {
+                    Entity ghost = *e;
+                    rotateEntity(ghost, mid, turn);
+                    translateEntity(ghost, cursor_ - mid);
+                    EntityRenderer::draw(p, ghost, *doc_, vt, QColor("#f0b44c"));
+                }
+        }
+        p.restore();
+    }
     // THE PART LOOKED UP (Alt + the pointer): its own lines drawn over in a light orange - every object of it, the
     // part's outline, a run's wires and body - not a box round it.
     if (!lookupHighlight_.empty() && doc_) {
@@ -22660,6 +22780,34 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             QPolygonF poly;
             for (const auto& v : curve) poly << vt.toScreen(v);
             p.drawPolyline(poly);
+        } else if (tool_ == ToolId::Polyline && pts.size() >= 2 && entityById(draftLiveId_)) {
+            // THE POLYLINE ON THE SHEET ALREADY, drawn whole on to the pointer (the sheet leaves it out meanwhile):
+            // its arcs, its corners and its width as they will be.
+            Entity ghost = *entityById(draftLiveId_);
+            ghost.points = pts;
+            std::vector<double> bulges = draftBulges_;
+            double cur = 0.0;
+            if (polyArcMode_ && draftPts_.size() >= 2) {
+                const Vec2 prevDir = draftPts_.back() - draftPts_[draftPts_.size() - 2];
+                cur = tangentBulge(draftPts_.back(), cursor_, prevDir);
+            }
+            bulges.resize(draftPts_.size(), 0.0);
+            bulges.push_back(cur);
+            ghost.meta.remove(QStringLiteral("bulges"));
+            if (std::any_of(bulges.begin(), bulges.end(), [](double b) { return std::abs(b) > 1e-9; })) {
+                QJsonArray arr;
+                for (double b : bulges) arr.append(b);
+                ghost.meta.insert(QStringLiteral("bulges"), arr);
+            }
+            ghost.meta.remove(QStringLiteral("cornerRadii"));
+            if (previewAnyFillet) {
+                QJsonArray radii;
+                for (double r : previewRadii) radii.append(r);
+                ghost.meta.insert(QStringLiteral("cornerRadii"), radii);
+            }
+            if (plineWidth_ > 0.0) ghost.meta.insert(QStringLiteral("plineWidth"), plineWidth_);
+            else ghost.meta.remove(QStringLiteral("plineWidth"));
+            EntityRenderer::draw(p, ghost, *doc_, vt, paperInk(QColor("#ffffff")));
         } else if (tool_ == ToolId::Polyline &&
                    (polyArcMode_ ||
                     std::any_of(draftBulges_.begin(), draftBulges_.end(),

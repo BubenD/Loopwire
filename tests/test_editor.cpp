@@ -357,7 +357,7 @@ int run_editor_tests() {
               "double-connect: without shift the end moves but is not capped");
     }
 
-    // --- Drawing a double line: shift-click the end onto a line caps that run-end.
+    // --- Drawing a double line: ending on a line caps that run-end (Shift held would not).
     {
         Document d; d.entities().clear();
         Entity t; t.id = "T"; t.type = EntityType::Line; t.a = {100, -50}; t.b = {100, 50};
@@ -365,13 +365,13 @@ int run_editor_tests() {
         Editor ed; ed.setDocument(&d); noSnap(ed);
         ed.setTool(ToolId::DoubleLine);
         ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);          // start (no cap)
-        ed.onPointerPress({100, 0}, Qt::LeftButton, Qt::ShiftModifier);     // end on T, shift -> cap
+        ed.onPointerPress({100, 0}, Qt::LeftButton, Qt::NoModifier);      // end on T -> cap
         const Entity* dl = nullptr;
         for (const auto& e : d.entities())
             if (e.type == EntityType::DoubleLine) dl = &e;
         check(dl && !dl->meta.value("cutStart").toBool() && dl->meta.value("cutEnd").toBool() &&
                   dl->meta.value("cutEndKind").toString() == QLatin1String("line"),
-              "double-draw: shift-click end onto a line caps that run-end only");
+              "double-draw: ending on a line caps that run-end only");
     }
 
     // --- Delete removes selection.
@@ -4023,7 +4023,7 @@ int run_editor_tests() {
         ed.setPixelTolerance(4);
         ed.doubleLineGap() = 10.0;
         ed.setTool(ToolId::DoublePolyline);
-        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::ShiftModifier);   // Shift: start flush on it
+        ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);   // on the line: start flush on it
         ed.onPointerPress({120, 0}, Qt::LeftButton, Qt::NoModifier);
         ed.onKey(Qt::Key_Return, Qt::NoModifier);
         const Entity* run = nullptr;
@@ -4072,6 +4072,62 @@ int run_editor_tests() {
             for (const Entity& e : d3.entities())
                 if (e.type == EntityType::Polyline && e.meta.value("double").toBool()) capped = e.meta.value(QStringLiteral("cutStart")).toBool();
             check(!capped, "dpoly-shift-start: started in the open - no cap");
+        }
+        // SHIFT HELD ON THE CLICK: drawn as it is, not lined up with what it lands on - at the start or the end.
+        for (const bool atStart : {true, false}) {
+            Document d8;
+            d8.entities().push_back(ref);
+            Editor e8;
+            e8.setDocument(&d8);
+            e8.snapSettings().objectSnap = true;
+            e8.snapSettings().gridSnap = false;
+            e8.snapSettings().ortho = false;
+            e8.snapSettings().polar = false;
+            e8.setPixelTolerance(4);
+            e8.doubleLineGap() = 10.0;
+            e8.setTool(ToolId::DoublePolyline);
+            for (const bool shift : {false, true}) {
+                d8.entities() = {ref};
+                e8.setTool(ToolId::DoublePolyline);
+                const Qt::KeyboardModifiers mods = shift ? Qt::ShiftModifier : Qt::NoModifier;
+                if (atStart) {
+                    e8.onPointerPress({0, 0}, Qt::LeftButton, mods);
+                    e8.onPointerPress({120, 0}, Qt::LeftButton, Qt::NoModifier);
+                } else {
+                    e8.onPointerPress({120, 0}, Qt::LeftButton, Qt::NoModifier);
+                    e8.onPointerPress({0, 0}, Qt::LeftButton, mods);
+                }
+                e8.onKey(Qt::Key_Return, Qt::NoModifier);
+                bool capped = false;
+                for (const Entity& e : d8.entities())
+                    if (e.type == EntityType::Polyline && e.meta.value("double").toBool())
+                        capped = e.meta.value(atStart ? QStringLiteral("cutStart") : QStringLiteral("cutEnd")).toBool();
+                check(capped == !shift, qPrintable(QStringLiteral("dpoly align: %1 on the line %2 - %3")
+                                                       .arg(atStart ? QStringLiteral("started") : QStringLiteral("ended"),
+                                                            shift ? QStringLiteral("with Shift") : QStringLiteral("without"),
+                                                            shift ? QStringLiteral("drawn as it is") : QStringLiteral("flush on it"))));
+            }
+        }
+        // ALIGN BY 4 POINTS: a line turned so its two points run the way the other two do, its middle put where clicked.
+        {
+            Document d9;
+            Entity moving;
+            moving.id = QStringLiteral("moving");
+            moving.type = EntityType::Line;
+            moving.a = {0, 0};
+            moving.b = {10, 0};
+            d9.entities() = {moving};
+            Editor e9;
+            e9.setDocument(&d9);
+            e9.snapSettings().objectSnap = false;
+            e9.snapSettings().gridSnap = false;
+            e9.selectById(moving.id);
+            e9.alignSelection(Editor::AlignMode::FourPoint);
+            for (const Vec2& p : {Vec2{0, 0}, Vec2{10, 0}, Vec2{100, 100}, Vec2{100, 120}, Vec2{50, 50}})
+                e9.onPointerPress(p, Qt::LeftButton, Qt::NoModifier);
+            const Entity& done = d9.entities().front();
+            check(distance(done.a, Vec2{50, 45}) < 1e-6 && distance(done.b, Vec2{50, 55}) < 1e-6,
+                  "align by 4 points: turned to run as the second pair does, its middle on the point clicked");
         }
         // ESC AND SPACE: what is drawn up to the last point is kept, and the tool put down.
         for (const int key : {static_cast<int>(Qt::Key_Escape), static_cast<int>(Qt::Key_Space)})
@@ -4898,7 +4954,7 @@ int run_editor_tests() {
             ed.setPixelTolerance(4);
             ed.doubleLineGap() = 14.0;
             ed.setTool(ToolId::DoublePolyline);
-            ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::ShiftModifier);
+            ed.onPointerPress({0, 0}, Qt::LeftButton, Qt::NoModifier);
             ed.onPointerPress({-120, 55}, Qt::LeftButton, Qt::NoModifier);
             ed.onKey(Qt::Key_Return, Qt::NoModifier);
             Entity run;

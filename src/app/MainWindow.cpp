@@ -4267,6 +4267,7 @@ QWidget* MainWindow::operationsRow() {
             {"alignbottom", QStringLiteral("By object bottom"), Editor::AlignMode::Bottom},
             {"alignx", QStringLiteral("By X-cursor"), Editor::AlignMode::CursorX},
             {"aligny", QStringLiteral("By Y-cursor"), Editor::AlignMode::CursorY},
+            {"align", QStringLiteral("By 4 points (two on it, two on another, then where)"), Editor::AlignMode::FourPoint},
         };
         auto* menu = new QMenu(b);
         for (const Way& way : ways) {
@@ -12598,9 +12599,9 @@ std::vector<KeyRow> keyboardReference() {
                              "(Length and Angle, X radius and Y radius)"));
     out.push_back(lit("Ctrl", "Drawing an arc: flip it to the sweep the other way round"));
     out.push_back(lit("Ctrl", "Drawing a double line: swap which side of the line you draw the second line falls"));
-    out.push_back(lit("(click on a line)", "Starting a double line on another object: both lines start flush on it, "
-                                           "the second cut or carried to it - no Shift needed"));
-    out.push_back(lit("Shift", "Ending a double line on a line: both lines end flush on it"));
+    out.push_back(lit("(click on an object)", "Starting or ending a double line on another object: both lines meet it "
+                                              "flush, the second cut or carried to it"));
+    out.push_back(lit("Shift + click", "Starting or ending a double line on an object: drawn as it is, not lined up with it"));
     out.push_back(lit("Space  /  Esc", "Drawing a line, double line or polyline: keep what is drawn up to the last "
                                        "point, and put the tool down"));
     out.push_back(lit("A  /  L  /  W  /  C  /  U", "Drawing a polyline: arc or line segments, its width, close it, take "
