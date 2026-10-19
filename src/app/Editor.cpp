@@ -11103,6 +11103,18 @@ void Editor::handleDrawPress(const Vec2& p) {
         break;
     // A RECTANGLE BY THREE POINTS: two corners along one edge - which sets its angle and its length - and a third
     // point that sets how far the opposite edge stands off it.
+    // A TRIANGLE: the base's two ends, then a click on the side it is to stand on - and then the two base angles,
+    // asked for by the window (see triangleAnglesRequested and placeTriangle).
+    case ToolId::Triangle:
+        draftPts_.push_back(p);
+        drafting_ = true;
+        if (draftPts_.size() == 1)
+            emit message(QStringLiteral("Triangle: click the other end of its base"));
+        else if (draftPts_.size() == 2)
+            emit message(QStringLiteral("Triangle: click the side it stands on"));
+        else
+            emit triangleAnglesRequested();
+        break;
     case ToolId::Rect3Point:
         draftPts_.push_back(p);
         drafting_ = true;
@@ -19809,6 +19821,40 @@ bool Editor::polylineAsWipeout() {
     return true;
 }
 
+QString Editor::placeTriangle(double angleA, double angleB) {
+    if (tool_ != ToolId::Triangle || draftPts_.size() < 3 || !doc_) return QStringLiteral("Draw its base and click its side first");
+    // THE ANGLES ARE WHAT A TRIANGLE CAN HAVE: each more than nothing, the two together leaving something for the
+    // third - no more than 179 degrees between them.
+    if (angleA <= 0.0 || angleB <= 0.0) return QStringLiteral("The angle is wrong: each angle has to be more than 0 degrees");
+    if (angleA + angleB > 179.0 + 1e-9)
+        return QStringLiteral("The angle is wrong: %1 + %2 = %3 degrees - the two together can be no more than 179")
+            .arg(angleA, 0, 'f', 1).arg(angleB, 0, 'f', 1).arg(angleA + angleB, 0, 'f', 1);
+    const Vec2 a = draftPts_[0], b = draftPts_[1];
+    const double base = distance(a, b);
+    if (base < 1e-9) return QStringLiteral("Its base has no length");
+    // ON THE SIDE CLICKED, the apex where the two sides from the base ends meet (by the sines).
+    const Vec2 dir = (b - a) * (1.0 / base);
+    const Vec2 n = dir.perp();
+    const double side = dot(draftPts_[2] - a, n) >= 0.0 ? 1.0 : -1.0;
+    const double ra = angleA * M_PI / 180.0, rb = angleB * M_PI / 180.0;
+    const double ac = base * std::sin(rb) / std::sin(ra + rb);
+    const Vec2 c = a + (dir * std::cos(ra) + n * (side * std::sin(ra))) * ac;
+    Entity e;
+    e.type = EntityType::Polyline;
+    e.layer = doc_->activeLayer();
+    e.points = {a, b, c, a};
+    e.meta.insert(QStringLiteral("closed"), true);
+    e.id = uid();
+    pushUndo();
+    addEntity(std::move(e));
+    doc_->setDirty(true);
+    cancelDraw();
+    emit message(QStringLiteral("Triangle: %1, %2 and %3 degrees").arg(angleA, 0, 'f', 1).arg(angleB, 0, 'f', 1)
+                     .arg(180.0 - angleA - angleB, 0, 'f', 1));
+    emit changed();
+    return QString();
+}
+
 int Editor::divideSelection(int pieces) {
     if (!doc_ || pieces < 2) return 0;
     // WHAT CAN BE DIVIDED: a line (not a ray or a construction line, which have no end to divide to), and a plain
@@ -22362,10 +22408,14 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             p.drawLine(vt.toScreen(r2[0]), vt.toScreen(r2[1]));
         } else if (tool_ == ToolId::DoublePolyline && pts.size() >= 2) {
             // ONCE IT IS ON THE SHEET (placed as it is drawn) only the stretch still following the pointer is a
-            // preview: what is placed is drawn as itself.
-            if (!draftLiveId_.isEmpty() && pts.size() > 2) {
-                pts = {pts[pts.size() - 2], pts.back()};
-                previewRadii = {0.0, 0.0};
+            // preview - but drawn on from the knee it leaves, through the corner it will make: the segment before
+            // it as well, so the two lines meet the placed ones and mitre round the corner with no gap.
+            const bool live = !draftLiveId_.isEmpty() && pts.size() > 2;
+            if (live) {
+                const size_t n = pts.size();
+                const double kneeRadius = previewRadii.size() >= n ? previewRadii[n - 2] : 0.0;
+                pts = {pts[n - 3], pts[n - 2], pts[n - 1]};
+                previewRadii = {0.0, kneeRadius, 0.0};
             }
             // Round each filleted corner of the centerline at radius + gap/2 so both
             // runs fillet, then offset.
@@ -22379,10 +22429,23 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
                 previewAnyFillet ? roundedPolylinePerCorner(shifted, centerRadii) : shifted;
             std::vector<Vec2> r1 = offsetPolyline(center, h);
             std::vector<Vec2> r2 = offsetPolyline(center, -h);
-            extendLsStart(r1); // ls: start both runs on the reference line
-            extendLsStart(r2);
-            capShiftStart(r1); // Shift: and so does the line the run was started on
-            capShiftStart(r2);
+            if (live) {
+                // From where each placed line stops - square across at the knee - through the mitre and on.
+                const Entity* placed = entityById(draftLiveId_);
+                if (placed && placed->points.size() >= 2 && previewRadii[1] <= 0.0 && r1.size() == 3 && r2.size() == 3) {
+                    const std::vector<Vec2> placedA = offsetPolyline(placed->points, h);
+                    const std::vector<Vec2> placedB = offsetPolyline(placed->points, -h);
+                    if (!placedA.empty() && !placedB.empty()) {
+                        r1[0] = placedA.back();
+                        r2[0] = placedB.back();
+                    }
+                }
+            } else {
+                extendLsStart(r1); // ls: start both runs on the reference line
+                extendLsStart(r2);
+                capShiftStart(r1); // Shift: and so does the line the run was started on
+                capShiftStart(r2);
+            }
             for (const auto& run : {r1, r2}) {
                 QPolygonF poly;
                 for (const auto& v : run) poly << vt.toScreen(v);
@@ -22398,6 +22461,11 @@ void Editor::drawOverlay(QPainter& p, const ViewTransform& vt) const {
             Vec2 from, to;
             lineReach(ghost, from, to);
             p.drawLine(vt.toScreen(from), vt.toScreen(to));
+        } else if (tool_ == ToolId::Triangle && pts.size() >= 2) {
+            // Its base, and - waiting for its angles - the side it stands on.
+            QPolygonF poly;
+            poly << vt.toScreen(pts[0]) << vt.toScreen(pts[1]);
+            p.drawPolyline(poly);
         } else if (tool_ == ToolId::Rect3Point && pts.size() >= 2) {
             // The first edge, and - with it down - the rectangle standing off it to the pointer.
             const Vec2 a = pts[0], b = pts[1];

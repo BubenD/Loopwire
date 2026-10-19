@@ -106,9 +106,8 @@ void MainWindow::buildHarnessMechanicalTab() {
     // of thing that makes a drawing take twice as long as it should.
     mechGroups_ << addGroupKeep(lay, QStringLiteral("Draw"),
                                toolRow({ToolId::Line, ToolId::DoublePolyline, ToolId::Polyline, ToolId::Rect, ToolId::Circle,
-                                        ToolId::Ellipse, ToolId::Arc, ToolId::Spline, ToolId::Polygon,
-                                        ToolId::Hatch, ToolId::Wipeout},
-                                       {drawMoreButton(page)}));
+                                        ToolId::Ellipse, ToolId::Arc, ToolId::Spline, ToolId::Polygon, ToolId::Ray,
+                                        ToolId::Hatch, ToolId::Wipeout}));
     polylineOptionsGroup(lay, page);
     // The modify tools, Match, Array and Copy: twelve buttons in the same two rows of six, as on Home.
     // Array and Copy standing beside the grid at their own widths is what made this group read as three

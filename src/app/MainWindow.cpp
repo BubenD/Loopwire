@@ -2771,6 +2771,52 @@ MainWindow::MainWindow(QWidget* parent, ModuleReporter onModule) : QMainWindow(p
             statusBar()->showMessage(QStringLiteral(
                 "Connector: edit the settings, then press Place connector to position it"));
     });
+    // A TRIANGLE'S TWO BASE ANGLES: typed, the third shown as it comes out - and an angle that cannot be said so, with
+    // OK held back until it can.
+    connect(editor_, &Editor::triangleAnglesRequested, this, [this] {
+        QDialog dlg(this);
+        dlg.setObjectName(QStringLiteral("triangleAngles"));
+        dlg.setWindowTitle(QStringLiteral("Triangle"));
+        auto* form = new QFormLayout(&dlg);
+        auto* first = new QDoubleSpinBox(&dlg);
+        auto* second = new QDoubleSpinBox(&dlg);
+        for (QDoubleSpinBox* s : {first, second}) {
+            s->setRange(-360.0, 360.0);
+            s->setDecimals(1);
+            s->setSuffix(QString::fromUtf8("\xC2\xB0"));
+            s->setValue(60.0);
+        }
+        first->setObjectName(QStringLiteral("triangleAngleA"));
+        second->setObjectName(QStringLiteral("triangleAngleB"));
+        auto* third = new QLabel(&dlg);
+        third->setObjectName(QStringLiteral("triangleAngleC"));
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+        form->addRow(QStringLiteral("Angle at the base's first end"), first);
+        form->addRow(QStringLiteral("Angle at its second end"), second);
+        form->addRow(QStringLiteral("Third angle"), third);
+        form->addRow(buttons);
+        auto refresh = [first, second, third, buttons] {
+            const double a = first->value(), b = second->value();
+            const bool ok = a > 0.0 && b > 0.0 && a + b <= 179.0 + 1e-9;
+            third->setText(ok ? QStringLiteral("%1%2").arg(180.0 - a - b, 0, 'f', 1).arg(QString::fromUtf8("\xC2\xB0"))
+                              : a <= 0.0 || b <= 0.0 ? QStringLiteral("The angle is wrong - each has to be more than 0")
+                                                     : QStringLiteral("The angle is wrong - the two add to %1, no more than 179 can be")
+                                                           .arg(a + b, 0, 'f', 1));
+            third->setStyleSheet(ok ? QString() : QStringLiteral("color:#e06c6c;"));
+            buttons->button(QDialogButtonBox::Ok)->setEnabled(ok);
+        };
+        connect(first, &QDoubleSpinBox::valueChanged, &dlg, refresh);
+        connect(second, &QDoubleSpinBox::valueChanged, &dlg, refresh);
+        connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+        refresh();
+        if (dlg.exec() != QDialog::Accepted) {
+            editor_->onKey(Qt::Key_Escape, Qt::NoModifier);
+            return;
+        }
+        const QString why = editor_->placeTriangle(first->value(), second->value());
+        if (!why.isEmpty()) statusBar()->showMessage(why, 6000);
+    });
     connect(editor_, &Editor::textPromptRequested, this, [this](const QString&) {
         // Begin on-canvas in-place editing at the pending insertion box.
         Vec2 tl;
@@ -3922,7 +3968,9 @@ QAction* MainWindow::makeToolAction(const QString& text, ToolId id) {
     toolGroup_->addAction(a);
     toolActions_.insert(static_cast<int>(id), a);
     allToolActions_.append(a);        // every instance (duplicates across tabs too)
-    connect(a, &QAction::triggered, this, [this, id] { editor_->setTool(id); });
+    // The tool it arms is read when it is pressed: a button with a fall-menu of variants (Rectangle, Rectangle by 3
+    // points, Triangle) arms the one last picked from it.
+    connect(a, &QAction::triggered, this, [this, a] { editor_->setTool(static_cast<ToolId>(a->data().toInt())); });
     return a;
 }
 
@@ -4004,6 +4052,42 @@ QWidget* MainWindow::toolRow(const QList<ToolId>& tools, const QList<QWidget*>& 
                 editor_->setConnectionPinStub(true);
                 editor_->setTool(ToolId::ConnectionPin);
             });
+            b->setMenu(menu);
+            b->setPopupMode(QToolButton::MenuButtonPopup);
+        } else if (id == ToolId::Rect || id == ToolId::Ray) {
+            // A BUTTON OF VARIANTS, laid out as the circle's methods are: the one picked from the menu is drawn with,
+            // and it is what the button arms from then on, wearing its picture. Ray's menu has Divide under them.
+            auto* menu = new QMenu(b);
+            menu->setObjectName(id == ToolId::Rect ? QStringLiteral("rectMenu") : QStringLiteral("rayMenu"));
+            const QList<ToolId> variants = id == ToolId::Rect
+                                               ? QList<ToolId>{ToolId::Rect, ToolId::Rect3Point, ToolId::Triangle}
+                                               : QList<ToolId>{ToolId::Ray, ToolId::ConstructionLine};
+            for (ToolId v : variants) {
+                QAction* pick = menu->addAction(makeToolIcon(v), toolLabel(v), this, [this, act, b, v] {
+                    act->setData(static_cast<int>(v));
+                    act->setIcon(makeToolIcon(v));
+                    act->setText(toolLabel(v));
+                    b->setToolTip(toolLabel(v));
+                    editor_->setTool(v);
+                });
+                pick->setObjectName(QStringLiteral("variant") + toolLabel(v).remove(QLatin1Char(' ')));
+                if (!toolActions_.contains(static_cast<int>(v))) toolActions_.insert(static_cast<int>(v), act);
+            }
+            if (id == ToolId::Ray) {
+                menu->addSeparator();
+                QAction* divide = menu->addAction(QStringLiteral("Divide..."));
+                divide->setObjectName(QStringLiteral("drawDivide"));
+                divide->setToolTip(QStringLiteral("Cut the selected lines and polylines into so many equal pieces"));
+                connect(divide, &QAction::triggered, this, [this] {
+                    if (!editor_) return;
+                    bool ok = false;
+                    const int n = QInputDialog::getInt(this, QStringLiteral("Divide"), QStringLiteral("Into how many equal pieces:"),
+                                                       2, 2, 1000, 1, &ok);
+                    if (!ok) return;
+                    if (editor_->divideSelection(n) == 0)
+                        statusBar()->showMessage(QStringLiteral("Divide: select a line or a polyline first"), 5000);
+                });
+            }
             b->setMenu(menu);
             b->setPopupMode(QToolButton::MenuButtonPopup);
         } else if (id == ToolId::Arc) {

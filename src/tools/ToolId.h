@@ -118,6 +118,9 @@ enum class ToolId {
     ConstructionLine,
     // A RECTANGLE BY THREE POINTS: two corners along one edge, at any angle, and how far the opposite edge stands off.
     Rect3Point,
+    // A TRIANGLE ON A BASE: the base's two ends, a click on the side it stands on, then the angles at the two ends of
+    // the base - the third is what is left of 180 degrees.
+    Triangle,
 };
 
 inline bool isPickModifyTool(ToolId t) {
@@ -134,6 +137,7 @@ inline bool isDrawTool(ToolId t) {
     case ToolId::Ray:
     case ToolId::ConstructionLine:
     case ToolId::Rect3Point:
+    case ToolId::Triangle:
     case ToolId::Rect:
     case ToolId::Polygon:
     case ToolId::Circle:
@@ -186,6 +190,7 @@ inline QString toolLabel(ToolId t) {
     case ToolId::Ray: return QStringLiteral("Ray");
     case ToolId::ConstructionLine: return QStringLiteral("Construction line");
     case ToolId::Rect3Point: return QStringLiteral("Rectangle by 3 points");
+    case ToolId::Triangle: return QStringLiteral("Triangle");
     case ToolId::Rect: return QStringLiteral("Rectangle");
     case ToolId::Polygon: return QStringLiteral("Polygon");
     case ToolId::Circle: return QStringLiteral("Circle");

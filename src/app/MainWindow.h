@@ -547,9 +547,7 @@ private:
     // The tools as buttons, packed into TWO ROWS - and anything else that belongs in the same group packed
     // with them, so a group is two tidy rows rather than one tall one with odds and ends beside it.
     QWidget* toolRow(const QList<ToolId>& tools, const QList<QWidget*>& alsoInTheGroup = {});
-    // THE DRAW GROUP'S MORE button (ray, construction line, rectangle by 3 points, divide), and the Polyline's options
-    // group, shown while it is in use.
-    QToolButton* drawMoreButton(QWidget* parent);
+    // THE POLYLINE'S OPTIONS group, shown while it is in use.
     QWidget* polylineOptionsGroup(QHBoxLayout* lay, QWidget* page);
     // One square for every icon button on the ribbon: 28 px of icon, room for a split button's arrow beside
     // it, and the same height whichever kind of button it is. Sizes left to Qt come out of each button's own

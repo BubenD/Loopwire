@@ -276,13 +276,27 @@ QIcon makeToolIcon(ToolId id, const QColor& ink, int variant) {
     case ToolId::Line: p.drawLine(5, 18, 19, 6); break;
     case ToolId::DoubleLine: p.drawLine(4, 16, 17, 5); p.drawLine(7, 19, 20, 8); break;
     case ToolId::Polyline: {
-        // A polyline: straight runs and an arc, one object.
+        // A polyline: a straight run into an arc, one object - a node at each end.
         QPainterPath path;
-        path.moveTo(3, 18);
-        path.lineTo(9, 10);
-        path.lineTo(13, 14);
-        path.cubicTo(15, 6, 21, 6, 21, 12);
+        path.moveTo(4, 6);
+        path.lineTo(12, 6);
+        path.arcTo(QRectF(6, 6, 12, 12), 90.0, -180.0);
         p.drawPath(path);
+        p.setBrush(p.pen().color());
+        p.drawEllipse(QPointF(4, 6), 1.6, 1.6);
+        p.drawEllipse(QPointF(12, 18), 1.6, 1.6);
+        p.setBrush(Qt::NoBrush);
+        break;
+    }
+    case ToolId::Triangle: {
+        // A triangle on its base, its two base angles marked.
+        p.drawPolygon(QPolygonF({{3, 19}, {21, 19}, {9, 5}}));
+        QPainterPath marks;
+        marks.arcMoveTo(QRectF(-1, 15, 8, 8), 0.0);
+        marks.arcTo(QRectF(-1, 15, 8, 8), 0.0, 49.0);
+        marks.arcMoveTo(QRectF(17, 15, 8, 8), 180.0);
+        marks.arcTo(QRectF(17, 15, 8, 8), 180.0, -50.0);
+        p.drawPath(marks);
         break;
     }
     case ToolId::Ray:

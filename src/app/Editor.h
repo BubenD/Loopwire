@@ -421,6 +421,10 @@ public:
     // DIVIDE: the selected lines (and plain polylines) each cut into so many equal pieces, one change to undo.
     // Returns how many were divided.
     int divideSelection(int pieces);
+    // THE TRIANGLE BEING DRAWN, given its two base angles (degrees, at the base's first and second ends): placed,
+    // the third angle what is left of 180. Returns why not - an angle that cannot be (each more than 0, the two
+    // together no more than 179) - or empty once it is placed.
+    QString placeTriangle(double angleA, double angleB);
     void setShrinkRouteMode(ShrinkRouteMode mode) { shrinkMode_ = mode; }
     ShrinkRouteMode shrinkRouteMode() const { return shrinkMode_; }
     // HEATSHRINK ON THE ENDS of a cable or a braid over the run: the next one drawn with a sleeve over each end, or not.
@@ -1664,6 +1668,8 @@ signals:
     void pasteRequested();
     // Tool needs free-text/numeric input (prompt shown by the host UI).
     void textPromptRequested(const QString& prompt);
+    // A triangle's base and side are down: its two base angles are wanted (see placeTriangle).
+    void triangleAnglesRequested();
     // Double-clicked an existing text object — the host opens the editor for it.
     void editTextRequested(const QString& id);
     // Double-clicked a copy of a block — the host opens the block editor for it.

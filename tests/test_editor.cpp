@@ -4191,6 +4191,22 @@ int run_editor_tests() {
             e7.onPointerPress({50, 450}, Qt::LeftButton, Qt::NoModifier);
             check(e7.polylineAsWipeout() && d7.entities().back().type == EntityType::Wipeout && d7.entities().back().points.size() == 3,
                   "polyline: what is drawn closed into a wipeout");
+            // A TRIANGLE: its base, its side, its two base angles - the third what is left.
+            bool asked = false;
+            QObject::connect(&e7, &Editor::triangleAnglesRequested, [&asked] { asked = true; });
+            e7.setTool(ToolId::Triangle);
+            e7.onPointerPress({0, 500}, Qt::LeftButton, Qt::NoModifier);
+            e7.onPointerPress({100, 500}, Qt::LeftButton, Qt::NoModifier);
+            e7.onPointerPress({50, 540}, Qt::LeftButton, Qt::NoModifier);
+            check(asked, "triangle: base and side down, its angles are asked for");
+            const size_t before = d7.entities().size();
+            const QString wrong = e7.placeTriangle(100.0, 85.0);
+            check(!wrong.isEmpty() && wrong.contains(QStringLiteral("angle is wrong")) && d7.entities().size() == before,
+                  "triangle: two angles adding to more than 179 - the angle is wrong, nothing drawn");
+            check(e7.placeTriangle(60.0, 60.0).isEmpty(), "triangle: 60 and 60 - placed");
+            const Entity& tri = d7.entities().back();
+            check(tri.points.size() == 4 && distance(tri.points[2], Vec2{50.0, 500.0 + 50.0 * std::sqrt(3.0)}) < 1e-6,
+                  "triangle: its apex on the side clicked, the third angle 60");
         }
     }
 
