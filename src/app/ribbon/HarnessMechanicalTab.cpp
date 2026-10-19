@@ -105,8 +105,7 @@ void MainWindow::buildHarnessMechanicalTab() {
     // on a branch - and having to cross to another tab for a line and back for a break mark is the kind
     // of thing that makes a drawing take twice as long as it should.
     mechGroups_ << addGroupKeep(lay, QStringLiteral("Draw"),
-                               toolRow({ToolId::Line, ToolId::DoubleLine, ToolId::Polyline,
-                                        ToolId::DoublePolyline, ToolId::Rect, ToolId::Circle,
+                               toolRow({ToolId::Polyline, ToolId::DoublePolyline, ToolId::Rect, ToolId::Circle,
                                         ToolId::Ellipse, ToolId::Arc, ToolId::Spline, ToolId::Polygon,
                                         ToolId::Hatch, ToolId::Wipeout}));
     // The modify tools, Match, Array and Copy: twelve buttons in the same two rows of six, as on Home.

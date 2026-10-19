@@ -11096,8 +11096,9 @@ void Editor::handleDrawPress(const Vec2& p) {
     case ToolId::VolumeArrow:
     case ToolId::AxisAngle:
         if (tool_ == ToolId::DoubleLine) {
-            // Shift-click on a line caps that run-end flush to it (applied in finishDraw).
-            if (draftPts_.empty()) drawStartShift_ = (pressMods_ & Qt::ShiftModifier);
+            // Started on another object, both lines start flush on it - Shift not needed; Shift-click caps the
+            // end too (applied in finishDraw).
+            if (draftPts_.empty()) drawStartShift_ = (pressMods_ & Qt::ShiftModifier) || startsOnObject(p);
             drawEndShift_ = (pressMods_ & Qt::ShiftModifier);
         }
         draftPts_.push_back(p);
@@ -11206,8 +11207,9 @@ void Editor::handleDrawPress(const Vec2& p) {
             bulge = tangentBulge(draftPts_.back(), p, prevDir);
         }
         if (tool_ == ToolId::DoublePolyline) {
-            // Shift-click on a line caps that run-end flush to it (applied in finishDraw).
-            if (draftPts_.empty()) drawStartShift_ = (pressMods_ & Qt::ShiftModifier);
+            // STARTED ON ANOTHER OBJECT, BOTH LINES START FLUSH ON IT: the second line is cut (or carried) to it as
+            // the first is, Shift not needed. Shift-click caps the end on a line too (applied in finishDraw).
+            if (draftPts_.empty()) drawStartShift_ = (pressMods_ & Qt::ShiftModifier) || startsOnObject(p);
             drawEndShift_ = (pressMods_ & Qt::ShiftModifier);
         }
         // Starting a wire on a connector pin: remember the connector's pins so the fan-out
@@ -13275,7 +13277,7 @@ bool Editor::acceptCommandInput(const QString& text) {
         // Any other active draw tool consumes "g" with a hint — it must never fall
         // through to run the "g" command word and switch tools mid-draw.
         if (drafting_ || isDrawTool(tool_)) {
-            emit message(QStringLiteral("Gap applies to double line/polyline"));
+            emit message(QStringLiteral("Gap applies to double lines"));
             return true;
         }
     }
@@ -13316,7 +13318,7 @@ bool Editor::acceptCommandInput(const QString& text) {
         // Any other active draw tool (e.g. Line) consumes "f" with a hint instead
         // of running the "fillet" command and jumping into the Fillet tool.
         if (drafting_ || isDrawTool(tool_)) {
-            emit message(QStringLiteral("Fillet applies to polylines"));
+            emit message(QStringLiteral("Fillet applies to lines"));
             return true;
         }
     }
@@ -13362,7 +13364,7 @@ bool Editor::acceptCommandInput(const QString& text) {
             if (!draftCornerRadii_.empty()) draftCornerRadii_.pop_back();
             if (draftPts_.empty()) {
                 cancelDraw();
-                emit message(QStringLiteral("Polyline cancelled"));
+                emit message(QStringLiteral("Line cancelled"));
             } else {
                 emit message(QStringLiteral("Undid last point — click next, [C]lose or Enter"));
             }
@@ -14695,7 +14697,7 @@ bool Editor::trimPickAt(const Vec2& pick, const std::vector<Entity>& boundaries,
                            (obj->type == EntityType::Polyline && obj->meta.value("double").toBool());
         *what = isDbl ? QStringLiteral("one line of a double run")
                 : obj->type == EntityType::Line ? QStringLiteral("a line")
-                : obj->type == EntityType::Polyline ? QStringLiteral("a polyline")
+                : obj->type == EntityType::Polyline ? QStringLiteral("a line")
                                                     : QStringLiteral("an object");
     }
     const bool dbl = obj->type == EntityType::DoubleLine;
@@ -14754,7 +14756,7 @@ bool Editor::trimPickAt(const Vec2& pick, const std::vector<Entity>& boundaries,
         auto pieces = trimPolylinePieces(run, pick, boundaries, selfId);
         if (pieces.empty())
             return say(QStringLiteral("Nothing the reference crosses lies either side of the point "
-                                      "you picked, so there is no piece of that polyline to take "
+                                      "you picked, so there is no piece of that line to take "
                                       "off."));
         obj->type = EntityType::Polyline;
         obj->meta.remove(QStringLiteral("cornerRadii"));
@@ -16547,7 +16549,7 @@ void Editor::handleArrayPress(const Vec2& p) {
         std::vector<Vec2> pts;
         if (pathEnt) pts = arrayPathPoints(*pathEnt, &closed);
         if (pts.size() < 2) {
-            emit message(QStringLiteral("That object can't be a path — pick a line, polyline, arc, "
+            emit message(QStringLiteral("That object can't be a path — pick a line, arc, "
                                         "circle, ellipse or spline"));
             return;
         }
@@ -20557,6 +20559,15 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
         // and returns to Select — the Schematic ribbon menu comes back (setTool clears
         // twistArmType_ and emits twistArmChanged, which restores the hidden ribbon groups).
         // A break being marked out: Esc gives up the line and the tool, like a twist.
+        // A LINE OR DOUBLE LINE BEING DRAWN: what is drawn up to the last joint stays on the sheet, and the tool ends.
+        // Only the stretch still following the pointer goes.
+        if ((tool_ == ToolId::Polyline || tool_ == ToolId::DoublePolyline) && drafting_) {
+            if (draftPts_.size() >= 2) finishDraw();
+            else cancelDraw();
+            setTool(ToolId::Select);
+            emit changed();
+            return true;
+        }
         if (tool_ == ToolId::LengthBreak) {
             wireBandHasStart_ = false;
             breakFrozen_ = false;
@@ -20715,6 +20726,14 @@ bool Editor::onKey(int key, Qt::KeyboardModifiers mods) {
             if (tool_ == ToolId::Line) {
                 draftPts_.clear();
                 drafting_ = false;
+                setTool(ToolId::Select);
+                emit changed();
+                return true;
+            }
+            // A LINE OR DOUBLE LINE: kept as drawn up to its last joint, and the tool ends - as Esc does.
+            if (tool_ == ToolId::Polyline || tool_ == ToolId::DoublePolyline) {
+                if (draftPts_.size() >= 2) finishDraw();
+                else cancelDraw();
                 setTool(ToolId::Select);
                 emit changed();
                 return true;

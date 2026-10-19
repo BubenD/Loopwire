@@ -2336,6 +2336,10 @@ private:
     // Shift held on the first / most-recent draft click of a double line/polyline:
     // caps that run-end flush to a line it lands on (finishDraw applies the caps).
     bool drawStartShift_ = false;
+    // A double line's first click on another object - a line it is to start flush on.
+    bool startsOnObject(const Vec2& p) const {
+        return doc_ && !cutSegmentsThrough(p, doc_->entities(), QString()).empty();
+    }
     bool drawEndShift_ = false;
     bool gapInputMode_ = false;    // command line is awaiting a gap value ("g")
     bool filletInputMode_ = false; // command line is awaiting a fillet radius ("f")

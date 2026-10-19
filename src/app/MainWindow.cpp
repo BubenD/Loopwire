@@ -10190,7 +10190,12 @@ void MainWindow::refreshProperties() {
                                  : sleeveIsBraid(x)                                        ? QStringLiteral("braided sleeve over the run")
                                  : square || ends                                          ? QStringLiteral("cable over the run")
                                                                                            : QStringLiteral("heatshrink over the run");
-            name = QStringLiteral("Double polyline (%1%2)").arg(what, ends ? QStringLiteral(", heatshrink on ends") : QString());
+            name = QStringLiteral("Double line (%1%2)").arg(what, ends ? QStringLiteral(", heatshrink on ends") : QString());
+        } else if (x.type == EntityType::Polyline) {
+            // THE LINE AND THE DOUBLE LINE, as the tools that draw them are called.
+            name = x.meta.value(QStringLiteral("double")).toBool() ? QStringLiteral("Double line") : QStringLiteral("Line");
+        } else if (x.type == EntityType::DoubleLine) {
+            name = QStringLiteral("Double line");
         }
         return name;
     };
@@ -12237,10 +12242,9 @@ void MainWindow::buildCommands() {
     auto tool = [this](ToolId id) { return [this, id] { editor_->setTool(id); }; };
     commands_ = {
         // Draw
-        {{"line", "l"}, "Draw", "Line", tool(ToolId::Line)},
-        {{"pline", "lp", "pl", "polyline"}, "Draw", "Polyline", tool(ToolId::Polyline)},
-        {{"dline", "d", "dl", "ml"}, "Draw", "Double line", tool(ToolId::DoubleLine)},
-        {{"dpline", "dp", "dpl", "mline"}, "Draw", "Double polyline", tool(ToolId::DoublePolyline)},
+        // LINE AND DOUBLE LINE: through every point clicked - the old polyline names still find them.
+        {{"line", "l", "pline", "lp", "pl", "polyline"}, "Draw", "Line", tool(ToolId::Polyline)},
+        {{"dline", "d", "dl", "ml", "dpline", "dp", "dpl", "mline"}, "Draw", "Double line", tool(ToolId::DoublePolyline)},
         {{"rectang", "rec", "rectangle", "rect"}, "Draw", "Rectangle", tool(ToolId::Rect)},
         {{"polygon", "pol"}, "Draw", "Polygon", tool(ToolId::Polygon)},
         {{"circle", "c"}, "Draw", "Circle", tool(ToolId::Circle)},
@@ -12500,8 +12504,12 @@ std::vector<KeyRow> keyboardReference() {
     out.push_back(lit("Tab", "Where a tool asks for more than one number, move between them "
                              "(Length and Angle, X radius and Y radius)"));
     out.push_back(lit("Ctrl", "Drawing an arc: flip it to the sweep the other way round"));
-    out.push_back(lit("Ctrl", "Drawing a double line or double polyline: swap which side of the "
-                              "line you draw the second line falls"));
+    out.push_back(lit("Ctrl", "Drawing a double line: swap which side of the line you draw the second line falls"));
+    out.push_back(lit("(click on a line)", "Starting a double line on another object: both lines start flush on it, "
+                                           "the second cut or carried to it - no Shift needed"));
+    out.push_back(lit("Shift", "Ending a double line on a line: both lines end flush on it"));
+    out.push_back(lit("Space  /  Esc", "Drawing a line or double line: keep what is drawn up to the last point, and put "
+                                       "the tool down"));
     out.push_back(lit("Shift+1 to Shift+9", "Fanning wires out of a connector: add or drop that one "
                                        "pin's wire"));
     out.push_back(lit("Shift", "Fanning wires out of a connector: route one from every pin"));
@@ -12510,7 +12518,7 @@ std::vector<KeyRow> keyboardReference() {
     out.push_back(lit("a number", "How far along the direction the cursor is pointing"));
     out.push_back(lit("x,y", "An absolute point"));
     out.push_back(lit("@dx,dy", "A point relative to the last one"));
-    out.push_back(lit("g  /  f", "Set the double-line gap / the polyline fillet radius"));
+    out.push_back(lit("g  /  f", "Set the double-line gap / the line's fillet radius"));
     out.push_back(lit("a letter", "With nothing going on, starts a command at the cursor"));
 
     out.push_back(head("The usual editing"));

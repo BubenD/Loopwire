@@ -76,27 +76,20 @@ const std::vector<CommandDemoScript>& scripts() {
                          std::move(steps)});
         };
         // ---- Draw
-        add("line", "Line: click where it starts and where it ends. The tool stays on for the next one; Esc stops.",
-            ToolId::Line,
-            {move({30, 25}, "Line: the pointer to where the line starts"), click({30, 25}, "Click: the start"),
-             move({170, 75}, "The line follows the pointer"), click({170, 75}, "Click: the end - the line is drawn"),
-             key(Qt::Key_Escape, "Esc: the tool is put down")});
-        add("pline", "Polyline: one object through every point clicked; Enter finishes it.", ToolId::Polyline,
-            {move({25, 20}, "Polyline: the first point"), click({25, 20}, "Click: where it starts"),
+        add("line", "Line: one object through every point clicked; Space or Esc keeps what is drawn and puts the tool down.",
+            ToolId::Polyline,
+            {move({25, 20}, "Line: the first point"), click({25, 20}, "Click: where it starts"),
              move({80, 80}, "To the next corner"), click({80, 80}, "Click: a corner"),
              move({130, 25}, "And the next"), click({130, 25}, "Click: another corner"),
              move({175, 70}, "The last point"), click({175, 70}, "Click: the last point"),
-             key(Qt::Key_Return, "Enter: finish the polyline")});
-        add("dline", "Double line: two parallel lines, drawn by their middle.", ToolId::DoubleLine,
-            {move({30, 50}, "Double line: where it starts"), click({30, 50}, "Click: the start"),
-             move({170, 50}, "Both lines follow the pointer"), click({170, 50}, "Click: the end"),
-             key(Qt::Key_Escape, "Esc: done")});
-        add("dpline", "Double polyline: a double line through every point clicked; Enter finishes it.",
+             key(Qt::Key_Space, "Space: the line is kept as drawn, and the tool put down")});
+        add("dline", "Double line: two parallel lines through every point clicked; started on another object, both "
+                     "start flush on it. Space or Esc keeps what is drawn.",
             ToolId::DoublePolyline,
-            {move({30, 25}, "Double polyline: the first point"), click({30, 25}, "Click: the start"),
+            {move({30, 25}, "Double line: the first point"), click({30, 25}, "Click: the start"),
              move({100, 75}, "To a corner"), click({100, 75}, "Click: a corner"),
              move({170, 25}, "The last point"), click({170, 25}, "Click: the end"),
-             key(Qt::Key_Return, "Enter: finish it")});
+             key(Qt::Key_Escape, "Esc: kept as drawn, and the tool put down")});
         add("rectang", "Rectangle: click two opposite corners.", ToolId::Rect,
             {move({45, 20}, "Rectangle: one corner"), click({45, 20}, "Click: the first corner"),
              move({155, 80}, "The rectangle follows the pointer"), click({155, 80}, "Click: the opposite corner")});

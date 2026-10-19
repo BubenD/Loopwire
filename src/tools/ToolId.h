@@ -170,8 +170,11 @@ inline QString toolLabel(ToolId t) {
     case ToolId::Select: return QStringLiteral("Select");
     case ToolId::Line: return QStringLiteral("Line");
     case ToolId::DoubleLine: return QStringLiteral("Double line");
-    case ToolId::Polyline: return QStringLiteral("Polyline");
-    case ToolId::DoublePolyline: return QStringLiteral("Double polyline");
+    // THE LINE AND THE DOUBLE LINE ARE THE ONES DRAWN THROUGH EVERY POINT CLICKED: what used to be the polyline and
+    // the double polyline. The one-segment Line and Double line tools are off the ribbon; typed, "line" and "dline"
+    // draw these.
+    case ToolId::Polyline: return QStringLiteral("Line");
+    case ToolId::DoublePolyline: return QStringLiteral("Double line");
     case ToolId::Rect: return QStringLiteral("Rectangle");
     case ToolId::Polygon: return QStringLiteral("Polygon");
     case ToolId::Circle: return QStringLiteral("Circle");

@@ -58,8 +58,7 @@ void MechModelCanvasDialog::buildUi() {
     };
     const ToolBtn tools[] = {
         {"Select", ToolId::Select, "Pick and move what is drawn"},
-        {"Line", ToolId::Line, "A single line"},
-        {"Polyline", ToolId::Polyline, "A run of lines"},
+        {"Line", ToolId::Polyline, "A line through every point clicked"},
         {"Rectangle", ToolId::Rect, "A rectangle"},
         {"Circle", ToolId::Circle, "A circle"},
         {"Arc", ToolId::Arc, "An arc"},
@@ -74,7 +73,7 @@ void MechModelCanvasDialog::buildUi() {
         connect(b, &QToolButton::clicked, this, [this, id] {
             if (editor_) editor_->setTool(id);
         });
-        if (t.tool == ToolId::Line) b->setChecked(true);
+        if (t.tool == ToolId::Polyline) b->setChecked(true);
         strip->addWidget(b);
     }
     strip->addSpacing(12);
@@ -106,7 +105,7 @@ void MechModelCanvasDialog::buildUi() {
     canvas_->setEditor(editor_);
     canvas_->setDocument(&doc_);
     editor_->setDocument(&doc_);
-    editor_->setTool(ToolId::Line);
+    editor_->setTool(ToolId::Polyline);
     // A canvas of its own, and grey rather than the drawing's own dark blue, so it is never mistaken
     // for the sheet - what is drawn here is a piece of vocabulary, not part of a harness.
     canvas_->setBackgroundColor(QColor("#3a3d42"));

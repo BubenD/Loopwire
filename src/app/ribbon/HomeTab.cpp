@@ -103,8 +103,7 @@ void MainWindow::buildHomeTab() {
     QAction* sel = makeToolAction(QStringLiteral("Select"), ToolId::Select);
     sel->setChecked(true);
     addGroup(lay, QStringLiteral("Draw"),
-             toolRow({ToolId::Line, ToolId::DoubleLine, ToolId::Polyline,
-                      ToolId::DoublePolyline, ToolId::Rect, ToolId::Circle,
+             toolRow({ToolId::Polyline, ToolId::DoublePolyline, ToolId::Rect, ToolId::Circle,
                       ToolId::Ellipse, ToolId::Arc, ToolId::Spline, ToolId::Polygon,
                       ToolId::Hatch, ToolId::Wipeout}));
     // The modify tools, Match, Array and Copy: twelve buttons in the same two rows of six. Array and Copy

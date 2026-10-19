@@ -4039,7 +4039,7 @@ int run_editor_tests() {
                       near(run->meta.value(QStringLiteral("cutStartBx")).toDouble(), 40.0),
                   "dpoly-shift-start: the reference is the line that was clicked");
         }
-        // Without Shift nothing is capped - the run just starts where it was clicked.
+        // WITHOUT SHIFT TOO: started on a line, both rails start flush on it.
         Document d2; d2.entities().clear();
         d2.entities().push_back(ref);
         Editor e2; e2.setDocument(&d2);
@@ -4052,8 +4052,47 @@ int run_editor_tests() {
         e2.onKey(Qt::Key_Return, Qt::NoModifier);
         for (const Entity& e : d2.entities())
             if (e.type == EntityType::Polyline && e.meta.value("double").toBool())
-                check(!e.meta.value(QStringLiteral("cutStart")).toBool(),
-                      "dpoly-shift-start: no Shift, no cap");
+                check(e.meta.value(QStringLiteral("cutStart")).toBool(),
+                      "dpoly-shift-start: no Shift - started on a line, still capped to it");
+        // STARTED IN THE OPEN, nothing to start flush on: no cap.
+        {
+            Document d3;
+            d3.entities().push_back(ref);
+            Editor e3;
+            e3.setDocument(&d3);
+            e3.snapSettings().objectSnap = true;
+            e3.snapSettings().gridSnap = false;
+            e3.setTool(ToolId::DoublePolyline);
+            e3.onPointerPress({0, 60}, Qt::LeftButton, Qt::NoModifier);
+            e3.onPointerPress({120, 60}, Qt::LeftButton, Qt::NoModifier);
+            e3.onKey(Qt::Key_Return, Qt::NoModifier);
+            bool capped = false;
+            for (const Entity& e : d3.entities())
+                if (e.type == EntityType::Polyline && e.meta.value("double").toBool()) capped = e.meta.value(QStringLiteral("cutStart")).toBool();
+            check(!capped, "dpoly-shift-start: started in the open - no cap");
+        }
+        // ESC AND SPACE: what is drawn up to the last point is kept, and the tool put down.
+        for (const int key : {static_cast<int>(Qt::Key_Escape), static_cast<int>(Qt::Key_Space)})
+            for (const ToolId tool : {ToolId::Polyline, ToolId::DoublePolyline}) {
+                Document d4;
+                Editor e4;
+                e4.setDocument(&d4);
+                e4.snapSettings().objectSnap = false;
+                e4.snapSettings().gridSnap = false;
+                e4.setTool(tool);
+                e4.onPointerPress({0, 100}, Qt::LeftButton, Qt::NoModifier);
+                e4.onPointerPress({50, 100}, Qt::LeftButton, Qt::NoModifier);
+                e4.onPointerPress({50, 150}, Qt::LeftButton, Qt::NoModifier);
+                e4.onKey(key, Qt::NoModifier);
+                size_t points = 0;
+                for (const Entity& e : d4.entities())
+                    if (e.type == EntityType::Polyline) points = e.points.size();
+                check(points == 3 && e4.tool() == ToolId::Select,
+                      qPrintable(QStringLiteral("%1 then %2: the three points drawn kept, the tool put down")
+                                     .arg(toolLabel(tool), key == Qt::Key_Escape ? QStringLiteral("Esc") : QStringLiteral("Space"))));
+            }
+        check(toolLabel(ToolId::Polyline) == QStringLiteral("Line") && toolLabel(ToolId::DoublePolyline) == QStringLiteral("Double line"),
+              "names: the polyline is the Line, the double polyline the Double line");
     }
 
     // --- Trimming ONE line of a double run: the fence crosses that line and not the centreline, so
