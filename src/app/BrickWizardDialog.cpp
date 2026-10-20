@@ -109,7 +109,9 @@ void relayColumn(QWidget* section) {
 // is pushed down or pulled up with it.
 class SectionGrip : public QWidget {
 public:
-    SectionGrip(QWidget* body, QWidget* parent) : QWidget(parent), body_(body) {
+    // FIXED: the body is as tall as it is pulled. Otherwise it is at least as tall as it is pulled, and grows past that
+    // with what is in it.
+    SectionGrip(QWidget* body, QWidget* parent, bool fixed = true) : QWidget(parent), body_(body), fixed_(fixed) {
         setFixedHeight(7);
         setCursor(Qt::SizeVerCursor);
         setToolTip(QStringLiteral("Drag to make this section taller or shorter"));
@@ -129,12 +131,15 @@ protected:
     }
     void mouseMoveEvent(QMouseEvent* e) override {
         if (!(e->buttons() & Qt::LeftButton)) return;
-        body_->setFixedHeight(std::max(40, int(start_ + e->globalPosition().y() - from_)));
+        const int h = std::max(40, int(start_ + e->globalPosition().y() - from_));
+        if (fixed_) body_->setFixedHeight(h);
+        else body_->setMinimumHeight(h);
         relayColumn(parentWidget());
     }
 
 private:
     QWidget* body_;
+    bool fixed_ = true;
     double from_ = 0.0;
     int start_ = 0;
 };
@@ -159,13 +164,13 @@ QWidget* foldSection(const QString& title, QWidget* body, QVBoxLayout* into, con
     head->setStyleSheet(QStringLiteral("QToolButton{font-weight:bold;text-align:left;}"));
     lay->addWidget(head);
     lay->addWidget(body);
-    QWidget* grip = nullptr;
-    if (height > 0) {
-        body->setFixedHeight(height);
-        grip = new SectionGrip(body, sec);
-        grip->setObjectName(QLatin1String(name) + QStringLiteral("Grip"));
-        lay->addWidget(grip);
-    }
+    // EVERY SECTION CAN BE PULLED TALLER: one given a height is that tall; one without is as tall as what is in it, and
+    // taller when pulled.
+    body->setSizePolicy(body->sizePolicy().horizontalPolicy(), QSizePolicy::Minimum);
+    if (height > 0) body->setFixedHeight(height);
+    QWidget* grip = new SectionGrip(body, sec, height > 0);
+    grip->setObjectName(QLatin1String(name) + QStringLiteral("Grip"));
+    lay->addWidget(grip);
     QObject::connect(head, &QToolButton::toggled, sec, [sec, head, body, grip](bool open) {
         body->setVisible(open);
         if (grip) grip->setVisible(open);
@@ -224,6 +229,7 @@ QWidget* scrolled(QWidget* w) {
 QString layerName(const QString& key) {
     if (key == QLatin1String("cable")) return QStringLiteral("Cable");
     if (key == QLatin1String("braid")) return QStringLiteral("Braided shield");
+    if (key == QLatin1String("sleeve")) return QStringLiteral("Braided sleeve");
     if (key == QLatin1String("heatshrink")) return QStringLiteral("Heatshrink");
     return QStringLiteral("Wires");
 }
@@ -929,7 +935,12 @@ void BrickCanvas::mouseReleaseEvent(QMouseEvent* e) {
             // Let go ON a port, that port; anywhere else on the brick, the one facing the other.
             const int toPort = tport.first == to ? tport.second : -1;
             QString why;
-            if (d_->connect(dragId_, to, &why, dragPort_, toPort)) {
+            // LINKED HERE, ONE PART AT EACH END OF A HARNESS RUN: several there are its branches.
+            const bool several = d_->partsOnRunEnds;
+            d_->partsOnRunEnds = false;
+            const bool madeLink = d_->connect(dragId_, to, &why, dragPort_, toPort);
+            d_->partsOnRunEnds = several;
+            if (madeLink) {
                 // A JOINT TIED TO ITS RUN sits just above it, coupled to it from now on.
                 Brick* da = d_->brick(dragId_);
                 Brick* db = d_->brick(to);
@@ -2146,6 +2157,13 @@ QWidget* BrickWizardDialog::buildRunPage() {
     form->setFieldGrowthPolicy(QFormLayout::FieldsStayAtSizeHint);
     runKind_ = new QLabel(page);
     form->addRow(QStringLiteral("Special"), runKind_);
+    // THE RUN AS A WHOLE, FIRST: its wires, its length - and its stroke beside it - and the wires it takes from a cable.
+    auto* overallBox = new QGroupBox(QStringLiteral("Overall"), page);
+    overallBox->setObjectName(QStringLiteral("brickGroupOverall"));
+    QFormLayout* overall = new QFormLayout(overallBox);
+    overall->setFieldGrowthPolicy(QFormLayout::FieldsStayAtSizeHint);
+    form->addRow(overallBox);
+    runForm_ = overall;
     auto spin = [page](const char* name, double lo, double hi, double step, const QString& suffix,
                        const QString& special = QString()) {
         auto* s = new QDoubleSpinBox(page);
@@ -2161,26 +2179,42 @@ QWidget* BrickWizardDialog::buildRunPage() {
     wires_ = new QSpinBox(page);
     wires_->setObjectName(QStringLiteral("brickWires"));
     wires_->setRange(1, 64);
-    form->addRow(QStringLiteral("Wires"), wires_);
+    overall->addRow(QStringLiteral("Wires"), wires_);
     // A TWISTED PAIR: how many pairs (two wires each).
     pairs_ = new QSpinBox(page);
     pairs_->setObjectName(QStringLiteral("brickPairs"));
     pairs_->setRange(1, 32);
     pairs_->setToolTip(QStringLiteral("How many twisted pairs - two wires each"));
-    form->addRow(QStringLiteral("Pairs"), pairs_);
+    overall->addRow(QStringLiteral("Pairs"), pairs_);
     connect(pairs_, &QSpinBox::valueChanged, this, [this](int) {
         writeRun();
         loadPanel();
     });
     length_ = spin("brickLength", 0.0, 100000.0, 10.0, QStringLiteral(" mm"));   // down to nought: parts face to face
-    form->addRow(QStringLiteral("Length"), length_);
+    {
+        // THE STROKE BESIDE THE LENGTH: ticked, the run is drawn short (its body as long as Body drawn says) and broken.
+        auto* host = new QWidget(page);
+        auto* h = new QHBoxLayout(host);
+        h->setContentsMargins(0, 0, 0, 0);
+        h->setSpacing(6);
+        h->addWidget(length_);
+        strokeOn_ = new QCheckBox(QStringLiteral("Stroke"), host);
+        strokeOn_->setObjectName(QStringLiteral("brickStroke"));
+        strokeOn_->setToolTip(QStringLiteral("Draw the run shorter than it is, broken across its body - the dimensions "
+                                             "still say its real length"));
+        h->addWidget(strokeOn_);
+        h->addStretch(1);
+        overall->addRow(QStringLiteral("Length"), host);
+    }
     // BRIDGE WIRES: which wires of the cable, fanout or heatshrink this one is joined to it takes - "1-3,5" -
     // and so how many wires it has and what each one's net is.
     {
+        // EACH SAID FOR WHAT IT IS: the cable it comes from, the wires it takes, the part it comes out beside.
         auto* host = new QWidget(page);
-        auto* v = new QVBoxLayout(host);
+        auto* v = new QFormLayout(host);
+        bridgeForm_ = v;
         v->setContentsMargins(0, 0, 0, 0);
-        v->setSpacing(1);
+        v->setFieldGrowthPolicy(QFormLayout::FieldsStayAtSizeHint);
         bridge_ = new QComboBox(host);
         bridge_->setObjectName(QStringLiteral("brickBridgeWires"));
         bridge_->setEditable(true);
@@ -2232,12 +2266,12 @@ QWidget* BrickWizardDialog::buildRunPage() {
             }
         });
         pickRow->addWidget(bridgeMany_);
-        v->addLayout(pickRow);
+        v->addRow(QStringLiteral("Takes"), pickRow);
         // WHICH BRANCH IT COMES OUT OF, where its cable goes to several parts at that end.
         bridgeAt_ = new QComboBox(host);
         bridgeAt_->setObjectName(QStringLiteral("brickBridgeAt"));
         bridgeAt_->setToolTip(QStringLiteral("Which of the cable's parts at that end the bridge wire comes out beside"));
-        v->addWidget(bridgeAt_);
+        v->addRow(QStringLiteral("Beside"), bridgeAt_);
         connect(bridgeAt_, &QComboBox::activated, this, [this](int i) {
             Brick* b = design_.brick(canvas_->selected());
             if (!b) return;
@@ -2247,8 +2281,9 @@ QWidget* BrickWizardDialog::buildRunPage() {
         bridgeFrom_ = new QLabel(host);
         bridgeFrom_->setObjectName(QStringLiteral("brickBridgeFrom"));
         bridgeFrom_->setStyleSheet(QStringLiteral("color:#8fa3b8;"));
-        v->addWidget(bridgeFrom_);
-        form->addRow(QStringLiteral("Bridge wires"), host);
+        bridgeFrom_->setWordWrap(true);
+        v->insertRow(0, QStringLiteral("From"), bridgeFrom_);
+        overall->addRow(QStringLiteral("Bridge wires"), host);
         connect(bridge_, &QComboBox::activated, this, [this](int) {
             writeRun();
             loadPanel();
@@ -2259,7 +2294,7 @@ QWidget* BrickWizardDialog::buildRunPage() {
         });
     }
     wireWidth_ = spin("brickWireWidth", 0.2, 20.0, 0.1, QStringLiteral(" mm"));
-    form->addRow(QStringLiteral("Wire width"), wireWidth_);
+    overall->addRow(QStringLiteral("Wire width"), wireWidth_);
     // How many lines the wires converge to where they are gathered.
     trunk_ = spin("brickTrunk", 1.0, 12.0, 1.0, QStringLiteral(" wires"));
     trunk_->setDecimals(0);
@@ -2286,30 +2321,20 @@ QWidget* BrickWizardDialog::buildRunPage() {
         });
         return row;
     };
-    // A STROKE, under the length: the run drawn shorter than it is and broken across the middle - its dimensions say
-    // the real length. How long it is drawn beside it, on Auto unless a figure is typed.
+    // HOW LONG THE BODY IS DRAWN, STROKED: under the length, shown only while Stroke is ticked - the picture's length
+    // between the fans, never more than the body really is (Auto: half of it).
     {
-        auto* host = new QWidget(page);
-        auto* h = new QHBoxLayout(host);
-        h->setContentsMargins(0, 0, 0, 0);
-        h->setSpacing(4);
-        strokeOn_ = new QCheckBox(QStringLiteral("Stroke"), host);
-        strokeOn_->setObjectName(QStringLiteral("brickStroke"));
-        strokeOn_->setToolTip(QStringLiteral("Draw the run shorter than it is, broken across the middle - "
-                                             "the dimensions still say its real length"));
-        h->addWidget(strokeOn_);
         strokeDrawn_ = spin("brickStrokeDrawn", 1.0, 100000.0, 10.0, QStringLiteral(" mm"));
-        strokeDrawn_->setToolTip(QStringLiteral("How long the stroked run is drawn"));
-        h->addWidget(withAuto(strokeDrawn_, "brickStrokeDrawnAuto"), 1);
+        strokeDrawn_->setToolTip(QStringLiteral("How long the stroked run's body is drawn, between its fans - for the "
+                                                "picture; the dimensions say its real length"));
+        strokeRow_ = withAuto(strokeDrawn_, "brickStrokeDrawnAuto");
         int lengthRow = -1;
         QFormLayout::ItemRole role;
-        form->getWidgetPosition(length_, &lengthRow, &role);
-        form->insertRow(lengthRow + 1, QStringLiteral("Drawn"), host);
-        connect(strokeOn_, &QCheckBox::toggled, this, [this](bool on) {
-            strokeDrawn_->setEnabled(on);
-            autoOf_.value(strokeDrawn_)->setEnabled(on);
+        overall->getWidgetPosition(length_->parentWidget(), &lengthRow, &role);
+        overall->insertRow(lengthRow + 1, QStringLiteral("Body drawn"), strokeRow_);
+        connect(strokeOn_, &QCheckBox::toggled, this, [this](bool) {
             writeRun();
-            showActuals();
+            loadPanel();
         });
     }
     // A FAN OR NONE, beside the "A": lit, the wires spread across the face of the part at that end; off,
@@ -2346,6 +2371,41 @@ QWidget* BrickWizardDialog::buildRunPage() {
     QFormLayout* fansForm = group("brickGroupFans", QStringLiteral("Fans"));
     QFormLayout* bodyForm = group("brickGroupBody", QStringLiteral("Body"));
     QFormLayout* transForm = group("brickGroupTransition", QStringLiteral("Transition heatshrink"));
+    // SHORT HEATSHRINKS OVER THE BODY: none, or so many of a length spread along it - their figures shown only when there
+    // are some.
+    QFormLayout* overForm = group("brickGroupOverShrink", QStringLiteral("Heatshrink over body"));
+    overShrinkForm_ = overForm;
+    overShrinkOn_ = new QComboBox(page);
+    overShrinkOn_->setObjectName(QStringLiteral("brickOverShrink"));
+    overShrinkOn_->addItems({QStringLiteral("None"), QStringLiteral("Over the body")});
+    overForm->addRow(QStringLiteral("Where"), overShrinkOn_);
+    overShrinkLen_ = spin("brickOverShrinkLen", 0.5, 10000.0, 1.0, QStringLiteral(" mm"));
+    overShrinkLen_->setToolTip(QStringLiteral("How long each piece is"));
+    overForm->addRow(QStringLiteral("Length"), overShrinkLen_);
+    overShrinkCount_ = new QSpinBox(page);
+    overShrinkCount_->setObjectName(QStringLiteral("brickOverShrinkCount"));
+    overShrinkCount_->setRange(1, 100);
+    overShrinkCount_->setToolTip(QStringLiteral("How many pieces, spread evenly along the body between the fans"));
+    overForm->addRow(QStringLiteral("Amount"), overShrinkCount_);
+    overShrinkPart_ = new QComboBox(page);
+    overShrinkPart_->setObjectName(QStringLiteral("brickOverShrinkPart"));
+    overShrinkPart_->addItem(QStringLiteral("(no part number)"), QString());
+    for (const LibraryPart* p : catalog_.ofKind(PartKind::Heatshrink))
+        overShrinkPart_->addItem((p->mfrPn.isEmpty() ? p->title() : p->mfrPn) +
+                                     (p->description.isEmpty() ? QString() : QStringLiteral(" — ") + p->description),
+                                 p->id);
+    overForm->addRow(QStringLiteral("P/N"), overShrinkPart_);
+    connect(overShrinkOn_, &QComboBox::activated, this, [this](int) {
+        writeRun();
+        loadPanel();
+    });
+    connect(overShrinkLen_, &QDoubleSpinBox::valueChanged, this, [this](double) { writeRun(); });
+    connect(overShrinkCount_, &QSpinBox::valueChanged, this, [this](int) { writeRun(); });
+    connect(overShrinkPart_, &QComboBox::activated, this, [this](int) {
+        writeRun();
+        const QString id = overShrinkPart_->currentData().toString();
+        if (!id.isEmpty() && bomItemOf(id) == 0) addPartToBom(id);
+    });
     fanStart_ = spin("brickFanStart", 0.5, 1000.0, 1.0, QStringLiteral(" mm"));
     {
         QWidget* row = withAuto(fanStart_, "brickFanStartAuto");
@@ -2363,6 +2423,26 @@ QWidget* BrickWizardDialog::buildRunPage() {
     fansForm->addRow(QStringLiteral("Converge to"), withAuto(trunk_, "brickTrunkAuto"));
     fanScale_ = spin("brickFanScale", 5.0, 100.0, 5.0, QStringLiteral(" %"));
     fansForm->addRow(QStringLiteral("Fans across the face"), fanScale_);
+    // WHAT THE BODY IS: its outermost layer - bare wires, a cable, a braided shield, a braided sleeve or a heatshrink -
+    // the layers under it kept as they are.
+    bodyType_ = new QComboBox(page);
+    bodyType_->setObjectName(QStringLiteral("brickBodyType"));
+    for (const auto& [key, label] : {std::pair<const char*, const char*>{"wires", "Wires only"}, {"cable", "Cable"},
+                                     {"braid", "Braided shield"}, {"sleeve", "Braided sleeve"}, {"heatshrink", "Heatshrink"}})
+        bodyType_->addItem(QLatin1String(label), QLatin1String(key));
+    bodyForm->addRow(QStringLiteral("Body type"), bodyType_);
+    connect(bodyType_, &QComboBox::activated, this, [this](int i) {
+        Brick* b = design_.brick(canvas_->selected());
+        if (!b || !brickIsSpecial(b->type)) return;
+        const QString key = bodyType_->itemData(i).toString();
+        QStringList& st = b->run.stack;
+        if (st.isEmpty()) st << QStringLiteral("wires");
+        if (key == QLatin1String("wires")) st = {QStringLiteral("wires")};
+        else if (b->run.outermost() == QLatin1String("wires")) st << key;
+        else st.last() = key;
+        designChanged();
+        loadPanel();
+    });
     knee_ = spin("brickKnee", 0.0, 1000.0, 1.0, QStringLiteral(" mm"));
     bodyForm->addRow(QStringLiteral("Bend radius, body"), withAuto(knee_, "brickKneeAuto"));
     bodyScale_ = spin("brickBodyScale", 5.0, 100.0, 5.0, QStringLiteral(" %"));
@@ -2405,6 +2485,7 @@ QWidget* BrickWizardDialog::buildRunPage() {
             writeRun();
         });
     foldSection(QStringLiteral("Run"), page, cols, "brickFoldRun");
+    runColumn_ = column;
     connect(wires_, &QSpinBox::valueChanged, this, [this](int) {
         writeRun();
         loadLabels();   // the wires a label can go on
@@ -2414,7 +2495,9 @@ QWidget* BrickWizardDialog::buildRunPage() {
         transitionWidth_->setEnabled(i != 0);
         autoOf_.value(transitionWidth_)->setEnabled(i != 0);
         writeRun();
+        loadBranches();   // its figures shown or not
         showActuals();
+        relayPanel();
     });
 
     // THE WIRES AND THEIR NETS, numbered from the top down as the labels are. A net is picked from
@@ -2444,6 +2527,7 @@ QWidget* BrickWizardDialog::buildRunPage() {
     addLayer->addItem(QStringLiteral("Add…"), QString());
     addLayer->addItem(QStringLiteral("Cable"), QStringLiteral("cable"));
     addLayer->addItem(QStringLiteral("Braided shield"), QStringLiteral("braid"));
+    addLayer->addItem(QStringLiteral("Braided sleeve"), QStringLiteral("sleeve"));
     addLayer->addItem(QStringLiteral("Heatshrink"), QStringLiteral("heatshrink"));
     sb->addWidget(addLayer);
     auto layerBtn = [&](const char* name, const QString& text) {
@@ -2539,11 +2623,16 @@ QWidget* BrickWizardDialog::buildRunPage() {
             transLayersHost_[side] = host;
             auto* t = new QTableWidget(0, 2, box);
             t->setObjectName(QStringLiteral("brickTransLayers") + fin);
-            t->setHorizontalHeaderLabels({QStringLiteral("P/N"), QStringLiteral("Step from cable side")});
+            t->setHorizontalHeaderLabels({QStringLiteral("P/N"), QStringLiteral("Step")});
+            t->horizontalHeaderItem(1)->setToolTip(QStringLiteral("Its step: how far short of the bottom transition's cable-side end it stops"));
             t->verticalHeader()->setVisible(false);
+            // SEEN WHOLE: the part number takes what is left, the step column as wide as its heading; and the table as
+            // tall as its rows (see loadLayers), not cut off under a fixed height.
             t->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+            t->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+            t->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
             t->setSelectionBehavior(QAbstractItemView::SelectRows);
-            t->setMaximumHeight(96);
+            t->setMinimumWidth(240);
             t->setToolTip(QStringLiteral("Heatshrinks over the transition, one over another - inside out. Each stops its "
                                          "step short of the bottom transition's cable-side end (Auto: a little more for "
                                          "each layer out)"));
@@ -3795,9 +3884,12 @@ void BrickWizardDialog::loadPanel() {
         return;
     }
     panel_->setCurrentIndex(2);
+    // NOTHING WRITTEN BACK WHILE THE PANEL IS LOADED - trunk_ above all: its maximum set to this run's wires clamps it,
+    // and a write then gave this run the figures still in the panel from the last one picked.
     const QSignalBlocker s1(wires_), s2(length_), s3(wireWidth_), s4(fanStart_), s5(fanFinish_),
         s6(knee_), s7(fanKnee_), s8(fanScale_), s9(transitions_), s10(bodyScale_), s11(bodyWidth_),
-        s12(dimTotal_), s13(dimFans_), s14(dimBetween_), s15(transitionWidth_);
+        s12(dimTotal_), s13(dimFans_), s14(dimBetween_), s15(transitionWidth_),
+        s16(trunk_), s17(strokeDrawn_);
     const BrickRunSpec& r = b->run;
     runKind_->setText(brickTypeName(b->type));
     wires_->setValue(r.wires);
@@ -3850,7 +3942,8 @@ void BrickWizardDialog::loadPanel() {
             }
             const int at = bridgeAt_->findData(r.bridgeAt);
             bridgeAt_->setCurrentIndex(at >= 0 ? at : parts.size() > 0 ? parts.size() - 1 : -1);
-            bridgeAt_->setVisible(parts.size() > 1);
+            if (bridgeForm_) bridgeForm_->setRowVisible(bridgeAt_, parts.size() > 1);
+            else bridgeAt_->setVisible(parts.size() > 1);
         }
         const bool shield = r.bridgeWires.trimmed() == QLatin1String(kBridgeShield);
         const QList<int> take = from && !shield ? parseWireList(r.bridgeWires, from->run.wires) : QList<int>();
@@ -3881,12 +3974,7 @@ void BrickWizardDialog::loadPanel() {
         a->setChecked(isAuto);
         if (!isAuto) spinBox->setValue(value);
     }
-    {
-        const QSignalBlocker so(strokeOn_);
-        strokeOn_->setChecked(r.stroke);
-        strokeDrawn_->setEnabled(r.stroke);
-        autoOf_.value(strokeDrawn_)->setEnabled(r.stroke);
-    }
+
     for (auto [on, spinBox, value] : {std::tuple<QToolButton*, QDoubleSpinBox*, double>{fanStartOn_, fanStart_, r.fanStartMm},
                                       {fanFinishOn_, fanFinish_, r.fanFinishMm}}) {
         const bool fan = value != 0.0;
@@ -3925,9 +4013,12 @@ void BrickWizardDialog::loadPanel() {
     }
     const int keep = stack_->currentRow();
     stack_->clear();
+    // A BRANCH'S OR BRIDGE WIRE'S WIRES ARE THE MAIN HARNESS'S, taken from it - and said so.
+    const bool bridged = (brickIsBranch(*b) || brickIsBridge(*b)) && !joinedSpecial(design_, b->id).isEmpty();
     for (int i = 0; i < r.stack.size(); ++i) {
         // With its part number, where it has one.
-        QString text = layerName(r.stack[i]);
+        QString text = bridged && r.stack[i] == QLatin1String("wires") ? QStringLiteral("Bridged wires (from main harness)")
+                                                                       : layerName(r.stack[i]);
         if (const LibraryPart* lp = catalog_.byId(r.stackParts.value(r.stack[i])))
             text += QStringLiteral("  -  ") + (lp->mfrPn.isEmpty() ? lp->title() : lp->mfrPn);
         auto* it = new QListWidgetItem(text, stack_);
@@ -3939,11 +4030,35 @@ void BrickWizardDialog::loadPanel() {
         }
     }
     stack_->setCurrentRow(std::clamp(keep, 0, stack_->count() - 1));
+    {
+        const QSignalBlocker hush(bodyType_);
+        bodyType_->setCurrentIndex(std::max(0, bodyType_->findData(r.outermost())));
+    }
+    // THE HEATSHRINK OVER THE BODY: its figures only when there is some.
+    {
+        const QSignalBlocker h1(overShrinkOn_), h2(overShrinkLen_), h3(overShrinkCount_), h4(overShrinkPart_);
+        const bool on = r.overShrinkCount > 0;
+        overShrinkOn_->setCurrentIndex(on ? 1 : 0);
+        overShrinkLen_->setValue(r.overShrinkMm);
+        overShrinkCount_->setValue(std::max(1, r.overShrinkCount));
+        overShrinkPart_->setCurrentIndex(std::max(0, overShrinkPart_->findData(r.overShrinkPart)));
+        for (QWidget* w : {static_cast<QWidget*>(overShrinkLen_), static_cast<QWidget*>(overShrinkCount_),
+                           static_cast<QWidget*>(overShrinkPart_)})
+            overShrinkForm_->setRowVisible(w, on);
+    }
+    // THE STROKE'S BODY LENGTH: under the length while it is ticked, never more than the run is long.
+    {
+        const QSignalBlocker so(strokeOn_), sd(strokeDrawn_);
+        strokeOn_->setChecked(r.stroke);
+        strokeDrawn_->setMaximum(std::max(1.0, r.lengthMm));
+        if (runForm_) runForm_->setRowVisible(strokeRow_, r.stroke);
+    }
     loadLayerPart();
     loadLabels();
     loadNets();
     loadBranches();
     showActuals();
+    relayPanel();
 }
 
 void BrickWizardDialog::loadBranches() {
@@ -4009,8 +4124,13 @@ void BrickWizardDialog::loadBranches() {
         transStretchAutoFin_->setEnabled(r.transitionStretchFinish);
         // FRAMED BY SIDE: one frame for both, or the start's and the finish's each with all its figures.
         if (transSide_[0] && transSide_[1]) {
+            // NONE: none of its figures - unless the cable divides into branches under heatshrink, where it has one there
+            // all the same.
+            const bool none = r.transitions == RunEnds::None && r.branchCover != 1;
+            transSame_->setVisible(!none);
+            transSide_[0]->setVisible(!none);
             transSide_[0]->setTitle(apart ? QStringLiteral("Start") : QStringLiteral("Both sides"));
-            transSide_[1]->setVisible(apart);
+            transSide_[1]->setVisible(apart && !none);
             transSideForm_[0]->setRowVisible(transLenFinish_->parentWidget(), !apart);
             if (auto* l = qobject_cast<QLabel*>(transSideForm_[0]->labelForField(transLenStart_->parentWidget())))
                 l->setText(apart ? QStringLiteral("Length") : QStringLiteral("Length, start"));
@@ -4665,7 +4785,10 @@ void BrickWizardDialog::writeRun() {
     r.bodyScalePct = bodyScale_->value();
     r.bodyWidthMm = manual(bodyWidth_) ? bodyWidth_->value() : 0.0;
     r.stroke = strokeOn_->isChecked();
-    r.strokeDrawnMm = manual(strokeDrawn_) ? strokeDrawn_->value() : 0.0;
+    r.strokeDrawnMm = manual(strokeDrawn_) ? std::min(strokeDrawn_->value(), r.lengthMm) : 0.0;
+    r.overShrinkCount = overShrinkOn_->currentIndex() == 1 ? overShrinkCount_->value() : 0;
+    r.overShrinkMm = overShrinkLen_->value();
+    r.overShrinkPart = overShrinkPart_->currentData().toString();
     r.transitionWidthMm =
         manual(transitionWidth_)
             ? std::max(transitionWidth_->value(), actual_.contains(b->id) ? actual_.value(b->id).bodyWidth : 0.0)
@@ -4704,22 +4827,34 @@ void BrickWizardDialog::loadLayerPart() {
     const QString layer = b->run.stack[row];
     const PartKind kind = layer == QLatin1String("cable")        ? PartKind::Cable
                           : layer == QLatin1String("braid")      ? PartKind::ShieldBraid
+                          : layer == QLatin1String("sleeve")     ? PartKind::Sleeve
                           : layer == QLatin1String("heatshrink") ? PartKind::Heatshrink
                                                                  : PartKind::Wire;
     layerPart_->addItem(QStringLiteral("(none)"), QString());
+    // FIRST WHAT THE RUNS NEXT ALONG HAVE for this layer - the same part, most likely - then the whole list.
+    QStringList offered;
+    for (const QString& n : neighbourSpecials(b->id)) {
+        const Brick* nb = design_.brick(n);
+        const QString id = nb ? nb->run.stackParts.value(layer) : QString();
+        if (id.isEmpty() || offered.contains(id)) continue;
+        offered << id;
+        const LibraryPart* p = catalog_.byId(id);
+        const QString pn = !p ? id : p->mfrPn.isEmpty() ? p->title() : p->mfrPn;
+        layerPart_->addItem(QStringLiteral("%1  (as on %2)").arg(pn, nb->name.isEmpty() ? brickTitle(*nb) : nb->name), id);
+    }
+    if (!offered.isEmpty()) layerPart_->insertSeparator(layerPart_->count());
     // THE LIBRARY KEPT for the loop: merged() is made afresh, and the parts ofKind() points at are in it - looped over
     // straight off the call, it is gone before the first part is read.
     const PartsLibrary lib = catalog_.merged();
     for (const LibraryPart* p : lib.ofKind(kind))
-        layerPart_->addItem(p->mfrPn.isEmpty() ? p->title() : p->mfrPn + QStringLiteral(" - ") + p->title(), p->id);
+        if (!offered.contains(p->id))
+            layerPart_->addItem(p->mfrPn.isEmpty() ? p->title() : p->mfrPn + QStringLiteral(" - ") + p->title(), p->id);
     const int at = layerPart_->findData(b->run.stackParts.value(layer));
     layerPart_->setCurrentIndex(at >= 0 ? at : 0);
     layerPart_->setEnabled(true);
 }
 
-int BrickWizardDialog::layerPartsFromNeighbours(const QString& special) {
-    Brick* s = design_.brick(special);
-    if (!s || !brickIsSpecial(s->type)) return 0;
+QStringList BrickWizardDialog::neighbourSpecials(const QString& special) const {
     // The specials next along: joined to it, or on the other side of a part it is linked to.
     QStringList near;
     for (const QString& o : design_.linksOf(special)) {
@@ -4731,6 +4866,23 @@ int BrickWizardDialog::layerPartsFromNeighbours(const QString& special) {
                 if (o2 != special)
                     if (const Brick* b2 = design_.brick(o2); b2 && brickIsSpecial(b2->type)) near << o2;
     }
+    return near;
+}
+
+void BrickWizardDialog::relayPanel() {
+    if (!runColumn_ || !runColumn_->layout()) return;
+    // Every frame in it first: rows shown, hidden or moved into another frame since it was last laid out.
+    for (QLayout* l : runColumn_->findChildren<QLayout*>()) l->invalidate();
+    for (QWidget* w : runColumn_->findChildren<QWidget*>())
+        if (w->layout()) w->layout()->activate();
+    for (int i = 0; i < runColumn_->layout()->count(); ++i)
+        if (QWidget* sec = runColumn_->layout()->itemAt(i)->widget()) relayColumn(sec);
+}
+
+int BrickWizardDialog::layerPartsFromNeighbours(const QString& special) {
+    Brick* s = design_.brick(special);
+    if (!s || !brickIsSpecial(s->type)) return 0;
+    const QStringList near = neighbourSpecials(special);
     int given = 0;
     for (const QString& layer : s->run.stack) {
         if (!s->run.stackParts.value(layer).isEmpty()) continue;
@@ -5203,7 +5355,10 @@ void BrickWizardDialog::frameTransitionSides() {
             const QFormLayout::TakeRowResult taken = from->takeRow(row);
             for (QLayoutItem* item : {taken.labelItem, taken.fieldItem}) {
                 if (!item) continue;
-                if (QWidget* w = item->widget(); w && w != field) w->deleteLater();
+                if (QWidget* w = item->widget(); w && w != field) {
+                    w->hide();   // gone at once, not left standing where it was until it is deleted
+                    w->deleteLater();
+                }
                 delete item;
             }
             break;
@@ -5270,6 +5425,11 @@ void BrickWizardDialog::loadLayers(int side) {
         t->setCellWidget(k, 1, sp);
     }
     t->setEnabled(b->run.transitions != RunEnds::None);
+    // AS TALL AS ITS ROWS (one at least, to be seen as a table), so every layer is seen.
+    t->resizeRowsToContents();
+    int high = t->horizontalHeader()->sizeHint().height() + 2 * t->frameWidth() + 2;
+    for (int k = 0; k < std::max(1, t->rowCount()); ++k) high += t->rowCount() > 0 ? t->rowHeight(k) : 26;
+    t->setFixedHeight(high);
 }
 
 void BrickWizardDialog::refreshSymRef() {
@@ -5379,7 +5539,8 @@ void BrickWizardDialog::refreshPreview() {
         for (const Brick& b : design_.bricks)
             extras = extras || (brickIsSpecial(b.type) && (!b.run.transitionPart.isEmpty() || !b.run.branchShrinkPart.isEmpty() ||
                                                            !b.run.transitionLayers.isEmpty() || !b.run.transitionPartFinish.isEmpty() ||
-                                                           (b.run.fanEndShrink && !b.run.fanEndShrinkPart.isEmpty())));
+                                                           (b.run.fanEndShrink && !b.run.fanEndShrinkPart.isEmpty()) ||
+                                                           (b.run.overShrinkCount > 0 && !b.run.overShrinkPart.isEmpty())));
         if (extras) {
             const BrickBuild pre = buildBrickHarness(design_, &catalog_);
             extraBranchLengths_ = pre.branchLengths;

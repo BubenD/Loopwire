@@ -130,11 +130,17 @@ struct BrickRunSpec {
     // The whole length said by a single-ended dimension: from its start, a short line with the figure.
     bool dimSingle = false;
     // A STROKE: the run drawn shorter than it is, broken across the middle by a break mark - the dimensions still say
-    // the real length. How long it is drawn: 0, Auto (kBrickStrokeAutoMm, never longer than the run). WHERE the mark is:
-    // its share of the way along what is between the fans (dragged along the body on the preview), the middle unless moved.
+    // the real length. HOW LONG ITS BODY IS DRAWN (between the fans), for the picture: 0, Auto (half the real body), and
+    // never longer than the body is. WHERE the mark is: its share of the way along the body (dragged along it on the
+    // preview), the middle unless moved.
     bool stroke = false;
     double strokeDrawnMm = 0.0;
     double strokeAt = 0.5;
+    // SHORT HEATSHRINKS OVER THE BODY: so many of them (0, none), each so long, spread evenly along the body between the
+    // fans - and their part number.
+    int overShrinkCount = 0;
+    double overShrinkMm = 20.0;
+    QString overShrinkPart;
     // WHICH SIDE each dimension goes: below the run, or above it. The whole length below, the fans and between them
     // above, unless told.
     bool dimTotalBelow = true;
@@ -310,6 +316,10 @@ struct BrickDesign {
     // changes moves. Not saved.
     QString holdPart;
     double holdX = 0.0;
+    // SEVERAL PARTS STRAIGHT ON A HARNESS RUN'S END, as designs made before Branch bricks have them: connect() takes them
+    // while this is set. The wizard clears it for a link made on its pane - there several parts at an end are branches.
+    // Not saved.
+    bool partsOnRunEnds = true;
     // The part as its brick shows it: turned on the pane with the drawing only while they are tied.
     Brick asOnPane(const Brick& b) const {
         Brick t = b;
@@ -389,10 +399,9 @@ std::vector<Vec2> routeBetweenFaces(const Vec2& a, const Vec2& aOut, const Vec2&
 constexpr double kBrickMmPerCol = 75.0;
 // The least room the drawing keeps between two parts facing each other along a run - for the fans between them.
 constexpr double kBrickRoomBetween = 0.0;   // none: a part may come right up to the other, the run down to nought
-constexpr double kBrickStrokeAutoMm = 150.0;   // a stroked run left on Auto is drawn this long (or its length, if less)
-// HOW LONG A RUN IS DRAWN: its length - or, stroked, the length asked for it on the drawing (Auto: kBrickStrokeAutoMm),
-// never longer than the run itself.
-double brickStrokeDrawnMm(const BrickRunSpec& r);
+// HOW LONG A RUN'S BODY IS DRAWN, given how long it really is (its length less its fans): that - or, stroked, the
+// length asked for it (Auto: half of it), never longer than it is.
+double brickStrokeBodyMm(const BrickRunSpec& r, double realBodyMm);
 // The one part each side of a special, when it runs from one part to one part.
 bool specialOneToOne(const BrickDesign& d, const QString& special, QString* start, QString* finish);
 // `end` (linked to `special`) put as far along from the special's other part as the special is long, on the
@@ -503,7 +512,7 @@ struct BrickActual {
     double transitionStretchFinish = 0.0;
     double transitionLenStart = 0.0;   // each transition's length, as the drawing makes it
     double transitionLenFinish = 0.0;
-    double strokeDrawn = 0.0;          // a stroked run's length as drawn
+    double strokeDrawn = 0.0;          // a stroked run's body (between its fans) as drawn
 };
 
 struct BrickBuild {

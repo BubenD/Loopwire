@@ -1807,6 +1807,16 @@ int run_drawingspace_tests() {
                 for (const Entity& e : doc->entities())
                     if (e.id == tableId) tb = &e;
                 check(std::abs(boundsOf(tb->points).max.x - right) < 1e-6, "revision table: it keeps to its corner throughout");
+                // PICKED ON ITS OWN: a click on it takes the table alone, to be moved and its grid lines pulled.
+                ed->clearSelection();
+                ed->setTool(ToolId::Select);
+                const Bounds rb = boundsOf(tb->points);
+                const Vec2 inTable{(rb.min.x + rb.max.x) * 0.5, (rb.min.y + rb.max.y) * 0.5};
+                ed->onPointerPress(inTable, Qt::LeftButton, Qt::NoModifier);
+                ed->onPointerRelease(inTable, Qt::LeftButton);
+                const auto picked = ed->selection();
+                std::printf("  revision table: a click on it picked %d object(s)\n", static_cast<int>(picked.size()));
+                check(picked.size() == 1 && picked.front() == tableId, "revision table: a click on it picks it alone, not the whole frame");
             }
         }
     }

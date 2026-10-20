@@ -311,7 +311,13 @@ void testFanoutJointAndExtras() {
     d.connect(runOnly, a, &why);
     check(!d.connect(runOnly, c, &why, kPortRight, -1), "run: a cable with no fan at an end takes one part there");
     d.brick(runOnly)->run.fanFinishMm = -1.0;
-    check(d.connect(runOnly, c, &why, kPortRight, -1), "run: with a fan there, it takes several - the fan split between them");
+    // ONE PART AT EACH END OF A HARNESS RUN, as the wizard links it, fan or no fan: several there are its branches. An
+    // old design's cable to several parts is still made (and drawn) as it was.
+    d.partsOnRunEnds = false;
+    check(!d.connect(runOnly, c, &why, kPortRight, -1) && why.contains(QLatin1String("Branch")),
+          "run: linked in the wizard, a second part at a harness run's end is refused - branches take several");
+    d.partsOnRunEnds = true;
+    check(d.connect(runOnly, c, &why, kPortRight, -1), "run: an old design's cable, with a fan there, takes several - the fan split between them");
     d.removeBrick(run);
     d.removeBrick(runOnly);
     d.removeBrick(a);
@@ -10083,7 +10089,10 @@ void testRoundSeventyOne() {
                 apart(whole), apart(shortB), said(whole, "total"), said(shortB, "total"), said(whole, "between"),
                 said(shortB, "between"));
     check(breaks(whole) == 0 && breaks(shortB) == 1, "stroke: a break mark across the run, and only when it is stroked");
-    check(std::abs(apart(whole) - apart(shortB) - 800.0) < 1.0, "stroke: the parts drawn 800 nearer - the run drawn 200 long");
+    // DRAWN IS THE BODY'S LENGTH, between the fans: the parts as much nearer as the real body is longer than 200.
+    const double realBody = said(whole, "between");
+    check(std::abs(apart(whole) - apart(shortB) - (realBody - 200.0)) < 1.0,
+          "stroke: the parts drawn nearer by as much as the body is cut - its body drawn 200 long");
     check(std::abs(said(whole, "total") - said(shortB, "total")) < 1e-6 && said(shortB, "total") >= 1000.0 &&
               std::abs(said(whole, "between") - said(shortB, "between")) < 1e-6,
           "stroke: the dimensions say the real length all the same");
@@ -10098,9 +10107,9 @@ void testRoundSeventyOne() {
           "stroke: the break mark drawn over the run, nothing but dimensions after it");
     s.strokeDrawnMm = 0.0;
     const BrickBuild autoB = buildBrickHarness(d, nullptr);
-    check(std::abs(apart(whole) - apart(autoB) - (1000.0 - kBrickStrokeAutoMm)) < 1.0 &&
-              std::abs(autoB.actual.value(r).strokeDrawn - kBrickStrokeAutoMm) < 1e-6,
-          "stroke: on Auto it is drawn kBrickStrokeAutoMm long, and the window is told so");
+    check(std::abs(apart(whole) - apart(autoB) - realBody * 0.5) < 1.0 &&
+              std::abs(autoB.actual.value(r).strokeDrawn - realBody * 0.5) < 1.0,
+          "stroke: on Auto its body is drawn half as long as it is, and the window is told so");
     s.strokeDrawnMm = 250.0;
     const BrickDesign back = BrickDesign::fromJson(d.toJson());
     check(back.brick(r) && back.brick(r)->run.stroke && std::abs(back.brick(r)->run.strokeDrawnMm - 250.0) < 1e-9,
@@ -10112,7 +10121,7 @@ void testRoundSeventyOne() {
     check(oldBack.brick(r) && !oldBack.brick(r)->run.stroke, "stroke: a run without one reads back without one");
 }
 
-// A STROKE SHOWN AS SOON AS IT IS TICKED - on a short run too, that Auto leaves its length - and slid along the body on
+// A STROKE SHOWN AS SOON AS IT IS TICKED - on a short run too - and slid along the body on
 // the preview, where it stays.
 void testRoundSeventyTwo() {
     BrickDesign d;
@@ -10131,8 +10140,10 @@ void testRoundSeventyTwo() {
     d.brick(r)->run.stroke = true;
     const Entity mid = mark(d);
     check(mid.type == EntityType::LengthBreak && mid.meta.value(QStringLiteral("brickStrokePath")).toArray().size() >= 4,
-          "stroke: a short run left on Auto - nothing cut - still shows the mark, to be seen and moved");
-    check(std::abs(brickStrokeDrawnMm(d.brick(r)->run) - 150.0) < 1e-9, "stroke: Auto draws a run no longer than kBrickStrokeAutoMm at its length");
+          "stroke: a short run stroked shows the mark, to be seen and moved");
+    check(std::abs(brickStrokeBodyMm(d.brick(r)->run, 100.0) - 50.0) < 1e-9 &&
+              std::abs(brickStrokeBodyMm(BrickRunSpec{}, 100.0) - 100.0) < 1e-9,
+          "stroke: Auto draws the body half as long as it is - and a run not stroked as it is");
     d.brick(r)->run.strokeAt = 0.2;
     const Entity nearStart = mark(d);
     const Vec2 xAt = buildBrickHarness(d, nullptr).faces.value(x + QStringLiteral(":0")).centre;
@@ -10160,6 +10171,9 @@ void testRoundSeventyTwo() {
     for (const Entity& e : dlg.preview()->entities())
         if (e.type == EntityType::LengthBreak) shown = &e;
     check(shown != nullptr && dlg.design().brick(r)->run.stroke, "stroke: ticked, the mark is on the preview at once");
+    auto* bodyDrawn = dlg.findChild<QDoubleSpinBox*>(QStringLiteral("brickStrokeDrawn"));
+    check(bodyDrawn && bodyDrawn->isVisibleTo(&dlg) && bodyDrawn->maximum() <= 150.0 + 1e-9,
+          "stroke: ticked, the body's drawn length is asked for under the length - never more than the run");
     if (!shown) return;
     const QJsonArray path = shown->meta.value(QStringLiteral("brickStrokePath")).toArray();
     const Vec2 to{path[path.size() - 2].toDouble(), path[path.size() - 1].toDouble()};
@@ -10171,6 +10185,139 @@ void testRoundSeventyTwo() {
     std::printf("  stroke: dragged from the middle toward the finish, now at %.3f of the way\n",
                 dlg.design().brick(r)->run.strokeAt);
     check(dlg.design().brick(r)->run.strokeAt > 0.8, "stroke: dragged along the body, it goes where it is pulled");
+}
+
+// ONE PART AT EACH END OF A HARNESS RUN (several there are branches), NO PART DRAWN OVER ANOTHER, A BRAIDED SLEEVE, SHORT
+// HEATSHRINKS OVER THE BODY, and the run's panel: its body type, its heatshrink over the body, a branch's bridged wires.
+void testRoundSeventyThree() {
+    {
+        BrickDesign d;
+        const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString r = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+        const QString y = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        const QString z = d.addBrick(BrickType::End, PartKind::Connector, 2, 1);
+        d.connect(x, r);
+        d.connect(r, y);
+        QString why;
+        d.partsOnRunEnds = false;   // as the wizard links
+        check(!d.connect(r, z, &why) && why.contains(QLatin1String("Branch")),
+              "one part a side: a second part linked straight to a harness run's end is refused - use branches");
+        const QString br = d.addBrick(BrickType::Run, PartKind::Wire, 2, 2);
+        makeBranch(*d.brick(br));
+        check(d.connect(r, br, &why) && d.connect(br, z, &why), "one part a side: a branch joined to the run's end takes the part");
+    }
+    {
+        // TWO HARNESSES LAID ON ONE PLACE: their parts moved apart, not drawn one over the other.
+        BrickDesign d;
+        const QString a1 = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString r1 = d.addBrick(BrickType::Run, PartKind::Wire, 1, 0);
+        const QString b1 = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        const QString a2 = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+        const QString r2 = d.addBrick(BrickType::Run, PartKind::Wire, 1, 0);
+        const QString b2 = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+        d.connect(a1, r1);
+        d.connect(r1, b1);
+        d.connect(a2, r2);
+        d.connect(r2, b2);
+        const BrickBuild b = buildBrickHarness(d, nullptr);
+        auto box = [&](const QString& id) {
+            Bounds bb;
+            for (const Entity& e : b.entities)
+                if (e.meta.value(QStringLiteral("brickId")).toString() == id &&
+                    e.meta.value(QStringLiteral("mechRole")).toString() != QLatin1String("dim")) {
+                    const Bounds eb = e.bounds();
+                    if (eb.valid) {
+                        bb.expand(eb.min);
+                        bb.expand(eb.max);
+                    }
+                }
+            return bb;
+        };
+        auto over = [&](const QString& p, const QString& q) {
+            const Bounds u = box(p), v = box(q);
+            return u.valid && v.valid && u.min.x < v.max.x - 1e-6 && v.min.x < u.max.x - 1e-6 && u.min.y < v.max.y - 1e-6 &&
+                   v.min.y < u.max.y - 1e-6;
+        };
+        check(!over(a1, a2) && !over(b1, b2), "no part over part: two parts laid on one place are moved apart");
+    }
+    BrickDesign d;
+    const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+    const QString r = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+    const QString y = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+    d.connect(x, r);
+    d.connect(r, y);
+    BrickRunSpec& s = d.brick(r)->run;
+    s.lengthMm = 400.0;
+    s.stack = {QStringLiteral("wires"), QStringLiteral("sleeve")};
+    s.overShrinkCount = 3;
+    s.overShrinkMm = 15.0;
+    s.overShrinkPart = QStringLiteral("hs-test");
+    const BrickBuild b = buildBrickHarness(d, nullptr);
+    int pieces = 0;
+    QString body;
+    for (const Entity& e : b.entities) {
+        if (e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("overShrink")) ++pieces;
+        if (e.type == EntityType::TwistedPair) body = e.meta.value(QStringLiteral("twistBody")).toString();
+    }
+    check(body == QLatin1String("braid"), "sleeve: a braided sleeve as the body is drawn as one");
+    check(pieces == 3 && b.layerCount.value(r + QStringLiteral("|hs-test")) == 3 &&
+              std::abs(b.layerMm.value(r + QStringLiteral("|hs-test")) - 45.0) < 1e-9,
+          "heatshrink over the body: so many pieces drawn, and on the bill by their part and length");
+    const BrickDesign back = BrickDesign::fromJson(d.toJson());
+    check(back.brick(r)->run.overShrinkCount == 3 && std::abs(back.brick(r)->run.overShrinkMm - 15.0) < 1e-9 &&
+              back.brick(r)->run.overShrinkPart == QLatin1String("hs-test"),
+          "heatshrink over the body: kept with the design");
+
+    // THE PANEL.
+    s.overShrinkCount = 0;
+    s.stack = {QStringLiteral("wires"), QStringLiteral("cable")};
+    const QString br = d.addBrick(BrickType::Run, PartKind::Wire, 2, 2);
+    const QString z = d.addBrick(BrickType::End, PartKind::Connector, 3, 2);
+    makeBranch(*d.brick(br));
+    d.connect(r, br);
+    d.connect(br, z);
+    Document doc;
+    Editor ed;
+    ed.setDocument(&doc);
+    BrickWizardDialog dlg(&ed);
+    dlg.resize(1400, 900);
+    dlg.show();
+    dlg.design() = d;
+    dlg.selectBrick(r);
+    QApplication::processEvents();
+    auto* bodyType = dlg.findChild<QComboBox*>(QStringLiteral("brickBodyType"));
+    auto* overOn = dlg.findChild<QComboBox*>(QStringLiteral("brickOverShrink"));
+    auto* overCount = dlg.findChild<QSpinBox*>(QStringLiteral("brickOverShrinkCount"));
+    check(bodyType && overOn && overCount, "panel: a body type, and heatshrink over the body");
+    if (!bodyType || !overOn || !overCount) return;
+    check(bodyType->currentData().toString() == QLatin1String("cable") && !overCount->isVisibleTo(&dlg),
+          "panel: the body type is what is outermost; with no heatshrink over the body, none of its figures");
+    bodyType->setCurrentIndex(bodyType->findData(QStringLiteral("sleeve")));
+    emit bodyType->activated(bodyType->currentIndex());
+    check(dlg.design().brick(r)->run.outermost() == QLatin1String("sleeve"), "panel: a braided sleeve picked as the body");
+    overOn->setCurrentIndex(1);
+    emit overOn->activated(1);
+    QApplication::processEvents();
+    check(overCount->isVisibleTo(&dlg) && dlg.design().brick(r)->run.overShrinkCount >= 1,
+          "panel: heatshrink over the body asked for - its length, amount and part shown");
+    auto* trans = dlg.findChild<QComboBox*>(QStringLiteral("brickTransitions"));
+    auto* same = dlg.findChild<QCheckBox*>(QStringLiteral("brickTransSame"));
+    if (trans && same) {
+        trans->setCurrentIndex(0);
+        QApplication::processEvents();
+        const bool hiddenNone = !same->isVisibleTo(&dlg);
+        trans->setCurrentIndex(3);
+        QApplication::processEvents();
+        check(hiddenNone && same->isVisibleTo(&dlg), "panel: no transition heatshrink, none of its figures; one, they are back");
+    }
+    dlg.selectBrick(br);
+    QApplication::processEvents();
+    check(std::abs(dlg.design().brick(br)->run.lengthMm - d.brick(br)->run.lengthMm) < 1e-9 &&
+              dlg.design().brick(br)->run.wires == d.brick(br)->run.wires,
+          "panel: picking a run of fewer wires keeps its own figures - not the last run's left in the panel");
+    auto* stack = dlg.findChild<QListWidget*>(QStringLiteral("brickStack"));
+    check(stack && stack->count() > 0 && stack->item(0)->text().startsWith(QLatin1String("Bridged wires (from main harness)")),
+          "panel: a branch's wires are said to be the main harness's, bridged");
 }
 
 void testFreestyleRouting() {
@@ -12809,6 +12956,7 @@ int run_brickharness_tests() {
     ROUND(testRoundSeventy);
     ROUND(testRoundSeventyOne);
     ROUND(testRoundSeventyTwo);
+    ROUND(testRoundSeventyThree);
     ROUND(testFreestyleRouting);
     ROUND(testRoutingEnhancements);
     ROUND(test3DViewControls);

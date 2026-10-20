@@ -1595,6 +1595,9 @@ bool Editor::expandBlockSelection() {
     for (const QString& id : selected_) {
         const Entity* e = entityById(id);
         if (!e) continue;
+        // THE REVISION TABLE IS PICKED ON ITS OWN - to be moved, its columns and rows pulled wider or taller - and goes
+        // with the frame when the frame is picked.
+        if (e->meta.value(QStringLiteral("revisionTable")).toBool()) continue;
         const QString key = groupKeyOf(*e);
         if (!key.isEmpty() && !keys.contains(key)) keys << key;
     }
@@ -1634,6 +1637,8 @@ bool Editor::isBlockPiece(const Entity& e) {
     // No grips on a placed block, nor on a template frame: they move as one and are changed in their
     // own editor. A FIELD is the exception - it exists to be filled in on the drawing.
     if (entityIsTemplateField(e)) return false;
+    // So is the revision table: its grid lines have their grips, to resize its columns and rows.
+    if (e.meta.value(QStringLiteral("revisionTable")).toBool()) return false;
     return !groupKeyOf(e).isEmpty();
 }
 

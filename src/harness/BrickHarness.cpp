@@ -426,6 +426,12 @@ bool BrickDesign::connect(const QString& a, const QString& b, QString* why, int 
         // starts somewhere before it finishes anywhere, a fanout included.
         if (taken(sPort) >= 1 && taken(1 - sPort) == 0) sPort = 1 - sPort;
     }
+    // ONE PART AT EACH END OF A HARNESS RUN: two or more parts out of one end of a cable are its branches - a Branch brick
+    // for each, joined to the cable's end - not parts linked straight to it.
+    if (sp.type == BrickType::Run && !brickIsBridge(sp) && !brickIsBranch(sp) && !partsOnRunEnds &&
+        !(sPort == kPortLeft ? starts : finishes).isEmpty())
+        return refuse(QStringLiteral("A harness run goes into one part at each end - for more parts there, add a Branch "
+                                     "for each one, joined to the run's end, and link the parts to the branches"));
     if (!several(sPort) && taken(sPort) >= 1)
         return refuse(QStringLiteral("That end of the run is already on a part - a fanout, or a "
                                      "cable with a fan there, finishes on several"));
@@ -570,6 +576,9 @@ QJsonObject BrickDesign::toJson() const {
                                                    {"stroke", r.stroke},
                                                    {"strokeDrawnMm", r.strokeDrawnMm},
                                                    {"strokeAt", r.strokeAt},
+                                                   {"overShrinkCount", r.overShrinkCount},
+                                                   {"overShrinkMm", r.overShrinkMm},
+                                                   {"overShrinkPart", r.overShrinkPart},
                                                    {"trunkWires", r.trunkWires},
                                                    {"pairs", r.pairs},
                                                    {"dimTotalBelow", r.dimTotalBelow},
@@ -759,6 +768,9 @@ BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
             s.stroke = r.value(QStringLiteral("stroke")).toBool(false);
             s.strokeDrawnMm = std::max(0.0, r.value(QStringLiteral("strokeDrawnMm")).toDouble(0.0));
             s.strokeAt = std::clamp(r.value(QStringLiteral("strokeAt")).toDouble(0.5), 0.0, 1.0);
+            s.overShrinkCount = std::max(0, r.value(QStringLiteral("overShrinkCount")).toInt(0));
+            s.overShrinkMm = std::max(0.5, r.value(QStringLiteral("overShrinkMm")).toDouble(20.0));
+            s.overShrinkPart = r.value(QStringLiteral("overShrinkPart")).toString();
             s.trunkWires = r.value(QStringLiteral("trunkWires")).toInt(0);
             s.pairs = std::max(1, r.value(QStringLiteral("pairs")).toInt(1));
             s.dimTotalBelow = r.value(QStringLiteral("dimTotalBelow")).toBool(true);
@@ -1972,10 +1984,11 @@ QString colourHexOf(const QString& said) {
 }
 } // namespace
 
-double brickStrokeDrawnMm(const BrickRunSpec& r) {
-    if (!r.stroke) return r.lengthMm;
-    const double asked = r.strokeDrawnMm > 1e-9 ? r.strokeDrawnMm : kBrickStrokeAutoMm;
-    return std::max(0.0, std::min(r.lengthMm, asked));
+double brickStrokeBodyMm(const BrickRunSpec& r, double realBodyMm) {
+    const double real = std::max(0.0, realBodyMm);
+    if (!r.stroke) return real;
+    const double asked = r.strokeDrawnMm > 1e-9 ? r.strokeDrawnMm : real * 0.5;
+    return std::clamp(asked, 0.0, real);
 }
 
 // THE DRAWING IS LAID OUT FROM `design`; every figure a dimension says is read from `real`. They are one and the same
@@ -2027,16 +2040,19 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         BrickBuild done = buildBrickHarness(sized, catalog, itemOf);
         return done;
     }
-    // STROKED RUNS: laid out at the length they are drawn, so their parts come in that much nearer - each of the run's
-    // own lengths to its parts cut by as much as the run is.
+    // STROKED RUNS: laid out with their bodies the length they are drawn, so their parts come in that much nearer - each
+    // of the run's own lengths to its parts cut by as much as the run is. How long the body really is - the length less
+    // the fans, as the drawing makes them - from a drawing of it as it is.
     bool anyStroke = false;
-    for (const Brick& b : design.bricks)
-        anyStroke = anyStroke || (brickIsSpecial(b.type) && b.run.stroke && brickStrokeDrawnMm(b.run) < b.run.lengthMm - 1e-9);
+    for (const Brick& b : design.bricks) anyStroke = anyStroke || (brickIsSpecial(b.type) && b.run.stroke);
     if (!anyStroke) return buildBrickDrawn(design, design, catalog, itemOf);
+    const BrickBuild asIs = buildBrickDrawn(design, design, catalog, itemOf);
     BrickDesign drawn = design;
     for (Brick& b : drawn.bricks) {
         if (!brickIsSpecial(b.type) || !b.run.stroke) continue;
-        const double cut = b.run.lengthMm - brickStrokeDrawnMm(b.run);
+        const BrickActual act = asIs.actual.value(b.id);
+        const double realBody = std::max(0.0, b.run.lengthMm - act.fanStart - act.fanFinish);
+        const double cut = realBody - brickStrokeBodyMm(b.run, realBody);
         if (cut <= 1e-9) continue;
         b.run.lengthMm -= cut;
         for (BrickLink& l : drawn.links)
@@ -2596,6 +2612,37 @@ static BrickBuild buildBrickDrawn(const BrickDesign& design, const BrickDesign& 
     if (!design.holdPart.isEmpty() && xOf.contains(design.holdPart)) {
         const double by = design.holdX - xOf.value(design.holdPart);
         for (auto it = xOf.begin(); it != xOf.end(); ++it) it.value() += by;
+    }
+    // NO PART ON TOP OF ANOTHER: two parts whose outlines would overlap where the layout put them - pulled in across onto
+    // one row, or laid along to one place - are moved apart across the harness: the one lower on the pane, away from the
+    // other, clear of it with a little room.
+    {
+        QStringList ends;
+        for (const Brick& b : design.bricks)
+            if (b.type == BrickType::End && xOf.contains(b.id) && shapes.contains(b.id) && !yLock.contains(b.id)) ends << b.id;
+        auto halfOf = [&](const QString& id) {
+            const Brick* b = design.brick(id);
+            const Vec2 h = shapes.value(id).half;
+            return b && b->rot % 2 != 0 ? Vec2{h.y, h.x} : h;
+        };
+        auto yOf = [&](const QString& id) { return -gridOf(id).y * rowPitch + drawDyOf(id); };
+        constexpr double kClear = 4.0;
+        for (int pass = 0; pass < 8; ++pass) {
+            bool moved = false;
+            for (int i = 0; i < ends.size(); ++i)
+                for (int j = i + 1; j < ends.size(); ++j) {
+                    const QString p = ends[i], q = ends[j];
+                    const Vec2 hp = halfOf(p), hq = halfOf(q);
+                    const double dy = yOf(q) - yOf(p);
+                    if (std::abs(xOf.value(p) - xOf.value(q)) >= hp.x + hq.x || std::abs(dy) >= hp.y + hq.y) continue;
+                    const bool qMoves = gridOf(q).y >= gridOf(p).y;
+                    const QString mover = qMoves ? q : p;
+                    const double apart = qMoves ? dy : -dy;   // the mover's height over the other
+                    pullAcross[mover] += (apart > 1e-9 ? 1.0 : -1.0) * (hp.y + hq.y + kClear - std::abs(dy));
+                    moved = true;
+                }
+            if (!moved) break;
+        }
     }
     for (auto it = xOf.cbegin(); it != xOf.cend(); ++it)
         if (const Brick* pb = design.brick(it.key()); pb && pb->type == BrickType::End) out.partX.insert(it.key(), it.value());
@@ -3675,8 +3722,10 @@ static BrickBuild buildBrickDrawn(const BrickDesign& design, const BrickDesign& 
                     // A BRANCH under heatshrink with a transition asked at an end is drawn as a body that takes one: a
                     // sleeve has no transition of its own to draw.
                     const bool transitionAsked = br.viaBranch && r.transitions != RunEnds::None && !(insideA && insideB);
+                    // A BRAIDED SLEEVE is drawn as one, its braid over the whole body.
                     run.meta.insert(QStringLiteral("twistBody"),
                                     outer == QLatin1String("heatshrink") && !transitionAsked ? QStringLiteral("heatshrink")
+                                    : outer == QLatin1String("sleeve")                      ? QStringLiteral("braid")
                                                                                              : QStringLiteral("cable"));
                     run.meta.insert(QStringLiteral("twistBodyWidth"), bodyWidth);
                     // A BRAID OVER IT: drawn as a cable is, hatched as a braid; woven in 3D.
@@ -3936,7 +3985,7 @@ static BrickBuild buildBrickDrawn(const BrickDesign& design, const BrickDesign& 
             act.transitionStretchFinish = stretchCouldFinish;
             act.transitionLenStart = br.flipped ? transLenB : transLenA;
             act.transitionLenFinish = br.flipped ? transLenA : transLenB;
-            act.strokeDrawn = s.run.lengthMm;
+            act.strokeDrawn = std::max(0.0, routeLength(route) - fanA - fanB);
             for (const Entity& e : made)
                 if (e.type == EntityType::TwistedPair) {
                     const TwistFigures fig = twistedPairFigures(e);
@@ -3966,6 +4015,31 @@ static BrickBuild buildBrickDrawn(const BrickDesign& design, const BrickDesign& 
                 h.meta.insert(QStringLiteral("hatchScale"), 0.5);
                 h.meta.insert(QStringLiteral("mechRole"), QStringLiteral("braid"));
                 made.push_back(h);
+            }
+        }
+
+        // SHORT HEATSHRINKS OVER THE BODY: so many, each its length, spread evenly between the fans - each a sleeve a
+        // little wider than the body, and on the bill by its part.
+        if (r.overShrinkCount > 0 && (!isSub || br.viaBranch) && route.size() >= 2 && (!loose || isTrunk)) {
+            const double len = routeLength(route);
+            const bool fans = len > fanA + fanB + 1.0;
+            const double s0 = fans ? fanA : 0.0, s1 = fans ? len - fanB : len;
+            const int n = r.overShrinkCount;
+            const double step = (s1 - s0) / n;
+            const double piece = std::max(0.5, std::min(r.overShrinkMm, step * 0.9));
+            const double across = std::max(bodyWidth, la.lane * (wires - 1) + ww) + 1.0;
+            for (int k = 0; k < n; ++k) {
+                Vec2 dir;
+                const Vec2 c = pointAlong(route, s0 + step * (k + 0.5), &dir);
+                Entity box = makeBoxAt(c, dir, piece, across);
+                box.meta.insert(QStringLiteral("mechRole"), QStringLiteral("overShrink"));
+                if (!r.overShrinkPart.isEmpty()) box.meta.insert(QStringLiteral("libPart"), r.overShrinkPart);
+                made.push_back(box);
+            }
+            if (!r.overShrinkPart.isEmpty()) {
+                const QString key = s.id + QLatin1Char('|') + r.overShrinkPart;
+                out.layerCount[key] += n;
+                out.layerMm[key] += n * r.overShrinkMm;
             }
         }
 

@@ -396,7 +396,20 @@ private:
     QSpinBox* wires_ = nullptr;
     QDoubleSpinBox* length_ = nullptr;
     QCheckBox* strokeOn_ = nullptr;          // the run drawn short and broken
-    QDoubleSpinBox* strokeDrawn_ = nullptr;  // how long it is drawn (A: Auto)
+    QDoubleSpinBox* strokeDrawn_ = nullptr;  // how long its body is drawn (A: Auto)
+    QWidget* strokeRow_ = nullptr;           // that field's row, shown while stroked
+    QFormLayout* bridgeForm_ = nullptr;      // the bridge wires' own rows
+    QComboBox* bodyType_ = nullptr;          // what the body is: its outermost layer
+    QFormLayout* overShrinkForm_ = nullptr;  // heatshrink over the body
+    QComboBox* overShrinkOn_ = nullptr;
+    QDoubleSpinBox* overShrinkLen_ = nullptr;
+    QSpinBox* overShrinkCount_ = nullptr;
+    QComboBox* overShrinkPart_ = nullptr;
+    QWidget* runColumn_ = nullptr;           // the run panel's sections, to lay out again when what is in them changes
+    // The specials next along one: joined to it, or beyond a part it is linked to.
+    QStringList neighbourSpecials(const QString& special) const;
+    // The run panel's sections laid out again, after rows are shown or hidden in them.
+    void relayPanel();
     QDoubleSpinBox* wireWidth_ = nullptr;
     // BRIDGE WIRES, on a bridge wire only: which wire of the cable it is joined to it takes - picked from that
     // cable's wires (by net, where they have one) or its braided shield, or typed ("1-3,5").
