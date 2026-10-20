@@ -17563,6 +17563,180 @@ bool Editor::setTableContents(const QString& id, int rows, const QJsonArray& cel
     return true;
 }
 
+namespace {
+// A TABLE AS ROWS AND COLUMNS: each row's height and column's width in drawing units, and each cell's words and
+// alignment - read off the entity, changed, and written back, its geometry rebuilt from its top-left (a revision table
+// moved back to the right edge it had).
+struct TableGrid {
+    std::vector<double> h, w;
+    std::vector<std::vector<QJsonValue>> cells, align;
+};
+TableGrid readTableGrid(const Entity& e) {
+    TableGrid g;
+    const int rows = e.meta.value("rows").toInt(), cols = e.meta.value("cols").toInt();
+    const Bounds b = boundsOf(e.points);
+    const QJsonArray rf = e.meta.value("rowFrac").toArray(), cf = e.meta.value("colFrac").toArray();
+    const QJsonArray cells = e.meta.value("cells").toArray(), align = e.meta.value("cellAlign").toArray();
+    for (int i = 0; i < rows; ++i) g.h.push_back((i < rf.size() ? rf[i].toDouble() : 1.0 / rows) * b.height());
+    for (int c = 0; c < cols; ++c) g.w.push_back((c < cf.size() ? cf[c].toDouble() : 1.0 / cols) * b.width());
+    for (int r = 0; r < rows; ++r) {
+        std::vector<QJsonValue> row, rowAlign;
+        for (int c = 0; c < cols; ++c) {
+            const int idx = r * cols + c;
+            row.push_back(idx < cells.size() ? cells[idx] : QJsonValue(QString()));
+            rowAlign.push_back(idx < align.size() ? align[idx] : QJsonValue(QStringLiteral("MC")));
+        }
+        g.cells.push_back(row);
+        g.align.push_back(rowAlign);
+    }
+    return g;
+}
+void writeTableGrid(Entity& e, const TableGrid& g) {
+    const double right = boundsOf(e.points).max.x;
+    QJsonArray cells, align;
+    for (size_t r = 0; r < g.cells.size(); ++r)
+        for (size_t c = 0; c < g.w.size(); ++c) {
+            cells.append(c < g.cells[r].size() ? g.cells[r][c] : QJsonValue(QString()));
+            align.append(c < g.align[r].size() ? g.align[r][c] : QJsonValue(QStringLiteral("MC")));
+        }
+    e.meta.insert("rows", static_cast<int>(g.h.size()));
+    e.meta.insert("cols", static_cast<int>(g.w.size()));
+    e.meta.insert("cells", cells);
+    e.meta.insert("cellAlign", align);
+    rebuildTable(e, g.h, g.w);
+    if (e.meta.value("revisionTable").toBool()) {
+        const double dx = right - boundsOf(e.points).max.x;
+        for (Vec2& p : e.points) p.x += dx;
+        e.a.x += dx;
+    }
+}
+} // namespace
+
+QStringList Editor::tableHeadings(const QString& id) const {
+    QStringList out;
+    if (const Entity* e = entityById(id); e && e->meta.value("table").toBool()) {
+        const TableGrid g = readTableGrid(*e);
+        if (!g.cells.empty())
+            for (const QJsonValue& v : g.cells.front()) out << v.toString();
+    }
+    return out;
+}
+
+QStringList Editor::tableHiddenColumns(const QString& id) const {
+    QStringList out;
+    if (const Entity* e = entityById(id))
+        for (const QJsonValue v : e->meta.value(QStringLiteral("hiddenCols")).toArray())
+            out << v.toObject().value(QStringLiteral("heading")).toString();
+    return out;
+}
+
+bool Editor::tableHideColumn(const QString& id, int col) {
+    Entity* e = entityById(id);
+    if (!e || !e->meta.value("table").toBool()) return false;
+    TableGrid g = readTableGrid(*e);
+    if (col < 0 || col >= static_cast<int>(g.w.size()) || g.w.size() < 2) return false;
+    pushUndo();
+    // KEPT WITH THE TABLE: where it was, how wide, and every cell of it.
+    QJsonObject kept;
+    kept.insert(QStringLiteral("at"), col);
+    kept.insert(QStringLiteral("width"), g.w[static_cast<size_t>(col)]);
+    QJsonArray cells, align;
+    for (size_t r = 0; r < g.cells.size(); ++r) {
+        cells.append(g.cells[r][static_cast<size_t>(col)]);
+        align.append(g.align[r][static_cast<size_t>(col)]);
+        g.cells[r].erase(g.cells[r].begin() + col);
+        g.align[r].erase(g.align[r].begin() + col);
+    }
+    kept.insert(QStringLiteral("heading"), cells.isEmpty() ? QString() : cells[0].toString());
+    kept.insert(QStringLiteral("cells"), cells);
+    kept.insert(QStringLiteral("align"), align);
+    g.w.erase(g.w.begin() + col);
+    QJsonArray hidden = e->meta.value(QStringLiteral("hiddenCols")).toArray();
+    hidden.append(kept);
+    e->meta.insert(QStringLiteral("hiddenCols"), hidden);
+    writeTableGrid(*e, g);
+    doc_->setDirty(true);
+    emit changed();
+    return true;
+}
+
+bool Editor::tableShowColumn(const QString& id, int hiddenIndex) {
+    Entity* e = entityById(id);
+    if (!e || !e->meta.value("table").toBool()) return false;
+    QJsonArray hidden = e->meta.value(QStringLiteral("hiddenCols")).toArray();
+    if (hiddenIndex < 0 || hiddenIndex >= hidden.size()) return false;
+    TableGrid g = readTableGrid(*e);
+    pushUndo();
+    const QJsonObject kept = hidden[hiddenIndex].toObject();
+    const int at = std::clamp(kept.value(QStringLiteral("at")).toInt(), 0, static_cast<int>(g.w.size()));
+    const QJsonArray cells = kept.value(QStringLiteral("cells")).toArray(), align = kept.value(QStringLiteral("align")).toArray();
+    // Rows added since it was hidden: blank in it.
+    for (size_t r = 0; r < g.cells.size(); ++r) {
+        const int ri = static_cast<int>(r);
+        g.cells[r].insert(g.cells[r].begin() + at, ri < cells.size() ? cells[ri] : QJsonValue(QString()));
+        g.align[r].insert(g.align[r].begin() + at, ri < align.size() ? align[ri] : QJsonValue(QStringLiteral("MC")));
+    }
+    g.w.insert(g.w.begin() + at, std::max(1.0, kept.value(QStringLiteral("width")).toDouble(15.0)));
+    hidden.removeAt(hiddenIndex);
+    if (hidden.isEmpty()) e->meta.remove(QStringLiteral("hiddenCols"));
+    else e->meta.insert(QStringLiteral("hiddenCols"), hidden);
+    writeTableGrid(*e, g);
+    doc_->setDirty(true);
+    emit changed();
+    return true;
+}
+
+bool Editor::tableAddColumn(const QString& id, const QString& heading, double widthMm) {
+    Entity* e = entityById(id);
+    if (!e || !e->meta.value("table").toBool()) return false;
+    TableGrid g = readTableGrid(*e);
+    if (g.cells.empty()) return false;
+    pushUndo();
+    for (size_t r = 0; r < g.cells.size(); ++r) {
+        g.cells[r].push_back(r == 0 ? QJsonValue(heading) : QJsonValue(QString()));
+        g.align[r].push_back(QJsonValue(QStringLiteral("MC")));
+    }
+    g.w.push_back(std::max(1.0, widthMm));
+    writeTableGrid(*e, g);
+    doc_->setDirty(true);
+    emit changed();
+    return true;
+}
+
+bool Editor::tableRemoveColumn(const QString& id, int col) {
+    Entity* e = entityById(id);
+    if (!e || !e->meta.value("table").toBool()) return false;
+    TableGrid g = readTableGrid(*e);
+    if (col < 0 || col >= static_cast<int>(g.w.size()) || g.w.size() < 2) return false;
+    pushUndo();
+    for (size_t r = 0; r < g.cells.size(); ++r) {
+        g.cells[r].erase(g.cells[r].begin() + col);
+        g.align[r].erase(g.align[r].begin() + col);
+    }
+    g.w.erase(g.w.begin() + col);
+    writeTableGrid(*e, g);
+    doc_->setDirty(true);
+    emit changed();
+    return true;
+}
+
+QHash<QString, QString> Editor::revisionRowValues(const QString& group) const {
+    QHash<QString, QString> out;
+    if (const Document* owner = drawingOwner())
+        out.insert(QStringLiteral("revision"), effectiveDrawingDetails(*owner).value(QStringLiteral("revision")).toString());
+    // The frame's own boxes: whose name is in Drawn, Checked and Approved, and the date it was drawn.
+    for (const TemplateFieldEntry& f : templateFields(group)) {
+        const QString text = f.text.trimmed();
+        if (f.key == QLatin1String("drawnBy")) out.insert(QStringLiteral("drawn"), text);
+        else if (f.key == QLatin1String("checkedBy")) out.insert(QStringLiteral("checked"), text);
+        else if (f.key == QLatin1String("approvedBy")) out.insert(QStringLiteral("approved"), text);
+        else if (f.key == QLatin1String("drawnDate")) out.insert(QStringLiteral("date"), text);
+        else if (drawingFieldKey(f.key) == QLatin1String("revision") && out.value(QStringLiteral("revision")).isEmpty())
+            out.insert(QStringLiteral("revision"), text);
+    }
+    return out;
+}
+
 void Editor::tableDeleteRow() {
     Entity* e = entityById(cellTableId_);
     if (!e || !e->meta.value("table").toBool() || cellIndex_ < 0) return;

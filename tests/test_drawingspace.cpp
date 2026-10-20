@@ -1752,6 +1752,61 @@ int run_drawingspace_tests() {
                     tableOffered = tableOffered || a->objectName() == QLatin1String("canvasRevisionTable");
                 }
                 check(fieldsOffered && tableOffered, "template: right-click on the frame offers its fields and its revision table");
+                // ON A CELL OF IT: what the drawing says pasted in, a row filled from it, and its columns managed.
+                QHash<QString, QString> who;
+                for (const Editor::TemplateFieldEntry& f : ed->templateFields(group))
+                    if (f.key == QLatin1String("drawnBy")) who.insert(f.id, QStringLiteral("E. Pi"));
+                ed->setTemplateFields(who);
+                QJsonObject det = doc->drawingDetails();
+                det.insert(QStringLiteral("revision"), QStringLiteral("C"));
+                ed->setDrawingDetails(det);
+                const QHash<QString, QString> vals = ed->revisionRowValues(group);
+                check(vals.value(QStringLiteral("revision")) == QLatin1String("C") && vals.value(QStringLiteral("drawn")) == QLatin1String("E. Pi"),
+                      "revision table: the current revision and who drew it, to paste");
+                const Entity* tb = nullptr;
+                for (const Entity& e : doc->entities())
+                    if (e.id == tableId) tb = &e;
+                const int tcols = tb->meta.value(QStringLiteral("cols")).toInt();
+                const QStringList heads = ed->tableHeadings(tableId);
+                // The middle of the second row's first cell.
+                const Bounds tbb = boundsOf(tb->points);
+                const int rowsNow = tb->meta.value(QStringLiteral("rows")).toInt();
+                const double rowH = tbb.height() / rowsNow;
+                const double colW = tbb.width() / tcols;
+                const Vec2 cellAt{tbb.min.x + colW * 0.5, tbb.max.y - rowH * 1.5};
+                QMenu cellMenu;
+                win.buildCanvasMenu(cellMenu, cellAt);
+                QAction* fill = nullptr;
+                QMenu* columns = nullptr;
+                for (QAction* a : cellMenu.actions()) {
+                    if (a->objectName() == QLatin1String("canvasRevisionFillRow")) fill = a;
+                    if (a->menu() && a->menu()->objectName() == QLatin1String("canvasRevisionColumns")) columns = a->menu();
+                }
+                bool pasteOffered = false;
+                for (QAction* a : cellMenu.actions())
+                    pasteOffered = pasteOffered || (a->menu() && a->menu()->objectName() == QLatin1String("canvasRevisionPaste"));
+                check(fill && columns && pasteOffered, "revision table: right-click on a cell offers to paste, fill the row, and its columns");
+                if (fill) fill->trigger();
+                for (const Entity& e : doc->entities())
+                    if (e.id == tableId) tb = &e;
+                const QJsonArray filled = tb->meta.value(QStringLiteral("cells")).toArray();
+                const int revCol = static_cast<int>(heads.indexOf(QStringLiteral("REV")));
+                const int drawnCol = static_cast<int>(heads.indexOf(QStringLiteral("DRAWN")));
+                check(revCol >= 0 && drawnCol >= 0 && filled[tcols + revCol].toString() == QLatin1String("C") &&
+                          filled[tcols + drawnCol].toString() == QLatin1String("E. Pi"),
+                      "revision table: the row filled from the drawing, each column by its heading");
+                const double right = boundsOf(tb->points).max.x;
+                check(ed->tableHideColumn(tableId, 1) && ed->tableHeadings(tableId).size() == heads.size() - 1 &&
+                          ed->tableHiddenColumns(tableId).size() == 1,
+                      "revision table: a column hidden, kept to show again");
+                check(ed->tableShowColumn(tableId, 0) && ed->tableHeadings(tableId) == heads, "revision table: shown again where it was");
+                check(ed->tableAddColumn(tableId, QStringLiteral("ZONE"), 18.0) && ed->tableHeadings(tableId).last() == QLatin1String("ZONE"),
+                      "revision table: a column added on the end");
+                check(ed->tableRemoveColumn(tableId, static_cast<int>(heads.size())) && ed->tableHeadings(tableId) == heads,
+                      "revision table: and deleted");
+                for (const Entity& e : doc->entities())
+                    if (e.id == tableId) tb = &e;
+                check(std::abs(boundsOf(tb->points).max.x - right) < 1e-6, "revision table: it keeps to its corner throughout");
             }
         }
     }

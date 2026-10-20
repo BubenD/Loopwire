@@ -583,6 +583,10 @@ private:
     Vec2 dimDragN_{0.0, 1.0};
     double dimDragShift0_ = 0.0;
     QString previewDimAt(const Vec2& world) const;
+    // A stroke's break mark at a point on the preview (its run's id into `id`), or none.
+    const Entity* previewStrokeAt(const Vec2& world, QString* id) const;
+    QString strokeDrag_;              // the run whose stroke is being slid along it. Not saved.
+    std::vector<Vec2> strokePath_;    // the stretch it slides along. Not saved.
 public:
     QString selectedDimension() const { return dimSel_; }
 private:

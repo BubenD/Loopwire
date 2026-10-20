@@ -4362,9 +4362,13 @@ bool BrickWizardDialog::eventFilter(QObject* o, QEvent* e) {
         if (e->type() == QEvent::MouseMove && partDrag_.isEmpty() &&
             !(static_cast<QMouseEvent*>(e)->buttons() & Qt::LeftButton)) {
             const QString over = previewPartAt(static_cast<QMouseEvent*>(e)->position());
-            const bool overDim = over.isEmpty() &&
-                                 !previewDimAt(preview_->worldAt(static_cast<QMouseEvent*>(e)->position())).isEmpty();
-            preview_->setCursor(!over.isEmpty() ? Qt::OpenHandCursor : overDim ? Qt::SizeVerCursor : Qt::ArrowCursor);
+            const Vec2 overAt = preview_->worldAt(static_cast<QMouseEvent*>(e)->position());
+            const bool overStroke = over.isEmpty() && previewStrokeAt(overAt, nullptr) != nullptr;
+            const bool overDim = over.isEmpty() && !overStroke && !previewDimAt(overAt).isEmpty();
+            preview_->setCursor(!over.isEmpty() ? Qt::OpenHandCursor
+                                : overStroke    ? Qt::SizeHorCursor
+                                : overDim       ? Qt::SizeVerCursor
+                                                : Qt::ArrowCursor);
             // LOCKED TO THE OTHERS: said over a part whose branch is as long as the others' at that end of its cable.
             {
                 QStringList with;
@@ -4379,6 +4383,46 @@ bool BrickWizardDialog::eventFilter(QObject* o, QEvent* e) {
                 hoverPart_ = over;
                 showGrabRings();
             }
+        }
+        // A STROKE'S BREAK MARK, TAKEN HOLD OF AND SLID ALONG THE BODY: where it is pulled to between the fans is where it
+        // stays (its share of the way, on the run).
+        if (e->type() == QEvent::MouseButtonPress) {
+            auto* me = static_cast<QMouseEvent*>(e);
+            if (me->button() == Qt::LeftButton && me->modifiers() == Qt::NoModifier) {
+                QString id;
+                if (const Entity* mark = previewStrokeAt(preview_->worldAt(me->position()), &id)) {
+                    strokeDrag_ = id;
+                    strokePath_.clear();
+                    const QJsonArray p = mark->meta.value(QStringLiteral("brickStrokePath")).toArray();
+                    for (int k = 0; k + 1 < p.size(); k += 2) strokePath_.push_back(Vec2{p[k].toDouble(), p[k + 1].toDouble()});
+                    status_->setText(QStringLiteral("Stroke - slide it along the body"));
+                    return true;
+                }
+            }
+        } else if (e->type() == QEvent::MouseMove && !strokeDrag_.isEmpty()) {
+            const Vec2 now = preview_->worldAt(static_cast<QMouseEvent*>(e)->position());
+            // How far along the stretch the nearest point to the pointer is, over its whole length.
+            double best = 1e300, bestAt = 0.0, acc = 0.0;
+            for (size_t k = 1; k < strokePath_.size(); ++k) {
+                const Vec2 a = strokePath_[k - 1], b = strokePath_[k];
+                const double len = distance(a, b);
+                const double t = len > 1e-9 ? std::clamp(dot(now - a, b - a) / (len * len), 0.0, 1.0) : 0.0;
+                const double d = distance(now, a + (b - a) * t);
+                if (d < best) {
+                    best = d;
+                    bestAt = acc + t * len;
+                }
+                acc += len;
+            }
+            if (Brick* b = design_.brick(strokeDrag_); b && acc > 1e-9) {
+                b->run.strokeAt = std::round(std::clamp(bestAt / acc, 0.05, 0.95) * 1000.0) / 1000.0;
+                refreshPreview();
+            }
+            return true;
+        } else if (e->type() == QEvent::MouseButtonRelease && !strokeDrag_.isEmpty()) {
+            strokeDrag_.clear();
+            recordHistory();
+            return true;
         }
         // A DIMENSION, PICKED AND DRAGGED: pressed on its line or a joint at the end of it, it is picked - its joints
         // shown - and pulled, it moves in or out from what it measures, square to it.
@@ -4724,6 +4768,18 @@ void BrickWizardDialog::checkCompatibility(const Brick* b) {
     compat_->setText(said.isEmpty() ? QString() : QStringLiteral("⚠ ") + said);
     compat_->setVisible(!said.isEmpty());
     compatAdd_->setVisible(canAdd);
+}
+
+const Entity* BrickWizardDialog::previewStrokeAt(const Vec2& world, QString* id) const {
+    for (const Entity& e : lastEnts_) {
+        if (e.type != EntityType::LengthBreak) continue;
+        // Within the reach of its strokes either way across, and a little along.
+        const double reach = std::max(2.0, e.meta.value(QStringLiteral("size")).toDouble(6.0));
+        if (distance(world, e.a) > reach) continue;
+        if (id) *id = e.meta.value(QStringLiteral("brickId")).toString();
+        return &e;
+    }
+    return nullptr;
 }
 
 QString BrickWizardDialog::previewDimAt(const Vec2& world) const {

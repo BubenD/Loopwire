@@ -127,6 +127,7 @@ public:
     // Each returns whether anything was changed; `accept` false only builds the window (for the tests to read).
     bool editTemplateFields(const QString& group, bool accept = true);
     bool editRevisionTable(const QString& group, bool accept = true);
+    void addRevisionTableToMenu(QMenu& menu, const QString& group, const QString& tableId, const Vec2& world);
     void placeLibraryPart(const QString& partId, bool mechanical);
     // What a double-click on a part's NAME in the shelf puts down: whatever the ticks under it say - one
     // drawing, two, or all of them, side by side as one placement. Public because it IS the gesture, and a

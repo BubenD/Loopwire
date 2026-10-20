@@ -8726,6 +8726,114 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* e) {
     return QMainWindow::eventFilter(obj, e);
 }
 
+// THE REVISION TABLE FROM THE RIGHT-CLICK: what the drawing says pasted into the cell under the cursor - its current
+// revision, who drew, checked and approved it - or a whole row filled from it, column by column by heading; and its
+// columns shown, hidden, added and deleted.
+void MainWindow::addRevisionTableToMenu(QMenu& menu, const QString& group, const QString& tableId, const Vec2& world) {
+    if (!editor_ || !editDoc()) return;
+    const Entity* table = nullptr;
+    for (const Entity& e : editDoc()->entities())
+        if (e.id == tableId) table = &e;
+    if (!table) return;
+    const QHash<QString, QString> values = editor_->revisionRowValues(group);
+    const int cols = table->meta.value(QStringLiteral("cols")).toInt();
+    Vec2 tl;
+    double cw = 0.0, ch = 0.0;
+    const int cell = editor_->tableCellAt(*table, world, tl, cw, ch);
+    // Which of the drawing's figures a column takes, by its heading.
+    auto whatFor = [](const QString& heading) {
+        const QString h = heading.toUpper();
+        if (h.contains(QLatin1String("APPROV"))) return QStringLiteral("approved");
+        if (h.contains(QLatin1String("CHECK"))) return QStringLiteral("checked");
+        if (h.contains(QLatin1String("DRAWN"))) return QStringLiteral("drawn");
+        if (h.contains(QLatin1String("DATE"))) return QStringLiteral("date");
+        if (h.startsWith(QLatin1String("REV"))) return QStringLiteral("revision");
+        return QString();
+    };
+    if (cell >= cols && cols > 0) {
+        QMenu* paste = menu.addMenu(QStringLiteral("Paste into this cell"));
+        paste->setObjectName(QStringLiteral("canvasRevisionPaste"));
+        const std::pair<const char*, QString> what[] = {{"revision", QStringLiteral("Current revision")},
+                                                        {"drawn", QStringLiteral("Drawn")},
+                                                        {"checked", QStringLiteral("Checked")},
+                                                        {"approved", QStringLiteral("Approved")}};
+        for (const auto& [key, label] : what) {
+            const QString text = values.value(QLatin1String(key));
+            QAction* a = paste->addAction(text.isEmpty() ? QStringLiteral("%1 (not filled in)").arg(label)
+                                                         : QStringLiteral("%1: %2").arg(label, text),
+                                          this, [this, tableId, cell, text] {
+                                              editor_->applyTableCellEdit(tableId, cell, text);
+                                              canvas_->update();
+                                          });
+            a->setObjectName(QStringLiteral("canvasRevisionPaste_") + QLatin1String(key));
+            a->setEnabled(!text.isEmpty());
+        }
+        const int row = cell / cols;
+        QAction* fill = menu.addAction(QStringLiteral("Fill this row from the drawing"), this,
+                                       [this, tableId, row, cols, values, whatFor] {
+            // One change to undo, the whole row.
+            const Entity* t = nullptr;
+            for (const Entity& e : editDoc()->entities())
+                if (e.id == tableId) t = &e;
+            if (!t) return;
+            QJsonArray cells = t->meta.value(QStringLiteral("cells")).toArray();
+            const int rows = t->meta.value(QStringLiteral("rows")).toInt();
+            const QStringList heads = editor_->tableHeadings(tableId);
+            while (cells.size() < rows * cols) cells.append(QString());
+            for (int c = 0; c < cols && c < heads.size(); ++c) {
+                const QString key = whatFor(heads[c]);
+                if (!key.isEmpty() && !values.value(key).isEmpty()) cells[row * cols + c] = values.value(key);
+            }
+            editor_->setTableContents(tableId, rows, cells);
+            canvas_->update();
+        });
+        fill->setObjectName(QStringLiteral("canvasRevisionFillRow"));
+    }
+    // THE COLUMNS: each shown one ticked - untick it to hide it; each hidden one unticked - tick it to show it again.
+    QMenu* columns = menu.addMenu(QStringLiteral("Revision table columns"));
+    columns->setObjectName(QStringLiteral("canvasRevisionColumns"));
+    const QStringList heads = editor_->tableHeadings(tableId);
+    for (int c = 0; c < heads.size(); ++c) {
+        QAction* a = columns->addAction(heads[c].isEmpty() ? QStringLiteral("Column %1").arg(c + 1) : heads[c]);
+        a->setCheckable(true);
+        a->setChecked(true);
+        a->setEnabled(heads.size() > 1);
+        connect(a, &QAction::triggered, this, [this, tableId, c] {
+            editor_->tableHideColumn(tableId, c);
+            canvas_->update();
+        });
+    }
+    const QStringList hidden = editor_->tableHiddenColumns(tableId);
+    for (int k = 0; k < hidden.size(); ++k) {
+        QAction* a = columns->addAction(hidden[k].isEmpty() ? QStringLiteral("(hidden column)") : hidden[k]);
+        a->setCheckable(true);
+        a->setChecked(false);
+        connect(a, &QAction::triggered, this, [this, tableId, k] {
+            editor_->tableShowColumn(tableId, k);
+            canvas_->update();
+        });
+    }
+    columns->addSeparator();
+    QAction* add = columns->addAction(QStringLiteral("Add column..."), this, [this, tableId] {
+        bool ok = false;
+        const QString name = QInputDialog::getText(this, QStringLiteral("Add column"), QStringLiteral("Heading:"),
+                                                   QLineEdit::Normal, QString(), &ok);
+        if (!ok) return;
+        editor_->tableAddColumn(tableId, name.trimmed().toUpper(), 20.0);
+        canvas_->update();
+    });
+    add->setObjectName(QStringLiteral("canvasRevisionAddColumn"));
+    QMenu* del = columns->addMenu(QStringLiteral("Delete column"));
+    for (int c = 0; c < heads.size(); ++c) {
+        QAction* a = del->addAction(heads[c].isEmpty() ? QStringLiteral("Column %1").arg(c + 1) : heads[c], this,
+                                    [this, tableId, c] {
+                                        editor_->tableRemoveColumn(tableId, c);
+                                        canvas_->update();
+                                    });
+        a->setEnabled(heads.size() > 1);
+    }
+}
+
 bool MainWindow::editTemplateFields(const QString& group, bool accept) {
     if (!editor_) return false;
     const auto fields = editor_->templateFields(group);
@@ -8862,10 +8970,11 @@ void MainWindow::buildCanvasMenu(QMenu& menu, const Vec2& menuWorld) {
         QAction* fields = menu.addAction(QStringLiteral("Edit template fields..."), this,
                                          [this, group] { editTemplateFields(group); });
         fields->setObjectName(QStringLiteral("canvasTemplateFields"));
-        if (!editor_->templateRevisionTable(group).isEmpty()) {
+        if (const QString tableId = editor_->templateRevisionTable(group); !tableId.isEmpty()) {
             QAction* rev = menu.addAction(QStringLiteral("Fill the revision table..."), this,
                                           [this, group] { editRevisionTable(group); });
             rev->setObjectName(QStringLiteral("canvasRevisionTable"));
+            addRevisionTableToMenu(menu, group, tableId, world);
         }
         menu.addSeparator();
     }

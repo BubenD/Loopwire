@@ -130,9 +130,11 @@ struct BrickRunSpec {
     // The whole length said by a single-ended dimension: from its start, a short line with the figure.
     bool dimSingle = false;
     // A STROKE: the run drawn shorter than it is, broken across the middle by a break mark - the dimensions still say
-    // the real length. How long it is drawn: 0, Auto (kBrickStrokeAutoMm, never longer than the run).
+    // the real length. How long it is drawn: 0, Auto (kBrickStrokeAutoMm, never longer than the run). WHERE the mark is:
+    // its share of the way along what is between the fans (dragged along the body on the preview), the middle unless moved.
     bool stroke = false;
     double strokeDrawnMm = 0.0;
+    double strokeAt = 0.5;
     // WHICH SIDE each dimension goes: below the run, or above it. The whole length below, the fans and between them
     // above, unless told.
     bool dimTotalBelow = true;

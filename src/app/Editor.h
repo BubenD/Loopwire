@@ -655,6 +655,17 @@ public:
     QString templateRevisionTable(const QString& group) const;
     // A table's cells, row by row, and as many rows as they fill (added rows as high as its last one), one undo.
     bool setTableContents(const QString& id, int rows, const QJsonArray& cells);
+    // A TABLE'S COLUMNS, by their headings (the top row): one hidden is kept with the table, to be shown again where it
+    // was; one added goes on the end; one deleted is gone. A revision table keeps its right edge - it stays in its corner.
+    QStringList tableHeadings(const QString& id) const;
+    QStringList tableHiddenColumns(const QString& id) const;
+    bool tableHideColumn(const QString& id, int col);
+    bool tableShowColumn(const QString& id, int hidden);
+    bool tableAddColumn(const QString& id, const QString& heading, double widthMm);
+    bool tableRemoveColumn(const QString& id, int col);
+    // WHAT A REVISION ROW IS FILLED IN WITH: the drawing's current revision, and who drew, checked and approved it and
+    // when (the frame's fields) - keyed "revision", "drawn", "checked", "approved", "date".
+    QHash<QString, QString> revisionRowValues(const QString& group) const;
     // Table cell selection (AutoCAD-style): a single click inside a cell selects just
     // that cell, enabling the row/column/alignment editing commands.
     QString selectedCellTable() const { return cellTableId_; }

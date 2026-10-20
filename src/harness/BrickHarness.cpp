@@ -569,6 +569,7 @@ QJsonObject BrickDesign::toJson() const {
                                                    {"dimSingle", r.dimSingle},
                                                    {"stroke", r.stroke},
                                                    {"strokeDrawnMm", r.strokeDrawnMm},
+                                                   {"strokeAt", r.strokeAt},
                                                    {"trunkWires", r.trunkWires},
                                                    {"pairs", r.pairs},
                                                    {"dimTotalBelow", r.dimTotalBelow},
@@ -757,6 +758,7 @@ BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
             s.dimSingle = r.value(QStringLiteral("dimSingle")).toBool(false);
             s.stroke = r.value(QStringLiteral("stroke")).toBool(false);
             s.strokeDrawnMm = std::max(0.0, r.value(QStringLiteral("strokeDrawnMm")).toDouble(0.0));
+            s.strokeAt = std::clamp(r.value(QStringLiteral("strokeAt")).toDouble(0.5), 0.0, 1.0);
             s.trunkWires = r.value(QStringLiteral("trunkWires")).toInt(0);
             s.pairs = std::max(1, r.value(QStringLiteral("pairs")).toInt(1));
             s.dimTotalBelow = r.value(QStringLiteral("dimTotalBelow")).toBool(true);
@@ -3978,11 +3980,27 @@ static BrickBuild buildBrickDrawn(const BrickDesign& design, const BrickDesign& 
                 const BrickLink* own = real.link(s.id, br.b.node);
                 if (!(own && own->lengthMm > 1e-9)) cutHere = 0.0;
             }
-            if (cutHere > 1e-6) {
+            // Shown as soon as the run is stroked, cut or not - so it is seen, and can be put where it is wanted.
+            if (cutHere > 1e-6 || !isSub) {
                 const double len = routeLength(route);
-                const double at = len > fanA + fanB + 1.0 ? (fanA + len - fanB) / 2.0 : len / 2.0;
+                const bool fans = len > fanA + fanB + 1.0;
+                const double s0 = fans ? fanA : 0.0, s1 = fans ? len - fanB : len;
+                const double at = s0 + (s1 - s0) * std::clamp(realS.run.strokeAt, 0.0, 1.0);
                 Vec2 dir;
                 const Vec2 c = pointAlong(route, at, &dir);
+                // THE WAY IT CAN BE DRAGGED: the stretch between the fans, for the preview to slide it along.
+                QJsonArray path;
+                auto put = [&path](const Vec2& p) {
+                    path.append(p.x);
+                    path.append(p.y);
+                };
+                put(pointAlong(route, s0));
+                double acc = 0.0;
+                for (size_t k = 1; k + 1 < route.size(); ++k) {
+                    acc += distance(route[k - 1], route[k]);
+                    if (acc > s0 && acc < s1) put(route[k]);
+                }
+                put(pointAlong(route, s1));
                 const double across = std::max(bodyWidth, la.lane * (wires - 1) + ww);
                 Entity mark;
                 mark.type = EntityType::LengthBreak;
@@ -3991,6 +4009,7 @@ static BrickBuild buildBrickDrawn(const BrickDesign& design, const BrickDesign& 
                 mark.meta.insert(QStringLiteral("size"), std::max(4.0, across * 0.75 + 2.0));
                 mark.meta.insert(QStringLiteral("mechRole"), QStringLiteral("stroke"));
                 mark.meta.insert(QStringLiteral("brickStrokeCut"), cutHere);
+                mark.meta.insert(QStringLiteral("brickStrokePath"), path);
                 made.push_back(mark);
             }
         }

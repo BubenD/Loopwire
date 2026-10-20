@@ -10112,6 +10112,67 @@ void testRoundSeventyOne() {
     check(oldBack.brick(r) && !oldBack.brick(r)->run.stroke, "stroke: a run without one reads back without one");
 }
 
+// A STROKE SHOWN AS SOON AS IT IS TICKED - on a short run too, that Auto leaves its length - and slid along the body on
+// the preview, where it stays.
+void testRoundSeventyTwo() {
+    BrickDesign d;
+    const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+    const QString r = d.addBrick(BrickType::Run, PartKind::Cable, 1, 0);
+    const QString y = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+    d.connect(x, r);
+    d.connect(r, y);
+    d.brick(r)->run.lengthMm = 150.0;
+    d.brick(r)->run.stack = {QStringLiteral("wires"), QStringLiteral("cable")};
+    auto mark = [&](const BrickDesign& des) {
+        for (const Entity& e : buildBrickHarness(des, nullptr).entities)
+            if (e.type == EntityType::LengthBreak) return e;
+        return Entity{};
+    };
+    d.brick(r)->run.stroke = true;
+    const Entity mid = mark(d);
+    check(mid.type == EntityType::LengthBreak && mid.meta.value(QStringLiteral("brickStrokePath")).toArray().size() >= 4,
+          "stroke: a short run left on Auto - nothing cut - still shows the mark, to be seen and moved");
+    check(std::abs(brickStrokeDrawnMm(d.brick(r)->run) - 150.0) < 1e-9, "stroke: Auto draws a run no longer than kBrickStrokeAutoMm at its length");
+    d.brick(r)->run.strokeAt = 0.2;
+    const Entity nearStart = mark(d);
+    const Vec2 xAt = buildBrickHarness(d, nullptr).faces.value(x + QStringLiteral(":0")).centre;
+    check(distance(nearStart.a, xAt) < distance(mid.a, xAt) - 5.0, "stroke: put a fifth of the way along, it is nearer the start");
+    check(std::abs(BrickDesign::fromJson(d.toJson()).brick(r)->run.strokeAt - 0.2) < 1e-9, "stroke: where it is, kept");
+    d.brick(r)->run.strokeAt = 0.5;
+    d.brick(r)->run.stroke = false;
+
+    // ON THE WIZARD: ticked, the mark is on the preview at once; taken hold of and pulled, it slides along the body.
+    Document doc;
+    Editor ed;
+    ed.setDocument(&doc);
+    BrickWizardDialog dlg(&ed);
+    dlg.resize(1400, 900);
+    dlg.show();
+    dlg.design() = d;
+    dlg.selectBrick(r);
+    QApplication::processEvents();
+    auto* tick = dlg.findChild<QCheckBox*>(QStringLiteral("brickStroke"));
+    check(tick != nullptr, "stroke: a Stroke tick on the run's panel");
+    if (!tick) return;
+    tick->setChecked(true);
+    QApplication::processEvents();
+    const Entity* shown = nullptr;
+    for (const Entity& e : dlg.preview()->entities())
+        if (e.type == EntityType::LengthBreak) shown = &e;
+    check(shown != nullptr && dlg.design().brick(r)->run.stroke, "stroke: ticked, the mark is on the preview at once");
+    if (!shown) return;
+    const QJsonArray path = shown->meta.value(QStringLiteral("brickStrokePath")).toArray();
+    const Vec2 to{path[path.size() - 2].toDouble(), path[path.size() - 1].toDouble()};
+    const QPointF from = dlg.preview()->screenAt(shown->a);
+    mouse(dlg.preview(), QEvent::MouseButtonPress, from);
+    mouse(dlg.preview(), QEvent::MouseMove, dlg.preview()->screenAt(to));
+    mouse(dlg.preview(), QEvent::MouseButtonRelease, dlg.preview()->screenAt(to));
+    QApplication::processEvents();
+    std::printf("  stroke: dragged from the middle toward the finish, now at %.3f of the way\n",
+                dlg.design().brick(r)->run.strokeAt);
+    check(dlg.design().brick(r)->run.strokeAt > 0.8, "stroke: dragged along the body, it goes where it is pulled");
+}
+
 void testFreestyleRouting() {
     Entity cable;
     cable.id = QStringLiteral("freestyle-cable");
@@ -12747,6 +12808,7 @@ int run_brickharness_tests() {
     ROUND(testRoundSixtyNine);
     ROUND(testRoundSeventy);
     ROUND(testRoundSeventyOne);
+    ROUND(testRoundSeventyTwo);
     ROUND(testFreestyleRouting);
     ROUND(testRoutingEnhancements);
     ROUND(test3DViewControls);
