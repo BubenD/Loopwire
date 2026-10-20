@@ -1,4 +1,5 @@
 #include "app/HarnessBuilderDialog.h"
+#include "app/WiringDialog.h"
 
 #include "io/AppPaths.h"
 
@@ -2548,6 +2549,13 @@ QWidget* HarnessBuilderDialog::buildWiresSection() {
     fillBtn->setToolTip(QStringLiteral("Give every wire the next free pin at each end, in "
                                       "order, without disturbing the pins already set"));
     connect(fillBtn, &QPushButton::clicked, this, [this] { autoFillPins(); });
+    // WIRED BY HAND, in a window of its own: the connectors drawn with their pins, wired by clicking and dragging.
+    auto* wireBtn = new QPushButton(QStringLiteral("Wire connectors..."), this);
+    wireBtn->setObjectName(QStringLiteral("harnessBuilderWireConnectors"));
+    wireBtn->setToolTip(QStringLiteral("Wire two connectors - or several - by clicking or dragging from pin to pin; twist, screen and "
+                                       "make cables with a stroke across the lines"));
+    wireBtn->setAutoDefault(false);
+    connect(wireBtn, &QPushButton::clicked, this, [this] { openWiringWindow(); });
 
     auto* groupLabel = new QLabel(QStringLiteral("Group by"), this);
     groupLabel->setStyleSheet(QStringLiteral("color:#9fb4c8;"));
@@ -2662,7 +2670,7 @@ QWidget* HarnessBuilderDialog::buildWiresSection() {
     wireSplit_->addWidget(detailsClip);
     wireSplit_->setSizes({140, 220});
     return section(QStringLiteral("Wire connections"), wireSplit_, this,
-                   QList<QWidget*>{addBtn, groupBtn, fillBtn, groupLabel, groupByBox_, expandBtn, collapseBtn});
+                   QList<QWidget*>{addBtn, groupBtn, wireBtn, fillBtn, groupLabel, groupByBox_, expandBtn, collapseBtn});
 }
 
 void HarnessBuilderDialog::lightPins(const QString& connId, int pin) {
@@ -2818,6 +2826,28 @@ QStringList HarnessBuilderDialog::pickedWireIds() const {
     for (const HarnessWire& w : def_.wires)
         if (picked.contains(w.id)) out << w.id;
     return out;
+}
+
+WiringDialog* HarnessBuilderDialog::openWiringWindow() {
+    if (def_.connectors.size() < 2) {
+        summaryLabel_->setText(QStringLiteral("Wiring is between connectors - add two first"));
+        return nullptr;
+    }
+    if (!wiringWindow_) {
+        wiringWindow_ = new WiringDialog(def_, [this] { reloadAll(); }, this);
+        wiringWindow_->setAskDrain([this] { return askDrainConnector(); });
+        wiringWindow_->setUndo([this] { undo(); }, [this] { redo(); });
+    }
+    // THE TWO THE WIRE BEING EDITED JOINS, where there is one.
+    for (const HarnessWire& w : def_.wires)
+        if (w.id == selectedWireId_ && harnessConnById(def_, w.fromConn) && harnessConnById(def_, w.toConn) && w.fromConn != w.toConn) {
+            wiringWindow_->showTwo(w.fromConn, w.toConn);
+            break;
+        }
+    wiringWindow_->show();
+    wiringWindow_->raise();
+    wiringWindow_->activateWindow();
+    return wiringWindow_;
 }
 
 QStringList HarnessBuilderDialog::selectedOrCurrentWireIds() const {
@@ -4813,6 +4843,8 @@ void HarnessBuilderDialog::reloadAll() {
     // buttons looked as though they did nothing at all.
     refreshPreview();
     syncing_ = false;
+    // The wiring window, open beside it, drawn again too.
+    if (wiringWindow_ && wiringWindow_->isVisible()) wiringWindow_->refresh();
     // Keep the running count honest without nagging: crossings now, issues only on demand.
     const int crossings = harnessCrossings(def_);
     summaryLabel_->setText(QStringLiteral("%1 connector(s), %2 wire(s), %3 crossing(s)")

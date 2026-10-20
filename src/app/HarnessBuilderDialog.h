@@ -7,6 +7,7 @@
 #include <QList>
 #include <QSet>
 #include <QMap>
+#include <QPointer>
 #include <QString>
 
 class QCheckBox;
@@ -35,6 +36,7 @@ class WizardFlowLayout;
 struct LibraryPart;
 // Drawn previews used inside the dialog (defined in the .cpp).
 class ConnectorPreview;
+class WiringDialog;
 class HarnessWiringPreview;
 
 // The Harness Builder: describe a whole harness once — connectors, their order and side,
@@ -78,6 +80,8 @@ public:
     // A COPY of the wire selected (its whole cable, where it is in one), its ends left open; its two ends swapped.
     void duplicateSelectedWire();
     void swapSelectedWireEnds();
+    // THE WIRING WINDOW: the connectors drawn with their pins, wired by hand - opened on the two the wire being edited joins.
+    WiringDialog* openWiringWindow();
 
     // What the builder currently describes. Read-only: everything that changes a harness goes
     // through the dialog's own controls, so the definition and the tables can never disagree.
@@ -311,6 +315,8 @@ private:
     // True while an Add wire is waiting for a group header to be clicked.
     bool pendingAddGroup_ = false;
     QComboBox* groupByBox_ = nullptr;
+    // The wiring window, once opened (not saved).
+    QPointer<WiringDialog> wiringWindow_;
     QDoubleSpinBox* textGapSpin_ = nullptr;
     QDoubleSpinBox* spliceSizeSpin_ = nullptr;
     QDoubleSpinBox* textHeightSpin_ = nullptr;

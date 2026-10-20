@@ -3,6 +3,7 @@
 #include "app/DrawingPreview.h"
 #include "app/Editor.h"
 #include "app/HarnessBuilderDialog.h"
+#include "app/WiringDialog.h"
 #include "harness/HarnessBuilder.h"
 #include "harness/HarnessDemand.h"
 #include "system/SystemImport.h"
@@ -18,6 +19,7 @@
 #include <QPushButton>
 #include <QListWidgetItem>
 #include <QMouseEvent>
+#include "harness/CableSpec.h"
 #include "harness/PartsLibrary.h"
 #include <QAction>
 #include <QGroupBox>
@@ -1343,6 +1345,176 @@ void testWizardSimplerWiring() {
     }
 }
 
+// THE WIRING WINDOW: two connectors as bricks of pin squares; a pin clicked and then another wires them, the next pair
+// offered and taken with Enter; dragged pin to pin, a wire; a wired pin dragged to a free one, its end moved; a line
+// dragged up the stack, moved in the list; a stroke across lines twists them, screens them (the drain asked), picks them;
+// the lines picked given a colour in one go; Delete; Auto 1:1; several connectors; a pin with two wires said; undone.
+void testWiringWindow() {
+    Document doc;
+    Editor editor;
+    editor.setDocument(&doc);
+    HarnessBuilderDialog wizard(&editor);
+    wizard.resize(1200, 800);
+    wizard.show();
+    QApplication::processEvents();
+    HarnessDef def;
+    for (const auto& [id, side, pins] : {std::tuple<const char*, HarnessSide, int>{"c1", HarnessSide::Left, 8},
+                                         {"c2", HarnessSide::Right, 8},
+                                         {"c3", HarnessSide::Right, 4}}) {
+        HarnessConnector c;
+        c.id = QLatin1String(id);
+        c.designator = QString::fromLatin1(id).toUpper();
+        c.side = side;
+        c.pinCount = pins;
+        def.connectors.push_back(c);
+    }
+    wizard.loadDemand(def, QStringLiteral("wiring window"));
+    wizard.setStep(1);
+    QApplication::processEvents();
+    check(wizard.findChild<QPushButton*>(QStringLiteral("harnessBuilderWireConnectors")), "wiring window: Wire connectors... on the Wires step");
+    WiringDialog* win = wizard.openWiringWindow();
+    QApplication::processEvents();
+    check(win && win->isVisible() && win->twoMode() && win->canvas()->shown() == QStringList({QStringLiteral("c1"), QStringLiteral("c2")}),
+          "wiring window: opened on two connectors, the first left and the first right");
+    if (!win) return;
+    win->setAskDrain([] { return QStringLiteral("c2"); });
+    WiringCanvas* canvas = win->canvas();
+    auto mouse = [&](QEvent::Type type, const QPointF& at, Qt::MouseButtons buttons, Qt::KeyboardModifiers mods = Qt::NoModifier) {
+        QMouseEvent e(type, at, canvas->mapToGlobal(at), type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton, buttons, mods);
+        QApplication::sendEvent(canvas, &e);
+    };
+    auto click = [&](const QPointF& at) {
+        mouse(QEvent::MouseButtonPress, at, Qt::LeftButton);
+        mouse(QEvent::MouseButtonRelease, at, Qt::NoButton);
+        QApplication::processEvents();
+    };
+    auto drag = [&](const QPointF& from, const QPointF& to, Qt::KeyboardModifiers mods = Qt::NoModifier) {
+        mouse(QEvent::MouseButtonPress, from, Qt::LeftButton, mods);
+        for (int i = 1; i <= 6; ++i) mouse(QEvent::MouseMove, from + (to - from) * (i / 6.0), Qt::LeftButton, mods);
+        mouse(QEvent::MouseButtonRelease, to, Qt::NoButton, mods);
+        QApplication::processEvents();
+    };
+    auto key = [&](int k) {
+        QKeyEvent e(QEvent::KeyPress, k, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &e);
+        QApplication::processEvents();
+    };
+    auto wireOf = [&](const QString& id) -> HarnessWire {
+        for (const HarnessWire& w : wizard.definition().wires)
+            if (w.id == id) return w;
+        return {};
+    };
+    auto last = [&] { return wizard.definition().wires.empty() ? HarnessWire() : wizard.definition().wires.back(); };
+    // A PIN, THEN ANOTHER: a wire; the next pair offered, taken with Enter.
+    click(canvas->pinCentre(QStringLiteral("c1"), 1));
+    check(canvas->pendingPin() == QLatin1String("c1:1"), "wiring window: a pin clicked waits for its other end");
+    click(canvas->pinCentre(QStringLiteral("c2"), 3));
+    const HarnessWire first = last();
+    check(wizard.definition().wires.size() == 1 && first.fromConn == QLatin1String("c1") && first.fromPin == 1 && first.toConn == QLatin1String("c2") &&
+              first.toPin == 3 && canvas->pendingPin().isEmpty(),
+          "wiring window: clicked pin to pin - a wire, in the harness the wizard has");
+    QString gf, gt;
+    int gfp = 0, gtp = 0;
+    check(canvas->ghost(gf, gfp, gt, gtp) && gfp == 2 && gtp == 4, "wiring window: the next pair offered - the next free pin on each");
+    key(Qt::Key_Return);
+    check(wizard.definition().wires.size() == 2 && last().fromPin == 2 && last().toPin == 4, "wiring window: Enter takes it");
+    // DRAGGED PIN TO PIN: a wire. A wired pin dragged to a free one: its end moved there.
+    drag(canvas->pinCentre(QStringLiteral("c1"), 5), canvas->pinCentre(QStringLiteral("c2"), 1));
+    const QString third = last().id;
+    check(wizard.definition().wires.size() == 3 && last().fromPin == 5 && last().toPin == 1, "wiring window: dragged from pin to pin - a wire");
+    drag(canvas->pinCentre(QStringLiteral("c2"), 1), canvas->pinCentre(QStringLiteral("c2"), 6));
+    check(wizard.definition().wires.size() == 3 && wireOf(third).toPin == 6, "wiring window: a wired pin dragged to a free one - its end moved there");
+    // A NEW WIRE AT THE BOTTOM OF THE STACK; dragged to the top, first in the list - the table's and the drawing's order.
+    check(canvas->barCentre(third).y() > canvas->barCentre(first.id).y(), "wiring window: a new wire's line under the ones before it");
+    drag(canvas->barCentre(third), canvas->barCentre(first.id) - QPointF(0, 10));
+    check(wizard.definition().wires.front().id == third && canvas->barCentre(third).y() < canvas->barCentre(first.id).y(),
+          "wiring window: a line dragged up the stack - first in the list");
+    // A STROKE ACROSS TWO LINES: twisted. Another, with Screen: screened, its drain to C2.
+    const QString second = wizard.definition().wires[2].id;
+    auto strokeAcross = [&](const QString& a, const QString& b) {
+        const QPointF pa = canvas->barCentre(a), pb = canvas->barCentre(b);
+        drag(QPointF(pa.x() - 20, std::min(pa.y(), pb.y()) - 9), QPointF(pa.x() + 20, std::max(pa.y(), pb.y()) + 9));
+    };
+    canvas->setTool(WiringCanvas::Tool::Twist);
+    strokeAcross(first.id, second);
+    check(!wireOf(first.id).twistGroup.isEmpty() && wireOf(first.id).twistGroup == wireOf(second).twistGroup && wireOf(third).twistGroup.isEmpty(),
+          "wiring window: a stroke across two lines with Twist - those two twisted, no other");
+    canvas->setTool(WiringCanvas::Tool::Screen);
+    const size_t before = wizard.definition().wires.size();
+    strokeAcross(first.id, second);
+    const HarnessWire drain = last();
+    check(!wireOf(first.id).shieldGroup.isEmpty() && wizard.definition().wires.size() == before + 1 &&
+              drain.fromConn == harnessInternalShieldKey(wireOf(first.id).shieldGroup) && drain.toConn == QLatin1String("c2"),
+          "wiring window: a stroke with Screen - screened, its drain to the connector said");
+    // PICKED BY A STROKE, a colour for both.
+    canvas->setTool(WiringCanvas::Tool::Select);
+    strokeAcross(first.id, second);
+    check(canvas->selection().size() == 2, "wiring window: a stroke with Select picks the lines it crosses");
+    auto* title = win->findChild<QLabel*>(QStringLiteral("wiringPanelTitle"));
+    check(title && title->text().contains(QLatin1String("2 lines picked")), "wiring window: the panel edits both");
+    win->setSelectedColor(QStringLiteral("RD-BK"));
+    win->setSelectedGauge(QStringLiteral("1.0"));
+    check(wireOf(first.id).color == QLatin1String("RD-BK") && wireOf(second).color == QLatin1String("RD-BK") && wireOf(second).gauge == QLatin1String("1.0") &&
+              wireOf(third).color != QLatin1String("RD-BK"),
+          "wiring window: a colour and a gauge set once - on both lines picked, no other");
+    // DELETE; AUTO 1:1.
+    canvas->setSelection({third});
+    key(Qt::Key_Delete);
+    check(wireOf(third).id.isEmpty(), "wiring window: Delete takes the line picked away");
+    const int made = win->autoOneToOne();
+    int freeLeft = 0;
+    for (int pin = 1; pin <= 8; ++pin)
+        if (canvas->wiresOn(QStringLiteral("c1"), pin).isEmpty()) ++freeLeft;
+    check(made > 0 && (freeLeft == 0 || made + 3 >= 7), "wiring window: Auto 1:1 - the free pins wired across, in turn");
+    // SEVERAL CONNECTORS: all three, C3 wired from C1.
+    win->showSeveral();
+    check(!win->twoMode() && canvas->shown().size() == 3, "wiring window: several connectors - all three shown");
+    const QString toC3 = win->connectPins(QStringLiteral("c1"), 8, QStringLiteral("c3"), 2);
+    check(!toC3.isEmpty() && !canvas->barCentre(toC3).isNull() && canvas->pinCentre(QStringLiteral("c3"), 2).x() > canvas->barCentre(toC3).x(),
+          "wiring window: several - a wire to the third connector, on the right with its side");
+    // A PIN WITH TWO WIRES: said.
+    win->connectPins(QStringLiteral("c1"), 8, QStringLiteral("c3"), 3);
+    auto* problems = win->findChild<QLabel*>(QStringLiteral("wiringProblems"));
+    check(problems && problems->text().contains(QLatin1String("two wires")), "wiring window: a pin with two wires - said under the picture");
+    // UNDONE: the wizard's own undo, from the window.
+    const size_t now = wizard.definition().wires.size();
+    if (auto* undo = win->findChild<QPushButton*>(QStringLiteral("wiringUndo"))) undo->click();
+    QApplication::processEvents();
+    check(wizard.definition().wires.size() == now - 1, "wiring window: Undo - the last wire taken back, the wizard's undo");
+    // A LIBRARY CABLE PLACED: two twisted pairs, from C1 to C3 - one cable, its pairs twisted apart.
+    {
+        PartsLibrary lib;
+        LibraryPart& cable = lib.add(PartKind::Cable);
+        cable.mfrPn = QStringLiteral("FTP-2x2");
+        setCableSpecOn(cable, cableSpecFromText(QStringLiteral("2x2x24AWG")));
+        useHarnessBuilderLibraryForTest(lib);
+        win->showTwo(QStringLiteral("c1"), QStringLiteral("c3"));
+        const size_t had = wizard.definition().wires.size();
+        const int placed = win->placeCable(cable.id);
+        std::vector<HarnessWire> cores(wizard.definition().wires.begin() + static_cast<long long>(had), wizard.definition().wires.end());
+        QSet<QString> twists, bundles;
+        for (const HarnessWire& w : cores) {
+            twists.insert(w.twistGroup);
+            bundles.insert(w.bundle);
+        }
+        std::printf("  wiring window: cable placed - %d conductor(s), %d twist group(s), %d cable(s)\n", placed, int(twists.size()), int(bundles.size()));
+        check(placed == 4 && cores.size() == 4 && twists.size() == 2 && !twists.contains(QString()) && bundles.size() == 1 && !bundles.contains(QString()) &&
+                  cores.front().libPart == cable.id,
+              "wiring window: Place cable - its four conductors one cable, its two pairs twisted apart");
+        useHarnessBuilderLibraryForTest(PartsLibrary{});
+    }
+    if (std::getenv("LOOPWIRE_SHOTS")) {
+        win->showTwo(QStringLiteral("c1"), QStringLiteral("c2"));
+        canvas->setSelection({first.id, second});
+        win->resize(1280, 780);
+        QApplication::processEvents();
+        win->grab().save(QStringLiteral("wiring_two.png"));
+        win->showSeveral();
+        QApplication::processEvents();
+        win->grab().save(QStringLiteral("wiring_several.png"));
+    }
+}
+
 int run_harnessbuilder_tests() {
     g_fail = 0;
     std::printf("harness builder tests:\n");
@@ -1357,6 +1529,7 @@ int run_harnessbuilder_tests() {
     testWizardSecondRound();
     testWireGrouping();
     testWizardSimplerWiring();
+    testWiringWindow();
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

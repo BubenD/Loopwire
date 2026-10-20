@@ -195,6 +195,8 @@ add_library(loopwire_core STATIC
     src/app/Part3DEditorDialog.cpp
     src/app/Sketch2DDialog.h
     src/app/Sketch2DDialog.cpp
+    src/app/WiringDialog.h
+    src/app/WiringDialog.cpp
     src/app/NavWheel.cpp
     src/app/View3DHelpDialog.cpp
     src/geometry/Mesh3D.h
