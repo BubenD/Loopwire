@@ -8726,6 +8726,103 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* e) {
     return QMainWindow::eventFilter(obj, e);
 }
 
+bool MainWindow::editTemplateFields(const QString& group, bool accept) {
+    if (!editor_) return false;
+    const auto fields = editor_->templateFields(group);
+    if (fields.empty()) {
+        statusBar()->showMessage(QStringLiteral("This template has no fields to fill in"), 5000);
+        return false;
+    }
+    QDialog dlg(this);
+    dlg.setObjectName(QStringLiteral("templateFieldsDialog"));
+    dlg.setWindowTitle(QStringLiteral("Template fields"));
+    dlg.setMinimumWidth(420);
+    auto* lay = new QVBoxLayout(&dlg);
+    auto* form = new QFormLayout;
+    QHash<QString, QLineEdit*> edits;
+    for (const Editor::TemplateFieldEntry& f : fields) {
+        auto* edit = new QLineEdit(f.text, &dlg);
+        edit->setObjectName(QStringLiteral("templateField_") + f.key);
+        // A drawing P/N, revision or title is Drawing details': set here, it is set there and on every copy.
+        if (!drawingFieldKey(f.key).isEmpty())
+            edit->setToolTip(QStringLiteral("Drawing details - changed here, it changes on the model and every sheet"));
+        form->addRow(f.label, edit);
+        edits.insert(f.id, edit);
+    }
+    lay->addLayout(form);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    lay->addWidget(buttons);
+    if (accept ? dlg.exec() != QDialog::Accepted : true) return false;
+    QHash<QString, QString> textById;
+    for (auto it = edits.cbegin(); it != edits.cend(); ++it) textById.insert(it.key(), it.value()->text());
+    const int n = editor_->setTemplateFields(textById);
+    statusBar()->showMessage(QStringLiteral("Template fields: %1 changed").arg(n), 5000);
+    canvas_->update();
+    return n > 0;
+}
+
+bool MainWindow::editRevisionTable(const QString& group, bool accept) {
+    if (!editor_ || !editDoc()) return false;
+    const QString id = editor_->templateRevisionTable(group);
+    const Entity* t = nullptr;
+    for (const Entity& e : editDoc()->entities())
+        if (e.id == id) t = &e;
+    if (!t) return false;
+    const int cols = t->meta.value(QStringLiteral("cols")).toInt();
+    const int rows = t->meta.value(QStringLiteral("rows")).toInt();
+    const QJsonArray cells = t->meta.value(QStringLiteral("cells")).toArray();
+    if (cols <= 0 || rows <= 0) return false;
+    QDialog dlg(this);
+    dlg.setObjectName(QStringLiteral("revisionTableDialog"));
+    dlg.setWindowTitle(QStringLiteral("Revision table"));
+    dlg.resize(720, 360);
+    auto* lay = new QVBoxLayout(&dlg);
+    // ITS HEADING ROW IS THE TEMPLATE'S: the rows under it are this drawing's issues, one a row.
+    auto* grid = new QTableWidget(rows - 1, cols, &dlg);
+    grid->setObjectName(QStringLiteral("revisionTableGrid"));
+    QStringList heads;
+    for (int c = 0; c < cols; ++c) heads << (c < cells.size() ? cells[c].toString() : QString());
+    grid->setHorizontalHeaderLabels(heads);
+    grid->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    for (int r = 1; r < rows; ++r)
+        for (int c = 0; c < cols; ++c) {
+            const int idx = r * cols + c;
+            grid->setItem(r - 1, c, new QTableWidgetItem(idx < cells.size() ? cells[idx].toString() : QString()));
+        }
+    lay->addWidget(grid, 1);
+    auto* rowButtons = new QHBoxLayout;
+    auto* add = new QPushButton(QStringLiteral("Add row"), &dlg);
+    add->setObjectName(QStringLiteral("revisionTableAddRow"));
+    connect(add, &QPushButton::clicked, &dlg, [grid, cols] {
+        const int r = grid->rowCount();
+        grid->insertRow(r);
+        for (int c = 0; c < cols; ++c) grid->setItem(r, c, new QTableWidgetItem);
+    });
+    auto* remove = new QPushButton(QStringLiteral("Remove row"), &dlg);
+    connect(remove, &QPushButton::clicked, &dlg, [grid] {
+        const int r = grid->currentRow() >= 0 ? grid->currentRow() : grid->rowCount() - 1;
+        if (r >= 0 && grid->rowCount() > 1) grid->removeRow(r);
+    });
+    rowButtons->addWidget(add);
+    rowButtons->addWidget(remove);
+    rowButtons->addStretch(1);
+    lay->addLayout(rowButtons);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    lay->addWidget(buttons);
+    if (accept ? dlg.exec() != QDialog::Accepted : true) return false;
+    QJsonArray out;
+    for (int c = 0; c < cols; ++c) out.append(heads.value(c));
+    for (int r = 0; r < grid->rowCount(); ++r)
+        for (int c = 0; c < cols; ++c) out.append(grid->item(r, c) ? grid->item(r, c)->text() : QString());
+    const bool done = editor_->setTableContents(id, grid->rowCount() + 1, out);
+    canvas_->update();
+    return done;
+}
+
 void MainWindow::showCanvasMenu(const QPoint& globalPos) {
     if (!editor_) return;
     QMenu menu(this);
@@ -8758,6 +8855,20 @@ void MainWindow::buildCanvasMenu(QMenu& menu, const Vec2& menuWorld) {
     // library being worked in are here, by kind, with a search for a library too long to walk through.
     addLibraryToCanvasMenu(menu);
     const bool hasSel = !editor_->selection().empty();
+
+    // A TEMPLATE FRAME UNDER THE CURSOR (or picked): its fields filled in from here, and its revision table - without
+    // opening the template itself, which is the house style and not this drawing's.
+    if (const QString group = editor_->templateGroupAt(world); !group.isEmpty()) {
+        QAction* fields = menu.addAction(QStringLiteral("Edit template fields..."), this,
+                                         [this, group] { editTemplateFields(group); });
+        fields->setObjectName(QStringLiteral("canvasTemplateFields"));
+        if (!editor_->templateRevisionTable(group).isEmpty()) {
+            QAction* rev = menu.addAction(QStringLiteral("Fill the revision table..."), this,
+                                          [this, group] { editRevisionTable(group); });
+            rev->setObjectName(QStringLiteral("canvasRevisionTable"));
+        }
+        menu.addSeparator();
+    }
 
     // On a sheet, the windows come first. A window is added here, or with "+ window" in the corner of the
     // strip, or by typing LAYOUTWINDOW - three ways, because it was not found the first time.

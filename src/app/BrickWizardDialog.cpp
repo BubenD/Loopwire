@@ -2286,6 +2286,32 @@ QWidget* BrickWizardDialog::buildRunPage() {
         });
         return row;
     };
+    // A STROKE, under the length: the run drawn shorter than it is and broken across the middle - its dimensions say
+    // the real length. How long it is drawn beside it, on Auto unless a figure is typed.
+    {
+        auto* host = new QWidget(page);
+        auto* h = new QHBoxLayout(host);
+        h->setContentsMargins(0, 0, 0, 0);
+        h->setSpacing(4);
+        strokeOn_ = new QCheckBox(QStringLiteral("Stroke"), host);
+        strokeOn_->setObjectName(QStringLiteral("brickStroke"));
+        strokeOn_->setToolTip(QStringLiteral("Draw the run shorter than it is, broken across the middle - "
+                                             "the dimensions still say its real length"));
+        h->addWidget(strokeOn_);
+        strokeDrawn_ = spin("brickStrokeDrawn", 1.0, 100000.0, 10.0, QStringLiteral(" mm"));
+        strokeDrawn_->setToolTip(QStringLiteral("How long the stroked run is drawn"));
+        h->addWidget(withAuto(strokeDrawn_, "brickStrokeDrawnAuto"), 1);
+        int lengthRow = -1;
+        QFormLayout::ItemRole role;
+        form->getWidgetPosition(length_, &lengthRow, &role);
+        form->insertRow(lengthRow + 1, QStringLiteral("Drawn"), host);
+        connect(strokeOn_, &QCheckBox::toggled, this, [this](bool on) {
+            strokeDrawn_->setEnabled(on);
+            autoOf_.value(strokeDrawn_)->setEnabled(on);
+            writeRun();
+            showActuals();
+        });
+    }
     // A FAN OR NONE, beside the "A": lit, the wires spread across the face of the part at that end; off,
     // they go into it as the bundle they are, and the length is not asked for.
     auto withFan = [this](QWidget* row, QDoubleSpinBox* s, const char* name) {
@@ -2369,7 +2395,7 @@ QWidget* BrickWizardDialog::buildRunPage() {
     transForm->addRow(QStringLiteral("Width"), withAuto(transitionWidth_, "brickTransitionWidthAuto"));
     transitionForm_ = transForm;   // its part number and its lengths join it (the branches section makes them)
     for (QDoubleSpinBox* s : {length_, wireWidth_, fanStart_, fanFinish_, knee_, fanKnee_, fanScale_,
-                              bodyScale_, bodyWidth_, trunk_, transitionWidth_})
+                              bodyScale_, bodyWidth_, trunk_, transitionWidth_, strokeDrawn_})
         connect(s, &QDoubleSpinBox::valueChanged, this, [this, s](double) {
             // A figure typed in takes it over from Auto.
             if (QToolButton* a = autoOf_.value(s)) {
@@ -3848,11 +3874,18 @@ void BrickWizardDialog::loadPanel() {
                                           {fanKnee_, r.fanKneeMm, r.fanKneeMm < 0.0},
                                           {bodyWidth_, r.bodyWidthMm, r.bodyWidthMm <= 1e-9},
                                           {transitionWidth_, r.transitionWidthMm, r.transitionWidthMm <= 1e-9},
-                                          {trunk_, double(r.trunkWires), r.trunkWires <= 0}}) {
+                                          {trunk_, double(r.trunkWires), r.trunkWires <= 0},
+                                          {strokeDrawn_, r.strokeDrawnMm, r.strokeDrawnMm <= 1e-9}}) {
         QToolButton* a = autoOf_.value(spinBox);
         const QSignalBlocker ba(a);
         a->setChecked(isAuto);
         if (!isAuto) spinBox->setValue(value);
+    }
+    {
+        const QSignalBlocker so(strokeOn_);
+        strokeOn_->setChecked(r.stroke);
+        strokeDrawn_->setEnabled(r.stroke);
+        autoOf_.value(strokeDrawn_)->setEnabled(r.stroke);
     }
     for (auto [on, spinBox, value] : {std::tuple<QToolButton*, QDoubleSpinBox*, double>{fanStartOn_, fanStart_, r.fanStartMm},
                                       {fanFinishOn_, fanFinish_, r.fanFinishMm}}) {
@@ -4095,7 +4128,8 @@ void BrickWizardDialog::showActuals() {
                                   {knee_, a.knee},
                                   {fanKnee_, a.fanKnee},
                                   {bodyWidth_, a.bodyWidth},
-                                  {trunk_, a.trunk}}) {
+                                  {trunk_, a.trunk},
+                                  {strokeDrawn_, a.strokeDrawn}}) {
         QToolButton* btn = autoOf_.value(spinBox);
         if (!btn || !btn->isChecked()) continue;
         const QSignalBlocker block(spinBox);
@@ -4586,6 +4620,8 @@ void BrickWizardDialog::writeRun() {
     r.fanScalePct = fanScale_->value();
     r.bodyScalePct = bodyScale_->value();
     r.bodyWidthMm = manual(bodyWidth_) ? bodyWidth_->value() : 0.0;
+    r.stroke = strokeOn_->isChecked();
+    r.strokeDrawnMm = manual(strokeDrawn_) ? strokeDrawn_->value() : 0.0;
     r.transitionWidthMm =
         manual(transitionWidth_)
             ? std::max(transitionWidth_->value(), actual_.contains(b->id) ? actual_.value(b->id).bodyWidth : 0.0)

@@ -10048,6 +10048,70 @@ void testRoundSeventy() {
     }
 }
 
+// A STROKE ON A RUN: drawn shorter than it is and broken across the middle, its parts that much nearer - the
+// dimensions still say the real length, and how long it is drawn is Auto or a figure.
+void testRoundSeventyOne() {
+    BrickDesign d;
+    const QString x = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+    const QString r = d.addBrick(BrickType::Run, PartKind::Wire, 1, 0);
+    const QString y = d.addBrick(BrickType::End, PartKind::Connector, 2, 0);
+    d.connect(x, r);
+    d.connect(r, y);
+    BrickRunSpec& s = d.brick(r)->run;
+    s.lengthMm = 1000.0;
+    s.dimTotal = true;
+    s.dimBetween = true;
+    auto apart = [&](const BrickBuild& b) {
+        return distance(b.faces.value(x + QStringLiteral(":0")).centre, b.faces.value(y + QStringLiteral(":0")).centre);
+    };
+    auto said = [&](const BrickBuild& b, const char* kind) {
+        for (const Entity& e : b.entities)
+            if (e.meta.value(QStringLiteral("brickDim")).toString() == QLatin1String(kind))
+                return e.meta.value(QStringLiteral("brickMeasured")).toDouble();
+        return -1.0;
+    };
+    auto breaks = [&](const BrickBuild& b) {
+        int n = 0;
+        for (const Entity& e : b.entities) n += e.type == EntityType::LengthBreak ? 1 : 0;
+        return n;
+    };
+    const BrickBuild whole = buildBrickHarness(d, nullptr);
+    s.stroke = true;
+    s.strokeDrawnMm = 200.0;
+    const BrickBuild shortB = buildBrickHarness(d, nullptr);
+    std::printf("  stroke: parts %.1f apart unstroked, %.1f stroked to 200; total says %.1f / %.1f, between %.1f / %.1f\n",
+                apart(whole), apart(shortB), said(whole, "total"), said(shortB, "total"), said(whole, "between"),
+                said(shortB, "between"));
+    check(breaks(whole) == 0 && breaks(shortB) == 1, "stroke: a break mark across the run, and only when it is stroked");
+    check(std::abs(apart(whole) - apart(shortB) - 800.0) < 1.0, "stroke: the parts drawn 800 nearer - the run drawn 200 long");
+    check(std::abs(said(whole, "total") - said(shortB, "total")) < 1e-6 && said(shortB, "total") >= 1000.0 &&
+              std::abs(said(whole, "between") - said(shortB, "between")) < 1e-6,
+          "stroke: the dimensions say the real length all the same");
+    check([&] {
+                  bool seen = false;
+                  for (const Entity& e : shortB.entities) {
+                      if (e.type == EntityType::LengthBreak) seen = true;
+                      else if (seen && e.meta.value(QStringLiteral("mechRole")).toString() != QLatin1String("dim")) return false;
+                  }
+                  return true;
+              }(),
+          "stroke: the break mark drawn over the run, nothing but dimensions after it");
+    s.strokeDrawnMm = 0.0;
+    const BrickBuild autoB = buildBrickHarness(d, nullptr);
+    check(std::abs(apart(whole) - apart(autoB) - (1000.0 - kBrickStrokeAutoMm)) < 1.0 &&
+              std::abs(autoB.actual.value(r).strokeDrawn - kBrickStrokeAutoMm) < 1e-6,
+          "stroke: on Auto it is drawn kBrickStrokeAutoMm long, and the window is told so");
+    s.strokeDrawnMm = 250.0;
+    const BrickDesign back = BrickDesign::fromJson(d.toJson());
+    check(back.brick(r) && back.brick(r)->run.stroke && std::abs(back.brick(r)->run.strokeDrawnMm - 250.0) < 1e-9,
+          "stroke: kept with the design");
+    BrickDesign old = d;
+    old.brick(r)->run.stroke = false;
+    QJsonObject o = old.toJson();
+    const BrickDesign oldBack = BrickDesign::fromJson(o);
+    check(oldBack.brick(r) && !oldBack.brick(r)->run.stroke, "stroke: a run without one reads back without one");
+}
+
 void testFreestyleRouting() {
     Entity cable;
     cable.id = QStringLiteral("freestyle-cable");
@@ -12682,6 +12746,7 @@ int run_brickharness_tests() {
     ROUND(testRoundSixtyEight);
     ROUND(testRoundSixtyNine);
     ROUND(testRoundSeventy);
+    ROUND(testRoundSeventyOne);
     ROUND(testFreestyleRouting);
     ROUND(testRoutingEnhancements);
     ROUND(test3DViewControls);

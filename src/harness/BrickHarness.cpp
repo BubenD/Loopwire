@@ -567,6 +567,8 @@ QJsonObject BrickDesign::toJson() const {
                                                    {"dimLinear", r.dimLinear},
                                                    {"dimTrace", r.dimTrace},
                                                    {"dimSingle", r.dimSingle},
+                                                   {"stroke", r.stroke},
+                                                   {"strokeDrawnMm", r.strokeDrawnMm},
                                                    {"trunkWires", r.trunkWires},
                                                    {"pairs", r.pairs},
                                                    {"dimTotalBelow", r.dimTotalBelow},
@@ -753,6 +755,8 @@ BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
             s.dimLinear = r.value(QStringLiteral("dimLinear")).toBool(true);
             s.dimTrace = r.value(QStringLiteral("dimTrace")).toBool(false);
             s.dimSingle = r.value(QStringLiteral("dimSingle")).toBool(false);
+            s.stroke = r.value(QStringLiteral("stroke")).toBool(false);
+            s.strokeDrawnMm = std::max(0.0, r.value(QStringLiteral("strokeDrawnMm")).toDouble(0.0));
             s.trunkWires = r.value(QStringLiteral("trunkWires")).toInt(0);
             s.pairs = std::max(1, r.value(QStringLiteral("pairs")).toInt(1));
             s.dimTotalBelow = r.value(QStringLiteral("dimTotalBelow")).toBool(true);
@@ -1966,6 +1970,17 @@ QString colourHexOf(const QString& said) {
 }
 } // namespace
 
+double brickStrokeDrawnMm(const BrickRunSpec& r) {
+    if (!r.stroke) return r.lengthMm;
+    const double asked = r.strokeDrawnMm > 1e-9 ? r.strokeDrawnMm : kBrickStrokeAutoMm;
+    return std::max(0.0, std::min(r.lengthMm, asked));
+}
+
+// THE DRAWING IS LAID OUT FROM `design`; every figure a dimension says is read from `real`. They are one and the same
+// design, except that a stroked run is shorter in `design` - drawn short and broken, its dimensions the real length.
+static BrickBuild buildBrickDrawn(const BrickDesign& design, const BrickDesign& real, const PartsCatalog* catalog,
+                                  const std::function<int(const QString& libPart)>& itemOf);
+
 BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* catalog,
                              const std::function<int(const QString& libPart)>& itemOf) {
     // AUTO SCALE: an end left on Auto is made the size of the drawing's usual entry - its entry faces as
@@ -2010,6 +2025,26 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         BrickBuild done = buildBrickHarness(sized, catalog, itemOf);
         return done;
     }
+    // STROKED RUNS: laid out at the length they are drawn, so their parts come in that much nearer - each of the run's
+    // own lengths to its parts cut by as much as the run is.
+    bool anyStroke = false;
+    for (const Brick& b : design.bricks)
+        anyStroke = anyStroke || (brickIsSpecial(b.type) && b.run.stroke && brickStrokeDrawnMm(b.run) < b.run.lengthMm - 1e-9);
+    if (!anyStroke) return buildBrickDrawn(design, design, catalog, itemOf);
+    BrickDesign drawn = design;
+    for (Brick& b : drawn.bricks) {
+        if (!brickIsSpecial(b.type) || !b.run.stroke) continue;
+        const double cut = b.run.lengthMm - brickStrokeDrawnMm(b.run);
+        if (cut <= 1e-9) continue;
+        b.run.lengthMm -= cut;
+        for (BrickLink& l : drawn.links)
+            if ((l.a == b.id || l.b == b.id) && l.lengthMm > 1e-9) l.lengthMm = std::max(1.0, l.lengthMm - cut);
+    }
+    return buildBrickDrawn(drawn, design, catalog, itemOf);
+}
+
+static BrickBuild buildBrickDrawn(const BrickDesign& design, const BrickDesign& real, const PartsCatalog* catalog,
+                                  const std::function<int(const QString& libPart)>& itemOf) {
     BrickBuild out;
     MechDrawOptions opt;
     for (const Brick& b : design.bricks)
@@ -3884,6 +3919,9 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         }
         // How long it REALLY is: drawn longer only for room to see, the dimensions say the real figure.
         const double total = stretchOf.contains(s.id) ? s.run.lengthMm : routeLength(route);
+        // STROKED: the same run in the real design, and how much shorter it is drawn than it is.
+        const Brick& realS = real.brick(s.id) ? *real.brick(s.id) : s;
+        const double strokeCut = std::max(0.0, realS.run.lengthMm - s.run.lengthMm);
         // WHAT AUTO CAME TO, on the special's first run, so the window can show it.
         if (!out.actual.contains(s.id) && !isSub) {
             BrickActual act;
@@ -3896,6 +3934,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             act.transitionStretchFinish = stretchCouldFinish;
             act.transitionLenStart = br.flipped ? transLenB : transLenA;
             act.transitionLenFinish = br.flipped ? transLenA : transLenB;
+            act.strokeDrawn = s.run.lengthMm;
             for (const Entity& e : made)
                 if (e.type == EntityType::TwistedPair) {
                     const TwistFigures fig = twistedPairFigures(e);
@@ -3925,6 +3964,34 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                 h.meta.insert(QStringLiteral("hatchScale"), 0.5);
                 h.meta.insert(QStringLiteral("mechRole"), QStringLiteral("braid"));
                 made.push_back(h);
+            }
+        }
+
+        // THE STROKE: a break mark across the middle of what is between the fans, where the run is drawn short - the
+        // stretch between its two strokes masked, as a break by hand is. Moved in front of everything once the whole
+        // drawing is made (see below), so nothing drawn after it paints over the gap.
+        if (realS.run.stroke && (!loose || isTrunk) && route.size() >= 2) {
+            double cutHere = isTrunk ? strokeCut
+                                     : runLengthTo(real, realS, br.b.node) - runLengthTo(design, s, br.b.node);
+            // A branch with no length of its own is the cable's - broken once, on the cable, not again on each branch.
+            if (isSub && !br.viaBranch) {
+                const BrickLink* own = real.link(s.id, br.b.node);
+                if (!(own && own->lengthMm > 1e-9)) cutHere = 0.0;
+            }
+            if (cutHere > 1e-6) {
+                const double len = routeLength(route);
+                const double at = len > fanA + fanB + 1.0 ? (fanA + len - fanB) / 2.0 : len / 2.0;
+                Vec2 dir;
+                const Vec2 c = pointAlong(route, at, &dir);
+                const double across = std::max(bodyWidth, la.lane * (wires - 1) + ww);
+                Entity mark;
+                mark.type = EntityType::LengthBreak;
+                mark.a = c;
+                mark.rotation = std::atan2(dir.y, dir.x);
+                mark.meta.insert(QStringLiteral("size"), std::max(4.0, across * 0.75 + 2.0));
+                mark.meta.insert(QStringLiteral("mechRole"), QStringLiteral("stroke"));
+                mark.meta.insert(QStringLiteral("brickStrokeCut"), cutHere);
+                made.push_back(mark);
             }
         }
 
@@ -3979,10 +4046,12 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
                             : design.dimToFar ? fb.farAt
                                               : fb.nearAt;
             // What the run IS - its length - not what it was drawn: from part to part only the run is measured.
-            const double runIs = isSub && br.viaBranch ? dimOwner->run.lengthMm + runLengthTo(design, s, br.b.node)
-                                 : isSub              ? runLengthTo(design, s, br.b.node)
-                                 : !isTrunk && !loose ? runLengthTo(design, s, br.b.node)
-                                                      : total;
+            // READ FROM THE REAL DESIGN: a stroked run is drawn shorter than this.
+            const Brick& realOwner = real.brick(dimOwner->id) ? *real.brick(dimOwner->id) : *dimOwner;
+            const double runIs = isSub && br.viaBranch ? realOwner.run.lengthMm + runLengthTo(real, realS, br.b.node)
+                                 : isSub              ? runLengthTo(real, realS, br.b.node)
+                                 : !isTrunk && !loose ? runLengthTo(real, realS, br.b.node)
+                                                      : total + strokeCut;
             const double along = runIs + (partA ? distance(from, fa.centre) : 0.0) + (partB ? distance(to, fb.centre) : 0.0);
             const QString said = !dr.dimTextTotal.isEmpty() ? dr.dimTextTotal : fmt(along);
             if (dr.dimSingle) {
@@ -4107,7 +4176,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
         }
         if (r.dimBetween && !loose && !isSub && total > fanA + fanB) {
             const Vec2 p0 = pointAlong(route, fanA), p1 = pointAlong(route, total - fanB);
-            const double runIs = !isTrunk ? runLengthTo(design, s, br.b.node) : total;
+            const double runIs = !isTrunk ? runLengthTo(real, realS, br.b.node) : total + strokeCut;
             dim(p0, p1, sideOff(p0, p1, gapOut, r.dimBetweenBelow), std::max(0.0, runIs - fanA - fanB), !straight,
                 r.dimTextBetween, "between");
         }
@@ -4339,6 +4408,12 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
     // DIMENSIONS PUT ON BY HAND: between two bricks' reference points (near or far, as the drawing says; a part of
     // nominal size by its face), the line above both or below both. Two parts on one run say the run's length -
     // what a harness is built to - and otherwise how far apart they are along the harness.
+    //
+    // FIRST THE STROKES' BREAK MARKS GO IN FRONT: a mark masks only what was painted before it, so it is moved after
+    // every run, part and fitting (in the order they were made) - and the dimensions put up next come after it.
+    std::stable_partition(out.entities.begin(), out.entities.end(), [](const Entity& e) {
+        return e.type != EntityType::LengthBreak;
+    });
     if (!design.dims.empty()) {
         QHash<QString, Bounds> boxOf;
         for (const Entity& e : out.entities) {
@@ -4419,7 +4494,7 @@ BrickBuild buildBrickHarness(const BrickDesign& design, const PartsCatalog* cata
             Vec2 p1 = refOf(dm.b, portB, design.dimToFar, design.dimToMid, &faceB);
             double runs = 0.0;
             for (const QString& n : path)
-                if (const Brick* s = design.brick(n); s && brickIsSpecial(s->type)) runs += s->run.lengthMm;
+                if (const Brick* s = real.brick(n); s && brickIsSpecial(s->type)) runs += s->run.lengthMm;
             // The runs, and from each end's face to the point it is measured from (near, far or mid).
             const double said = path.size() > 1 ? runs + distance(p0, faceA) + distance(p1, faceB)
                                                  : std::abs(p1.x - p0.x);

@@ -129,6 +129,10 @@ struct BrickRunSpec {
     bool dimTrace = false;
     // The whole length said by a single-ended dimension: from its start, a short line with the figure.
     bool dimSingle = false;
+    // A STROKE: the run drawn shorter than it is, broken across the middle by a break mark - the dimensions still say
+    // the real length. How long it is drawn: 0, Auto (kBrickStrokeAutoMm, never longer than the run).
+    bool stroke = false;
+    double strokeDrawnMm = 0.0;
     // WHICH SIDE each dimension goes: below the run, or above it. The whole length below, the fans and between them
     // above, unless told.
     bool dimTotalBelow = true;
@@ -383,6 +387,10 @@ std::vector<Vec2> routeBetweenFaces(const Vec2& a, const Vec2& aOut, const Vec2&
 constexpr double kBrickMmPerCol = 75.0;
 // The least room the drawing keeps between two parts facing each other along a run - for the fans between them.
 constexpr double kBrickRoomBetween = 0.0;   // none: a part may come right up to the other, the run down to nought
+constexpr double kBrickStrokeAutoMm = 150.0;   // a stroked run left on Auto is drawn this long (or its length, if less)
+// HOW LONG A RUN IS DRAWN: its length - or, stroked, the length asked for it on the drawing (Auto: kBrickStrokeAutoMm),
+// never longer than the run itself.
+double brickStrokeDrawnMm(const BrickRunSpec& r);
 // The one part each side of a special, when it runs from one part to one part.
 bool specialOneToOne(const BrickDesign& d, const QString& special, QString* start, QString* finish);
 // `end` (linked to `special`) put as far along from the special's other part as the special is long, on the
@@ -493,6 +501,7 @@ struct BrickActual {
     double transitionStretchFinish = 0.0;
     double transitionLenStart = 0.0;   // each transition's length, as the drawing makes it
     double transitionLenFinish = 0.0;
+    double strokeDrawn = 0.0;          // a stroked run's length as drawn
 };
 
 struct BrickBuild {

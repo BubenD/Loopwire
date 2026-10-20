@@ -395,6 +395,8 @@ private:
     QLabel* runKind_ = nullptr;
     QSpinBox* wires_ = nullptr;
     QDoubleSpinBox* length_ = nullptr;
+    QCheckBox* strokeOn_ = nullptr;          // the run drawn short and broken
+    QDoubleSpinBox* strokeDrawn_ = nullptr;  // how long it is drawn (A: Auto)
     QDoubleSpinBox* wireWidth_ = nullptr;
     // BRIDGE WIRES, on a bridge wire only: which wire of the cable it is joined to it takes - picked from that
     // cable's wires (by net, where they have one) or its braided shield, or typed ("1-3,5").

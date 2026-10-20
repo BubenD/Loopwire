@@ -10730,6 +10730,19 @@ void Editor::onDoubleClick(const Vec2& world) {
                     emit editTextRequested(e->id);
                     return;
                 }
+                // A TABLE IN THE FRAME - its revision table - is filled in on the drawing, cell by cell, as any table
+                // is: the template is opened from anywhere else on the frame.
+                if (!entityTemplateGroup(*e).isEmpty() && e->meta.value("table").toBool()) {
+                    Vec2 tl;
+                    double cw = 0, ch = 0;
+                    const int idx = tableCellAt(*e, world, tl, cw, ch);
+                    if (idx >= 0) {
+                        const QJsonArray cells = e->meta.value("cells").toArray();
+                        emit editTableCellRequested(e->id, idx, idx < cells.size() ? cells[idx].toString() : QString(),
+                                                    tl, cw, ch);
+                        return;
+                    }
+                }
                 if (!entityTemplateGroup(*e).isEmpty()) {
                     emit editTemplateRequested(entityTemplateName(*e));
                     return;
@@ -17454,6 +17467,100 @@ void Editor::tableInsertRow(bool below) {
     emit cellSelectionChanged();
     emit changed();
     emit message(QStringLiteral("Row inserted"));
+}
+
+QString Editor::templateGroupAt(const Vec2& world) const {
+    if (const auto hit = hitTest(world))
+        if (const Entity* e = entityById(*hit); e && !entityTemplateGroup(*e).isEmpty()) return entityTemplateGroup(*e);
+    for (const QString& id : selected_)
+        if (const Entity* e = entityById(id); e && !entityTemplateGroup(*e).isEmpty()) return entityTemplateGroup(*e);
+    return {};
+}
+
+std::vector<Editor::TemplateFieldEntry> Editor::templateFields(const QString& group) const {
+    std::vector<TemplateFieldEntry> out;
+    if (!doc_ || group.isEmpty()) return out;
+    for (const Entity& e : doc_->entities()) {
+        if (entityTemplateGroup(e) != group || !entityIsTemplateField(e)) continue;
+        TemplateFieldEntry f;
+        f.id = e.id;
+        f.key = entityFieldKey(e);
+        f.label = e.meta.value(QStringLiteral("fieldLabel")).toString();
+        if (f.label.isEmpty()) f.label = f.key;
+        f.text = e.meta.value(QStringLiteral("text")).toString();
+        out.push_back(f);
+    }
+    return out;
+}
+
+int Editor::setTemplateFields(const QHash<QString, QString>& textById) {
+    if (!doc_) return 0;
+    QJsonObject details;
+    QHash<QString, QString> plain;
+    for (auto it = textById.cbegin(); it != textById.cend(); ++it) {
+        const Entity* e = entityById(it.key());
+        if (!e || e->meta.value(QStringLiteral("text")).toString() == it.value()) continue;
+        const QString detail = drawingFieldKey(entityFieldKey(*e));
+        if (!detail.isEmpty()) details.insert(detail, it.value().trimmed());
+        else plain.insert(it.key(), it.value());
+    }
+    if (details.isEmpty() && plain.isEmpty()) return 0;
+    pushUndo();
+    for (auto it = plain.cbegin(); it != plain.cend(); ++it)
+        if (Entity* e = entityById(it.key())) e->meta.insert(QStringLiteral("text"), it.value());
+    int count = static_cast<int>(plain.size());
+    if (!details.isEmpty()) {
+        Document* owner = drawingOwner();
+        QJsonObject merged = owner->drawingDetails();
+        for (auto it = details.constBegin(); it != details.constEnd(); ++it) merged.insert(it.key(), it.value());
+        owner->drawingDetails() = merged;
+        count += updateDrawingFields(*owner, merged);
+        if (doc_ != owner) {
+            doc_->drawingDetails() = merged;
+            count += updateDrawingFields(*doc_, merged);
+        }
+        owner->setDirty(true);
+        emit drawingDetailsChanged();
+    }
+    doc_->setDirty(true);
+    emit changed();
+    return count;
+}
+
+QString Editor::templateRevisionTable(const QString& group) const {
+    if (!doc_ || group.isEmpty()) return {};
+    for (const Entity& e : doc_->entities())
+        if (entityTemplateGroup(e) == group && e.meta.value(QStringLiteral("revisionTable")).toBool()) return e.id;
+    return {};
+}
+
+bool Editor::setTableContents(const QString& id, int rows, const QJsonArray& cells) {
+    Entity* e = entityById(id);
+    if (!e || !e->meta.value("table").toBool()) return false;
+    const int cols = e->meta.value("cols").toInt();
+    const int had = e->meta.value("rows").toInt();
+    if (cols <= 0 || had <= 0 || rows <= 0) return false;
+    const Bounds b = boundsOf(e->points);
+    const QJsonArray rf = e->meta.value("rowFrac").toArray();
+    const QJsonArray cf = e->meta.value("colFrac").toArray();
+    std::vector<double> h(had), w(cols);
+    for (int i = 0; i < had; ++i) h[i] = (i < rf.size() ? rf[i].toDouble() : 1.0 / had) * b.height();
+    for (int c = 0; c < cols; ++c) w[c] = (c < cf.size() ? cf[c].toDouble() : 1.0 / cols) * b.width();
+    pushUndo();
+    h.resize(static_cast<size_t>(rows), h.back());
+    QJsonArray ncells, nalign;
+    const QJsonArray align = e->meta.value("cellAlign").toArray();
+    for (int i = 0; i < rows * cols; ++i) {
+        ncells.append(i < cells.size() ? cells[i] : QJsonValue(QString()));
+        nalign.append(i < align.size() ? align[i] : QJsonValue(QStringLiteral("MC")));
+    }
+    e->meta.insert("rows", rows);
+    e->meta.insert("cells", ncells);
+    e->meta.insert("cellAlign", nalign);
+    rebuildTable(*e, h, w);
+    doc_->setDirty(true);
+    emit changed();
+    return true;
 }
 
 void Editor::tableDeleteRow() {

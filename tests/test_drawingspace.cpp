@@ -12,6 +12,8 @@
 #include "app/MainWindow.h"
 #include "app/ScientificCalculatorDialog.h"
 #include "model/Document.h"
+#include "model/DrawingDetails.h"
+#include "model/DrawingTemplate.h"
 #include "render/CanvasWidget.h"
 #include "render/EntityRenderer.h"
 
@@ -1681,6 +1683,76 @@ int run_drawingspace_tests() {
             }
         } else {
             check(false, "alt: found the canvas and its editor");
+        }
+    }
+
+    // ---- A placed template: its fields and its revision table filled in from the sheet ---------------------
+    {
+        MainWindow win;
+        win.resize(1500, 860);
+        win.show();
+        QApplication::processEvents();
+        Editor* ed = win.editorForTest();
+        Document* doc = ed ? ed->document() : nullptr;
+        check(doc != nullptr, "template fields: a drawing to put a template on");
+        if (doc) {
+            DrawingTemplate tpl;
+            tpl.name = QStringLiteral("fields-test");
+            if (const TemplateSheet* a3 = templateSheetByName(QStringLiteral("A3"))) tpl.sheet = *a3;
+            else tpl.sheet = templateSheets().front();
+            tpl.content = defaultSheetContent(tpl);
+            applyTemplate(tpl, *doc);
+            QString group;
+            for (const Entity& e : doc->entities())
+                if (!entityTemplateGroup(e).isEmpty()) group = entityTemplateGroup(e);
+            const auto fields = ed->templateFields(group);
+            QString titleId, plainId;
+            for (const Editor::TemplateFieldEntry& f : fields) {
+                if (drawingFieldKey(f.key) == QLatin1String("title")) titleId = f.id;
+                else if (drawingFieldKey(f.key).isEmpty() && plainId.isEmpty()) plainId = f.id;
+            }
+            std::printf("  template fields: %d on the frame\n", static_cast<int>(fields.size()));
+            check(!titleId.isEmpty() && !plainId.isEmpty(), "template fields: the frame's fields found, the title among them");
+            QHash<QString, QString> said{{titleId, QStringLiteral("MAIN LOOM")}, {plainId, QStringLiteral("2 of 3")}};
+            check(ed->setTemplateFields(said) >= 2, "template fields: filled in");
+            QString titleNow, plainNow;
+            for (const Entity& e : doc->entities()) {
+                if (e.id == titleId) titleNow = e.meta.value(QStringLiteral("text")).toString();
+                if (e.id == plainId) plainNow = e.meta.value(QStringLiteral("text")).toString();
+            }
+            check(titleNow == QLatin1String("MAIN LOOM") && plainNow == QLatin1String("2 of 3") &&
+                      doc->drawingDetails().value(QStringLiteral("title")).toString() == QLatin1String("MAIN LOOM"),
+                  "template fields: each written on the frame, the title into Drawing details too");
+            const QString tableId = ed->templateRevisionTable(group);
+            check(!tableId.isEmpty(), "revision table: the frame's revision table found");
+            const Entity* t = nullptr;
+            for (const Entity& e : doc->entities())
+                if (e.id == tableId) t = &e;
+            if (t) {
+                const int rows = t->meta.value(QStringLiteral("rows")).toInt();
+                const int cols = t->meta.value(QStringLiteral("cols")).toInt();
+                const double high = boundsOf(t->points).height();
+                QJsonArray cells = t->meta.value(QStringLiteral("cells")).toArray();
+                while (cells.size() < (rows + 1) * cols) cells.append(QString());
+                cells[rows * cols] = QStringLiteral("B");
+                check(ed->setTableContents(tableId, rows + 1, cells), "revision table: filled in, a row added");
+                for (const Entity& e : doc->entities())
+                    if (e.id == tableId) t = &e;
+                check(t->meta.value(QStringLiteral("rows")).toInt() == rows + 1 &&
+                          t->meta.value(QStringLiteral("cells")).toArray()[rows * cols].toString() == QLatin1String("B") &&
+                          boundsOf(t->points).height() > high + 1.0,
+                      "revision table: the new issue in a row of its own, the table grown down to hold it");
+                ed->selectById(tableId);
+                QMenu menu;
+                const Bounds bb = boundsOf(t->points);
+                win.buildCanvasMenu(menu, (bb.min + bb.max) * 0.5);
+                bool fieldsOffered = false, tableOffered = false;
+                for (QAction* a : menu.actions()) {
+                    fieldsOffered = fieldsOffered || a->objectName() == QLatin1String("canvasTemplateFields");
+                    tableOffered = tableOffered || a->objectName() == QLatin1String("canvasRevisionTable");
+                }
+                check(fieldsOffered && tableOffered, "template: right-click on the frame offers its fields and its revision table");
+            }
         }
     }
 

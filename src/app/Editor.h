@@ -642,6 +642,19 @@ public:
     // cell's top-left world corner and its world width/height.
     int tableCellAt(const Entity& e, const Vec2& p, Vec2& cellTopLeft, double& cw, double& ch) const;
     void applyTableCellEdit(const QString& id, int cell, const QString& text);
+    // THE TEMPLATE FRAME ON THE SHEET (every object of a placed template shares one group): the one under a point -
+    // or else the one a selected object is of; its fields, to fill in; its revision table, to fill in too.
+    QString templateGroupAt(const Vec2& world) const;
+    struct TemplateFieldEntry {
+        QString id, key, label, text;
+    };
+    std::vector<TemplateFieldEntry> templateFields(const QString& group) const;
+    // Each field given its words, one undo for all of them. A drawing P/N, revision or title is Drawing details' - set
+    // there, and so on every copy of it on the model and the sheets.
+    int setTemplateFields(const QHash<QString, QString>& textById);
+    QString templateRevisionTable(const QString& group) const;
+    // A table's cells, row by row, and as many rows as they fill (added rows as high as its last one), one undo.
+    bool setTableContents(const QString& id, int rows, const QJsonArray& cells);
     // Table cell selection (AutoCAD-style): a single click inside a cell selects just
     // that cell, enabling the row/column/alignment editing commands.
     QString selectedCellTable() const { return cellTableId_; }
