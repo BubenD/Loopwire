@@ -2371,16 +2371,7 @@ QString HarnessBuilderDialog::uniqueConnectorId() const {
     }
 }
 
-QString HarnessBuilderDialog::uniqueWireId() const {
-    int n = static_cast<int>(def_.wires.size()) + 1;
-    for (;; ++n) {
-        const QString id = QStringLiteral("w%1").arg(n);
-        bool taken = false;
-        for (const auto& w : def_.wires)
-            if (w.id == id) { taken = true; break; }
-        if (!taken) return id;
-    }
-}
+QString HarnessBuilderDialog::uniqueWireId() const { return harnessFreshWireId(def_); }
 
 HarnessConnector* HarnessBuilderDialog::connById(const QString& id) {
     for (auto& c : def_.connectors)
@@ -2434,10 +2425,17 @@ QStringList HarnessBuilderDialog::colorChoices() {
 // ---- Step 4: wire connections ----------------------------------------------
 
 QWidget* HarnessBuilderDialog::buildWiresSection() {
-    auto* addBtn = makeAddButton(this, QStringLiteral("Add wire"),
-                                QStringLiteral("One more conductor between two connectors"));
+    // ADD: a wire, at a click - or, from its arrow, two wires twisted or screened, a cable from the library, a coax. One
+    // button for everything that adds a connection, so there is one place to look for it.
+    auto* addBtn = new QToolButton(this);
     addBtn->setObjectName(QStringLiteral("harnessBuilderAddWire"));
-    connect(addBtn, &QPushButton::clicked, this, [this] {
+    addBtn->setText(QStringLiteral("Add wire"));
+    addBtn->setIcon(plusIcon());
+    addBtn->setToolTip(QStringLiteral("One more conductor between two connectors - the arrow for a twisted or screened pair, "
+                                      "a cable from the library or a coax"));
+    addBtn->setPopupMode(QToolButton::MenuButtonPopup);
+    addBtn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    connect(addBtn, &QToolButton::clicked, this, [this] {
         // Grouped, a new row has to belong somewhere: the group decides which connectors it runs
         // between (or which shield / twisted group it joins), and guessing would drop it into a
         // group the user was not looking at. So the click arms a pick, the headers light up, and
@@ -2481,116 +2479,75 @@ QWidget* HarnessBuilderDialog::buildWiresSection() {
         if (wireTable_ && wireTable_->rowCount())
             wireTable_->scrollToBottom();
     });
-    // A cable is not a wire, and adding one row at a time is not how it goes in: one click places the
-    // cable and every conductor it contains, described as the cable describes them.
-    auto* placeCableBtn = makeAddButton(this, QStringLiteral("Add cable"));
-    placeCableBtn->setToolTip(QStringLiteral(
-        "Place a cable from the library. Every conductor it is made of is added at once - the pairs "
-        "twisted, the screened groups screened, a coax as a coax, the drain wire there to be landed - "
-        "with the colours and cross-sections the cable itself says."));
-    connect(placeCableBtn, &QPushButton::clicked, this, [this] {
-        if (addCableFromLibrary() > 0) {
-            if (wireTable_ && wireTable_->rowCount()) wireTable_->scrollToBottom();
-        }
-    });
+    {
+        auto* menu = new QMenu(addBtn);
+        auto item = [&](const QString& text, const char* name, const QString& tip, auto fn) {
+            QAction* a = menu->addAction(text, this, fn);
+            a->setObjectName(QLatin1String(name));
+            a->setToolTip(tip);
+            return a;
+        };
+        item(QStringLiteral("Wire"), "harnessBuilderAddPlainWire", QStringLiteral("One wire, pin to pin"),
+             [this] { addConnection(AddWhat::Wire); });
+        item(QStringLiteral("Twisted pair"), "harnessBuilderAddTwisted", QStringLiteral("Two wires, twisted together"),
+             [this] { addConnection(AddWhat::TwistedPair); });
+        item(QStringLiteral("Screened pair"), "harnessBuilderAddScreened", QStringLiteral("Two wires under a screen of their own"),
+             [this] { addConnection(AddWhat::ScreenedPair); });
+        item(QStringLiteral("Screened twisted pair"), "harnessBuilderAddScreenedTwisted",
+             QStringLiteral("Two wires twisted together under a screen of their own"),
+             [this] { addConnection(AddWhat::ScreenedTwistedPair); });
+        menu->addSeparator();
+        // A cable is not a wire, and adding one row at a time is not how it goes in: one click places the cable and every
+        // conductor it contains, described as the cable describes them.
+        item(QStringLiteral("Cable from the library..."), "harnessBuilderAddCable",
+             QStringLiteral("Place a cable from the library. Every conductor it is made of is added at once - the pairs "
+                            "twisted, the screened groups screened, a coax as a coax - with the colours and cross-sections "
+                            "the cable itself says."),
+             [this] {
+                 if (addCableFromLibrary() > 0 && wireTable_ && wireTable_->rowCount()) wireTable_->scrollToBottom();
+             });
+        item(QStringLiteral("Coax"), "harnessBuilderAddCoax", QStringLiteral("A signal with its own screen, pin to pin"),
+             [this] { addConnection(AddWhat::Coax); });
+        addBtn->setMenu(menu);
+    }
+
+    // GROUP AS: the rows selected (Ctrl-click for several) made into one thing, or taken back out of it - pick the rows,
+    // then say what they are.
+    auto* groupBtn = new QToolButton(this);
+    groupBtn->setObjectName(QStringLiteral("harnessBuilderGroupAs"));
+    groupBtn->setText(QStringLiteral("Group as"));
+    groupBtn->setToolTip(QStringLiteral("Make the selected wires (Ctrl-click for several) a twisted pair, a screened group, "
+                                        "one cable or a coax - or take them out of it"));
+    groupBtn->setPopupMode(QToolButton::InstantPopup);
+    groupBtn->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    groupBtn->setMinimumWidth(groupBtn->fontMetrics().horizontalAdvance(groupBtn->text()) + 30);
+    {
+        auto* menu = new QMenu(groupBtn);
+        auto item = [&](const QString& text, const char* name, GroupAs how) {
+            QAction* a = menu->addAction(text, this, [this, how] {
+                if (how == GroupAs::Screened || how == GroupAs::TwistedScreened) groupSelectedWires(how, askDrainConnector());
+                else groupSelectedWires(how);
+            });
+            a->setObjectName(QLatin1String(name));
+            return a;
+        };
+        item(QStringLiteral("Twisted"), "harnessBuilderGroupTwisted", GroupAs::Twisted)->setIcon(twistIcon());
+        item(QStringLiteral("Screened..."), "harnessBuilderGroupScreened", GroupAs::Screened)->setIcon(shieldIcon());
+        item(QStringLiteral("Twisted and screened..."), "harnessBuilderGroupTwistedScreened", GroupAs::TwistedScreened);
+        item(QStringLiteral("One cable"), "harnessBuilderGroupCable", GroupAs::Cable);
+        item(QStringLiteral("Coax (two wires)"), "harnessBuilderGroupCoax", GroupAs::Coax);
+        menu->addSeparator();
+        item(QStringLiteral("Not twisted"), "harnessBuilderUngroupTwist", GroupAs::UngroupTwist);
+        item(QStringLiteral("Not screened"), "harnessBuilderUngroupScreen", GroupAs::UngroupScreen);
+        item(QStringLiteral("Out of its cable"), "harnessBuilderUngroupCable", GroupAs::UngroupCable);
+        item(QStringLiteral("Separate wires again"), "harnessBuilderUngroupAll", GroupAs::Ungroup);
+        groupBtn->setMenu(menu);
+    }
 
     auto* fillBtn = new QPushButton(QStringLiteral("Auto-fill pins"), this);
     fillBtn->setToolTip(QStringLiteral("Give every wire the next free pin at each end, in "
                                       "order, without disturbing the pins already set"));
     connect(fillBtn, &QPushButton::clicked, this, [this] { autoFillPins(); });
-
-    // Grouping: a long wire list is much easier to work through gathered by shield, by
-    // twisted group, or by the connector pair it joins — with the groups you are not
-    // touching folded away.
-    // One gauge for the whole harness: most harnesses are drawn on a single cross-section, and
-    // setting it row by row is a chore. Picking a value here writes it to every wire; a wire
-    // that needs its own can still be changed in its row afterwards.
-    auto* allGaugeLabel = new QLabel(QStringLiteral("All gauges"), this);
-    allGaugeLabel->setStyleSheet(QStringLiteral("color:#9fb4c8;"));
-    allGaugeBox_ = new QComboBox(this);
-    allGaugeBox_->addItem(QStringLiteral("—"), QString()); // idle: touches nothing
-    for (const QString& g : gaugeChoices()) allGaugeBox_->addItem(g, gaugeValueFor(g));
-    allGaugeBox_->setToolTip(QStringLiteral("Give every wire this cross-section"));
-    guardWheel(allGaugeBox_);
-    connect(allGaugeBox_, &QComboBox::currentIndexChanged, this, [this](int i) {
-        if (syncing_ || i <= 0) return;
-        const QString mm2 = allGaugeBox_->itemData(i).toString();
-        if (mm2.isEmpty()) return;
-        for (auto& w : def_.wires) w.gauge = mm2;
-        reloadAll();
-        summaryLabel_->setText(QStringLiteral("All %1 wire(s) set to %2 mm²")
-                                   .arg(def_.wires.size())
-                                   .arg(mm2));
-    });
-
-    // ---- Unify picked rows into one cable or coax ----
-    // A cable is several cores that run together; a coax is a signal with its own screen drawn
-    // beside it. Both are "this set of rows belongs together", which is why they are made the
-    // same way: pick the rows, then say what they are.
-    // Unifying is a two-step: the button ARMS a pick, the table becomes selectable, and Enter
-    // applies it to whatever was picked. Rows that are only selectable while something is
-    // waiting for them cannot be picked by accident, and the outline never lingers.
-    auto* cableBtn = new QPushButton(QStringLiteral("Unify as cable"), this);
-    cableBtn->setToolTip(QStringLiteral(
-        "Click, pick the rows that run together, then Enter: they become one cable and share a "
-        "background of their own"));
-    auto* coaxBtn = new QPushButton(QStringLiteral("Unify as coax"), this);
-    coaxBtn->setToolTip(QStringLiteral(
-        "Click, pick the rows, then Enter: each becomes a coax - a signal with its own screen "
-        "drawn beside it"));
-    auto* looseBtn = new QPushButton(QStringLiteral("Un-bundle"), this);
-    looseBtn->setToolTip(QStringLiteral(
-        "Click, pick the rows, then Enter: they leave their cable"));
-    for (QPushButton* b : {cableBtn, coaxBtn, looseBtn}) b->setCheckable(true);
-    unifyButtons_ = {cableBtn, coaxBtn, looseBtn};
-    // The way OUT of a pick: it appears when one starts and disappears when it ends, so what to
-    // do next is on screen rather than something to remember. Enter still works.
-    finishUnifyBtn_ = new QPushButton(QStringLiteral("Finish unify"), this);
-    finishUnifyBtn_->setToolTip(QStringLiteral(
-        "Apply the pick to the rows marked so far (Enter does the same; Esc abandons it)"));
-    finishUnifyBtn_->setStyleSheet(QStringLiteral("font-weight:600;"));
-    finishUnifyBtn_->hide();
-    connect(finishUnifyBtn_, &QPushButton::clicked, this, [this] { applyUnify(); });
-    const QString kinds[] = {QStringLiteral("cable"), QStringLiteral("coax"),
-                             QStringLiteral("loose")};
-    for (int i = 0; i < 3; ++i) {
-        QPushButton* b = unifyButtons_[i];
-        const QString kind = kinds[i];
-        connect(b, &QPushButton::clicked, this, [this, kind, b] {
-            if (!b->isChecked()) { cancelUnify(); return; } // clicking the armed one disarms it
-            armUnify(kind);
-        });
-    }
-
-    // Show-on-wire for the WHOLE column: one tick each for the colour, the cross-section and
-    // the label across every wire, plus All for the three together.
-    auto* showLabel = new QLabel(QStringLiteral("Show on wire"), this);
-    showLabel->setStyleSheet(QStringLiteral("color:#9fb4c8;"));
-    struct ColTick { const char* text; const char* tip; };
-    const ColTick colTicks[] = {
-        {"All", "Show the colour, the cross-section and the label on every wire"},
-        {"Clr", "Show the colour code on every wire"},
-        {"AWG", "Show the cross-section on every wire"},
-        {"Lbl", "Show the label on every wire"},
-    };
-    QList<QWidget*> showAllBoxes;
-    for (int i = 0; i < 4; ++i) {
-        auto* cb = new QCheckBox(QString::fromLatin1(colTicks[i].text), this);
-        cb->setToolTip(QString::fromLatin1(colTicks[i].tip));
-        cb->setTristate(false);
-        connect(cb, &QCheckBox::clicked, this, [this, i](bool on) {
-            for (auto& w : def_.wires) {
-                if (i == 0 || i == 1) w.showColor = on;
-                if (i == 0 || i == 2) w.showGauge = on;
-                if (i == 0 || i == 3) w.showLabel = on;
-            }
-            reloadAll();
-            summaryLabel_->setText(on ? QStringLiteral("Marking shown on every wire")
-                                      : QStringLiteral("Marking hidden on every wire"));
-        });
-        showAllBoxes << cb;
-        showColumnBoxes_ << cb;
-    }
 
     auto* groupLabel = new QLabel(QStringLiteral("Group by"), this);
     groupLabel->setStyleSheet(QStringLiteral("color:#9fb4c8;"));
@@ -2653,13 +2610,12 @@ QWidget* HarnessBuilderDialog::buildWiresSection() {
          QStringLiteral("Pin"), QStringLiteral("Type"), QStringLiteral("Bundle"),
          QStringLiteral("Gauge"), QStringLiteral("Color"), QStringLiteral("Label"),
          QStringLiteral("Show on wire"), QStringLiteral("Internal shield"),
-         QStringLiteral("Twist"), QString(), QStringLiteral("Library part")});
+         QStringLiteral("Group"), QString(), QStringLiteral("Library part")});
     wireTable_->verticalHeader()->setVisible(false);
     wireTable_->horizontalHeader()->setStretchLastSection(true);
-    // Rows are pickable so several can be gathered into one cable or coax - that is what the
-    // Unify buttons work on. Picking a row does not edit anything.
+    // Rows are picked (Ctrl-click for several) so they can be grouped - Group as works on them - and edited together in
+    // the panel below. Picking a row does not edit anything.
     wireTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
-    // Not selectable until a Unify button asks for a pick (see armUnify).
     wireTable_->setSelectionMode(QAbstractItemView::ExtendedSelection);
     // A picked row cannot be seen through its own cells - every cell is a widget, and a widget
     // paints over the selection colour behind it. So the picked rows are outlined instead, by an
@@ -2670,10 +2626,11 @@ QWidget* HarnessBuilderDialog::buildWiresSection() {
     connect(wireTable_->selectionModel(), &QItemSelectionModel::selectionChanged, this,
             [this] {
                 if (pickOverlay_) pickOverlay_->refresh();
-                if (pendingUnify_.isEmpty()) return;
-                const int n = pickedWireIds().size();
-                summaryLabel_->setText(
-                    QStringLiteral("%1 row(s) picked — Enter to apply, Esc to cancel").arg(n));
+                // The panel edits what is picked: one connection, or all of them together - led by one of them.
+                if (syncing_) return;
+                const QStringList ids = pickedWireIds();
+                if (!ids.isEmpty() && !ids.contains(selectedWireId_)) selectedWireId_ = ids.front();
+                refreshWireDetails();
             });
     // Right-clicking a row asks about the part it is made of - a cable bundle, a wire, a braid. The
     // rows of one cable all name the same part, so right-clicking any of them asks about the cable.
@@ -2705,21 +2662,9 @@ QWidget* HarnessBuilderDialog::buildWiresSection() {
     wireSplit_->addWidget(detailsClip);
     wireSplit_->setSizes({140, 220});
     return section(QStringLiteral("Wire connections"), wireSplit_, this,
-                   QList<QWidget*>{addBtn, placeCableBtn, fillBtn, cableBtn, coaxBtn, looseBtn,
-                                   finishUnifyBtn_,
-                                   allGaugeLabel,
-                                   allGaugeBox_, showLabel} +
-                       showAllBoxes +
-                       QList<QWidget*>{groupLabel, groupByBox_, expandBtn, collapseBtn});
+                   QList<QWidget*>{addBtn, groupBtn, fillBtn, groupLabel, groupByBox_, expandBtn, collapseBtn});
 }
 
-// The wires whose rows are picked in the table, read off the id each row carries. Group header
-// rows have none, so they drop out on their own.
-// Turn on row picking for a pending unify. Only one can be waiting at a time.
-// While a pick is armed, a press on the wire rows picks the row it landed on - whatever cell it
-// landed in. The table's own handler cannot be relied on here: every cell of a row holds a widget,
-// which the table treats as a persistent editor, and a press on one is spent giving that editor
-// the focus rather than selecting anything.
 void HarnessBuilderDialog::lightPins(const QString& connId, int pin) {
     // EVERY PIN WIRED TO IT, near or far: along each wire from a pin to the next, until none is new.
     QStringList lit;
@@ -2793,7 +2738,7 @@ bool HarnessBuilderDialog::eventFilter(QObject* watched, QEvent* ev) {
     }
     if (watched == bomDialog_ && ev->type() == QEvent::Hide && bomDialog_)
         QSettings().setValue(QStringLiteral("harnessBuilder/ui/v2/bomGeometry"), bomDialog_->saveGeometry());
-    if (ev->type() == QEvent::MouseButtonPress && pendingUnify_.isEmpty() &&
+    if (ev->type() == QEvent::MouseButtonPress &&
         !syncing_ && watched && static_cast<QMouseEvent*>(ev)->button() == Qt::LeftButton) {
         const QString id = watched->property("wizardWireId").toString();
         if (!id.isEmpty()) {
@@ -2826,144 +2771,9 @@ bool HarnessBuilderDialog::eventFilter(QObject* watched, QEvent* ev) {
             else if (pinnedPins_.isEmpty()) lightPins(QString(), 0);
         }
     }
-    if (wireTable_ && watched == wireTable_->viewport() && !pendingUnify_.isEmpty() &&
-        ev->type() == QEvent::MouseButtonPress) {
-        auto* me = static_cast<QMouseEvent*>(ev);
-        if (me->button() == Qt::LeftButton) {
-            const QModelIndex ix = wireTable_->indexAt(me->position().toPoint());
-            if (ix.isValid()) {
-                wireTable_->selectionModel()->select(
-                    ix, QItemSelectionModel::Toggle | QItemSelectionModel::Rows);
-                return true;
-            }
-        }
-    }
     return QDialog::eventFilter(watched, ev);
 }
 
-// Let the mouse through the wire rows' cell widgets (or take it back), so a click during a pick
-// reaches the table instead of the field it happened to land on. The fields' children are
-// included: a centred combo is an editable one, and its line edit would take the press.
-void HarnessBuilderDialog::setRowsPickable(bool pickable) {
-    if (!wireTable_) return;
-    for (int r = 0; r < wireTable_->rowCount(); ++r)
-        for (int c = 0; c < wireTable_->columnCount(); ++c) {
-            QWidget* cell = wireTable_->cellWidget(r, c);
-            if (!cell) continue;
-            cell->setAttribute(Qt::WA_TransparentForMouseEvents, pickable);
-            for (QWidget* kid : cell->findChildren<QWidget*>())
-                kid->setAttribute(Qt::WA_TransparentForMouseEvents, pickable);
-        }
-}
-
-void HarnessBuilderDialog::armUnify(const QString& kind) {
-    pendingUnify_ = kind;
-    for (QPushButton* b : unifyButtons_) {
-        if (!b) continue;
-        const QSignalBlocker block(b);
-        b->setChecked(b->text().contains(kind == QLatin1String("loose")
-                                             ? QStringLiteral("Un-bundle")
-                                             : (harnessIsCoaxKind(kind)
-                                                    ? QStringLiteral("coax")
-                                                    : QStringLiteral("cable"))));
-    }
-    if (wireTable_) {
-        wireTable_->setSelectionMode(QAbstractItemView::MultiSelection);
-        // Focus FIRST, and clear after it: taking focus in multi-selection mode gives the table a
-        // current row and selects it, so a pick that cleared before focusing started with row 1
-        // already picked - and the user's first click on it read as doing nothing (it was
-        // un-picking it).
-        wireTable_->setFocus();
-        wireTable_->clearSelection();
-        setRowsPickable(true);
-    }
-    if (finishUnifyBtn_) finishUnifyBtn_->show();
-    summaryLabel_->setText(
-        kind == QLatin1String("loose")
-            ? QStringLiteral("Pick the rows to take out of their cable, then press Enter (Esc to "
-                           "cancel)")
-            : QStringLiteral("Pick the rows to unify as one %1, then press Enter (Esc to cancel)")
-                  .arg(kind));
-}
-
-// Nothing is waiting any more: the rows stop being selectable, so a click cannot leave a
-// half-made pick behind.
-void HarnessBuilderDialog::cancelUnify() {
-    const bool was = !pendingUnify_.isEmpty();
-    pendingUnify_.clear();
-    for (QPushButton* b : unifyButtons_) {
-        if (!b) continue;
-        const QSignalBlocker block(b);
-        b->setChecked(false);
-    }
-    if (wireTable_) {
-        setRowsPickable(false);
-        wireTable_->clearSelection();
-        wireTable_->setSelectionMode(QAbstractItemView::ExtendedSelection);
-    }
-    if (finishUnifyBtn_) finishUnifyBtn_->hide();
-    if (pickOverlay_) pickOverlay_->refresh();
-    if (was) summaryLabel_->setText(QStringLiteral("Nothing unified"));
-}
-
-// Enter: gather the picked rows into a cable / coax, or take them out of one.
-void HarnessBuilderDialog::applyUnify() {
-    const QString kind = pendingUnify_;
-    if (kind.isEmpty()) return;
-    const QStringList picked = pickedWireIds();
-    if (picked.isEmpty()) {
-        summaryLabel_->setText(QStringLiteral("No rows picked — pick some, or Esc to cancel"));
-        return;
-    }
-    int n = 0;
-    QString name;
-    if (kind == QLatin1String("loose")) {
-        for (const QString& wid : picked)
-            for (auto& w : def_.wires)
-                if (w.id == wid && !w.bundle.isEmpty()) {
-                    w.bundle.clear();
-                    w.kind = QStringLiteral("wire");
-                    ++n;
-                }
-    } else {
-        // A fresh bundle name, so unifying twice makes two bundles rather than merging them.
-        const QString stem = harnessIsCoaxKind(kind) ? QStringLiteral("COAX")
-                                                            : QStringLiteral("CABLE");
-        for (int i = 1;; ++i) {
-            name = QStringLiteral("%1%2").arg(stem).arg(i);
-            bool taken = false;
-            for (const auto& w : def_.wires)
-                if (w.bundle == name) taken = true;
-            if (!taken) break;
-        }
-        for (auto& w : def_.wires)
-            if (picked.contains(w.id)) {
-                w.bundle = name;
-                // A cable is a BUNDLE of ordinary wires; only a coax changes what a row is.
-                if (harnessIsCoaxKind(kind)) w.kind = kind;
-                ++n;
-            }
-    }
-    pendingUnify_.clear();
-    for (QPushButton* b : unifyButtons_) {
-        if (!b) continue;
-        const QSignalBlocker block(b);
-        b->setChecked(false);
-    }
-    if (wireTable_) {
-        setRowsPickable(false); // the fields take the mouse again
-        wireTable_->clearSelection();
-        wireTable_->setSelectionMode(QAbstractItemView::ExtendedSelection);
-    }
-    if (finishUnifyBtn_) finishUnifyBtn_->hide();
-    reloadAll();
-    summaryLabel_->setText(name.isEmpty()
-                               ? QStringLiteral("%1 row(s) un-bundled").arg(n)
-                               : QStringLiteral("%1 row(s) unified as %2").arg(n).arg(name));
-}
-
-// Enter applies a pending pick and Esc abandons it — both taken before QDialog can read them as
-// "press the default button" and "close the window".
 void HarnessBuilderDialog::showEvent(QShowEvent* e) {
     forgetSharedLibrary();   // a part added since this window was last open is pickable now
     QDialog::showEvent(e);
@@ -2983,18 +2793,6 @@ void HarnessBuilderDialog::keyPressEvent(QKeyEvent* e) {
         e->accept();
         return;
     }
-    if (!pendingUnify_.isEmpty()) {
-        if (e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) {
-            applyUnify();
-            e->accept();
-            return;
-        }
-        if (e->key() == Qt::Key_Escape) {
-            cancelUnify();
-            e->accept();
-            return;
-        }
-    }
     // ENTER IN A FIELD APPLIES THAT FIELD, AND NOTHING ELSE. A dialog hands Enter to its default button, and here that
     // drew the whole harness on the sheet the moment a number was typed. A button with the focus still answers it.
     if (e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) {
@@ -3008,18 +2806,184 @@ void HarnessBuilderDialog::keyPressEvent(QKeyEvent* e) {
     QDialog::keyPressEvent(e);
 }
 
+// The wires whose rows are picked in the table, read off the id each row carries - in the order the wires are listed.
+// Group header rows have none, so they drop out on their own.
 QStringList HarnessBuilderDialog::pickedWireIds() const {
     QStringList out;
     if (!wireTable_ || !wireTable_->selectionModel()) return out;
-    QSet<int> rows;
+    QSet<QString> picked;
     for (const QModelIndex& ix : wireTable_->selectionModel()->selectedIndexes())
-        rows.insert(ix.row());
-    for (int r : rows) {
-        QWidget* cell = wireTable_->cellWidget(r, 0);
-        const QString wid = cell ? cell->property("wireId").toString() : QString();
-        if (!wid.isEmpty() && !out.contains(wid)) out << wid;
-    }
+        if (QWidget* cell = wireTable_->cellWidget(ix.row(), 0))
+            if (const QString wid = cell->property("wireId").toString(); !wid.isEmpty()) picked.insert(wid);
+    for (const HarnessWire& w : def_.wires)
+        if (picked.contains(w.id)) out << w.id;
     return out;
+}
+
+QStringList HarnessBuilderDialog::selectedOrCurrentWireIds() const {
+    QStringList ids = pickedWireIds();
+    if (ids.isEmpty() && !selectedWireId_.isEmpty() &&
+        std::any_of(def_.wires.begin(), def_.wires.end(), [this](const HarnessWire& w) { return w.id == selectedWireId_; }))
+        ids << selectedWireId_;
+    return ids;
+}
+
+// WHERE A NEW SCREEN'S DRAIN GOES: a connector of the harness (its next free pin), or nowhere yet. "" for nowhere.
+QString HarnessBuilderDialog::askDrainConnector() {
+    QStringList items{QStringLiteral("No drain wire yet")};
+    QStringList ids{QString()};
+    for (const HarnessConnector& c : def_.connectors) {
+        const int pin = nextFreePin(c);
+        if (pin <= 0) continue;
+        items << QStringLiteral("Drain to %1, pin %2").arg(c.designator.isEmpty() ? c.id : c.designator, harnessPinLabel(c, pin));
+        ids << c.id;
+    }
+    bool ok = false;
+    const QString chosen = QInputDialog::getItem(this, QStringLiteral("Screen"), QStringLiteral("The screen's drain wire:"), items, 0,
+                                                 false, &ok);
+    if (!ok) return QString();
+    return ids.value(items.indexOf(chosen));
+}
+
+QStringList HarnessBuilderDialog::addConnection(AddWhat what) {
+    if (def_.connectors.size() < 2) {
+        summaryLabel_->setText(QStringLiteral("A wire runs between two connectors — add a second connector first"));
+        return {};
+    }
+    const int count = what == AddWhat::Wire ? 1 : 2;
+    QStringList added;
+    for (int i = 0; i < count; ++i) {
+        const size_t before = def_.wires.size();
+        addWire();
+        if (def_.wires.size() == before) break;
+        added << def_.wires.back().id;
+    }
+    if (added.size() != count) {
+        summaryLabel_->setText(QStringLiteral("Not added - the connectors have no free pins left"));
+        return added;
+    }
+    QString said = QStringLiteral("Wire added");
+    if (what == AddWhat::TwistedPair || what == AddWhat::ScreenedTwistedPair)
+        said = QStringLiteral("Twisted pair %1 added").arg(harnessTwistWires(def_, added));
+    if (what == AddWhat::ScreenedPair || what == AddWhat::ScreenedTwistedPair) {
+        const QString screen = harnessScreenWires(def_, added);
+        said = what == AddWhat::ScreenedPair ? QStringLiteral("Screened pair %1 added").arg(screen)
+                                             : QStringLiteral("Screened twisted pair added (screen %1)").arg(screen);
+        said += QStringLiteral(" - land its drain from Group as > Screened, or in a row's From / To");
+    }
+    if (what == AddWhat::Coax) {
+        said = QStringLiteral("Coax %1 added").arg(harnessCoaxWires(def_, added));
+        grouping_ = WireGrouping::Assembly;
+        const QSignalBlocker block(groupByBox_);
+        groupByBox_->setCurrentIndex(groupByBox_->findData(int(grouping_)));
+    }
+    selectedWireId_ = added.front();
+    reloadAll();
+    // The rows just added, picked - ready to be edited together.
+    if (wireTable_) {
+        wireTable_->clearSelection();
+        for (int row = 0; row < wireTable_->rowCount(); ++row)
+            if (auto* cell = wireTable_->cellWidget(row, 0); cell && added.contains(cell->property("wireId").toString()))
+                wireTable_->selectionModel()->select(wireTable_->model()->index(row, 0), QItemSelectionModel::Select | QItemSelectionModel::Rows);
+        wireTable_->scrollToBottom();
+    }
+    summaryLabel_->setText(said);
+    return added;
+}
+
+QString HarnessBuilderDialog::groupSelectedWires(GroupAs how, const QString& drainConn) {
+    const QStringList ids = selectedOrCurrentWireIds();
+    if (ids.isEmpty()) {
+        summaryLabel_->setText(QStringLiteral("Pick the wires first - click a row, Ctrl-click for more"));
+        return {};
+    }
+    QString name, said;
+    int drainPin = 0;
+    if (const HarnessConnector* c = harnessConnById(def_, drainConn)) drainPin = nextFreePin(*c);
+    switch (how) {
+    case GroupAs::Twisted:
+        name = harnessTwistWires(def_, ids);
+        said = name.isEmpty() ? QStringLiteral("Twisting takes two wires or more") : QStringLiteral("%1 wire(s) twisted as %2").arg(ids.size()).arg(name);
+        break;
+    case GroupAs::Screened:
+    case GroupAs::TwistedScreened:
+        if (how == GroupAs::TwistedScreened && ids.size() < 2) {
+            said = QStringLiteral("Twisting takes two wires or more");
+            break;
+        }
+        if (how == GroupAs::TwistedScreened) harnessTwistWires(def_, ids);
+        name = harnessScreenWires(def_, ids, drainConn, drainPin);
+        said = QStringLiteral("%1 wire(s) screened as %2%3").arg(ids.size()).arg(name,
+                   drainPin > 0 ? QStringLiteral(", its drain landed") : QStringLiteral(" - no drain wire yet"));
+        break;
+    case GroupAs::Cable:
+        name = harnessCableWires(def_, ids);
+        said = name.isEmpty() ? QStringLiteral("A cable takes two wires or more") : QStringLiteral("%1 wire(s) made one cable, %2").arg(ids.size()).arg(name);
+        break;
+    case GroupAs::Coax:
+        name = harnessCoaxWires(def_, ids);
+        said = name.isEmpty() ? QStringLiteral("A coax is two wires - its signal, then its screen") : QStringLiteral("Coax %1 made").arg(name);
+        break;
+    case GroupAs::Ungroup:
+    case GroupAs::UngroupTwist:
+    case GroupAs::UngroupScreen:
+    case GroupAs::UngroupCable: {
+        const HarnessGrouping what = how == GroupAs::UngroupTwist    ? HarnessGrouping::Twist
+                                     : how == GroupAs::UngroupScreen ? HarnessGrouping::Screen
+                                     : how == GroupAs::UngroupCable  ? HarnessGrouping::Cable
+                                                                     : HarnessGrouping::All;
+        said = QStringLiteral("%1 wire(s) taken out").arg(harnessUngroupWires(def_, ids, what));
+        break;
+    }
+    }
+    reloadAll();
+    summaryLabel_->setText(said);
+    return name;
+}
+
+void HarnessBuilderDialog::duplicateSelectedWire() {
+    auto it = std::find_if(def_.wires.begin(), def_.wires.end(), [this](const auto& w) { return w.id == selectedWireId_; });
+    if (it == def_.wires.end()) return;
+    const QString bundle = it->bundle;
+    std::vector<HarnessWire> copies;
+    for (const auto& w : def_.wires) if (w.id == selectedWireId_ || (!bundle.isEmpty() && w.bundle == bundle)) copies.push_back(w);
+    QString nextBundle = bundle + QStringLiteral(" copy");
+    while (std::any_of(def_.wires.begin(), def_.wires.end(), [&](const auto& w) { return w.bundle == nextBundle; })) nextBundle += QLatin1Char('2');
+    // ITS PAIRS AND SCREENS ITS OWN: a copy twisted or screened with the original would make one group of both.
+    QHash<QString, QString> twists, screens;
+    auto fresh = [this](QHash<QString, QString>& names, const QString& was, QString HarnessWire::*field, const QString& stem) {
+        if (was.isEmpty()) return QString();
+        if (!names.contains(was))
+            for (int n = 1;; ++n) {
+                const QString name = stem + QString::number(n);
+                const bool taken = std::any_of(def_.wires.begin(), def_.wires.end(), [&](const HarnessWire& w) { return w.*field == name; }) ||
+                                   std::find(names.cbegin(), names.cend(), name) != names.cend();
+                if (!taken) {
+                    names.insert(was, name);
+                    break;
+                }
+            }
+        return names.value(was);
+    };
+    for (auto w : copies) {
+        w.id = uniqueWireId(); if (!bundle.isEmpty()) w.bundle = nextBundle;
+        w.fromConn = harnessOpenEndpointKey(); w.toConn = harnessOpenEndpointKey();
+        w.twistGroup = fresh(twists, w.twistGroup, &HarnessWire::twistGroup, QStringLiteral("T"));
+        w.shieldGroup = fresh(screens, w.shieldGroup, &HarnessWire::shieldGroup, QStringLiteral("S"));
+        def_.wires.push_back(w); selectedWireId_ = w.id;
+    }
+    reloadAll();
+}
+
+void HarnessBuilderDialog::swapSelectedWireEnds() {
+    auto it = std::find_if(def_.wires.begin(), def_.wires.end(), [this](const auto& w) { return w.id == selectedWireId_; });
+    if (it == def_.wires.end()) return;
+    const QString bundle = it->bundle;
+    for (auto& w : def_.wires) if (w.id == selectedWireId_ || (!bundle.isEmpty() && w.bundle == bundle)) {
+        std::swap(w.fromConn, w.toConn); std::swap(w.fromPin, w.toPin);
+        std::swap(w.fromTermination, w.toTermination);
+    }
+    reloadAll();
 }
 
 // A cable placed into the harness, expanded into what it is made of.
@@ -3050,25 +3014,28 @@ void HarnessBuilderDialog::showPartMenu(const QString& libPartId, const QPoint& 
         return;
     }
     QMenu menu(this);
-    const QString title = part->title();
-    menu.addAction(QStringLiteral("%1 — %2").arg(partKindName(part->kind), title))->setEnabled(false);
-    menu.addSeparator();
-    const QString noun = part->kind == PartKind::Cable ? QStringLiteral("cable")
-                                                       : partKindName(part->kind).toLower();
-    menu.addAction(QStringLiteral("See the %1's schematic").arg(noun), this, [this, part] {
-        PartViewDialog::showPart(*part, PartViewDialog::Show::Schematic, this);
-    });
-    menu.addAction(QStringLiteral("See the %1's mechanical drawing").arg(noun), this, [this, part] {
-        PartViewDialog::showPart(*part, PartViewDialog::Show::Mechanical, this);
-    });
-    menu.addAction(QStringLiteral("See what it is"), this, [this, part] {
-        PartViewDialog::showPart(*part, PartViewDialog::Show::Data, this);
-    });
-    menu.addSeparator();
-    menu.addAction(QStringLiteral("Open in library"), this,
-                   [this, libPartId] { emit openLibraryAt(libPartId); });
-    menu.addAction(QStringLiteral("Update from library"), this, [this, libPartId] { updatePartFromLibrary(libPartId); });
+    fillPartMenu(menu, *part);
     menu.exec(at);
+}
+
+void HarnessBuilderDialog::fillPartMenu(QMenu& menu, const LibraryPart& part) {
+    const LibraryPart* known = &part;
+    const QString libPartId = part.id;
+    menu.addAction(QStringLiteral("%1 — %2").arg(partKindName(part.kind), part.title()))->setEnabled(false);
+    menu.addSeparator();
+    const QString noun = part.kind == PartKind::Cable ? QStringLiteral("cable") : partKindName(part.kind).toLower();
+    menu.addAction(QStringLiteral("See the %1's schematic").arg(noun), this, [this, known] {
+        PartViewDialog::showPart(*known, PartViewDialog::Show::Schematic, this);
+    });
+    menu.addAction(QStringLiteral("See the %1's mechanical drawing").arg(noun), this, [this, known] {
+        PartViewDialog::showPart(*known, PartViewDialog::Show::Mechanical, this);
+    });
+    menu.addAction(QStringLiteral("See what it is"), this, [this, known] {
+        PartViewDialog::showPart(*known, PartViewDialog::Show::Data, this);
+    });
+    menu.addSeparator();
+    menu.addAction(QStringLiteral("Open in library"), this, [this, libPartId] { emit openLibraryAt(libPartId); });
+    menu.addAction(QStringLiteral("Update from library"), this, [this, libPartId] { updatePartFromLibrary(libPartId); });
 }
 
 void HarnessBuilderDialog::updatePartFromLibrary(const QString& id) {
@@ -3371,7 +3338,7 @@ void HarnessBuilderDialog::autoFillPins() {
 }
 
 void HarnessBuilderDialog::reloadWires() {
-    const QStringList selected = pendingUnify_.isEmpty() ? pickedWireIds() : QStringList();
+    const QStringList selected = pickedWireIds();
     wireTable_->clearSpans();
     wireTable_->setRowCount(0);
     const QStringList conns = connectorChoices();
@@ -3493,26 +3460,7 @@ void HarnessBuilderDialog::reloadWires() {
     if (!wizardUiReady_) fitColumns(wireTable_);
     // The rows just built their cell widgets on top of the pick overlay; put it back above them.
     if (pickOverlay_) pickOverlay_->refresh();
-    // Rows rebuilt during a pick get fresh cell widgets, which would start taking the mouse again.
-    if (!pendingUnify_.isEmpty()) setRowsPickable(true);
-    // The column-wide ticks reflect what every wire actually has, so they never claim a state
-    // the rows do not share.
-    if (showColumnBoxes_.size() == 4 && !def_.wires.empty()) {
-        bool allClr = true, allGa = true, allLbl = true;
-        for (const auto& w : def_.wires) {
-            if (!w.showColor) allClr = false;
-            if (!w.showGauge) allGa = false;
-            if (!w.showLabel) allLbl = false;
-        }
-        const bool flags[4] = {allClr && allGa && allLbl, allClr, allGa, allLbl};
-        for (int i = 0; i < 4; ++i) {
-            const QSignalBlocker block(showColumnBoxes_[i]);
-            showColumnBoxes_[i]->setChecked(flags[i]);
-        }
-    }
-    // A rebuild must not quietly make the rows pickable again.
-    wireTable_->setSelectionMode(pendingUnify_.isEmpty() ? QAbstractItemView::ExtendedSelection
-                                                         : QAbstractItemView::MultiSelection);
+    wireTable_->setSelectionMode(QAbstractItemView::ExtendedSelection);
     for (int row = 0; row < wireTable_->rowCount(); ++row)
         if (auto* cell = wireTable_->cellWidget(row, 0); cell && selected.contains(cell->property("wireId").toString()))
             wireTable_->selectionModel()->select(wireTable_->model()->index(row, 0), QItemSelectionModel::Select | QItemSelectionModel::Rows);
@@ -3528,15 +3476,72 @@ void HarnessBuilderDialog::reloadWires() {
 // The merged cell also SAYS what the group is - a twisted pair, a screened pair, the cable's part
 // number - which is the difference between a column of repeated text and a marked-up block a wireman
 // can read at a glance. Several pairs simply make several blocks.
+QWidget* HarnessBuilderDialog::wireGroupCell(const QStringList& ids, const QString& caption, const QString& tint) {
+    auto* cell = new QToolButton(wireTable_);
+    cell->setObjectName(QStringLiteral("wizardGroupCell"));
+    cell->setAutoRaise(true);
+    cell->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    cell->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    const HarnessWire* first = nullptr;
+    for (const HarnessWire& w : def_.wires)
+        if (ids.contains(w.id)) {
+            first = &w;
+            break;
+        }
+    const QString twist = first ? first->twistGroup : QString(), screen = first ? first->shieldGroup : QString();
+    cell->setText(caption.isEmpty() ? QStringLiteral("—") : caption);
+    if (!screen.isEmpty()) cell->setIcon(shieldIcon());
+    else if (!twist.isEmpty()) cell->setIcon(twistIcon());
+    QString sheet = QStringLiteral("QToolButton{border:none;font-weight:600;");
+    const QString ground = !caption.isEmpty() ? groupTint(twist.isEmpty() ? screen : twist) : tint;
+    if (!ground.isEmpty())
+        sheet += QStringLiteral("background:%1;color:%2;").arg(ground, QColor(ground).lightness() < 128 ? QStringLiteral("#f0f4f8") : QStringLiteral("#151a20"));
+    cell->setStyleSheet(sheet + QLatin1Char('}'));
+    cell->setToolTip(caption.isEmpty() ? QStringLiteral("On its own - pick it with others and use Group as to twist or screen them")
+                                       : QStringLiteral("%1 - click to rename it or take it apart").arg(caption));
+    // ITS GROUP, renamed or taken apart - the twist and the screen each.
+    connect(cell, &QToolButton::clicked, this, [this, ids, twist, screen, cell] {
+        QMenu menu(this);
+        auto rename = [this, ids](QString HarnessWire::*field, const QString& was, const QString& what) {
+            bool ok = false;
+            const QString name = QInputDialog::getText(this, QStringLiteral("Rename"), QStringLiteral("The %1's name:").arg(what), QLineEdit::Normal, was, &ok).trimmed();
+            if (!ok || name.isEmpty() || name == was) return;
+            for (HarnessWire& w : def_.wires)
+                if (w.*field == was) w.*field = name;
+            // A screen's drain lands on it by name.
+            if (field == &HarnessWire::shieldGroup)
+                for (HarnessWire& w : def_.wires) {
+                    if (w.fromConn == harnessInternalShieldKey(was)) w.fromConn = harnessInternalShieldKey(name);
+                    if (w.toConn == harnessInternalShieldKey(was)) w.toConn = harnessInternalShieldKey(name);
+                }
+            reloadAll();
+        };
+        if (!twist.isEmpty()) {
+            menu.addAction(QStringLiteral("Rename the twisted group %1...").arg(twist), this, [rename, twist] { rename(&HarnessWire::twistGroup, twist, QStringLiteral("twisted group")); });
+            menu.addAction(QStringLiteral("Not twisted"), this, [this, ids] { harnessUngroupWires(def_, ids, HarnessGrouping::Twist); reloadAll(); });
+        }
+        if (!screen.isEmpty()) {
+            menu.addAction(QStringLiteral("Rename the screen %1...").arg(screen), this, [rename, screen] { rename(&HarnessWire::shieldGroup, screen, QStringLiteral("screen")); });
+            menu.addAction(QStringLiteral("Not screened"), this, [this, ids] { harnessUngroupWires(def_, ids, HarnessGrouping::Screen); reloadAll(); });
+        }
+        if (twist.isEmpty() && screen.isEmpty())
+            menu.addAction(QStringLiteral("Pick it with others, then Group as - to twist or screen them"))->setEnabled(false);
+        menu.exec(cell->mapToGlobal(QPoint(0, cell->height())));
+    });
+    armCellMenu(cell, ids.value(0));
+    return cell;
+}
+
 void HarnessBuilderDialog::mergeGroupCells() {
     struct GroupCol {
         int col;
         QString HarnessWire::*field;
         bool isPart;
     };
+    // The Group column (11) is merged by what its rows are part of together - their twist and their screen.
     static const GroupCol kCols[] = {{5, &HarnessWire::bundle, false},
                                      {10, &HarnessWire::shieldGroup, false},
-                                     {11, &HarnessWire::twistGroup, false},
+                                     {11, nullptr, false},
                                      {13, &HarnessWire::libPart, true}};
     const int rows = wireTable_->rowCount();
     auto wireAt = [this](int row) -> const HarnessWire* {
@@ -3555,7 +3560,9 @@ void HarnessBuilderDialog::mergeGroupCells() {
         if (wireTable_->isColumnHidden(gc.col)) continue;
         auto valueAt = [&](int row) -> QString {
             const HarnessWire* w = wireAt(row);
-            return w ? (w->*gc.field) : QString();
+            if (!w) return QString();
+            if (!gc.field) return w->twistGroup.isEmpty() && w->shieldGroup.isEmpty() ? QString() : w->twistGroup + QLatin1Char('|') + w->shieldGroup;
+            return w->*gc.field;
         };
         for (int row = 0; row < rows;) {
             const QString value = valueAt(row);
@@ -3571,10 +3578,20 @@ void HarnessBuilderDialog::mergeGroupCells() {
                     ids << c->property("wireId").toString();
             // The covered rows' own editors go away first: a widget left in a cell a span covers is
             // still a live widget sitting on top of the table.
-            for (int r = row; r < end; ++r) wireTable_->removeCellWidget(r, gc.col);
+            // Hidden as it goes: a cell widget taken out is only deleted later, and drawn where it was until then.
+            for (int r = row; r < end; ++r) {
+                if (QWidget* old = wireTable_->cellWidget(r, gc.col)) old->hide();
+                wireTable_->removeCellWidget(r, gc.col);
+            }
             wireTable_->setSpan(row, gc.col, count, 1);
             const QString tint = bundleTint(wireAt(row) ? wireAt(row)->bundle : QString());
 
+            if (!gc.field) {
+                const HarnessWire* first = wireAt(row);
+                wireTable_->setCellWidget(row, gc.col, wireGroupCell(ids, first ? harnessGroupCaption(def_, *first) : QString(), tint));
+                row = end;
+                continue;
+            }
             if (gc.isPart) {
                 // One cable, one part number. Repeating it down the rows invited them to disagree,
                 // and a bill of materials cannot be built out of rows that disagree about what they
@@ -3677,15 +3694,48 @@ void HarnessBuilderDialog::mergeGroupCells() {
 // and a widget takes the press before the table ever sees it - which is why the table's own context
 // menu never opened and Qt answered instead with a line edit's Copy / Select All over the rows. Each
 // cell is asked to defer to this.
+// WHAT CAN BE DONE TO A ROW: copied, its ends swapped, grouped with the others picked, deleted - and the part it is made of
+// looked at. A row right-clicked outside the rows picked is picked on its own first.
 void HarnessBuilderDialog::showWireRowMenu(const QString& wireId, const QPoint& globalPos) {
-    QString libPart, what;
-    for (const auto& w : def_.wires)
-        if (w.id == wireId) {
-            libPart = w.libPart;
-            what = w.bundle.isEmpty() ? QStringLiteral("That wire")
-                                      : QStringLiteral("The cable %1").arg(w.bundle);
-        }
-    showPartMenu(libPart, globalPos, what);
+    const auto it = std::find_if(def_.wires.begin(), def_.wires.end(), [&wireId](const HarnessWire& w) { return w.id == wireId; });
+    if (it == def_.wires.end()) return;
+    const QString libPart = it->libPart;
+    if (!pickedWireIds().contains(wireId) && wireTable_) {
+        wireTable_->clearSelection();
+        for (int row = 0; row < wireTable_->rowCount(); ++row)
+            if (auto* cell = wireTable_->cellWidget(row, 0); cell && cell->property("wireId").toString() == wireId)
+                wireTable_->selectionModel()->select(wireTable_->model()->index(row, 0), QItemSelectionModel::Select | QItemSelectionModel::Rows);
+    }
+    selectWire(wireId);
+    QMenu menu(this);
+    menu.setObjectName(QStringLiteral("harnessBuilderRowMenu"));
+    menu.addAction(QStringLiteral("Duplicate"), this, [this] { duplicateSelectedWire(); })->setObjectName(QStringLiteral("harnessBuilderRowDuplicate"));
+    menu.addAction(QStringLiteral("Swap ends"), this, [this] { swapSelectedWireEnds(); })->setObjectName(QStringLiteral("harnessBuilderRowSwap"));
+    menu.addSeparator();
+    QMenu* group = menu.addMenu(QStringLiteral("Group as"));
+    group->addAction(twistIcon(), QStringLiteral("Twisted"), this, [this] { groupSelectedWires(GroupAs::Twisted); });
+    group->addAction(shieldIcon(), QStringLiteral("Screened..."), this, [this] { groupSelectedWires(GroupAs::Screened, askDrainConnector()); });
+    group->addAction(QStringLiteral("One cable"), this, [this] { groupSelectedWires(GroupAs::Cable); });
+    group->addAction(QStringLiteral("Coax (two wires)"), this, [this] { groupSelectedWires(GroupAs::Coax); });
+    group->addSeparator();
+    group->addAction(QStringLiteral("Separate wires again"), this, [this] { groupSelectedWires(GroupAs::Ungroup); });
+    menu.addSeparator();
+    if (const LibraryPart* part = libPart.trimmed().isEmpty() ? nullptr : sharedLibrary().byId(libPart)) {
+        QMenu* parts = menu.addMenu(QStringLiteral("Part"));
+        fillPartMenu(*parts, *part);
+    } else {
+        menu.addAction(QStringLiteral("No library part yet - name one in its Library part"))->setEnabled(false);
+    }
+    menu.addSeparator();
+    menu.addAction(QStringLiteral("Delete"), this, [this] {
+        const QStringList ids = selectedOrCurrentWireIds();
+        def_.wires.erase(std::remove_if(def_.wires.begin(), def_.wires.end(), [&ids](const HarnessWire& w) { return ids.contains(w.id); }),
+                         def_.wires.end());
+        selectedWireId_.clear();
+        reloadAll();
+        summaryLabel_->setText(QStringLiteral("%1 wire(s) deleted").arg(ids.size()));
+    })->setObjectName(QStringLiteral("harnessBuilderRowDelete"));
+    menu.exec(globalPos);
 }
 
 void HarnessBuilderDialog::armCellMenu(QWidget* cell, const QString& wireId) {
@@ -4070,17 +4120,8 @@ void HarnessBuilderDialog::buildWireRow(int row, const HarnessWire& wRef,
         });
         wireTable_->setCellWidget(row, 10, shield);
 
-        auto* twist = new QLineEdit(w.twistGroup, wireTable_);
-        twist->setPlaceholderText(QStringLiteral("—"));
-        twist->setToolTip(QStringLiteral("Twist group: wires with the same name are twisted "
-                                       "together (they must be neighbours)"));
-        centerEdit(twist);
-        connect(twist, &QLineEdit::editingFinished, this, [this, id, twist, wireById] {
-            if (syncing_) return;
-            if (auto* ww = wireById(id)) ww->twistGroup = twist->text().trimmed();
-            refreshPreview();
-        });
-        wireTable_->setCellWidget(row, 11, twist);
+        // WHAT IT IS PART OF: twisted, screened - said, not typed. Grouped from Group as; renamed or taken apart here.
+        wireTable_->setCellWidget(row, 11, wireGroupCell({id}, harnessGroupCaption(def_, w), bundleTint(w.bundle)));
 
         // The bundle's own background, so a cable reads as one block of rows.
         if (const QString tint = bundleTint(w.bundle); !tint.isEmpty())
@@ -4380,7 +4421,6 @@ QWidget* HarnessBuilderDialog::buildLayoutSection() {
 void HarnessBuilderDialog::reloadLayout() {
     // The whole-harness gauge picker is an action, not a setting: it drops back to idle so it
     // never reads as "every wire is this gauge" when they are not.
-    if (allGaugeBox_) allGaugeBox_->setCurrentIndex(0);
     leftXSpin_->setValue(def_.layout.leftX);
     leftYSpin_->setValue(def_.layout.leftY);
     rightXSpin_->setValue(def_.layout.rightX);

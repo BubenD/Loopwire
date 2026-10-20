@@ -1416,6 +1416,155 @@ HarnessDef harnessDefFromJson(const QJsonObject& root) {
 
 bool harnessIsDrainRow(const HarnessWire& w) { return w.id.startsWith(QLatin1String("drain-")); }
 
+QString harnessFreshWireId(const HarnessDef& def) {
+    for (int n = static_cast<int>(def.wires.size()) + 1;; ++n) {
+        const QString id = QStringLiteral("w%1").arg(n);
+        if (std::none_of(def.wires.begin(), def.wires.end(), [&id](const HarnessWire& w) { return w.id == id; })) return id;
+    }
+}
+
+namespace {
+
+// A NAME NOT YET GIVEN to any wire's `field`: the stem and the first number free.
+QString freshGroupName(const HarnessDef& def, const QString& stem, QString HarnessWire::*field) {
+    for (int n = 1;; ++n) {
+        const QString name = stem + QString::number(n);
+        if (std::none_of(def.wires.begin(), def.wires.end(), [&](const HarnessWire& w) { return w.*field == name; })) return name;
+    }
+}
+
+// The wires named, in the order they are listed - drains made by the connectors left out.
+std::vector<HarnessWire*> wiresNamed(HarnessDef& def, const QStringList& ids) {
+    std::vector<HarnessWire*> out;
+    for (HarnessWire& w : def.wires)
+        if (ids.contains(w.id) && !harnessIsDrainRow(w)) out.push_back(&w);
+    return out;
+}
+
+} // namespace
+
+QString harnessTwistWires(HarnessDef& def, const QStringList& ids) {
+    const std::vector<HarnessWire*> wires = wiresNamed(def, ids);
+    if (wires.size() < 2) return QString();
+    const QString name = freshGroupName(def, QStringLiteral("T"), &HarnessWire::twistGroup);
+    for (HarnessWire* w : wires) w->twistGroup = name;
+    return name;
+}
+
+QString harnessScreenWires(HarnessDef& def, const QStringList& ids, const QString& drainConn, int drainPin) {
+    const std::vector<HarnessWire*> wires = wiresNamed(def, ids);
+    if (wires.empty()) return QString();
+    const QString name = freshGroupName(def, QStringLiteral("S"), &HarnessWire::shieldGroup);
+    for (HarnessWire* w : wires) w->shieldGroup = name;
+    // ITS DRAIN: a wire from the screen to the pin given, in the wires' own cable.
+    if (!drainConn.isEmpty() && drainPin > 0 && harnessConnById(def, drainConn)) {
+        HarnessWire drain;
+        drain.id = harnessFreshWireId(def);
+        drain.fromConn = harnessInternalShieldKey(name);
+        drain.fromPin = 0;
+        drain.toConn = drainConn;
+        drain.toPin = drainPin;
+        drain.color = QStringLiteral("DRAIN");
+        drain.label = QStringLiteral("drain");
+        drain.bundle = wires.front()->bundle;
+        def.wires.push_back(drain);
+    }
+    return name;
+}
+
+QString harnessCableWires(HarnessDef& def, const QStringList& ids) {
+    const std::vector<HarnessWire*> wires = wiresNamed(def, ids);
+    if (wires.size() < 2) return QString();
+    const QString name = freshGroupName(def, QStringLiteral("CABLE"), &HarnessWire::bundle);
+    for (HarnessWire* w : wires) {
+        w->bundle = name;
+        // A cable is a BUNDLE of ordinary wires; only a coax changes what a row is.
+        if (harnessIsCoaxKind(w->kind)) w->kind = QStringLiteral("cable");
+    }
+    return name;
+}
+
+QString harnessCoaxWires(HarnessDef& def, const QStringList& ids) {
+    const std::vector<HarnessWire*> wires = wiresNamed(def, ids);
+    if (wires.size() != 2) return QString();
+    const QString name = freshGroupName(def, QStringLiteral("COAX"), &HarnessWire::bundle);
+    for (size_t i = 0; i < wires.size(); ++i) {
+        HarnessWire* w = wires[i];
+        w->bundle = name;
+        w->kind = QStringLiteral("coax");
+        w->coaxRole = i == 0 ? QStringLiteral("signal") : QStringLiteral("shield");
+        w->color = i == 0 ? QStringLiteral("SIGNAL") : QStringLiteral("SHIELD");
+        w->twistGroup.clear();
+    }
+    return name;
+}
+
+int harnessUngroupWires(HarnessDef& def, const QStringList& ids, HarnessGrouping what) {
+    int changed = 0;
+    QStringList screens;
+    for (HarnessWire* w : wiresNamed(def, ids)) {
+        bool did = false;
+        if ((what == HarnessGrouping::Twist || what == HarnessGrouping::All) && !w->twistGroup.isEmpty()) {
+            w->twistGroup.clear();
+            did = true;
+        }
+        if ((what == HarnessGrouping::Screen || what == HarnessGrouping::All) && !w->shieldGroup.isEmpty()) {
+            screens << w->shieldGroup;
+            w->shieldGroup.clear();
+            did = true;
+        }
+        if ((what == HarnessGrouping::Cable || what == HarnessGrouping::All) && !w->bundle.isEmpty()) {
+            w->bundle.clear();
+            if (w->kind != QLatin1String("wire")) {
+                w->kind = QStringLiteral("wire");
+                w->coaxRole.clear();
+            }
+            did = true;
+        }
+        changed += did ? 1 : 0;
+    }
+    // A SCREEN WITH NO WIRE LEFT IN IT has nothing to drain: its drain goes too.
+    for (const QString& screen : screens) {
+        if (std::any_of(def.wires.begin(), def.wires.end(), [&](const HarnessWire& w) { return w.shieldGroup == screen; })) continue;
+        const QString key = harnessInternalShieldKey(screen);
+        def.wires.erase(std::remove_if(def.wires.begin(), def.wires.end(),
+                                       [&key](const HarnessWire& w) { return w.fromConn == key || w.toConn == key; }),
+                        def.wires.end());
+    }
+    return changed;
+}
+
+bool harnessMoveWire(HarnessDef& def, const QString& id, int toIndex) {
+    const auto at = std::find_if(def.wires.begin(), def.wires.end(), [&id](const HarnessWire& w) { return w.id == id; });
+    if (at == def.wires.end()) return false;
+    const int from = static_cast<int>(at - def.wires.begin());
+    const HarnessWire moved = *at;
+    def.wires.erase(at);
+    int to = std::clamp(toIndex, 0, static_cast<int>(def.wires.size()) + 1);
+    if (to > from) --to;   // the list is one shorter for the wire taken out above it
+    to = std::clamp(to, 0, static_cast<int>(def.wires.size()));
+    def.wires.insert(def.wires.begin() + to, moved);
+    return true;
+}
+
+QString harnessGroupCaption(const HarnessDef& def, const HarnessWire& wire) {
+    auto count = [&](QString HarnessWire::*field) {
+        const QString name = wire.*field;
+        if (name.isEmpty()) return 0;
+        return static_cast<int>(std::count_if(def.wires.begin(), def.wires.end(), [&](const HarnessWire& w) { return w.*field == name; }));
+    };
+    const int twisted = count(&HarnessWire::twistGroup), screened = count(&HarnessWire::shieldGroup);
+    auto size = [](int n) { return n == 2 ? QStringLiteral("pair") : QStringLiteral("group of %1").arg(n); };
+    if (twisted > 1 && screened > 0) {
+        const QString how = screened == twisted ? size(twisted) : size(twisted) + QStringLiteral(" in a screened group");
+        return QStringLiteral("screened twisted %1 %2/%3").arg(how, wire.twistGroup, wire.shieldGroup);
+    }
+    if (twisted > 1) return QStringLiteral("twisted %1 %2").arg(size(twisted), wire.twistGroup);
+    if (screened > 1) return QStringLiteral("screened %1 %2").arg(size(screened), wire.shieldGroup);
+    if (screened == 1) return QStringLiteral("screened wire %1").arg(wire.shieldGroup);
+    return QString();
+}
+
 void harnessSyncDrains(HarnessDef& def) {
     for (HarnessConnector& c : def.connectors) {
         const bool left = c.side == HarnessSide::Left;

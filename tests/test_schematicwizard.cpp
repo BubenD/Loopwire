@@ -310,7 +310,8 @@ int run_schematicwizard_tests() {
               wireTable->columnWidth(2) >= 80), "compact columns stay readable, with scrolling when the side preview leaves too little room");
         if (wireTable) {
             int visible = 0; for (int c = 0; c < 14; ++c) if (!wireTable->isColumnHidden(c)) ++visible;
-            check(visible == 7, "six essential columns and the delete button are shown; original advanced fields remain available");
+            check(visible == 8 && !wireTable->isColumnHidden(11) && wireTable->horizontalHeaderItem(11)->text() == QLatin1String("Group"),
+                  "seven essential columns, the Group among them, and the delete button are shown; original advanced fields remain available");
             check(wireTable->columnWidth(2) >= 80 && wireTable->columnWidth(13) >= 80,
                   "hidden-step initial sizing leaves readable connector and part columns");
             check(wireTable->visibleRegion().boundingRect().height() > 42, "connection table remains visible beside/before its preview");
@@ -450,7 +451,8 @@ int run_schematicwizard_tests() {
         const QSize originalSize = wizard.size();
         wizard.resize(1240, 840); wizard.setStep(1); events(); wizard.grab().save("build/wizard-review/connections-wide.png");
         wizard.resize(originalSize); events();
-        if (auto* add = wizard.findChild<QPushButton*>("wizardAddCoax")) add->click(); events();
+        // Coax is on the Add wire button's menu now.
+        if (auto* add = wizard.findChild<QAction*>("harnessBuilderAddCoax")) add->trigger(); events();
         check(wizard.definition().wires.size() == 4 && harnessCoaxShield(wizard.definition().wires.back()),
               "Add coax creates paired signal and shield conductors");
         wizard.undo(); events();

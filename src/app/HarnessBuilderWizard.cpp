@@ -42,6 +42,7 @@ void clearForm(QWidget* host) {
         if (auto* widget = item->widget()) {
             for (auto* child : widget->findChildren<QObject*>())
                 if (child->objectName().startsWith(QLatin1String("wizard"))) child->setObjectName(QString());
+            if (widget->objectName().startsWith(QLatin1String("wizard"))) widget->setObjectName(QString());
             widget->hide(); widget->deleteLater();
         }
         delete item;
@@ -99,65 +100,6 @@ void HarnessBuilderDialog::initializeWizardUi() {
             WizardFlowSplitter::fitNaturalColumn(mainSplit_, pages_);
             fitWizardColumns(); saveWizardUi();
         });
-        button(QStringLiteral("Add coax"), QStringLiteral("wizardAddCoax"), [this] {
-            if (def_.connectors.size() < 2) { summaryLabel_->setText(QStringLiteral("Add two connectors first")); return; }
-            QString bundle; int n = 1;
-            do { bundle = QStringLiteral("COAX%1").arg(n++); }
-            while (std::any_of(def_.wires.begin(), def_.wires.end(), [&](const auto& w) { return w.bundle == bundle; }));
-            QString signalId;
-            for (int conductor = 0; conductor < 2; ++conductor) {
-                HarnessWire w; w.id = uniqueWireId(); w.bundle = bundle; w.kind = QStringLiteral("coax");
-                w.coaxRole = conductor == 0 ? QStringLiteral("signal") : QStringLiteral("shield");
-                w.color = conductor == 0 ? QStringLiteral("SIGNAL") : QStringLiteral("SHIELD");
-                const auto& from = def_.connectors.front(); const auto& to = def_.connectors.back();
-                w.fromPin = nextFreePin(from); w.toPin = nextFreePin(to);
-                w.fromConn = w.fromPin ? from.id : harnessOpenEndpointKey();
-                w.toConn = w.toPin ? to.id : harnessOpenEndpointKey();
-                if (!w.fromPin) w.fromPin = 1; if (!w.toPin) w.toPin = 1;
-                if (conductor == 0) signalId = w.id;
-                def_.wires.push_back(w);
-            }
-            grouping_ = WireGrouping::Assembly;
-            { QSignalBlocker block(groupByBox_); groupByBox_->setCurrentIndex(groupByBox_->findData(int(grouping_))); }
-            selectedWireId_ = signalId; reloadAll(); setStep(1);
-        });
-        button(QStringLiteral("Duplicate"), QStringLiteral("wizardDuplicateConnection"), [this] {
-            auto it = std::find_if(def_.wires.begin(), def_.wires.end(), [this](const auto& w) { return w.id == selectedWireId_; });
-            if (it == def_.wires.end()) return;
-            const QString bundle = it->bundle;
-            std::vector<HarnessWire> copies;
-            for (const auto& w : def_.wires) if (w.id == selectedWireId_ || (!bundle.isEmpty() && w.bundle == bundle)) copies.push_back(w);
-            QString nextBundle = bundle + QStringLiteral(" copy");
-            while (std::any_of(def_.wires.begin(), def_.wires.end(), [&](const auto& w) { return w.bundle == nextBundle; })) nextBundle += QLatin1Char('2');
-            for (auto w : copies) {
-                w.id = uniqueWireId(); if (!bundle.isEmpty()) w.bundle = nextBundle;
-                w.fromConn = harnessOpenEndpointKey(); w.toConn = harnessOpenEndpointKey();
-                def_.wires.push_back(w); selectedWireId_ = w.id;
-            }
-            reloadAll();
-        });
-        button(QStringLiteral("Swap ends"), QStringLiteral("wizardSwapEnds"), [this] {
-            auto it = std::find_if(def_.wires.begin(), def_.wires.end(), [this](const auto& w) { return w.id == selectedWireId_; });
-            if (it == def_.wires.end()) return;
-            const QString bundle = it->bundle;
-            for (auto& w : def_.wires) if (w.id == selectedWireId_ || (!bundle.isEmpty() && w.bundle == bundle)) {
-                std::swap(w.fromConn, w.toConn); std::swap(w.fromPin, w.toPin);
-                std::swap(w.fromTermination, w.toTermination);
-            }
-            reloadAll();
-        });
-        button(QStringLiteral("Apply to selected"), QStringLiteral("wizardApplySelected"), [this] {
-            const QStringList ids = pickedWireIds();
-            const auto it = std::find_if(def_.wires.begin(), def_.wires.end(), [this](const auto& w) { return w.id == selectedWireId_; });
-            if (it == def_.wires.end() || ids.size() < 2) return;
-            const HarnessWire source = *it;
-            for (auto& w : def_.wires) if (ids.contains(w.id)) {
-                if (harnessIsCoaxKind(w.kind)) w.coaxRole = harnessCoaxShield(w) ? QStringLiteral("shield") : QStringLiteral("signal");
-                w.gauge = source.gauge; w.color = source.color; w.libPart = source.libPart; w.partNumber = source.partNumber;
-                w.showColor = source.showColor; w.showGauge = source.showGauge; w.showLabel = source.showLabel;
-            }
-            reloadAll();
-        })->setToolTip(QStringLiteral("Apply the current connection's gauge, colour, material and marking flags to selected rows (Ctrl-click to select several)"));
         static_cast<QVBoxLayout*>(layout())->insertWidget(1, tools);
         if (settings.contains(uiKey + "geometry")) restoreGeometry(settings.value(uiKey + "geometry").toByteArray());
         for (auto* table : {connTable_, wireTable_}) {
@@ -182,7 +124,12 @@ void HarnessBuilderDialog::initializeWizardUi() {
         connect(mainSplit_, &QSplitter::splitterMoved, this, [this] { saveWizardUi(); });
         connect(wireSplit_, &QSplitter::splitterMoved, this, [this] { saveWizardUi(); });
         connect(wireTable_, &QTableWidget::cellClicked, this, [this](int row, int) {
-            if (auto* cell = wireTable_->cellWidget(row, 0)) selectWire(cell->property("wireId").toString());
+            // A click shows that wire in the panel - again, where it is the one already there.
+            auto* cell = wireTable_->cellWidget(row, 0);
+            const QString id = cell ? cell->property("wireId").toString() : QString();
+            if (id.isEmpty()) return;
+            if (id == selectedWireId_) refreshWireDetails();
+            else selectWire(id);
         });
         refreshWireDetails();
     }
@@ -234,8 +181,11 @@ void HarnessBuilderDialog::setCompactColumns(bool compact) {
         table->setColumnHidden(column, hidden);
     };
     // Column 12 of both tables is the row's delete button: always there, whatever else is hidden.
+    // Bundle (5) and Internal shield (10) are never shown: what a row is part of is said in the Group column (11), and
+    // made with Group as.
     for (int c = 0; c < wireTable_->columnCount(); ++c)
-        hide(wireTable_, c, compact && c != 0 && c != 1 && c != 2 && c != 3 && c != 7 && c != kDeleteColumn && c != 13);
+        hide(wireTable_, c, c == 5 || c == 10 ||
+                                (compact && c != 0 && c != 1 && c != 2 && c != 3 && c != 7 && c != 11 && c != kDeleteColumn && c != 13));
     for (int c = 0; c < connTable_->columnCount(); ++c)
         hide(connTable_, c, (c >= 8 && c <= 11) ||
             (compact && c != 0 && c != 1 && c != 2 && c != 4 && c != kDeleteColumn && c != 13 && c != 14));
@@ -337,11 +287,19 @@ void HarnessBuilderDialog::refreshWireDetails() {
         return;
     }
     const HarnessWire w = *it; const QString id = w.id;
-    auto commit = [this, id](std::function<void(HarnessWire&)> edit) {
-        for (auto& current : def_.wires) if (current.id == id) { edit(current); break; }
+    // EVERY WIRE PICKED, where this one is among them: a change here goes to all of them - one colour, one gauge, one part
+    // for the lot. Otherwise this one alone.
+    QStringList targets = pickedWireIds();
+    if (!targets.contains(id) || targets.size() < 2) targets = {id};
+    auto commit = [this, targets](std::function<void(HarnessWire&)> edit) {
+        for (auto& current : def_.wires) if (targets.contains(current.id)) edit(current);
         reloadAll();
     };
-    auto* basic = new QGroupBox(QStringLiteral("Connection %1%2").arg(id, w.bundle.isEmpty() ? QString() : QStringLiteral(" · ") + w.bundle), wireDetails_);
+    auto* basic = new QGroupBox(targets.size() > 1
+                                    ? QStringLiteral("%1 connections picked - a change here goes to all of them").arg(targets.size())
+                                    : QStringLiteral("Connection %1%2").arg(id, w.bundle.isEmpty() ? QString() : QStringLiteral(" · ") + w.bundle),
+                                wireDetails_);
+    basic->setObjectName(QStringLiteral("wizardConnectionBox"));
     // SHORT FIELDS, the same whatever the window's width: a field as wide as what goes in it, not as the window.
     auto* form = new QFormLayout(basic); form->setFieldGrowthPolicy(QFormLayout::FieldsStayAtSizeHint);
     form->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);

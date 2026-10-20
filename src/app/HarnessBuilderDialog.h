@@ -16,6 +16,8 @@ class QHBoxLayout;
 class QKeyEvent;
 class QLabel;
 class QListWidget;
+class QMenu;
+class QToolButton;
 class QPushButton;
 class QSpinBox;
 class QSplitter;
@@ -62,6 +64,20 @@ public:
     // its colours, cross-sections, twisted groups and screens already set. `libPartId` empty asks
     // which cable. Returns how many conductors were added.
     int addCableFromLibrary(const QString& libPartId = QString());
+    // ADDED IN ONE CLICK, from the Add menu: two wires twisted, or screened (and twisted), or a coax - between the
+    // connectors the last wire used, on the next free pins. The ids of the wires added.
+    enum class AddWhat { Wire, TwistedPair, ScreenedPair, ScreenedTwistedPair, Coax };
+    QStringList addConnection(AddWhat what);
+    // THE WIRES SELECTED in the table (or, none selected, the one being edited) made into one thing - twisted, screened,
+    // one cable, one coax - or taken back out of it. A screen's drain goes to `drainConn` (its next free pin), where one
+    // is named. The name given, or "" (and why, on the summary line).
+    enum class GroupAs { Twisted, Screened, TwistedScreened, Cable, Coax, Ungroup, UngroupTwist, UngroupScreen, UngroupCable };
+    QString groupSelectedWires(GroupAs how, const QString& drainConn = QString());
+    // The wires the table has selected - or the one being edited, where none is.
+    QStringList selectedOrCurrentWireIds() const;
+    // A COPY of the wire selected (its whole cable, where it is in one), its ends left open; its two ends swapped.
+    void duplicateSelectedWire();
+    void swapSelectedWireEnds();
 
     // What the builder currently describes. Read-only: everything that changes a harness goes
     // through the dialog's own controls, so the definition and the tables can never disagree.
@@ -163,6 +179,8 @@ private:
     // The rows of one bundle / screen / twisted pair carry ONE cell between them, merged down the
     // column and marked with what the block is.
     void mergeGroupCells();
+    // The Group column's cell for these rows: what they are part of, said, and a click to rename it or take it apart.
+    QWidget* wireGroupCell(const QStringList& ids, const QString& caption, const QString& tint);
     // The part menu for a row, and the wiring that lets a right-click ON A CELL reach it.
     void showWireRowMenu(const QString& wireId, const QPoint& globalPos);
     void armRowMenu(int row, const QString& wireId);
@@ -177,6 +195,8 @@ private:
     // Right-clicking anything that names a library part: look at it, or open the library at it. The
     // same menu wherever a part is named, because the question is the same.
     void showPartMenu(const QString& libPartId, const QPoint& at, const QString& what);
+    // The questions about a part, put in a menu: its drawings, what it is, the library it is in.
+    void fillPartMenu(QMenu& menu, const LibraryPart& part);
     void updatePartFromLibrary(const QString& libPartId);
     QMap<int, QByteArray> checkedSteps_;
     void addWire();
@@ -197,15 +217,7 @@ private:
     void runOptimizeBy(bool shield);
     // The pin optimisers that are switched on, run together in one pass (see optimizeHarnessCombined).
     void runCombinedOptimise(bool crossings, bool shields, bool twists);
-    // Unify is a two-step: a button arms a pick, Enter applies it, Esc abandons it. Rows are
-    // only selectable while one is pending, so nothing can be picked by accident.
-    void armUnify(const QString& kind); // "cable" | "coax" | "coax-splice" | "loose"
-    // Turns a click during a pick into a row toggle (see setRowsPickable).
     bool eventFilter(QObject* watched, QEvent* ev) override;
-    // While a pick is armed the rows' cell widgets let the mouse through, so one click picks a row.
-    void setRowsPickable(bool pickable);
-    void applyUnify();
-    void cancelUnify();
     void generate();
     void saveDefinition();
     void loadDefinition();
@@ -228,6 +240,8 @@ private:
     HarnessConnector* connById(const QString& id);
     // The wire ids of the rows currently picked in the wire table.
     QStringList pickedWireIds() const;
+    // Where a new screen's drain goes, asked: a connector (its next free pin), or "" for no drain wire yet.
+    QString askDrainConnector();
     QStringList connectorChoices() const;
     // Every endpoint a wire end can name - connectors and shields - as (key, label) pairs.
     QList<QPair<QString, QString>> endpointChoices() const;
@@ -294,16 +308,9 @@ private:
     WireGrouping grouping_ = WireGrouping::Connectors;
     QSet<QString> collapsedGroups_;
     QSet<QString> seenAssemblyGroups_;
-    // The kind of unify waiting for a pick ("" when none is).
-    QString pendingUnify_;
     // True while an Add wire is waiting for a group header to be clicked.
     bool pendingAddGroup_ = false;
-    QList<QPushButton*> unifyButtons_;
-    QPushButton* finishUnifyBtn_ = nullptr;
     QComboBox* groupByBox_ = nullptr;
-    QComboBox* allGaugeBox_ = nullptr;
-    // All / Clr / AWG / Lbl for the whole Show-on-wire column.
-    QList<QCheckBox*> showColumnBoxes_;
     QDoubleSpinBox* textGapSpin_ = nullptr;
     QDoubleSpinBox* spliceSizeSpin_ = nullptr;
     QDoubleSpinBox* textHeightSpin_ = nullptr;

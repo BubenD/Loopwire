@@ -209,6 +209,32 @@ void harnessSyncDrains(HarnessDef& def);
 // Whether a wire row is a connector's drain, made by harnessSyncDrains rather than by hand.
 bool harnessIsDrainRow(const HarnessWire& w);
 
+// ---- Grouping the wires ----------------------------------------------------
+// WIRES MADE INTO ONE THING: twisted together, screened together, one cable, one coax - or taken back out of it. Each is
+// the same membership the rows already carry (twistGroup, shieldGroup, bundle, kind), named afresh so making two pairs
+// makes two pairs rather than one of four. Each returns the name it gave, or "" where there was nothing to make.
+//
+// A new wire's id, not yet taken ("w1", "w2", ...).
+QString harnessFreshWireId(const HarnessDef& def);
+// Twisted: two or more wires.
+QString harnessTwistWires(HarnessDef& def, const QStringList& ids);
+// Screened: one or more wires - with its drain, where a pin is given, a wire from the screen to it.
+QString harnessScreenWires(HarnessDef& def, const QStringList& ids, const QString& drainConn = QString(), int drainPin = 0);
+// One cable: two or more wires, its conductors.
+QString harnessCableWires(HarnessDef& def, const QStringList& ids);
+// One coax: two wires, the first the signal and the second its screen.
+QString harnessCoaxWires(HarnessDef& def, const QStringList& ids);
+// TAKEN OUT of what they were made into - their twist, their screen (its drain with it, once no wire is left in it), their
+// cable or coax, or all of it. How many wires it changed.
+enum class HarnessGrouping { Twist, Screen, Cable, All };
+int harnessUngroupWires(HarnessDef& def, const QStringList& ids, HarnessGrouping what);
+// A WIRE MOVED in the list - what the table and the drawing go by - to before the wire at `toIndex` (past the last: to the
+// end). False where there is no such wire.
+bool harnessMoveWire(HarnessDef& def, const QString& id, int toIndex);
+// What a wire is part of, said as the table says it: "twisted pair T1", "screened pair S1", "screened twisted pair",
+// a group of N - or "".
+QString harnessGroupCaption(const HarnessDef& def, const HarnessWire& wire);
+
 const HarnessConnector* harnessConnById(const HarnessDef& def, const QString& id);
 
 // Which coax of its bundle this wire is, 1-based, in the order the wires are listed. One cable

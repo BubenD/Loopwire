@@ -19,6 +19,8 @@
 #include <QListWidgetItem>
 #include <QMouseEvent>
 #include "harness/PartsLibrary.h"
+#include <QAction>
+#include <QGroupBox>
 #include <QLabel>
 #include <QSplitter>
 #include <QSettings>
@@ -177,9 +179,8 @@ void testPhaseZero() {
     check(undoButton && redoButton && undoButton->isEnabled() && !redoButton->isEnabled(), "builder undo: its own buttons, each enabled when it can act");
 
     // ---- THE PREVIEW IS WHAT GENERATE DRAWS - wires and all ----
-    QPushButton* addWire = nullptr;
-    for (QPushButton* b : dialog.findChildren<QPushButton*>())
-        if (b->text() == QLatin1String("Add wire")) addWire = b;
+    // Add wire is a button with a menu on its arrow now - found by its name.
+    auto* addWire = dialog.findChild<QAbstractButton*>(QStringLiteral("harnessBuilderAddWire"));
     for (int i = 0; i < 3 && addWire; ++i) {
         addWire->click();
         QApplication::processEvents();
@@ -373,9 +374,8 @@ void testStepsRefined() {
           "compact steps: preview position follows its menu across every step");
     // ---- DRAINS: to the body or a pin, direct or through a hook-up wire ----
     dialog.setStep(1);   // Wires
-    QPushButton* addWire = nullptr;
-    for (QPushButton* b : dialog.findChildren<QPushButton*>())
-        if (b->text() == QLatin1String("Add wire")) addWire = b;
+    // Add wire is a button with a menu on its arrow now - found by its name.
+    auto* addWire = dialog.findChild<QAbstractButton*>(QStringLiteral("harnessBuilderAddWire"));
     for (int i = 0; i < 2 && addWire; ++i) {
         addWire->click();
         QApplication::processEvents();
@@ -457,9 +457,8 @@ void testShieldConnectAndPinLight() {
     addTwoEnds(dialog);
     auto settle = [] { for (int k = 0; k < 4; ++k) QApplication::processEvents(); };
     dialog.setStep(1);   // Wires
-    QPushButton* addWire = nullptr;
-    for (QPushButton* b : dialog.findChildren<QPushButton*>())
-        if (b->text() == QLatin1String("Add wire")) addWire = b;
+    // Add wire is a button with a menu on its arrow now - found by its name.
+    auto* addWire = dialog.findChild<QAbstractButton*>(QStringLiteral("harnessBuilderAddWire"));
     for (int i = 0; i < 2 && addWire; ++i) {
         addWire->click();
         settle();
@@ -1061,7 +1060,7 @@ void testWizardSecondRound() {
           "wizard preview: a see-through Fit button over the picture");
 
     // A NEW WIRE WHERE THE LAST WENT: J1 to P2, not the first right-hand connector.
-    if (auto* add = wizard.findChild<QPushButton*>(QStringLiteral("harnessBuilderAddWire"))) add->click();
+    if (auto* add = wizard.findChild<QAbstractButton*>(QStringLiteral("harnessBuilderAddWire"))) add->click();
     QApplication::processEvents();
     const HarnessWire& added = wizard.definition().wires.back();
     std::printf("  wizard add wire: %s-%d to %s-%d\n", qPrintable(added.fromConn), added.fromPin, qPrintable(added.toConn), added.toPin);
@@ -1147,6 +1146,203 @@ void testWizardSecondRound() {
     }
 }
 
+// WIRES MADE INTO ONE THING, AND BACK: twisted, screened with a drain, one cable, one coax - each named afresh - then taken
+// out again, a screen's drain with it; a wire moved in the list; what each is part of, said.
+void testWireGrouping() {
+    HarnessDef d;
+    HarnessConnector p1, p2;
+    p1.id = QStringLiteral("P1");
+    p1.designator = QStringLiteral("P1");
+    p1.pinCount = 8;
+    p2 = p1;
+    p2.id = QStringLiteral("P2");
+    p2.designator = QStringLiteral("P2");
+    p2.side = HarnessSide::Right;
+    d.connectors = {p1, p2};
+    for (int i = 1; i <= 6; ++i) {
+        HarnessWire w;
+        w.id = harnessFreshWireId(d);
+        w.fromConn = QStringLiteral("P1");
+        w.fromPin = i;
+        w.toConn = QStringLiteral("P2");
+        w.toPin = i;
+        d.wires.push_back(w);
+    }
+    check(d.wires[5].id == QLatin1String("w6") && harnessFreshWireId(d) == QLatin1String("w7"), "grouping: wire ids given in turn");
+    auto wire = [&](const QString& id) -> const HarnessWire& {
+        static const HarnessWire none;
+        for (const HarnessWire& w : d.wires)
+            if (w.id == id) return w;
+        return none;
+    };
+    // TWISTED: two pairs, two names.
+    const QString t1 = harnessTwistWires(d, {QStringLiteral("w1"), QStringLiteral("w2")});
+    const QString t2 = harnessTwistWires(d, {QStringLiteral("w3"), QStringLiteral("w4")});
+    check(t1 == QLatin1String("T1") && t2 == QLatin1String("T2") && wire(QStringLiteral("w2")).twistGroup == t1 &&
+              wire(QStringLiteral("w4")).twistGroup == t2,
+          "grouping: two pairs twisted - two twisted groups, not one of four");
+    check(harnessTwistWires(d, {QStringLiteral("w5")}).isEmpty(), "grouping: one wire alone is not twisted");
+    check(harnessGroupCaption(d, wire(QStringLiteral("w1"))) == QLatin1String("twisted pair T1"), "grouping: said as a twisted pair");
+    // SCREENED, with its drain to a pin.
+    const size_t before = d.wires.size();
+    const QString s1 = harnessScreenWires(d, {QStringLiteral("w1"), QStringLiteral("w2")}, QStringLiteral("P1"), 8);
+    const HarnessWire& drain = d.wires.back();
+    check(s1 == QLatin1String("S1") && d.wires.size() == before + 1 && drain.fromConn == harnessInternalShieldKey(s1) &&
+              drain.toConn == QLatin1String("P1") && drain.toPin == 8 && drain.color == QLatin1String("DRAIN") &&
+              !harnessIsDrainRow(drain),
+          "grouping: a pair screened - its drain a wire from the screen to the pin given");
+    check(harnessGroupCaption(d, wire(QStringLiteral("w1"))).startsWith(QLatin1String("screened twisted pair")),
+          "grouping: said as a screened twisted pair");
+    // ONE CABLE, and a coax.
+    const QString cable = harnessCableWires(d, {QStringLiteral("w1"), QStringLiteral("w2"), QStringLiteral("w3"), QStringLiteral("w4")});
+    check(cable == QLatin1String("CABLE1") && wire(QStringLiteral("w3")).bundle == cable && wire(QStringLiteral("w1")).twistGroup == t1,
+          "grouping: four wires one cable - the pairs inside it still twisted");
+    const QString coax = harnessCoaxWires(d, {QStringLiteral("w5"), QStringLiteral("w6")});
+    check(coax == QLatin1String("COAX1") && wire(QStringLiteral("w5")).coaxRole == QLatin1String("signal") &&
+              wire(QStringLiteral("w6")).coaxRole == QLatin1String("shield") && wire(QStringLiteral("w6")).kind == QLatin1String("coax"),
+          "grouping: two wires a coax - the first its signal, the second its screen");
+    check(harnessCoaxWires(d, {QStringLiteral("w1")}).isEmpty(), "grouping: a coax is two wires, no fewer");
+    const std::vector<HarnessIssue> issues = validateHarness(d);
+    bool twistIssue = false;
+    for (const HarnessIssue& i : issues) twistIssue = twistIssue || i.key.startsWith(QLatin1String("twist"));
+    check(!twistIssue, "grouping: the pairs made are neighbours - nothing for the checks to say about them");
+    // TAKEN OUT AGAIN: the screen's drain goes with the last wire out of it.
+    check(harnessUngroupWires(d, {QStringLiteral("w1")}, HarnessGrouping::Screen) == 1 &&
+              std::any_of(d.wires.begin(), d.wires.end(), [&](const HarnessWire& w) { return w.fromConn == harnessInternalShieldKey(s1); }),
+          "ungroup: one wire out of the screen - the drain stays for the other");
+    harnessUngroupWires(d, {QStringLiteral("w2")}, HarnessGrouping::Screen);
+    check(d.wires.size() == before && std::none_of(d.wires.begin(), d.wires.end(), [&](const HarnessWire& w) { return w.fromConn == harnessInternalShieldKey(s1); }),
+          "ungroup: the last wire out - the drain goes with the screen");
+    check(harnessUngroupWires(d, {QStringLiteral("w5"), QStringLiteral("w6")}, HarnessGrouping::Cable) == 2 &&
+              wire(QStringLiteral("w6")).kind == QLatin1String("wire") && wire(QStringLiteral("w6")).bundle.isEmpty(),
+          "ungroup: the coax taken apart - two plain wires again");
+    harnessUngroupWires(d, {QStringLiteral("w1"), QStringLiteral("w2"), QStringLiteral("w3"), QStringLiteral("w4")}, HarnessGrouping::All);
+    check(std::all_of(d.wires.begin(), d.wires.end(), [](const HarnessWire& w) { return w.twistGroup.isEmpty() && w.bundle.isEmpty(); }),
+          "ungroup: all of it - every wire on its own");
+    // MOVED in the list.
+    check(harnessMoveWire(d, QStringLiteral("w5"), 0) && d.wires.front().id == QLatin1String("w5") && d.wires[1].id == QLatin1String("w1"),
+          "move: a wire to the top of the list");
+    check(harnessMoveWire(d, QStringLiteral("w5"), 3) && d.wires[2].id == QLatin1String("w5") && d.wires[3].id == QLatin1String("w3"),
+          "move: down, to before the wire that was third");
+    check(harnessMoveWire(d, QStringLiteral("w5"), 99) && d.wires.back().id == QLatin1String("w5") && !harnessMoveWire(d, QStringLiteral("nope"), 0),
+          "move: past the end - the last; no such wire, nothing moved");
+}
+
+// THE WIRES STEP, SIMPLER: one Add button (its menu a twisted pair, a screened pair, a cable, a coax), Group as on the rows
+// picked, a Group column saying what each row is part of, the panel editing every row picked at once - and the old
+// controls (Unify, All gauges, the column-wide ticks, the toolbar's coax, copy and swap) gone.
+void testWizardSimplerWiring() {
+    Document doc;
+    Editor editor;
+    editor.setDocument(&doc);
+    HarnessBuilderDialog wizard(&editor);
+    wizard.resize(1200, 800);
+    wizard.show();
+    QApplication::processEvents();
+    HarnessDef def;
+    for (const auto& [id, side] : {std::pair<const char*, HarnessSide>{"c1", HarnessSide::Left}, {"c2", HarnessSide::Right}}) {
+        HarnessConnector c;
+        c.id = QLatin1String(id);
+        c.designator = QString::fromLatin1(id).toUpper();
+        c.side = side;
+        c.pinCount = 10;
+        def.connectors.push_back(c);
+    }
+    wizard.loadDemand(def, QStringLiteral("simpler wiring"));
+    wizard.setStep(1);
+    QApplication::processEvents();
+    auto* table = wizard.findChild<QTableWidget*>(QStringLiteral("wizardWireTable"));
+    auto pick = [&](const QStringList& ids) {
+        table->clearSelection();
+        for (int row = 0; row < table->rowCount(); ++row)
+            if (auto* cell = table->cellWidget(row, 0); cell && ids.contains(cell->property("wireId").toString()))
+                table->selectionModel()->select(table->model()->index(row, 0), QItemSelectionModel::Select | QItemSelectionModel::Rows);
+        QApplication::processEvents();
+    };
+    auto wireOf = [&](const QString& id) -> HarnessWire {
+        for (const HarnessWire& w : wizard.definition().wires)
+            if (w.id == id) return w;
+        return {};
+    };
+    // THE OLD CONTROLS GONE.
+    bool oldThere = false;
+    for (QAbstractButton* b : wizard.findChildren<QAbstractButton*>())
+        oldThere = oldThere || b->text().startsWith(QLatin1String("Unify")) || b->text() == QLatin1String("Un-bundle") ||
+                   b->text() == QLatin1String("Finish unify") || b->text() == QLatin1String("Add cable");
+    for (QLabel* l : wizard.findChildren<QLabel*>()) oldThere = oldThere || l->text() == QLatin1String("All gauges") || l->text() == QLatin1String("Show on wire");
+    for (const char* name : {"wizardAddCoax", "wizardDuplicateConnection", "wizardSwapEnds", "wizardApplySelected"})
+        oldThere = oldThere || wizard.findChild<QWidget*>(QLatin1String(name));
+    check(table && !oldThere, "simpler wiring: Unify, All gauges, the column ticks and the toolbar's coax / copy / swap are gone");
+    auto* add = wizard.findChild<QToolButton*>(QStringLiteral("harnessBuilderAddWire"));
+    check(add && add->menu() && add->text() == QLatin1String("Add wire") && wizard.findChild<QAction*>(QStringLiteral("harnessBuilderAddTwisted")) &&
+              wizard.findChild<QAction*>(QStringLiteral("harnessBuilderAddCable")) && wizard.findChild<QAction*>(QStringLiteral("harnessBuilderAddCoax")),
+          "simpler wiring: one Add wire button - a twisted or screened pair, a cable, a coax on its menu");
+    // A TWISTED PAIR IN ONE CLICK, picked, said in its Group column.
+    const QStringList pair = wizard.addConnection(HarnessBuilderDialog::AddWhat::TwistedPair);
+    QApplication::processEvents();
+    check(pair.size() == 2 && !wireOf(pair[0]).twistGroup.isEmpty() && wireOf(pair[0]).twistGroup == wireOf(pair[1]).twistGroup &&
+              wireOf(pair[0]).fromPin != wireOf(pair[1]).fromPin,
+          "simpler wiring: Add twisted pair - two wires, twisted, on pins of their own");
+    QString caption;
+    for (int row = 0; row < table->rowCount(); ++row)
+        if (auto* cell = qobject_cast<QToolButton*>(table->cellWidget(row, 11)); cell && cell->objectName() == QLatin1String("wizardGroupCell"))
+            caption = cell->text();
+    check(caption.startsWith(QLatin1String("twisted pair")) && table->horizontalHeaderItem(11)->text() == QLatin1String("Group") &&
+              table->isColumnHidden(5) && table->isColumnHidden(10),
+          "simpler wiring: the Group column says it - no Bundle or Internal shield columns to type into");
+    // EDITED TOGETHER: both picked, one colour for both.
+    pick(pair);
+    auto* box = wizard.findChild<QGroupBox*>(QStringLiteral("wizardConnectionBox"));
+    check(box && box->title().startsWith(QLatin1String("2 connections picked")), "simpler wiring: two rows picked - the panel edits both");
+    if (auto* base = wizard.findChild<QComboBox*>(QStringLiteral("wizardBaseColor"))) base->setCurrentIndex(base->findData(QStringLiteral("RD")));
+    QApplication::processEvents();
+    check(wireOf(pair[0]).color == QLatin1String("RD") && wireOf(pair[1]).color == QLatin1String("RD"), "simpler wiring: a colour set once - both wires red");
+    check(wizard.findChild<QGroupBox*>(QStringLiteral("wizardConnectionBox")) &&
+              wizard.findChild<QGroupBox*>(QStringLiteral("wizardConnectionBox"))->title().startsWith(QLatin1String("2 connections")),
+          "simpler wiring: still both picked after the change");
+    // GROUP AS on what is picked: two more wires screened, their drain landed on P2; all four one cable.
+    const QStringList two = {wizard.addConnection(HarnessBuilderDialog::AddWhat::Wire).value(0),
+                             wizard.addConnection(HarnessBuilderDialog::AddWhat::Wire).value(0)};
+    pick(two);
+    const size_t before = wizard.definition().wires.size();
+    const QString screen = wizard.groupSelectedWires(HarnessBuilderDialog::GroupAs::Screened, QStringLiteral("c2"));
+    const HarnessWire drain = wizard.definition().wires.back();
+    check(!screen.isEmpty() && wizard.definition().wires.size() == before + 1 && wireOf(two[1]).shieldGroup == screen &&
+              drain.fromConn == harnessInternalShieldKey(screen) && drain.toConn == QLatin1String("c2") && drain.toPin > 0,
+          "simpler wiring: Group as Screened - the two wires screened, the drain landed on P2's next free pin");
+    pick(pair + two);
+    const QString cable = wizard.groupSelectedWires(HarnessBuilderDialog::GroupAs::Cable);
+    check(!cable.isEmpty() && wireOf(pair[0]).bundle == cable && wireOf(two[1]).bundle == cable && !wireOf(pair[0]).twistGroup.isEmpty(),
+          "simpler wiring: Group as One cable - four wires one cable, the pair still twisted inside it");
+    pick(two);
+    wizard.groupSelectedWires(HarnessBuilderDialog::GroupAs::UngroupScreen);
+    check(wireOf(two[0]).shieldGroup.isEmpty() &&
+              std::none_of(wizard.definition().wires.begin(), wizard.definition().wires.end(), [&](const HarnessWire& w) { return w.fromConn == harnessInternalShieldKey(screen); }),
+          "simpler wiring: Not screened - the screen and its drain gone");
+    wizard.groupSelectedWires(HarnessBuilderDialog::GroupAs::Twisted);
+    check(wireOf(two[0]).twistGroup == wireOf(two[1]).twistGroup && wireOf(two[0]).twistGroup != wireOf(pair[0]).twistGroup,
+          "simpler wiring: Group as Twisted - a second pair, named apart from the first");
+    // A COAX FROM THE MENU; copy and swap from the row menu.
+    const QStringList coax = wizard.addConnection(HarnessBuilderDialog::AddWhat::Coax);
+    check(coax.size() == 2 && wireOf(coax[0]).coaxRole == QLatin1String("signal") && harnessCoaxShield(wireOf(coax[1])),
+          "simpler wiring: Add coax - a signal and its screen");
+    pick({two[0]});
+    const HarnessWire was = wireOf(two[0]);
+    wizard.swapSelectedWireEnds();
+    check(wireOf(two[0]).fromConn == was.toConn && wireOf(two[0]).toPin == was.fromPin, "simpler wiring: Swap ends, from the row's menu");
+    const size_t count = wizard.definition().wires.size();
+    wizard.duplicateSelectedWire();
+    check(wizard.definition().wires.size() > count, "simpler wiring: Duplicate, from the row's menu");
+    check(wizard.groupSelectedWires(HarnessBuilderDialog::GroupAs::Coax).isEmpty(), "simpler wiring: a coax is two wires - one picked, nothing made");
+    if (std::getenv("LOOPWIRE_SHOTS")) {
+        for (QToolButton* b : wizard.findChildren<QToolButton*>())
+            if (b->text() == QLatin1String("Expand all")) b->click();
+        pick(pair);
+        QApplication::processEvents();
+        wizard.grab().save(QStringLiteral("wires_step.png"));
+    }
+}
+
 int run_harnessbuilder_tests() {
     g_fail = 0;
     std::printf("harness builder tests:\n");
@@ -1159,6 +1355,8 @@ int run_harnessbuilder_tests() {
     testHarnessDemand();
     testWizardTablesAndBom();
     testWizardSecondRound();
+    testWireGrouping();
+    testWizardSimplerWiring();
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }
