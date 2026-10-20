@@ -30,6 +30,7 @@
 #include <QApplication>
 #include <limits>
 #include <QPainter>
+#include <QPixmap>
 #include <QPainterPath>
 #include <QPushButton>
 #include <QScrollArea>
@@ -224,6 +225,28 @@ QWidget* scrolled(QWidget* w) {
     sa->setFrameShape(QFrame::NoFrame);
     sa->setWidget(w);
     return sa;
+}
+
+// A FIGURE THAT IS NOT TAKEN: the field red, an "x" under the pointer over it, and why in its tooltip - or, taken, as it
+// was. Marked "invalid" for the tests to see.
+void markNotTaken(QAbstractSpinBox* s, bool bad, const QString& why) {
+    if (!s) return;
+    static const QCursor kNo = [] {
+        QPixmap px(24, 24);
+        px.fill(Qt::transparent);
+        QPainter p(&px);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setPen(QPen(QColor(0xe0, 0x52, 0x52), 3.0, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(QPointF(5, 5), QPointF(19, 19));
+        p.drawLine(QPointF(19, 5), QPointF(5, 19));
+        return QCursor(px, 12, 12);
+    }();
+    s->setProperty("invalid", bad);
+    s->setStyleSheet(bad ? QStringLiteral("QAbstractSpinBox{border:1px solid #e05252;color:#e05252;}") : QString());
+    s->setToolTip(bad ? why : s->property("goodTip").toString());
+    for (QWidget* w : s->findChildren<QWidget*>()) w->setCursor(bad ? kNo : QCursor(Qt::IBeamCursor));
+    if (bad) s->setCursor(kNo);
+    else s->unsetCursor();
 }
 
 QString layerName(const QString& key) {
@@ -2327,11 +2350,27 @@ QWidget* BrickWizardDialog::buildRunPage() {
         strokeDrawn_ = spin("brickStrokeDrawn", 1.0, 100000.0, 10.0, QStringLiteral(" mm"));
         strokeDrawn_->setToolTip(QStringLiteral("How long the stroked run's body is drawn, between its fans - for the "
                                                 "picture; the dimensions say its real length"));
+        strokeDrawn_->setProperty("goodTip", strokeDrawn_->toolTip());
         strokeRow_ = withAuto(strokeDrawn_, "brickStrokeDrawnAuto");
         int lengthRow = -1;
         QFormLayout::ItemRole role;
         overall->getWidgetPosition(length_->parentWidget(), &lengthRow, &role);
         overall->insertRow(lengthRow + 1, QStringLiteral("Body drawn"), strokeRow_);
+        // ITS MARK: W, how far apart its two strokes are, and L, how long each is - each on Auto unless typed.
+        strokeGap_ = spin("brickStrokeGap", 0.5, 1000.0, 0.5, QStringLiteral(" mm"));
+        strokeGap_->setToolTip(QStringLiteral("W: how far apart the mark's two strokes are"));
+        strokeLen_ = spin("brickStrokeLen", 1.0, 1000.0, 1.0, QStringLiteral(" mm"));
+        strokeLen_->setToolTip(QStringLiteral("L: how long each of the mark's strokes is"));
+        strokeMarkRow_ = new QWidget(page);
+        auto* mh = new QHBoxLayout(strokeMarkRow_);
+        mh->setContentsMargins(0, 0, 0, 0);
+        mh->setSpacing(4);
+        mh->addWidget(new QLabel(QStringLiteral("W"), strokeMarkRow_));
+        mh->addWidget(withAuto(strokeGap_, "brickStrokeGapAuto"));
+        mh->addWidget(new QLabel(QStringLiteral("L"), strokeMarkRow_));
+        mh->addWidget(withAuto(strokeLen_, "brickStrokeLenAuto"));
+        mh->addStretch(1);
+        overall->insertRow(lengthRow + 2, QStringLiteral("Mark"), strokeMarkRow_);
         connect(strokeOn_, &QCheckBox::toggled, this, [this](bool) {
             writeRun();
             loadPanel();
@@ -2475,7 +2514,7 @@ QWidget* BrickWizardDialog::buildRunPage() {
     transForm->addRow(QStringLiteral("Width"), withAuto(transitionWidth_, "brickTransitionWidthAuto"));
     transitionForm_ = transForm;   // its part number and its lengths join it (the branches section makes them)
     for (QDoubleSpinBox* s : {length_, wireWidth_, fanStart_, fanFinish_, knee_, fanKnee_, fanScale_,
-                              bodyScale_, bodyWidth_, trunk_, transitionWidth_, strokeDrawn_})
+                              bodyScale_, bodyWidth_, trunk_, transitionWidth_, strokeDrawn_, strokeGap_, strokeLen_})
         connect(s, &QDoubleSpinBox::valueChanged, this, [this, s](double) {
             // A figure typed in takes it over from Auto.
             if (QToolButton* a = autoOf_.value(s)) {
@@ -3889,7 +3928,7 @@ void BrickWizardDialog::loadPanel() {
     const QSignalBlocker s1(wires_), s2(length_), s3(wireWidth_), s4(fanStart_), s5(fanFinish_),
         s6(knee_), s7(fanKnee_), s8(fanScale_), s9(transitions_), s10(bodyScale_), s11(bodyWidth_),
         s12(dimTotal_), s13(dimFans_), s14(dimBetween_), s15(transitionWidth_),
-        s16(trunk_), s17(strokeDrawn_);
+        s16(trunk_), s17(strokeDrawn_), s18(strokeGap_), s19(strokeLen_);
     const BrickRunSpec& r = b->run;
     runKind_->setText(brickTypeName(b->type));
     wires_->setValue(r.wires);
@@ -3968,7 +4007,9 @@ void BrickWizardDialog::loadPanel() {
                                           {bodyWidth_, r.bodyWidthMm, r.bodyWidthMm <= 1e-9},
                                           {transitionWidth_, r.transitionWidthMm, r.transitionWidthMm <= 1e-9},
                                           {trunk_, double(r.trunkWires), r.trunkWires <= 0},
-                                          {strokeDrawn_, r.strokeDrawnMm, r.strokeDrawnMm <= 1e-9}}) {
+                                          {strokeDrawn_, r.strokeDrawnMm, r.strokeDrawnMm <= 1e-9},
+                                          {strokeGap_, r.strokeGapMm, r.strokeGapMm <= 1e-9},
+                                          {strokeLen_, r.strokeLenMm, r.strokeLenMm <= 1e-9}}) {
         QToolButton* a = autoOf_.value(spinBox);
         const QSignalBlocker ba(a);
         a->setChecked(isAuto);
@@ -4050,8 +4091,11 @@ void BrickWizardDialog::loadPanel() {
     {
         const QSignalBlocker so(strokeOn_), sd(strokeDrawn_);
         strokeOn_->setChecked(r.stroke);
-        strokeDrawn_->setMaximum(std::max(1.0, r.lengthMm));
-        if (runForm_) runForm_->setRowVisible(strokeRow_, r.stroke);
+        markNotTaken(strokeDrawn_, false, QString());
+        if (runForm_) {
+            runForm_->setRowVisible(strokeRow_, r.stroke);
+            runForm_->setRowVisible(strokeMarkRow_, r.stroke);
+        }
     }
     loadLayerPart();
     loadLabels();
@@ -4094,7 +4138,9 @@ void BrickWizardDialog::loadBranches() {
                                           : r.transitionInsideEnds == RunEnds::Finish ? 1
                                                                                        : 2);
     }
-    if (transSideForm_[0]) transSideForm_[0]->setRowVisible(transInsideEnds_, r.transitionSame && r.transitionInside);
+    // WHICH ONE IS INSIDE only where there is a choice: both ends the same, inside, and a transition at each end.
+    if (transSideForm_[0])
+        transSideForm_[0]->setRowVisible(transInsideEnds_, r.transitionSame && r.transitionInside && r.transitions == RunEnds::Both);
     {
         const QSignalBlocker t1(transStretch_), t2(transStretchLen_), t3(transStretchAuto_);
         transStretch_->setChecked(r.transitionStretch);
@@ -4127,13 +4173,20 @@ void BrickWizardDialog::loadBranches() {
             // NONE: none of its figures - unless the cable divides into branches under heatshrink, where it has one there
             // all the same.
             const bool none = r.transitions == RunEnds::None && r.branchCover != 1;
-            transSame_->setVisible(!none);
-            transSide_[0]->setVisible(!none);
-            transSide_[0]->setTitle(apart ? QStringLiteral("Start") : QStringLiteral("Both sides"));
-            transSide_[1]->setVisible(apart && !none);
-            transSideForm_[0]->setRowVisible(transLenFinish_->parentWidget(), !apart);
+            // AT ONE END ONLY: no "both sides" to ask about - that end's figures, under its name.
+            const bool one = r.transitions == RunEnds::Start || r.transitions == RunEnds::Finish;
+            const bool fin = r.transitions == RunEnds::Finish;
+            transSame_->setVisible(!none && !one);
+            transSide_[0]->setVisible(!none && !(one && fin && apart));
+            transSide_[0]->setTitle(one ? (fin ? QStringLiteral("Finish") : QStringLiteral("Start"))
+                                        : apart ? QStringLiteral("Start") : QStringLiteral("Both sides"));
+            transSide_[1]->setVisible(apart && !none && (!one || fin));
+            transSideForm_[0]->setRowVisible(transLenFinish_->parentWidget(), !apart && (!one || fin));
+            transSideForm_[0]->setRowVisible(transLenStart_->parentWidget(), apart || !one || !fin);
             if (auto* l = qobject_cast<QLabel*>(transSideForm_[0]->labelForField(transLenStart_->parentWidget())))
-                l->setText(apart ? QStringLiteral("Length") : QStringLiteral("Length, start"));
+                l->setText(apart || one ? QStringLiteral("Length") : QStringLiteral("Length, start"));
+            if (auto* l = qobject_cast<QLabel*>(transSideForm_[0]->labelForField(transLenFinish_->parentWidget())))
+                l->setText(one ? QStringLiteral("Length") : QStringLiteral("Length, finish"));
         }
         {
             const QSignalBlocker f1(transLenFin2_), f2(transLenFin2Auto_);
@@ -4249,7 +4302,9 @@ void BrickWizardDialog::showActuals() {
                                   {fanKnee_, a.fanKnee},
                                   {bodyWidth_, a.bodyWidth},
                                   {trunk_, a.trunk},
-                                  {strokeDrawn_, a.strokeDrawn}}) {
+                                  {strokeDrawn_, a.strokeDrawn},
+                                  {strokeGap_, a.strokeGap},
+                                  {strokeLen_, a.strokeLen}}) {
         QToolButton* btn = autoOf_.value(spinBox);
         if (!btn || !btn->isChecked()) continue;
         const QSignalBlocker block(spinBox);
@@ -4483,7 +4538,8 @@ bool BrickWizardDialog::eventFilter(QObject* o, QEvent* e) {
             !(static_cast<QMouseEvent*>(e)->buttons() & Qt::LeftButton)) {
             const QString over = previewPartAt(static_cast<QMouseEvent*>(e)->position());
             const Vec2 overAt = preview_->worldAt(static_cast<QMouseEvent*>(e)->position());
-            const bool overStroke = over.isEmpty() && previewStrokeAt(overAt, nullptr) != nullptr;
+            const bool overStroke = over.isEmpty() && (previewStrokeAt(overAt, nullptr) != nullptr ||
+                                                       previewOverShrinkAt(overAt, nullptr) != nullptr);
             const bool overDim = over.isEmpty() && !overStroke && !previewDimAt(overAt).isEmpty();
             preview_->setCursor(!over.isEmpty() ? Qt::OpenHandCursor
                                 : overStroke    ? Qt::SizeHorCursor
@@ -4504,18 +4560,27 @@ bool BrickWizardDialog::eventFilter(QObject* o, QEvent* e) {
                 showGrabRings();
             }
         }
-        // A STROKE'S BREAK MARK, TAKEN HOLD OF AND SLID ALONG THE BODY: where it is pulled to between the fans is where it
-        // stays (its share of the way, on the run).
+        // A STROKE'S BREAK MARK, OR A SHORT HEATSHRINK OVER THE BODY, TAKEN HOLD OF AND SLID ALONG IT: where it is pulled to
+        // between the fans is where it stays (its share of the way, on the run).
         if (e->type() == QEvent::MouseButtonPress) {
             auto* me = static_cast<QMouseEvent*>(e);
             if (me->button() == Qt::LeftButton && me->modifiers() == Qt::NoModifier) {
                 QString id;
-                if (const Entity* mark = previewStrokeAt(preview_->worldAt(me->position()), &id)) {
+                const Vec2 at = preview_->worldAt(me->position());
+                const Entity* mark = previewStrokeAt(at, &id);
+                overDragIndex_ = -1;
+                if (!mark)
+                    if ((mark = previewOverShrinkAt(at, &id)))
+                        overDragIndex_ = mark->meta.value(QStringLiteral("brickOverShrinkIndex")).toInt();
+                if (mark) {
                     strokeDrag_ = id;
                     strokePath_.clear();
-                    const QJsonArray p = mark->meta.value(QStringLiteral("brickStrokePath")).toArray();
+                    const QJsonArray p = mark->meta.value(overDragIndex_ >= 0 ? QStringLiteral("brickOverShrinkPath")
+                                                                              : QStringLiteral("brickStrokePath"))
+                                             .toArray();
                     for (int k = 0; k + 1 < p.size(); k += 2) strokePath_.push_back(Vec2{p[k].toDouble(), p[k + 1].toDouble()});
-                    status_->setText(QStringLiteral("Stroke - slide it along the body"));
+                    status_->setText(overDragIndex_ >= 0 ? QStringLiteral("Heatshrink - slide it along the body")
+                                                         : QStringLiteral("Stroke - slide it along the body"));
                     return true;
                 }
             }
@@ -4535,7 +4600,16 @@ bool BrickWizardDialog::eventFilter(QObject* o, QEvent* e) {
                 acc += len;
             }
             if (Brick* b = design_.brick(strokeDrag_); b && acc > 1e-9) {
-                b->run.strokeAt = std::round(std::clamp(bestAt / acc, 0.05, 0.95) * 1000.0) / 1000.0;
+                if (overDragIndex_ >= 0) {
+                    // EACH PIECE ITS OWN PLACE from now on: those not yet moved where they were, spread evenly.
+                    const int n = b->run.overShrinkCount;
+                    QList<double>& at = b->run.overShrinkAt;
+                    for (int k = static_cast<int>(at.size()); k < n; ++k) at << (k + 0.5) / std::max(1, n);
+                    if (overDragIndex_ < at.size())
+                        at[overDragIndex_] = std::round(std::clamp(bestAt / acc, 0.0, 1.0) * 1000.0) / 1000.0;
+                } else {
+                    b->run.strokeAt = std::round(std::clamp(bestAt / acc, 0.05, 0.95) * 1000.0) / 1000.0;
+                }
                 refreshPreview();
             }
             return true;
@@ -4785,7 +4859,14 @@ void BrickWizardDialog::writeRun() {
     r.bodyScalePct = bodyScale_->value();
     r.bodyWidthMm = manual(bodyWidth_) ? bodyWidth_->value() : 0.0;
     r.stroke = strokeOn_->isChecked();
-    r.strokeDrawnMm = manual(strokeDrawn_) ? std::min(strokeDrawn_->value(), r.lengthMm) : 0.0;
+    // A BODY DRAWN LONGER THAN THE RUN IS NOT TAKEN: the field says so (red, an "x" under the pointer), and the figure the
+    // run had stays.
+    const bool tooLong = manual(strokeDrawn_) && strokeDrawn_->value() > r.lengthMm + 1e-9;
+    markNotTaken(strokeDrawn_, tooLong,
+                 QStringLiteral("Not taken: the body can't be drawn longer than the run is (%1 mm)").arg(r.lengthMm, 0, 'f', 1));
+    if (!tooLong) r.strokeDrawnMm = manual(strokeDrawn_) ? strokeDrawn_->value() : 0.0;
+    r.strokeGapMm = manual(strokeGap_) ? strokeGap_->value() : 0.0;
+    r.strokeLenMm = manual(strokeLen_) ? strokeLen_->value() : 0.0;
     r.overShrinkCount = overShrinkOn_->currentIndex() == 1 ? overShrinkCount_->value() : 0;
     r.overShrinkMm = overShrinkLen_->value();
     r.overShrinkPart = overShrinkPart_->currentData().toString();
@@ -4928,6 +5009,19 @@ const Entity* BrickWizardDialog::previewStrokeAt(const Vec2& world, QString* id)
         // Within the reach of its strokes either way across, and a little along.
         const double reach = std::max(2.0, e.meta.value(QStringLiteral("size")).toDouble(6.0));
         if (distance(world, e.a) > reach) continue;
+        if (id) *id = e.meta.value(QStringLiteral("brickId")).toString();
+        return &e;
+    }
+    return nullptr;
+}
+
+const Entity* BrickWizardDialog::previewOverShrinkAt(const Vec2& world, QString* id) const {
+    for (const Entity& e : lastEnts_) {
+        if (e.meta.value(QStringLiteral("mechRole")).toString() != QLatin1String("overShrink")) continue;
+        const Bounds bb = e.bounds();
+        if (!bb.valid || world.x < bb.min.x - 1.0 || world.x > bb.max.x + 1.0 || world.y < bb.min.y - 1.0 ||
+            world.y > bb.max.y + 1.0)
+            continue;
         if (id) *id = e.meta.value(QStringLiteral("brickId")).toString();
         return &e;
     }

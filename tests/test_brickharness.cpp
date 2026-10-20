@@ -531,7 +531,11 @@ void testRoundThreeModel() {
     check(said.contains(QStringLiteral("GND")) && said.contains(QStringLiteral("L3")) &&
               said.contains(QStringLiteral("W1")),
           "labels: a wire label with no text says its net; the others say what they were given");
-    check(modelParts >= 3 * 3, "labels: each drawn as the house label model, not a plain box");
+    // THE HOUSE MODEL, ITS WORDS ON IT: its mask and outline each - the lines that stood for printing give way to the
+    // text, written on the label itself as well as called out.
+    int onLabel = 0;
+    for (const Entity* t : texts) onLabel += t->type == EntityType::Text ? 1 : 0;
+    check(modelParts >= 3 * 2 && onLabel >= 3, "labels: each drawn as the house label model, its text on it, not a plain box");
     // CENTRED ON ITS WIRE: the label's middle lies on that wire's own path, and wire 1 is the top one.
     if (run) {
         const auto strands = twistedPairStrands(*run);
@@ -10172,8 +10176,17 @@ void testRoundSeventyTwo() {
         if (e.type == EntityType::LengthBreak) shown = &e;
     check(shown != nullptr && dlg.design().brick(r)->run.stroke, "stroke: ticked, the mark is on the preview at once");
     auto* bodyDrawn = dlg.findChild<QDoubleSpinBox*>(QStringLiteral("brickStrokeDrawn"));
-    check(bodyDrawn && bodyDrawn->isVisibleTo(&dlg) && bodyDrawn->maximum() <= 150.0 + 1e-9,
-          "stroke: ticked, the body's drawn length is asked for under the length - never more than the run");
+    check(bodyDrawn && bodyDrawn->isVisibleTo(&dlg), "stroke: ticked, the body's drawn length is asked for under the length");
+    // LONGER THAN THE RUN: typed, but not taken - the field marked so, the run's figure as it was.
+    if (bodyDrawn) {
+        const double was = dlg.design().brick(r)->run.strokeDrawnMm;
+        bodyDrawn->setValue(200.0);
+        check(bodyDrawn->property("invalid").toBool() && std::abs(dlg.design().brick(r)->run.strokeDrawnMm - was) < 1e-9,
+              "stroke: a body drawn longer than the run is not taken - the field says so");
+        bodyDrawn->setValue(60.0);
+        check(!bodyDrawn->property("invalid").toBool() && std::abs(dlg.design().brick(r)->run.strokeDrawnMm - 60.0) < 1e-9,
+              "stroke: one within the run is taken");
+    }
     if (!shown) return;
     const QJsonArray path = shown->meta.value(QStringLiteral("brickStrokePath")).toArray();
     const Vec2 to{path[path.size() - 2].toDouble(), path[path.size() - 1].toDouble()};
@@ -10318,6 +10331,117 @@ void testRoundSeventyThree() {
     auto* stack = dlg.findChild<QListWidget*>(QStringLiteral("brickStack"));
     check(stack && stack->count() > 0 && stack->item(0)->text().startsWith(QLatin1String("Bridged wires (from main harness)")),
           "panel: a branch's wires are said to be the main harness's, bridged");
+}
+
+// A CABLE DIVIDED AT BOTH ENDS - any number of branches at each - every part joined to it; THE STROKE'S MARK, W and L;
+// SHORT HEATSHRINKS PUT WHERE THEY ARE MOVED TO, NOT SEEN THROUGH; and a transition at one end only asks nothing of both.
+void testRoundSeventyFour() {
+    BrickDesign d;
+    const QString p1 = d.addBrick(BrickType::End, PartKind::Connector, 0, 0);
+    const QString p2 = d.addBrick(BrickType::End, PartKind::Connector, 0, 4);
+    const QString b1 = d.addBrick(BrickType::Run, PartKind::Wire, 2, 0);
+    const QString b2 = d.addBrick(BrickType::Run, PartKind::Wire, 2, 4);
+    const QString c = d.addBrick(BrickType::Run, PartKind::Cable, 4, 2);
+    const QString b3 = d.addBrick(BrickType::Run, PartKind::Wire, 6, 1);
+    const QString b4 = d.addBrick(BrickType::Run, PartKind::Wire, 6, 4);
+    const QString p3 = d.addBrick(BrickType::End, PartKind::Connector, 8, 0);
+    const QString p4 = d.addBrick(BrickType::End, PartKind::Connector, 8, 4);
+    for (const QString& b : {b1, b2, b3, b4}) makeBranch(*d.brick(b));
+    bool linked = true;
+    for (auto [x, y] : {std::pair<QString, QString>{p1, b1}, {p2, b2}, {b1, c}, {b2, c}, {c, b3}, {c, b4}, {b3, p3}, {b4, p4}})
+        linked = d.connect(x, y) && linked;
+    check(linked, "both ends: two branches joined at each end of the cable");
+    d.brick(c)->run.wires = 6;
+    d.brick(c)->run.stack = {QStringLiteral("wires"), QStringLiteral("cable")};
+    syncBridgeWires(d);
+    BrickBuild b = buildBrickHarness(d, nullptr);
+    // Each part reached: a run of the cable's (or one of its branches') ending at its face.
+    auto reached = [&](const BrickBuild& bb, const QString& part) {
+        const Vec2 face = bb.faces.value(part + QStringLiteral(":0")).centre;
+        for (const Entity& e : bb.entities) {
+            if (e.type != EntityType::TwistedPair || e.points.size() < 2) continue;
+            if (distance(e.points.front(), face) < 1.0 || distance(e.points.back(), face) < 1.0) return true;
+        }
+        return false;
+    };
+    check(reached(b, p1) && reached(b, p2) && reached(b, p3) && reached(b, p4),
+          "both ends: every part is reached - the cable divides at its start as well as its finish");
+    const double apart = std::abs(b.faces.value(p3 + QStringLiteral(":0")).centre.x - b.faces.value(p1 + QStringLiteral(":0")).centre.x);
+    std::printf("  both ends: the parts at the two ends %.1f apart\n", apart);
+    check(apart > d.brick(c)->run.lengthMm, "both ends: the parts at the two ends laid the cable's length and the branches' apart");
+
+    // THE MARK: W and L as typed - Auto, as wide as the body wants.
+    d.brick(c)->run.stroke = true;
+    d.brick(c)->run.lengthMm = 500.0;
+    d.brick(c)->run.strokeGapMm = 7.0;
+    d.brick(c)->run.strokeLenMm = 30.0;
+    b = buildBrickHarness(d, nullptr);
+    const Entity* mark = nullptr;
+    for (const Entity& e : b.entities)
+        if (e.type == EntityType::LengthBreak) mark = &e;
+    check(mark && std::abs(mark->meta.value(QStringLiteral("gap")).toDouble() - 7.0) < 1e-9 &&
+              std::abs(mark->meta.value(QStringLiteral("size")).toDouble() - 15.0) < 1e-9,
+          "stroke mark: its strokes W apart and L long, as typed");
+    d.brick(c)->run.strokeGapMm = d.brick(c)->run.strokeLenMm = 0.0;
+    b = buildBrickHarness(d, nullptr);
+    check(b.actual.value(c).strokeLen > 1.0 && b.actual.value(c).strokeGap > 0.5, "stroke mark: on Auto, what it came to told to the window");
+    check(BrickDesign::fromJson([&] {
+              BrickDesign t = d;
+              t.brick(c)->run.strokeGapMm = 4.0;
+              t.brick(c)->run.strokeLenMm = 22.0;
+              return t.toJson();
+          }())
+                  .brick(c)
+                  ->run.strokeLenMm == 22.0,
+          "stroke mark: kept with the design");
+
+    // SHORT HEATSHRINKS: where each is put, and over what is under them.
+    d.brick(c)->run.stroke = false;
+    d.brick(c)->run.lengthMm = 300.0;
+    d.brick(c)->run.overShrinkCount = 2;
+    d.brick(c)->run.overShrinkMm = 10.0;
+    b = buildBrickHarness(d, nullptr);
+    auto pieces = [&](const BrickBuild& bb) {
+        std::vector<Vec2> at;
+        int masks = 0;
+        for (const Entity& e : bb.entities) {
+            if (e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("overShrink")) {
+                const Bounds pb = e.bounds();
+                at.push_back((pb.min + pb.max) * 0.5);
+            }
+            if (e.type == EntityType::Wipeout && e.meta.value(QStringLiteral("mechRole")).toString() == QLatin1String("overShrinkMask"))
+                ++masks;
+        }
+        return std::make_pair(at, masks);
+    };
+    const auto even = pieces(b);
+    check(even.first.size() == 2 && even.second == 2, "heatshrink over the body: each piece over a mask - not seen through");
+    d.brick(c)->run.overShrinkAt = {0.1};
+    const auto moved = pieces(buildBrickHarness(d, nullptr));
+    check(moved.first.size() == 2 && distance(moved.first[0], even.first[0]) > 5.0 && distance(moved.first[1], even.first[1]) < 1e-6,
+          "heatshrink over the body: one moved goes where it is put, the other stays");
+
+    // A TRANSITION AT ONE END ONLY: nothing to ask about both.
+    Document doc;
+    Editor ed;
+    ed.setDocument(&doc);
+    BrickWizardDialog dlg(&ed);
+    dlg.resize(1400, 900);
+    dlg.show();
+    dlg.design() = d;
+    dlg.selectBrick(c);
+    QApplication::processEvents();
+    auto* trans = dlg.findChild<QComboBox*>(QStringLiteral("brickTransitions"));
+    auto* same = dlg.findChild<QCheckBox*>(QStringLiteral("brickTransSame"));
+    check(trans && same, "transition: its where and its both-sides tick");
+    if (trans && same) {
+        trans->setCurrentIndex(3);
+        QApplication::processEvents();
+        const bool bothAsks = same->isVisibleTo(&dlg);
+        trans->setCurrentIndex(2);
+        QApplication::processEvents();
+        check(bothAsks && !same->isVisibleTo(&dlg), "transition: at one end only, no both-sides tick");
+    }
 }
 
 void testFreestyleRouting() {
@@ -12957,6 +13081,7 @@ int run_brickharness_tests() {
     ROUND(testRoundSeventyOne);
     ROUND(testRoundSeventyTwo);
     ROUND(testRoundSeventyThree);
+    ROUND(testRoundSeventyFour);
     ROUND(testFreestyleRouting);
     ROUND(testRoutingEnhancements);
     ROUND(test3DViewControls);

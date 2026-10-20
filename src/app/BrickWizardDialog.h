@@ -398,6 +398,12 @@ private:
     QCheckBox* strokeOn_ = nullptr;          // the run drawn short and broken
     QDoubleSpinBox* strokeDrawn_ = nullptr;  // how long its body is drawn (A: Auto)
     QWidget* strokeRow_ = nullptr;           // that field's row, shown while stroked
+    QDoubleSpinBox* strokeGap_ = nullptr;    // its mark's W: its strokes apart (A: Auto)
+    QDoubleSpinBox* strokeLen_ = nullptr;    // its mark's L: each stroke's length (A: Auto)
+    QWidget* strokeMarkRow_ = nullptr;
+    int overDragIndex_ = -1;                 // the heatshrink over the body being slid along it, or -1. Not saved.
+    // A short heatshrink over a body at a point on the preview (its run's id into `id`), or none.
+    const Entity* previewOverShrinkAt(const Vec2& world, QString* id) const;
     QFormLayout* bridgeForm_ = nullptr;      // the bridge wires' own rows
     QComboBox* bodyType_ = nullptr;          // what the body is: its outermost layer
     QFormLayout* overShrinkForm_ = nullptr;  // heatshrink over the body

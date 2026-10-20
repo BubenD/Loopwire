@@ -136,11 +136,17 @@ struct BrickRunSpec {
     bool stroke = false;
     double strokeDrawnMm = 0.0;
     double strokeAt = 0.5;
+    // ITS MARK: how far apart its two strokes are (W) and how long each one is (L) - 0, Auto (as the body is wide).
+    double strokeGapMm = 0.0;
+    double strokeLenMm = 0.0;
     // SHORT HEATSHRINKS OVER THE BODY: so many of them (0, none), each so long, spread evenly along the body between the
     // fans - and their part number.
     int overShrinkCount = 0;
     double overShrinkMm = 20.0;
     QString overShrinkPart;
+    // WHERE EACH ONE IS: its middle's share of the way along the body, one for each - moved on the preview. Short of one
+    // for each (empty, as ever), the rest spread evenly.
+    QList<double> overShrinkAt;
     // WHICH SIDE each dimension goes: below the run, or above it. The whole length below, the fans and between them
     // above, unless told.
     bool dimTotalBelow = true;
@@ -513,6 +519,8 @@ struct BrickActual {
     double transitionLenStart = 0.0;   // each transition's length, as the drawing makes it
     double transitionLenFinish = 0.0;
     double strokeDrawn = 0.0;          // a stroked run's body (between its fans) as drawn
+    double strokeGap = 0.0;            // its mark: how far apart its strokes are, and how long each is, as drawn
+    double strokeLen = 0.0;
 };
 
 struct BrickBuild {

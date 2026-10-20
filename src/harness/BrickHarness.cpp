@@ -576,6 +576,9 @@ QJsonObject BrickDesign::toJson() const {
                                                    {"stroke", r.stroke},
                                                    {"strokeDrawnMm", r.strokeDrawnMm},
                                                    {"strokeAt", r.strokeAt},
+                                                   {"strokeGapMm", r.strokeGapMm},
+                                                   {"strokeLenMm", r.strokeLenMm},
+                                                   {"overShrinkAt", numbersJson(r.overShrinkAt)},
                                                    {"overShrinkCount", r.overShrinkCount},
                                                    {"overShrinkMm", r.overShrinkMm},
                                                    {"overShrinkPart", r.overShrinkPart},
@@ -771,6 +774,11 @@ BrickDesign BrickDesign::fromJson(const QJsonObject& o) {
             s.overShrinkCount = std::max(0, r.value(QStringLiteral("overShrinkCount")).toInt(0));
             s.overShrinkMm = std::max(0.5, r.value(QStringLiteral("overShrinkMm")).toDouble(20.0));
             s.overShrinkPart = r.value(QStringLiteral("overShrinkPart")).toString();
+            s.strokeGapMm = std::max(0.0, r.value(QStringLiteral("strokeGapMm")).toDouble(0.0));
+            s.strokeLenMm = std::max(0.0, r.value(QStringLiteral("strokeLenMm")).toDouble(0.0));
+            s.overShrinkAt.clear();
+            for (const QJsonValue x : r.value(QStringLiteral("overShrinkAt")).toArray())
+                s.overShrinkAt << std::clamp(x.toDouble(0.5), 0.0, 1.0);
             s.trunkWires = r.value(QStringLiteral("trunkWires")).toInt(0);
             s.pairs = std::max(1, r.value(QStringLiteral("pairs")).toInt(1));
             s.dimTotalBelow = r.value(QStringLiteral("dimTotalBelow")).toBool(true);
@@ -2140,6 +2148,9 @@ static BrickBuild buildBrickDrawn(const BrickDesign& design, const BrickDesign& 
         int splitOf = -1;
         bool flipped = false;   // built from the special's finish side to its start
         bool viaBranch = false; // a branch after the cable divides, drawn as the BRANCH brick (special) says
+        // DIVIDED AT BOTH ENDS: a branch out of the cable's start - out of the far end of its trunk, which runs loose from
+        // where it divides at its finish.
+        bool atStart = false;
     };
     std::vector<Branch> branches;
     // THE BRANCH BRICK each part is reached through, by "<cable>|<part>".
@@ -2259,7 +2270,47 @@ static BrickBuild buildBrickDrawn(const BrickDesign& design, const BrickDesign& 
             std::swap(a, b);
             flipped = !flipped;
         }
+        // A CABLE DIVIDED AT BOTH ENDS - branches (or parts) at its start as well as its finish: its trunk runs from where
+        // it divides at the finish, its length, to where it divides at the start; the parts at the start are taken out of
+        // there (startSubs, below).
+        QList<FaceRef> startSubs;
+        if (s.type == BrickType::Run && !brickIsBridge(s) && (b.size() > 1 || branchedB) && (a.size() > 1 || branchedA)) {
+            startSubs = a;
+            a.clear();
+        }
         const bool several = (s.type == BrickType::Fanout || s.type == BrickType::Run) && (b.size() > 1 || branchedB);
+        // The wires each part at one end takes: its link's, or its branch brick's picked wires, or an even share.
+        auto sharesOf = [&](const QList<FaceRef>& side) {
+            int given = 0, open = 0;
+            QList<int> said;
+            for (const FaceRef& f : side) {
+                QString other = f.node == f.id ? f.id : QString();
+                if (other.isEmpty() && junctions.contains(f.node)) {
+                    const Junction& jn = junctions.value(f.node);
+                    other = jn.a == s.id ? jn.b : jn.a;
+                }
+                const BrickLink* l = design.link(s.id, other);
+                int picked = l && !l->wireList.trimmed().isEmpty() ? parseWireList(l->wireList, s.run.wires).size() : 0;
+                if (const Brick* via = branchVia.value(s.id + QLatin1Char('|') + f.node))
+                    picked = parseWireList(via->run.bridgeWires, s.run.wires).size();
+                const int w = picked > 0 ? picked : l && l->wires > 0 ? l->wires : 0;
+                said << w;
+                if (w > 0) given += w;
+                else ++open;
+            }
+            const int rest = std::max(0, s.run.wires - bridged - given);
+            int extra = open > 0 ? rest % open : 0;
+            const int base = open > 0 ? rest / open : 0;
+            for (int& share : said)
+                if (share <= 0) {
+                    share = base;
+                    if (extra > 0) {
+                        ++share;
+                        --extra;
+                    }
+                }
+            return said;
+        };
         if (several) {
             int trunkAt = -1;
             // One body up to where it divides - a cable's, or a fanout's gathered wires - and from
@@ -2333,6 +2384,26 @@ static BrickBuild buildBrickDrawn(const BrickDesign& design, const BrickDesign& 
                     br.a = b[k];   // a fanout from nothing: each part fans out loose
                 }
                 branches.push_back(br);
+            }
+            // AND OUT OF ITS START, divided there too: each from the far end of the trunk to its part.
+            if (trunkAt >= 0 && !startSubs.isEmpty()) {
+                const QList<int> shares = sharesOf(startSubs);
+                for (int k = 0; k < startSubs.size(); ++k) {
+                    Branch br;
+                    br.special = &s;
+                    br.flipped = !flipped;
+                    br.wires = std::max(1, shares[k]);
+                    if (const Brick* via = branchVia.value(s.id + QLatin1Char('|') + startSubs[k].node)) {
+                        br.special = via;
+                        br.viaBranch = true;
+                        br.flipped = false;
+                        br.wires = std::max(1, br.wires - bridgedVia.value(via->id));
+                    }
+                    br.b = startSubs[k];
+                    br.splitOf = trunkAt;
+                    br.atStart = true;
+                    branches.push_back(br);
+                }
             }
             continue;
         }
@@ -2488,6 +2559,36 @@ static BrickBuild buildBrickDrawn(const BrickDesign& design, const BrickDesign& 
                 stretchOf.insert(br.special->id, std::max(stretchOf.value(br.special->id), drawn - real));
             edges[br.a.node] << Edge{br.b.node, gap, fa, fb, false, ua};
             edges[br.b.node] << Edge{br.a.node, gap, fb, fa, false, ub};
+        }
+        // DIVIDED AT BOTH ENDS: each part out of the cable's start held to the first out of its finish as far along as the
+        // branch at the start, the cable and the branches at the finish come to - the cable laid its length between them.
+        for (size_t t = 0; t < branches.size(); ++t) {
+            if (!branches[t].trunk || !branches[t].freeStart) continue;
+            const Branch* fin = nullptr;
+            std::vector<const Branch*> starts;
+            double meanB = 0.0;
+            int nB = 0;
+            for (const Branch& k : branches) {
+                if (k.splitOf != static_cast<int>(t) || k.b.node.isEmpty()) continue;
+                if (k.atStart) {
+                    starts.push_back(&k);
+                } else {
+                    if (!fin) fin = &k;
+                    if (k.viaBranch) {
+                        meanB += runLengthTo(design, *k.special, k.b.node);
+                        ++nB;
+                    }
+                }
+            }
+            if (!fin || starts.empty()) continue;
+            const double outB = std::max(40.0, nB > 0 ? meanB / nB : 0.0);
+            const double trunkLen = branches[t].special->run.lengthMm;
+            for (const Branch* st : starts) {
+                const double gap = runLengthTo(design, *st->special, st->b.node) + trunkLen + outB;
+                const Vec2 fa = faceAt(st->b), fb = faceAt(fin->b);
+                edges[st->b.node] << Edge{fin->b.node, gap, fa, fb, false, faceOutOf(st->b)};
+                edges[fin->b.node] << Edge{st->b.node, gap, fb, fa, false, faceOutOf(fin->b)};
+            }
         }
         // A BOOT ON A PART: face on face, level with it - wherever the two bricks are on the pane.
         for (const BrickLink& l : design.links) {
@@ -2979,8 +3080,19 @@ static BrickBuild buildBrickDrawn(const BrickDesign& design, const BrickDesign& 
         std::vector<size_t> subs;
         double fanMax = 0.0;
         Vec2 outSum{0.0, 0.0}, centreSum{0.0, 0.0};
+        std::vector<size_t> startSubsAt;   // out of the trunk's far end, where it divides at its start too
+        double meanBranch = 0.0;
+        int viaCount = 0;
         for (size_t k = 0; k < branches.size(); ++k) {
             if (branches[k].splitOf != static_cast<int>(t)) continue;
+            if (branches[k].atStart) {
+                startSubsAt.push_back(k);
+                continue;
+            }
+            if (branches[k].viaBranch) {
+                meanBranch += runLengthTo(design, *branches[k].special, branches[k].b.node);
+                ++viaCount;
+            }
             subs.push_back(k);
             const int w = std::max(1, branches[k].wires);
             fanMax = std::max(fanMax, r.fanFinishMm > 0.0 ? r.fanFinishMm
@@ -3005,10 +3117,17 @@ static BrickBuild buildBrickDrawn(const BrickDesign& design, const BrickDesign& 
         } else {
             const Vec2 faceOut = outSum.length() > 1e-9 ? outSum.normalized() : Vec2{-1.0, 0.0};
             toward = faceOut * -1.0;
-            at = centreSum / static_cast<double>(subs.size()) + faceOut * (fanMax + 25.0);
+            // INTO BRANCH BRICKS: where it divides is as far out in front of the parts as their branches are long.
+            const double outBy = viaCount > 0 ? std::max(fanMax + 25.0, meanBranch / viaCount) : fanMax + 25.0;
+            at = centreSum / static_cast<double>(subs.size()) + faceOut * outBy;
             splitDir[t] = faceOut;   // the cable carries on away from the parts
         }
         splitAt[t] = at;
+        // DIVIDED AT ITS START TOO: those branches out of the trunk's far end, its length on, heading on the same way.
+        for (size_t k : startSubsAt) {
+            splitAt[k] = at + splitDir[t] * branches[t].special->run.lengthMm;
+            splitDir[k] = splitDir[t];
+        }
         std::stable_sort(subs.begin(), subs.end(), [&](size_t x, size_t y) {
             return dot(atB[x].centre, toward.perp()) < dot(atB[y].centre, toward.perp());
         });
@@ -3113,7 +3232,12 @@ static BrickBuild buildBrickDrawn(const BrickDesign& design, const BrickDesign& 
         Bounds bb;
         for (const Entity& e : drawn) bb.expand(e.bounds());
         const Vec2 c = bb.valid ? (bb.min + bb.max) * 0.5 : Vec2{0.0, 0.0};
+        // WITH ITS WORDS ON IT: the model's lines standing for printing, inside its outline, give way to the text itself.
+        auto inside = [&](const Vec2& p) {
+            return p.x > bb.min.x + 0.3 && p.x < bb.max.x - 0.3 && p.y > bb.min.y + 0.3 && p.y < bb.max.y - 0.3;
+        };
         for (Entity& e : drawn) {
+            if (!text.isEmpty() && e.type == EntityType::Line && inside(e.a) && inside(e.b)) continue;
             translateEntity(e, c * -1.0);
             rotateEntity(e, Vec2{0.0, 0.0}, turn);
             translateEntity(e, mid0);
@@ -3121,6 +3245,16 @@ static BrickBuild buildBrickDrawn(const BrickDesign& design, const BrickDesign& 
             ents.push_back(e);
         }
         if (text.isEmpty()) return ents;
+        {
+            Entity t = makeTextAt(mid0, text,
+                                  std::clamp(across * 0.55, 1.2, along / std::max(1, int(text.size())) * 1.6), turn);
+            t.meta.insert(QStringLiteral("justify"), QStringLiteral("MC"));
+            t.meta.insert(QStringLiteral("mechRole"), QStringLiteral("label"));
+            t.meta.insert(QStringLiteral("labelText"), text);
+            t.meta.insert(QStringLiteral("labelMidX"), mid0.x);
+            t.meta.insert(QStringLiteral("labelMidY"), mid0.y);
+            ents.push_back(t);
+        }
         if (lab.leader) {
             // CALLED OUT: a leader from the top of the label out to its text.
             const Vec2 up = d.perp().y >= 0.0 ? d.perp() : d.perp() * -1.0;
@@ -3143,15 +3277,6 @@ static BrickBuild buildBrickDrawn(const BrickDesign& design, const BrickDesign& 
             leaders.append(point);
             t.meta.insert(QStringLiteral("leaders"), leaders);
             t.meta.insert(QStringLiteral("arrowSize"), 1.8);
-            t.meta.insert(QStringLiteral("mechRole"), QStringLiteral("label"));
-            t.meta.insert(QStringLiteral("labelText"), text);
-            t.meta.insert(QStringLiteral("labelMidX"), mid0.x);
-            t.meta.insert(QStringLiteral("labelMidY"), mid0.y);
-            ents.push_back(t);
-        } else {
-            Entity t = makeTextAt(mid0, text,
-                                  std::clamp(across * 0.55, 1.2, along / std::max(1, int(text.size())) * 1.6), turn);
-            t.meta.insert(QStringLiteral("justify"), QStringLiteral("MC"));
             t.meta.insert(QStringLiteral("mechRole"), QStringLiteral("label"));
             t.meta.insert(QStringLiteral("labelText"), text);
             t.meta.insert(QStringLiteral("labelMidX"), mid0.x);
@@ -3913,6 +4038,13 @@ static BrickBuild buildBrickDrawn(const BrickDesign& design, const BrickDesign& 
                     const std::vector<Vec2> other = offsetPolyline(piece, -half);
                     ring.insert(ring.end(), other.rbegin(), other.rend());
                     ring.push_back(ring.front());
+                    // OVER THE WIRE, NOT SEEN THROUGH: the wire under it masked, then its outline.
+                    Entity mask;
+                    mask.type = EntityType::Wipeout;
+                    mask.points = ring;
+                    mask.meta.insert(QStringLiteral("noFrame"), true);
+                    mask.meta.insert(QStringLiteral("mechRole"), QStringLiteral("fanShrinkMask"));
+                    made.push_back(mask);
                     Entity sl;
                     sl.type = EntityType::Polyline;
                     sl.points = ring;
@@ -4021,18 +4153,61 @@ static BrickBuild buildBrickDrawn(const BrickDesign& design, const BrickDesign& 
         // SHORT HEATSHRINKS OVER THE BODY: so many, each its length, spread evenly between the fans - each a sleeve a
         // little wider than the body, and on the bill by its part.
         if (r.overShrinkCount > 0 && (!isSub || br.viaBranch) && route.size() >= 2 && (!loose || isTrunk)) {
-            const double len = routeLength(route);
+            // ROUND THE BENDS AS THE BODY GOES: along the route with its knees filleted, a piece on a knee bent round it.
+            double knee = std::max(0.0, r.kneeRadiusMm);
+            for (const Entity& e : made)
+                if (e.type == EntityType::TwistedPair) knee = twistedPairFigures(e).kneeRadius;
+            // A SLEEVE JUST OVER THE BODY (or the wires packed, where there is none) - not as wide as they spread at a face.
+            const double half = ((bodyWidth > 1e-9 ? bodyWidth : packed * (wires - 1) + ww) + 1.0) / 2.0;
+            // Never tighter than the piece is wide: its inner edge would fold back on itself.
+            const double bend = std::max(knee, half * 1.5);
+            const std::vector<Vec2> path = route.size() > 2 ? filletedRoute(route, bend) : route;
+            const double len = routeLength(path);
             const bool fans = len > fanA + fanB + 1.0;
             const double s0 = fans ? fanA : 0.0, s1 = fans ? len - fanB : len;
             const int n = r.overShrinkCount;
-            const double step = (s1 - s0) / n;
-            const double piece = std::max(0.5, std::min(r.overShrinkMm, step * 0.9));
-            const double across = std::max(bodyWidth, la.lane * (wires - 1) + ww) + 1.0;
+            const double piece = std::max(0.5, std::min(r.overShrinkMm, (s1 - s0) * 0.9));
+            auto between = [&](double from, double to) {
+                std::vector<Vec2> pts{pointAlong(path, from)};
+                double acc = 0.0;
+                for (size_t k = 1; k + 1 < path.size(); ++k) {
+                    acc += distance(path[k - 1], path[k]);
+                    if (acc > from + 1e-6 && acc < to - 1e-6) pts.push_back(path[k]);
+                }
+                pts.push_back(pointAlong(path, to));
+                return pts;
+            };
+            // THE WAY THEY SLIDE, for the preview: the body between the fans.
+            QJsonArray bodyPath;
+            for (const Vec2& p : between(s0, s1)) {
+                bodyPath.append(p.x);
+                bodyPath.append(p.y);
+            }
             for (int k = 0; k < n; ++k) {
-                Vec2 dir;
-                const Vec2 c = pointAlong(route, s0 + step * (k + 0.5), &dir);
-                Entity box = makeBoxAt(c, dir, piece, across);
+                const double frac = k < r.overShrinkAt.size() ? std::clamp(r.overShrinkAt[k], 0.0, 1.0) : (k + 0.5) / n;
+                const double from = std::clamp(s0 + (s1 - s0) * frac - piece / 2.0, s0, std::max(s0, s1 - piece));
+                const std::vector<Vec2> mid = between(from, from + piece);
+                std::vector<Vec2> ring = offsetPolyline(mid, half);
+                const std::vector<Vec2> other = offsetPolyline(mid, -half);
+                ring.insert(ring.end(), other.rbegin(), other.rend());
+                if (ring.size() < 3) continue;
+                // OVER THE BODY, NOT SEEN THROUGH: what is under it masked first, then its outline.
+                Entity mask;
+                mask.type = EntityType::Wipeout;
+                mask.points = ring;
+                mask.meta.insert(QStringLiteral("noFrame"), true);
+                mask.meta.insert(QStringLiteral("mechRole"), QStringLiteral("overShrinkMask"));
+                made.push_back(mask);
+                Entity box;
+                box.type = EntityType::Polyline;
+                box.points = ring;
+                box.points.push_back(ring.front());
+                box.a = box.points.front();
+                box.b = box.points.back();
                 box.meta.insert(QStringLiteral("mechRole"), QStringLiteral("overShrink"));
+                box.meta.insert(QStringLiteral("brickOverShrinkIndex"), k);
+                box.meta.insert(QStringLiteral("brickOverShrinkCount"), n);
+                box.meta.insert(QStringLiteral("brickOverShrinkPath"), bodyPath);
                 if (!r.overShrinkPart.isEmpty()) box.meta.insert(QStringLiteral("libPart"), r.overShrinkPart);
                 made.push_back(box);
             }
@@ -4076,11 +4251,19 @@ static BrickBuild buildBrickDrawn(const BrickDesign& design, const BrickDesign& 
                 }
                 put(pointAlong(route, s1));
                 const double across = std::max(bodyWidth, la.lane * (wires - 1) + ww);
+                // ITS STROKES: each L long (Auto: clear of the body either side), W apart (Auto: as the mark draws them).
+                const double halfL = realS.run.strokeLenMm > 1e-9 ? realS.run.strokeLenMm / 2.0 : std::max(4.0, across * 0.75 + 2.0);
+                const double gapW = realS.run.strokeGapMm > 1e-9 ? realS.run.strokeGapMm : halfL * 0.9;
+                if (!isSub && out.actual.contains(s.id)) {
+                    out.actual[s.id].strokeLen = halfL * 2.0;
+                    out.actual[s.id].strokeGap = gapW;
+                }
                 Entity mark;
                 mark.type = EntityType::LengthBreak;
                 mark.a = c;
                 mark.rotation = std::atan2(dir.y, dir.x);
-                mark.meta.insert(QStringLiteral("size"), std::max(4.0, across * 0.75 + 2.0));
+                mark.meta.insert(QStringLiteral("size"), halfL);
+                mark.meta.insert(QStringLiteral("gap"), gapW);
                 mark.meta.insert(QStringLiteral("mechRole"), QStringLiteral("stroke"));
                 mark.meta.insert(QStringLiteral("brickStrokeCut"), cutHere);
                 mark.meta.insert(QStringLiteral("brickStrokePath"), path);
