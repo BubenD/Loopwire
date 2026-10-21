@@ -10,6 +10,8 @@
 #include <QPointer>
 #include <QString>
 
+#include <functional>
+
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
@@ -50,6 +52,11 @@ class HarnessWiringPreview;
 // THE HARNESS AS THE BUILDER'S PREVIEW SHOWS IT: what Generate draws, with each wire named as its twists and screens
 // name it, so a twisted wire leaves the gap its twist is drawn in. Screens and their drains left out unless asked.
 std::vector<Entity> harnessPreviewEntities(const HarnessDef& def, bool showShields);
+class DrawingPreview;
+// THE TWIST AND SHIELD SIGNS DRAGGED ALONG THEIR WIRES on a harness preview: pressed on, moved sideways - never past the
+// wires they are on - and let go. Where each is put goes into `def()`'s layout (markAt); `moved(false)` while it moves,
+// `moved(true)` when it is let go.
+void armHarnessMarkDrag(DrawingPreview* view, std::function<HarnessDef&()> def, std::function<void(bool done)> moved);
 struct PartsLibrary;
 enum class PartKind;
 const PartsLibrary& harnessBuilderLibrary();
@@ -175,6 +182,8 @@ private:
     // Redraw the wiring preview from the definition without rebuilding the pin map: a layout
     // parameter changes the picture but not the tables.
     void refreshPreview();
+    // THE TWIST AND SHIELD SIGNS PUT BY HAND on a preview: kept, every picture drawn again when let go.
+    void marksMoved(const QHash<QString, double>& marks, bool done);
     void reloadWires();
     // Build the editable cells of one wire onto table row `row`. Split out of reloadWires
     // so the grouped layout can interleave group headers between the wire rows.

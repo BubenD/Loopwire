@@ -49,6 +49,7 @@ constexpr double kCell = 26.0;      // a pin's square, and the gap round it
 constexpr int kPanelField = 210;   // a field of the panel, across
 constexpr double kRow = 24.0;       // a wire's bar, one under another
 constexpr double kMargin = 18.0;
+constexpr double kTrunkFan = 56.0;  // a cable shown as one harness: how far in from the lane's edge its wires fan into the trunk
 
 QString pinKey(const QString& conn, int pin) { return QStringLiteral("%1:%2").arg(conn).arg(pin); }
 
@@ -248,6 +249,17 @@ void WiringCanvas::relayout() {
             };
             if (shownHere(w.fromConn) && shownHere(w.toConn) && w.fromPin > 0 && w.toPin > 0) ids << w.id;
         }
+        // A CABLE SHOWN AS ONE HARNESS: its rows together, where its first one is - no other wire's bar inside its trunk.
+        for (const QString& cable : trunks_) {
+            QStringList members;
+            for (const QString& id : ids)
+                for (const HarnessWire& w : def_.wires)
+                    if (w.id == id && w.bundle == cable) members << id;
+            if (members.size() < 2) continue;
+            const int at = static_cast<int>(ids.indexOf(members.front()));
+            for (const QString& id : members) ids.removeAll(id);
+            for (int k = 0; k < members.size(); ++k) ids.insert(at + k, members[k]);
+        }
         return ids;
     }();
     // THE LANE BETWEEN THEM: as wide as the longest bar's words want, and the twist and screen marks either side of them -
@@ -323,8 +335,33 @@ QString WiringCanvas::pinAt(const QPointF& p) const {
     return {};
 }
 
+void WiringCanvas::setTrunk(const QString& cable, bool on) {
+    if (on) trunks_.insert(cable);
+    else trunks_.remove(cable);
+    relayout();
+}
+
 QString WiringCanvas::barAt(const QPointF& p) const {
+    // ON A TRUNK: the cable's first wire - the rest of the cable lit with it.
+    for (const QString& cable : trunks_) {
+        double top = 1e18, bottom = -1e18;
+        QString first;
+        for (const Bar& bar : bars_)
+            for (const HarnessWire& w : def_.wires)
+                if (w.id == bar.wire && w.bundle == cable && bar.fromSide != bar.toSide) {
+                    top = std::min(top, bar.y);
+                    bottom = std::max(bottom, bar.y);
+                    if (first.isEmpty()) first = w.id;
+                }
+        const double y = (top + bottom) / 2.0;
+        if (!first.isEmpty() && std::abs(p.y() - y) <= 8.0 && p.x() >= laneLeft_ + kTrunkFan && p.x() <= laneRight_ - kTrunkFan) return first;
+    }
     for (const Bar& bar : bars_) {
+        // A wire in a trunk is caught on the trunk only.
+        bool inTrunk = false;
+        for (const HarnessWire& w : def_.wires)
+            inTrunk = inTrunk || (bar.fromSide != bar.toSide && w.id == bar.wire && !w.bundle.isEmpty() && trunks_.contains(w.bundle));
+        if (inTrunk) continue;
         if (bar.fromSide == bar.toSide) {
             const double x = bar.laneX;
             if (std::abs(p.x() - x) <= 5.0 && p.y() >= std::min(bar.from.y(), bar.to.y()) - 3 &&
@@ -509,6 +546,7 @@ void WiringCanvas::paintEvent(QPaintEvent*) {
     }
     p.setPen(Qt::NoPen);
     for (auto it = bundles.begin(); it != bundles.end(); ++it) {
+        if (trunks_.contains(it.key())) continue;   // drawn as its trunk, below
         p.setBrush(QColor(90, 70, 40, 90));
         p.drawRoundedRect(QRectF(laneLeft_ - 8, it.value().first - kRow / 2, laneRight_ - laneLeft_ + 16, it.value().second - it.value().first + kRow), 6, 6);
         p.setPen(QColor(230, 190, 120));
@@ -581,9 +619,22 @@ void WiringCanvas::paintEvent(QPaintEvent*) {
         const double edge = bar.fromSide < 0 ? laneLeft_ : laneRight_;
         const QPointF a(bar.fromSide < 0 ? laneLeft_ : laneRight_, bar.y), b(bar.toSide < 0 ? laneLeft_ : laneRight_, bar.y);
         const QColor base = shownBase(w->color);
+        // ONE HARNESS: into its cable's trunk from the lane's edge, along it, and out again to its pin.
+        const bool trunk = !sameSide && !w->bundle.isEmpty() && trunks_.contains(w->bundle);
         QPainterPath path;
         path.moveTo(bar.from);
-        if (sameSide) {
+        if (trunk) {
+            const auto span = bundles.value(w->bundle);
+            const double trunkY = (span.first + span.second) / 2.0;
+            auto fan = [this](const QPointF& edge) { return QPointF(edge.x() < (laneLeft_ + laneRight_) / 2.0 ? laneLeft_ + kTrunkFan : laneRight_ - kTrunkFan, 0.0); };
+            path.lineTo(QPointF(bar.from.x() + bar.fromSide * -14.0, bar.from.y()));
+            path.lineTo(a);
+            path.lineTo(QPointF(fan(a).x(), trunkY));
+            path.lineTo(QPointF(fan(b).x(), trunkY));
+            path.lineTo(b);
+            path.lineTo(QPointF(bar.to.x() + bar.toSide * -14.0, bar.to.y()));
+            path.lineTo(bar.to);
+        } else if (sameSide) {
             // BETWEEN TWO CONNECTORS ON ONE SIDE: square out of its pin to its own lane, along it to the other pin's row,
             // and square into it.
             const double x = bar.laneX;
@@ -607,6 +658,7 @@ void WiringCanvas::paintEvent(QPaintEvent*) {
         p.drawPath(path);
         p.setPen(QPen(base, 2.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         p.drawPath(path);
+        if (trunk) continue;   // its words are the trunk's
         if (const QColor s = shownStripe(w->color); s.isValid()) {
             p.setPen(QPen(s, 1.2, Qt::DashLine));
             p.drawLine(a, b);
@@ -626,6 +678,34 @@ void WiringCanvas::paintEvent(QPaintEvent*) {
         p.drawRoundedRect(QRectF(text.center().x() - wordsW / 2.0, text.top(), wordsW, text.height()), 3, 3);
         p.setPen(QColor(220, 228, 238));
         p.drawText(text, Qt::AlignCenter, words);
+        p.setFont(font());
+    }
+    // ---- THE TRUNKS: a cable shown as one harness, over its wires where they run together - its name, its count, its P/N ----
+    for (auto it = bundles.begin(); it != bundles.end(); ++it) {
+        if (!trunks_.contains(it.key())) continue;
+        const double y = (it.value().first + it.value().second) / 2.0;
+        int count = 0;
+        QString part;
+        for (const HarnessWire& w : def_.wires)
+            if (w.bundle == it.key()) {
+                ++count;
+                if (part.isEmpty() && !w.libPart.isEmpty())
+                    if (const LibraryPart* lp = harnessBuilderLibrary().byId(w.libPart)) part = lp->mfrPn;
+                if (part.isEmpty()) part = w.partNumber;
+            }
+        const QRectF band(laneLeft_ + kTrunkFan, y - 7.0, laneRight_ - laneLeft_ - 2 * kTrunkFan, 14.0);
+        const bool lit = std::any_of(selection_.begin(), selection_.end(), [&](const QString& id) {
+            const HarnessWire* w = byId.value(id);
+            return w && w->bundle == it.key();
+        });
+        p.setPen(QPen(lit ? QColor(255, 170, 60) : QColor(10, 12, 16), lit ? 2.6 : 1.4));
+        p.setBrush(QColor(120, 92, 52));
+        p.drawRoundedRect(band, 7, 7);
+        p.setFont(small);
+        p.setPen(QColor(245, 232, 210));
+        QString words = QStringLiteral("%1 · %2 wires").arg(it.key()).arg(count);
+        if (!part.isEmpty()) words += QStringLiteral(" · ") + part;
+        p.drawText(band, Qt::AlignCenter, words);
         p.setFont(font());
     }
     // ---- WIRES JOINED TO ANOTHER'S RUN: from the pin to a dot on that wire's bar ----
@@ -1111,6 +1191,68 @@ WiringDialog::WiringDialog(HarnessDef& def, std::function<void()> changed, QWidg
     groups_->setToolTip(QStringLiteral("The twisted pairs and cables - and the shields - click one to pick its wires"));
     groups_->setSelectionMode(QAbstractItemView::ExtendedSelection);
     gsl->addWidget(groups_, 1);
+    // A SHIELD OVER A CABLE: a layer of the cable picked, a part of its own - not a group of its wires.
+    addShield_ = new QPushButton(QStringLiteral("Add shield to cable"), groupsSide);
+    addShield_->setObjectName(QStringLiteral("wiringAddCableShield"));
+    addShield_->setToolTip(QStringLiteral("A shield over every wire of the cable picked - a layer of that cable, with a P/N of its own"));
+    addShield_->setAutoDefault(false);
+    addShield_->setEnabled(false);
+    gsl->addWidget(addShield_);
+    // ONE HARNESS: the cable picked drawn as one trunk, its wires fanned out only to their pins - this picture only.
+    trunk_ = new QPushButton(QStringLiteral("Show as one harness"), groupsSide);
+    trunk_->setObjectName(QStringLiteral("wiringCableTrunk"));
+    trunk_->setToolTip(QStringLiteral("The cable picked drawn as one trunk here, its wires fanned out only to their pins - the drawing is not changed"));
+    trunk_->setAutoDefault(false);
+    trunk_->setCheckable(true);
+    trunk_->setEnabled(false);
+    gsl->addWidget(trunk_);
+    auto cableOfItem = [this](QListWidgetItem* it) {
+        return it && it->data(Qt::UserRole + 1).toString() == QLatin1String("cable") ? it->data(Qt::UserRole + 2).toString() : QString();
+    };
+    connect(groups_, &QListWidget::currentItemChanged, this, [this, cableOfItem](QListWidgetItem* it) {
+        const QString cable = cableOfItem(it);
+        bool shielded = false;
+        for (const HarnessWire& w : def_.wires)
+            shielded = shielded || (!cable.isEmpty() && w.bundle == cable && !w.shieldGroup.isEmpty() && cableOfShield(w.shieldGroup) == cable);
+        addShield_->setEnabled(!cable.isEmpty() && !shielded);
+        const QSignalBlocker hush(trunk_);
+        trunk_->setEnabled(!cable.isEmpty());
+        trunk_->setChecked(!cable.isEmpty() && canvas_->isTrunk(cable));
+    });
+    connect(trunk_, &QPushButton::toggled, this, [this, cableOfItem](bool on) {
+        const QString cable = cableOfItem(groups_->currentItem());
+        if (!cable.isEmpty()) canvas_->setTrunk(cable, on);
+    });
+    connect(addShield_, &QPushButton::clicked, this, [this, cableOfItem] {
+        const QString cable = cableOfItem(groups_->currentItem());
+        if (!cable.isEmpty()) addCableShield(cable);
+    });
+    groups_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(groups_, &QListWidget::customContextMenuRequested, this, [this, cableOfItem](const QPoint& at) {
+        QListWidgetItem* it = groups_->itemAt(at);
+        if (!it) return;
+        QMenu menu(this);
+        const QString cable = cableOfItem(it);
+        const QString kind = it->data(Qt::UserRole + 1).toString(), name = it->data(Qt::UserRole + 2).toString();
+        if (!cable.isEmpty()) {
+            menu.addAction(QStringLiteral("Add shield (a layer of %1)").arg(cable), this, [this, cable] { addCableShield(cable); });
+            const bool trunk = canvas_->isTrunk(cable);
+            menu.addAction(trunk ? QStringLiteral("Show its wires apart") : QStringLiteral("Show as one harness (fan-out to the pins)"), this,
+                           [this, cable, trunk, cableOfItem] {
+                               canvas_->setTrunk(cable, !trunk);
+                               if (cableOfItem(groups_->currentItem()) == cable) {
+                                   const QSignalBlocker hush(trunk_);
+                                   trunk_->setChecked(!trunk);
+                               }
+                           });
+        }
+        if (kind == QLatin1String("shield"))
+            menu.addAction(QStringLiteral("Remove shield %1").arg(name), this, [this, it] {
+                harnessUngroupWires(def_, it->data(Qt::UserRole).toStringList(), HarnessGrouping::Screen);
+                this->changed();
+            });
+        if (!menu.isEmpty()) menu.exec(groups_->viewport()->mapToGlobal(at));
+    });
     split->addWidget(groupsSide);
     connect(groups_, &QListWidget::itemClicked, this, [this](QListWidgetItem*) {
         QStringList ids;
@@ -1170,6 +1312,7 @@ WiringDialog::WiringDialog(HarnessDef& def, std::function<void()> changed, QWidg
             if (layoutChanged_) layoutChanged_();
             else if (changed_) changed_();
             canvas_->update();
+            if (previewTimer_) previewTimer_->start();
         });
         under->addWidget(terminate_);
         under->addStretch(1);
@@ -1332,15 +1475,45 @@ WiringDialog::WiringDialog(HarnessDef& def, std::function<void()> changed, QWidg
     preview_->setMaximumHeight(260);
     preview_->setMinimumWidth(kPanelField + 90);
     preview_->setMaximumWidth(kPanelField + 110);
-    pl->addWidget(new QLabel(QStringLiteral("<b>As it will be drawn</b>"), panel_));
+    // ITS HEADING, and beside it Enlarge: the same drawing in a window of its own, as big as it is made.
+    auto* previewHead = new QHBoxLayout;
+    previewHead->addWidget(new QLabel(QStringLiteral("<b>As it will be drawn</b>"), panel_));
+    previewHead->addStretch(1);
+    auto* enlarge = new QToolButton(panel_);
+    enlarge->setObjectName(QStringLiteral("wiringPreviewEnlarge"));
+    enlarge->setText(QStringLiteral("Enlarge"));
+    enlarge->setToolTip(QStringLiteral("The drawing in a window of its own - made as big as wanted, drawn again as the wiring changes"));
+    enlarge->setAutoRaise(true);
+    connect(enlarge, &QToolButton::clicked, this, [this] { enlargePreview(); });
+    previewHead->addWidget(enlarge);
+    pl->addLayout(previewHead);
     pl->addWidget(preview_, 0, Qt::AlignLeft);
     previewTimer_ = new QTimer(this);
     previewTimer_->setSingleShot(true);
     previewTimer_->setInterval(120);
     connect(previewTimer_, &QTimer::timeout, this, [this] {
-        preview_->setEntities(harnessPreviewEntities(def_, true));
+        const std::vector<Entity> shown = harnessPreviewEntities(def_, true);
+        preview_->setEntities(shown);
         preview_->fitToView();
+        if (bigPreview_) {
+            bigPreview_->setEntities(shown);
+            bigPreview_->update();
+        }
     });
+    // THE TWIST AND SHIELD SIGNS moved along their wires here - drawn again as they go, the drawing told when let go.
+    auto marked = [this](DrawingPreview* view) {
+        armHarnessMarkDrag(view, [this]() -> HarnessDef& { return def_; }, [this, view](bool done) {
+            const std::vector<Entity> shown = harnessPreviewEntities(def_, true);
+            view->setEntities(shown);
+            view->update();
+            if (!done) return;
+            if (layoutChanged_) layoutChanged_();
+            else if (changed_) changed_();
+            previewTimer_->start();
+        });
+    };
+    marked(preview_);
+    markDrag_ = marked;
     pl->addStretch(1);
     // EVERY FIELD SHORT: a set width, whatever the panel's - the long part names elided rather than widening it.
     for (QComboBox* box : panel_->findChildren<QComboBox*>()) {
@@ -1451,10 +1624,14 @@ void WiringDialog::fillConnectorChoices() {
     left_->clear();
     right_->clear();
     several_->clear();
+    // EACH PICKER ITS OWN SIDE: the left one the left-hand connectors, the right one the right-hand ones - every connector
+    // in both only where a side has none.
+    bool anyLeft = false, anyRight = false;
+    for (const HarnessConnector& c : def_.connectors) (c.side == HarnessSide::Left ? anyLeft : anyRight) = true;
     for (const HarnessConnector& c : def_.connectors) {
         const QString name = QStringLiteral("%1 (%2 pins)").arg(c.designator.isEmpty() ? c.id : c.designator).arg(c.pinCount);
-        left_->addItem(name, c.id);
-        right_->addItem(name, c.id);
+        if (c.side == HarnessSide::Left || !anyLeft) left_->addItem(name, c.id);
+        if (c.side != HarnessSide::Left || !anyRight) right_->addItem(name, c.id);
         auto* item = new QListWidgetItem(c.designator.isEmpty() ? c.id : c.designator, several_);
         item->setData(Qt::UserRole, c.id);
         item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
@@ -1533,13 +1710,24 @@ void WiringDialog::fillGroups() {
     if (!groups_) return;
     const QSignalBlocker hush(groups_);
     groups_->clear();
-    auto add = [this](const QString& kind, const QString& name, const std::function<bool(const HarnessWire&)>& in) {
+    auto add = [this](const QString& kind, const QString& name, const std::function<bool(const HarnessWire&)>& in,
+                      bool under = false) {
         QStringList ids;
         for (const HarnessWire& w : def_.wires)
             if (in(w)) ids << w.id;
         if (ids.isEmpty()) return;
-        auto* it = new QListWidgetItem(QStringLiteral("%1  %2 · %3 wire(s)").arg(name, kind).arg(ids.size()), groups_);
+        // A shield: its P/N beside it - a part of its own.
+        QString pn;
+        if (kind != QLatin1String("cable") && kind != QLatin1String("twisted")) {
+            const LibraryPart* p = harnessBuilderLibrary().byId(def_.shieldParts.value(name));
+            pn = p ? p->mfrPn : def_.shieldPns.value(name);
+        }
+        auto* it = new QListWidgetItem(QStringLiteral("%1%2  %3 · %4 wire(s)%5").arg(under ? QStringLiteral("    ↳ ") : QString(), name, kind)
+                                           .arg(ids.size())
+                                           .arg(pn.isEmpty() ? QString() : QStringLiteral(" · ") + pn), groups_);
         it->setData(Qt::UserRole, ids);
+        it->setData(Qt::UserRole + 1, kind.startsWith(QLatin1String("shield")) ? QStringLiteral("shield") : kind);
+        it->setData(Qt::UserRole + 2, name);
         it->setToolTip(ids.join(QStringLiteral(", ")));
     };
     QStringList twists, screens, cables;
@@ -1548,8 +1736,17 @@ void WiringDialog::fillGroups() {
         if (!w.shieldGroup.isEmpty() && !screens.contains(w.shieldGroup)) screens << w.shieldGroup;
         if (!w.bundle.isEmpty() && !cables.contains(w.bundle)) cables << w.bundle;
     }
-    for (const QString& g : cables)
+    // EACH CABLE, and under it its shield where it has one - a layer of the cable, not a shield among the others.
+    QStringList layers;
+    for (const QString& g : cables) {
         add(QStringLiteral("cable"), g, [&g](const HarnessWire& w) { return w.bundle == g; });
+        for (const QString& s : screens)
+            if (cableOfShield(s) == g) {
+                layers << s;
+                add(QStringLiteral("shield, layer of ") + g, s, [&s](const HarnessWire& w) { return w.shieldGroup == s; }, true);
+            }
+    }
+    for (const QString& s : layers) screens.removeAll(s);
     for (const QString& g : twists)
         add(QStringLiteral("twisted"), g, [&g](const HarnessWire& w) { return w.twistGroup == g; });
     // THE SHIELDS, apart: no group - the wires under one stay where they are - but each there to be picked.
@@ -1564,6 +1761,72 @@ void WiringDialog::fillGroups() {
     for (const QString& g : screens)
         add(QStringLiteral("shield"), g, [&g](const HarnessWire& w) { return w.shieldGroup == g; });
     markGroups();
+}
+
+void WiringDialog::redrawPreview() {
+    if (previewTimer_) previewTimer_->start();
+}
+
+DrawingPreview* WiringDialog::enlargePreview() {
+    if (bigPreview_) {
+        bigPreview_->window()->raise();
+        bigPreview_->window()->activateWindow();
+        return bigPreview_;
+    }
+    auto* win = new QDialog(this);
+    win->setObjectName(QStringLiteral("wiringPreviewWindow"));
+    win->setWindowTitle(QStringLiteral("As it will be drawn"));
+    win->setAttribute(Qt::WA_DeleteOnClose);
+    win->setSizeGripEnabled(true);
+    auto* v = new QVBoxLayout(win);
+    v->setContentsMargins(4, 4, 4, 4);
+    auto* big = new DrawingPreview(QString(), win);
+    big->setObjectName(QStringLiteral("wiringPreviewBig"));
+    big->setKeepView(true);
+    big->setEmptyText(QStringLiteral("Wire the connectors - the harness is drawn here"));
+    big->setToolTip(QStringLiteral("The harness as Generate will draw it - wheel to zoom, drag to move; drag a twist or a shield sign "
+                                   "along its wires"));
+    v->addWidget(big, 1);
+    bigPreview_ = big;
+    if (markDrag_) markDrag_(big);
+    const QByteArray was = QSettings().value(QStringLiteral("harnessBuilder/ui/v2/wiringPreviewWindow")).toByteArray();
+    if (!was.isEmpty()) win->restoreGeometry(was);
+    else win->resize(960, 620);
+    connect(win, &QDialog::finished, this, [win] { QSettings().setValue(QStringLiteral("harnessBuilder/ui/v2/wiringPreviewWindow"), win->saveGeometry()); });
+    big->setEntities(harnessPreviewEntities(def_, true));
+    win->show();
+    big->fitToView();
+    return big;
+}
+
+QString WiringDialog::cableOfShield(const QString& shield) const {
+    if (shield.isEmpty()) return {};
+    QString cable;
+    bool any = false;
+    for (const HarnessWire& w : def_.wires) {
+        if (!harnessConnById(def_, w.fromConn) || !harnessConnById(def_, w.toConn)) continue;   // a drain, a lead
+        if (w.shieldGroup == shield) {
+            if (w.bundle.isEmpty() || (any && w.bundle != cable)) return {};
+            cable = w.bundle;
+            any = true;
+        }
+    }
+    if (!any) return {};
+    for (const HarnessWire& w : def_.wires)
+        if (w.bundle == cable && harnessConnById(def_, w.fromConn) && harnessConnById(def_, w.toConn) && w.shieldGroup != shield) return {};
+    return cable;
+}
+
+QString WiringDialog::addCableShield(const QString& cable) {
+    QStringList ids;
+    for (const HarnessWire& w : def_.wires)
+        if (w.bundle == cable && harnessConnById(def_, w.fromConn) && harnessConnById(def_, w.toConn)) ids << w.id;
+    if (ids.isEmpty()) return {};
+    const QString name = harnessScreenWires(def_, ids);
+    changed();
+    // Picked, so its P/N and its drains are asked for in the panel.
+    canvas_->setSelection(ids);
+    return name;
 }
 
 void WiringDialog::markGroups() {

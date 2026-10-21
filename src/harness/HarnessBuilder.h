@@ -161,6 +161,10 @@ struct HarnessLayout {
     QString twistType = QStringLiteral("jog");
     int shieldAmount = 1; // OVERALL shield symbols placed per connector that asks for one
     int wireShieldAmount = 2; // symbols placed per INTERNAL (wire) shield group
+    // TWIST AND SHIELD SIGNS PUT BY HAND: "twist:<group>#<k>" / "shield:<group>#<k>" - the k-th sign of that group - to how
+    // far along its wires' span it sits, 0 at the left end, 1 at the right. Kept inside the wires when drawn. None: spaced
+    // out as worked out.
+    QHash<QString, double> markAt;
     double shieldLegLength = 20.0; // how far a generated shield's drain leg reaches
     // How far a FLYING LEAD (a wire with one open end) reaches out of its pin. 0 = worked out, far
     // enough to lie inside the screens of the cable it belongs to. How long a flying lead is left is

@@ -1197,8 +1197,8 @@ void testWireGrouping() {
               drain.toConn == QLatin1String("P1") && drain.toPin == 8 && drain.color == QLatin1String("DRAIN") &&
               !harnessIsDrainRow(drain),
           "grouping: a pair screened - its drain a wire from the screen to the pin given");
-    check(harnessGroupCaption(d, wire(QStringLiteral("w1"))).startsWith(QLatin1String("screened twisted pair")),
-          "grouping: said as a screened twisted pair");
+    check(harnessGroupCaption(d, wire(QStringLiteral("w1"))).startsWith(QLatin1String("shielded twisted pair")),
+          "grouping: said as a shielded twisted pair");
     // ONE CABLE, and a coax.
     const QString cable = harnessCableWires(d, {QStringLiteral("w1"), QStringLiteral("w2"), QStringLiteral("w3"), QStringLiteral("w4")});
     check(cable == QLatin1String("CABLE1") && wire(QStringLiteral("w3")).bundle == cable && wire(QStringLiteral("w1")).twistGroup == t1,
@@ -1951,6 +1951,192 @@ void testWiringWindow() {
     }
 }
 
+// THE INTERACTIVE WIRING, AGAIN: the switch named for where it leads; each connector picker its own side; Terminate unconnected
+// drawn in the small drawing at once; a cable's shield a layer of it; a cable shown as one harness; the twist and shield signs
+// dragged along their wires (never past them), kept and used by Generate; the drawing enlarged; a cable's part one cell for
+// all its rows.
+void testInteractiveWiringAgain() {
+    Document doc;
+    Editor editor;
+    editor.setDocument(&doc);
+    HarnessBuilderDialog wizard(&editor);
+    wizard.resize(1200, 800);
+    wizard.show();
+    QApplication::processEvents();
+    HarnessDef def;
+    for (const auto& [id, side, pins] : {std::tuple<const char*, HarnessSide, int>{"c1", HarnessSide::Left, 8},
+                                         {"c2", HarnessSide::Right, 8},
+                                         {"c3", HarnessSide::Left, 4},
+                                         {"c4", HarnessSide::Right, 4}}) {
+        HarnessConnector c;
+        c.id = QLatin1String(id);
+        c.designator = QString::fromLatin1(id).toUpper();
+        c.side = side;
+        c.pinCount = pins;
+        def.connectors.push_back(c);
+    }
+    wizard.loadDemand(def, QStringLiteral("interactive wiring"));
+    wizard.setStep(1);
+    QApplication::processEvents();
+    auto* viewSwitch = wizard.findChild<QPushButton*>(QStringLiteral("harnessBuilderWireConnectors"));
+    check(viewSwitch && viewSwitch->text() == QLatin1String("Interactive wiring"), "interactive wiring: the switch named Interactive wiring on the table");
+    WiringDialog* win = wizard.openWiringWindow();
+    QApplication::processEvents();
+    if (!win || !viewSwitch) return;
+    check(viewSwitch->text() == QLatin1String("Table mode"), "interactive wiring: and Table mode while the interactive wiring shows");
+    // EACH PICKER ITS OWN SIDE.
+    auto idsOf = [](QComboBox* box) {
+        QStringList ids;
+        for (int i = 0; box && i < box->count(); ++i) ids << box->itemData(i).toString();
+        return ids;
+    };
+    auto* left = win->findChild<QComboBox*>(QStringLiteral("wiringLeft"));
+    auto* right = win->findChild<QComboBox*>(QStringLiteral("wiringRight"));
+    check(idsOf(left) == QStringList({QStringLiteral("c1"), QStringLiteral("c3")}) &&
+              idsOf(right) == QStringList({QStringLiteral("c2"), QStringLiteral("c4")}),
+          "interactive wiring: two connectors - the left picker the left-hand ones only, the right picker the right-hand ones");
+    win->setAskDrain([] { return QString(); });
+    WiringCanvas* canvas = win->canvas();
+    const QString w1 = win->connectPins(QStringLiteral("c1"), 1, QStringLiteral("c2"), 1);
+    const QString w2 = win->connectPins(QStringLiteral("c1"), 2, QStringLiteral("c2"), 2);
+    const QString w3 = win->connectPins(QStringLiteral("c1"), 3, QStringLiteral("c2"), 3);
+    const QString w4 = win->connectPins(QStringLiteral("c1"), 4, QStringLiteral("c2"), 4);
+    const HarnessDef& d = wizard.definition();
+    auto* preview = win->findChild<DrawingPreview*>(QStringLiteral("wiringPreview"));
+    auto settle = [&](int ms = 400) {
+        QElapsedTimer waited;
+        waited.start();
+        while (waited.elapsed() < ms) QApplication::processEvents();
+    };
+    auto count = [](DrawingPreview* view, EntityType type) {
+        int n = 0;
+        for (const Entity& e : view ? view->entities() : std::vector<Entity>()) n += e.type == type;
+        return n;
+    };
+    // TERMINATE UNCONNECTED: the X on the free pins in the small drawing at once, and gone again.
+    settle();
+    const int freeBefore = count(preview, EntityType::NotConnected);
+    auto* terminate = win->findChild<QToolButton*>(QStringLiteral("wiringTerminate"));
+    if (terminate) terminate->setChecked(true);
+    settle();
+    const int freeMarked = count(preview, EntityType::NotConnected);
+    if (terminate) terminate->setChecked(false);
+    settle();
+    check(terminate && freeBefore == 0 && freeMarked > 0 && count(preview, EntityType::NotConnected) == 0,
+          "interactive wiring: Terminate unconnected drawn in the small drawing as it is switched, on and off");
+    // A CABLE OF TWO ROWS APART, its shield a layer of it.
+    const QString cable = win->groupWires(WiringCanvas::Tool::Cable, {w1, w3});
+    const QString shield = win->addCableShield(cable);
+    bool allShielded = true;
+    for (const HarnessWire& w : d.wires)
+        if (w.bundle == cable) allShielded = allShielded && w.shieldGroup == shield;
+    check(!cable.isEmpty() && !shield.isEmpty() && allShielded && win->cableOfShield(shield) == cable,
+          "interactive wiring: Add shield on a cable - one shield over every wire of it, a layer of that cable");
+    auto* groups = win->findChild<QListWidget*>(QStringLiteral("wiringGroups"));
+    int cableRow = -1, layerRow = -1;
+    bool shieldsHead = false;
+    for (int i = 0; groups && i < groups->count(); ++i) {
+        const QString text = groups->item(i)->text();
+        if (text.startsWith(cable)) cableRow = i;
+        if (text.contains(QStringLiteral("layer of ") + cable)) layerRow = i;
+        shieldsHead = shieldsHead || text == QLatin1String("Shields");
+    }
+    check(cableRow >= 0 && layerRow == cableRow + 1 && !shieldsHead,
+          "interactive wiring: the cable's shield listed under its cable, not among the loose shields");
+    // A SHIELD ON LOOSE WIRES: a part of its own, under Shields.
+    win->groupWires(WiringCanvas::Tool::Screen, {w2, w4}, QString());
+    shieldsHead = false;
+    for (int i = 0; groups && i < groups->count(); ++i) shieldsHead = shieldsHead || groups->item(i)->text() == QLatin1String("Shields");
+    check(shieldsHead, "interactive wiring: a shield on loose wires listed apart, under Shields");
+    // ONE HARNESS: the cable as one trunk on this picture only.
+    const QByteArray drawnBefore = QJsonDocument(harnessDefToJson(d)).toJson();
+    if (groups && cableRow >= 0) {
+        groups->setCurrentRow(cableRow);
+        auto* trunk = win->findChild<QPushButton*>(QStringLiteral("wiringCableTrunk"));
+        check(trunk && trunk->isEnabled(), "interactive wiring: Show as one harness offered for the cable picked");
+        if (trunk) trunk->click();
+    }
+    canvas->grab();
+    check(canvas->isTrunk(cable) && QJsonDocument(harnessDefToJson(d)).toJson() == drawnBefore,
+          "interactive wiring: the cable shown as one harness - the picture only, the harness unchanged");
+    canvas->setTrunk(cable, false);
+    // THE SIGNS DRAGGED: a twist along its wires, never past them; kept with the harness and used by Generate.
+    win->groupWires(WiringCanvas::Tool::Twist, {w2, w4});
+    settle();
+    auto twistIn = [](const std::vector<Entity>& ents, const QString& key) -> const Entity* {
+        for (const Entity& e : ents)
+            if (e.type == EntityType::Twist && e.meta.value(QStringLiteral("markKey")).toString() == key) return &e;
+        return nullptr;
+    };
+    DrawingPreview* big = win->enlargePreview();
+    QApplication::processEvents();
+    check(big && big->window()->isVisible() && big->window() != wizard.window(), "interactive wiring: Enlarge - the drawing in a window of its own");
+    if (big) {
+        big->window()->resize(1000, 640);
+        settle(200);
+        big->fitToView();
+        big->repaint();
+        const std::vector<Entity> ents = big->entities();
+        const Entity* sign = nullptr;
+        for (const Entity& e : ents)
+            if (e.type == EntityType::Twist && !e.meta.value(QStringLiteral("markKey")).toString().isEmpty()) sign = &e;
+        check(sign != nullptr, "interactive wiring: the twist sign says which it is, to be dragged");
+        if (sign) {
+            const QString key = sign->meta.value(QStringLiteral("markKey")).toString();
+            const double a = sign->meta.value(QStringLiteral("markA")).toDouble(), b = sign->meta.value(QStringLiteral("markB")).toDouble();
+            const double was = sign->points.front().x;
+            Vec2 mid{0, 0};
+            for (const Vec2& p : sign->points) mid = mid + p;
+            mid = mid * (1.0 / sign->points.size());
+            const QPointF from = big->screenAt(mid);
+            auto send = [&](QEvent::Type type, const QPointF& at, Qt::MouseButtons buttons) {
+                QMouseEvent ev(type, at, big->mapToGlobal(at), Qt::LeftButton, buttons, Qt::NoModifier);
+                QApplication::sendEvent(big, &ev);
+            };
+            const QPointF to = big->screenAt(Vec2{was + (b - a) * 0.15, mid.y});
+            send(QEvent::MouseButtonPress, from, Qt::LeftButton);
+            send(QEvent::MouseMove, to, Qt::LeftButton);
+            send(QEvent::MouseButtonRelease, to, Qt::NoButton);
+            QApplication::processEvents();
+            const HarnessBuild built = buildHarness(d);
+            const Entity* moved = twistIn(built.entities, key);
+            check(d.layout.markAt.contains(key) && moved && moved->points.front().x > was + (b - a) * 0.05,
+                  "interactive wiring: a twist sign dragged along its wires - Generate draws it where it was put");
+            // Far past the end: kept on its wires.
+            const QPointF past = big->screenAt(Vec2{b + (b - a) * 3.0, mid.y});
+            const QPointF now = big->screenAt(Vec2{moved ? moved->points.front().x : was, mid.y});
+            send(QEvent::MouseButtonPress, now, Qt::LeftButton);
+            send(QEvent::MouseMove, past, Qt::LeftButton);
+            send(QEvent::MouseButtonRelease, past, Qt::NoButton);
+            QApplication::processEvents();
+            const HarnessBuild far = buildHarness(d);
+            const Entity* kept = twistIn(far.entities, key);
+            check(d.layout.markAt.value(key) <= 1.0 && kept && kept->points.front().x <= b && kept->points.front().x >= a,
+                  "interactive wiring: dragged past its wires' end - it stays on them");
+            // KEPT WITH THE HARNESS.
+            const HarnessDef again = harnessDefFromJson(harnessDefToJson(d));
+            check(std::abs(again.layout.markAt.value(key, -1.0) - d.layout.markAt.value(key)) < 1e-9,
+                  "interactive wiring: where the signs were put saved with the harness");
+        }
+        big->window()->close();
+        QApplication::processEvents();
+    }
+    check(!harnessDefToJson(HarnessDef()).value(QStringLiteral("layout")).toObject().contains(QStringLiteral("markAt")),
+          "interactive wiring: no signs put by hand - nothing written for them");
+    // TABLE MODE: one Library part cell for the cable, over all its rows, next to each other or not.
+    viewSwitch->click();
+    QApplication::processEvents();
+    check(viewSwitch->text() == QLatin1String("Interactive wiring"), "interactive wiring: back on the table, the switch named Interactive wiring again");
+    int boxes = 0;
+    bool wholeCable = true;
+    for (QComboBox* box : wizard.findChildren<QComboBox*>(QStringLiteral("harnessBuilderCablePart")))
+        if (box->toolTip().contains(cable)) {
+            ++boxes;
+            wholeCable = wholeCable && box->toolTip().contains(QStringLiteral("all 2 of its wires"));
+        }
+    check(boxes >= 1 && wholeCable, "table mode: the cable's Library part one cell, for every wire of the cable");
+}
+
 int run_harnessbuilder_tests() {
     g_fail = 0;
     std::printf("harness builder tests:\n");
@@ -1966,6 +2152,7 @@ int run_harnessbuilder_tests() {
     testWireGrouping();
     testWizardSimplerWiring();
     testWiringWindow();
+    testInteractiveWiringAgain();
     std::printf(g_fail ? "  -> %d failed\n" : "  -> ok\n", g_fail);
     return g_fail;
 }

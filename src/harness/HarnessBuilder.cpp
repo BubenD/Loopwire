@@ -1321,6 +1321,11 @@ QJsonObject harnessDefToJson(const HarnessDef& def) {
     lay["twistAmount"] = def.layout.twistAmount;
     lay["shieldAmount"] = def.layout.shieldAmount;
     lay["wireShieldAmount"] = def.layout.wireShieldAmount;
+    if (!def.layout.markAt.isEmpty()) {
+        QJsonObject marks;
+        for (auto it = def.layout.markAt.cbegin(); it != def.layout.markAt.cend(); ++it) marks[it.key()] = it.value();
+        lay["markAt"] = marks;
+    }
     lay["shieldLegLength"] = def.layout.shieldLegLength;
     lay["leadLength"] = def.layout.leadLength;
     lay["pinPitch"] = def.layout.pinPitch;
@@ -1434,6 +1439,10 @@ HarnessDef harnessDefFromJson(const QJsonObject& root) {
     const int fileVersion = root.value(QStringLiteral("version")).toInt(1);
     loaded.layout.shieldAmount = fileVersion >= 2 ? lay.value("shieldAmount").toInt(1) : 1;
     loaded.layout.wireShieldAmount = lay.value("wireShieldAmount").toInt(2);
+    {
+        const QJsonObject marks = lay.value("markAt").toObject();
+        for (auto it = marks.begin(); it != marks.end(); ++it) loaded.layout.markAt.insert(it.key(), std::clamp(it.value().toDouble(0.5), 0.0, 1.0));
+    }
     loaded.layout.shieldLegLength = lay.value("shieldLegLength").toDouble(20.0);
     loaded.layout.leadLength = lay.value("leadLength").toDouble(0.0);
     loaded.layout.pinPitch = lay.value("pinPitch").toDouble(15.0);
@@ -1596,12 +1605,12 @@ QString harnessGroupCaption(const HarnessDef& def, const HarnessWire& wire) {
     const int twisted = count(&HarnessWire::twistGroup), screened = count(&HarnessWire::shieldGroup);
     auto size = [](int n) { return n == 2 ? QStringLiteral("pair") : QStringLiteral("group of %1").arg(n); };
     if (twisted > 1 && screened > 0) {
-        const QString how = screened == twisted ? size(twisted) : size(twisted) + QStringLiteral(" in a screened group");
-        return QStringLiteral("screened twisted %1 %2/%3").arg(how, wire.twistGroup, wire.shieldGroup);
+        const QString how = screened == twisted ? size(twisted) : size(twisted) + QStringLiteral(" in a shielded group");
+        return QStringLiteral("shielded twisted %1 %2/%3").arg(how, wire.twistGroup, wire.shieldGroup);
     }
     if (twisted > 1) return QStringLiteral("twisted %1 %2").arg(size(twisted), wire.twistGroup);
-    if (screened > 1) return QStringLiteral("screened %1 %2").arg(size(screened), wire.shieldGroup);
-    if (screened == 1) return QStringLiteral("screened wire %1").arg(wire.shieldGroup);
+    if (screened > 1) return QStringLiteral("shielded %1 %2").arg(size(screened), wire.shieldGroup);
+    if (screened == 1) return QStringLiteral("shielded wire %1").arg(wire.shieldGroup);
     return QString();
 }
 
@@ -2262,7 +2271,13 @@ HarnessBuild buildHarness(const HarnessDef& input) {
             // Kept inside the group's own run: a screen drawn past the end of the wires it encloses
             // encloses nothing.
             const double keepAway = std::max(6.0, (xb - xa) * 0.12);
-            x = std::min(clearOf(x, keepAway), xb - keepAway * 0.5);
+            const QString markKey = QStringLiteral("shield:%1#%2").arg(key).arg(k);
+            // PUT BY HAND: where it was dragged to, inside the wires still - not nudged off the others.
+            if (L.markAt.contains(markKey))
+                x = std::clamp(xa + (xb - xa) * L.markAt.value(markKey), xa + keepAway * 0.5, std::max(xa + keepAway * 0.5, xb - keepAway * 0.5));
+            else
+                x = std::min(clearOf(x, keepAway), xb - keepAway * 0.5);
+            const size_t had = out.entities.size();
             Vec2 drain;
             bool innerTerminated = false;
             {
@@ -2273,6 +2288,13 @@ HarnessBuild buildHarness(const HarnessDef& input) {
             }
             placeScreen(ids, x, key, /*overall=*/false, /*owns=*/k == 0, drain, nullptr,
                         /*terminated=*/innerTerminated);
+            // Which sign it is and the span it may be dragged along.
+            for (size_t i = had; i < out.entities.size(); ++i)
+                if (out.entities[i].type == EntityType::Screen) {
+                    out.entities[i].meta.insert("markKey", markKey);
+                    out.entities[i].meta.insert("markA", xa);
+                    out.entities[i].meta.insert("markB", xb);
+                }
         }
     }
 
@@ -2792,10 +2814,21 @@ HarnessBuild buildHarness(const HarnessDef& input) {
             }
         }
         std::sort(spots.begin(), spots.end());
-        for (double x : spots) {
+        for (int k = 0; k < static_cast<int>(spots.size()); ++k) {
+            double x = spots[k];
             std::vector<Vec2> cuts;
             QJsonArray wireIds;
             QString gauge;
+            // PUT BY HAND: where it was dragged to, inside the wires - where the whole group still runs there.
+            const QString markKey = QStringLiteral("twist:%1#%2").arg(key).arg(k);
+            if (L.markAt.contains(markKey)) {
+                const double pad = std::min(8.0, (xb - xa) * 0.25);
+                const double put = std::clamp(xa + (xb - xa) * L.markAt.value(markKey), xa + pad, std::max(xa + pad, xb - pad));
+                cutAt(ids, put, cuts, wireIds, gauge);
+                if (static_cast<int>(cuts.size()) == want) x = put;
+                cuts.clear();
+                wireIds = QJsonArray();
+            }
             cutAt(ids, x, cuts, wireIds, gauge);
             if (static_cast<int>(cuts.size()) != want) continue;
             Entity e;
@@ -2817,6 +2850,9 @@ HarnessBuild buildHarness(const HarnessDef& input) {
                 e.meta.insert("flatLen", 6.0);
             }
             e.meta.insert("twistGroup", key);
+            e.meta.insert("markKey", markKey);
+            e.meta.insert("markA", xa);
+            e.meta.insert("markB", xb);
             out.entities.push_back(std::move(e));
         }
     }

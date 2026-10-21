@@ -5,7 +5,9 @@
 #include <QDialog>
 #include <QHash>
 #include <QPointF>
+#include <QPointer>
 #include <QRectF>
+#include <QSet>
 
 #include <functional>
 #include <optional>
@@ -17,6 +19,7 @@ class QGroupBox;
 class QLabel;
 class QLineEdit;
 class QListWidget;
+class QPushButton;
 class QScrollArea;
 class QStackedWidget;
 class QTimer;
@@ -108,6 +111,10 @@ public:
     // THE WIRES IN THEIR COLOURS, or all white - a picture of what goes where, without the colours.
     void setWireColours(bool on);
     bool wireColours() const { return colours_; }
+    // A CABLE SHOWN AS ONE HARNESS: its wires drawn into one trunk across the lane, fanned out only to their pins - this
+    // picture only, the drawing as it was (not saved).
+    void setTrunk(const QString& cable, bool on);
+    bool isTrunk(const QString& cable) const { return trunks_.contains(cable); }
     // A SCREEN'S RING OR A PAIR'S TWIST under a point: the wires of that group, or none - and those a stroke crosses.
     QStringList groupMarkAt(const QPointF& p) const;
     QStringList groupMarksAcross(const QPointF& a, const QPointF& b) const;
@@ -124,6 +131,7 @@ private:
     QColor shownStripe(const QString& code) const;
     double zoom_ = 1.0;
     bool colours_ = true;
+    QSet<QString> trunks_;   // the cables shown as one harness (not saved)
     struct Brick {
         QString conn;
         QRectF rect;
@@ -189,12 +197,18 @@ public:
     void setLayoutChanged(std::function<void()> f) { layoutChanged_ = std::move(f); }
     // THE HARNESS CHANGED somewhere else: drawn again, the panel filled again.
     void refresh();
+    // The small drawing of the harness drawn again, a moment from now.
+    void redrawPreview();
 
     // TWO CONNECTORS, or SEVERAL (those named; none named: all).
     void showTwo(const QString& left, const QString& right);
     void showSeveral(const QStringList& ids = QStringList());
     bool twoMode() const;
     WiringCanvas* canvas() const { return canvas_; }
+    // A SHIELD AS A LAYER OF A CABLE: over every wire of it, a part of its own (its P/N given in the panel) - its name.
+    QString addCableShield(const QString& cable);
+    // A shield that is a cable's layer - over all that cable's wires and no others: the cable, else empty.
+    QString cableOfShield(const QString& shield) const;
 
     // WHAT THE POINTER DOES, done straight: a wire from pin to pin (its id); an end moved to another pin; a wire moved in
     // the list to before the shown wire at `toShownIndex`; the wires made twisted, screened or one cable.
@@ -274,6 +288,12 @@ private:
     QToolButton* colours_ = nullptr;
     DrawingPreview* preview_ = nullptr;
     QTimer* previewTimer_ = nullptr;
+    QPointer<DrawingPreview> bigPreview_;   // the drawing enlarged, while its window is open
+    std::function<void(DrawingPreview*)> markDrag_;
+public:
+    // THE DRAWING ENLARGED: a window of its own, kept drawn as the wiring changes - its picture.
+    DrawingPreview* enlargePreview();
+private:
     QLabel* panelTitle_ = nullptr;
     QComboBox* part_ = nullptr;
     QComboBox* base_ = nullptr;
@@ -286,6 +306,8 @@ private:
     QToolButton* optShield_ = nullptr;
     QToolButton* optTwist_ = nullptr;
     QListWidget* groups_ = nullptr;
+    QPushButton* addShield_ = nullptr;
+    QPushButton* trunk_ = nullptr;
     QGroupBox* screenBox_ = nullptr;
     QComboBox* screenPart_ = nullptr;
     QComboBox* screenEnd_[2] = {};
