@@ -1671,10 +1671,10 @@ void testWiringWindow() {
             const ConnectorGeometry g = connectorGeometry(c.a, connectorSpecFromMeta(c.meta));
             for (const Entity& x : built.entities)
                 if (x.type == EntityType::NotConnected)
-                    for (const Vec2& tip : g.pinTip) xOnPin = xOnPin || distance(tip, x.a) < 1e-6;
+                    for (const Vec2& end : g.pinEnd) xOnPin = xOnPin || distance(end, x.a) < 1e-6;
         }
         check(!badJoint && jointRun && spliced, "joint: drawn from its pin to the wire's run, a splice where it meets it");
-        check(xOnPin && stubless, "unconnected: an unwired pin terminated on the pin itself - its X there, no stub out to it");
+        check(xOnPin && !stubless, "unconnected: an unwired pin terminated at its pin's end - off the connector's body, its stub drawn");
         // A WIRE MOVED WITH ITS PINS: to before w1, its pins where w1's are in both stacks.
         dlg2.moveWireWithPins(w3, 0);
         check(dlg2.canvas()->shownWires().front() == w3 && at(QStringLiteral("a"), 3) < at(QStringLiteral("a"), 1) &&
@@ -1749,6 +1749,32 @@ void testWiringWindow() {
             for (const HarnessWire& w : d.wires) groupsAfter << w.shieldGroup;
             check(d.wires.size() == had && groupsBefore == groupsAfter, "screen: a stroke that crosses no line places no screen");
         }
+        // A JOINT ADDED ON A WIRE (its right-click): the pin its new wire goes to given; the new wire picked by a click.
+        {
+            const QString added = dlg2.addJointOnWire(w2, QStringLiteral("b:5"));
+            HarnessWire nw;
+            for (const HarnessWire& w : d.wires)
+                if (w.id == added) nw = w;
+            check(!added.isEmpty() && nw.fromConn == QLatin1String("b") && nw.fromPin == 5 && harnessJointEndpointWire(nw.toConn) == w2,
+                  "joint: added on a wire, its new wire to the pin picked");
+            QApplication::processEvents();
+            QString found;
+            for (const HarnessWire& w : d.wires)
+                if (w.id == added)
+                    for (double x = 0; x < dlg2.canvas()->width() && found.isEmpty(); x += 2)
+                        for (double y = 0; y < dlg2.canvas()->height() && found.isEmpty(); y += 2)
+                            if (dlg2.canvas()->jointWireAt(QPointF(x, y)) == added) found = added;
+            check(found == added, "joint: its new wire can be clicked - picked, for its part in the panel");
+        }
+        // ESC out of shielding: back to Select.
+        {
+            dlg2.canvas()->setTool(WiringCanvas::Tool::Screen);
+            QKeyEvent esc(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+            QApplication::sendEvent(dlg2.canvas(), &esc);
+            auto* select = dlg2.findChild<QToolButton*>(QStringLiteral("wiringToolSelect"));
+            check(dlg2.canvas()->tool() == WiringCanvas::Tool::Select && select && select->isChecked() && !select->autoRaise(),
+                  "tools: Esc out of shielding goes back to Select - each tool a framed button");
+        }
         // THE WHEEL ZOOMS.
         {
             const double z0 = dlg2.canvas()->zoom();
@@ -1809,6 +1835,39 @@ void testWiringWindow() {
         for (const HarnessWire& w : d.wires)
             if (w.fromConn == QLatin1String("p2") && w.toConn == QLatin1String("p3")) sameSide << w.id;
         check(!sameSide.isEmpty(), "several: wires between two right-hand connectors");
+        // AUTO 1:1 ON THE TWO PICKED: P4 and P3, every pin free on both wired to the next free on the other.
+        {
+            dlg3.canvas()->setSelectedBricks({QStringLiteral("p4"), QStringLiteral("p3")});
+            QSet<QString> before;
+            for (const HarnessWire& w : d.wires) before.insert(w.id);
+            const int made = dlg3.autoOneToOne();
+            int onPair = 0;
+            for (const HarnessWire& w : d.wires)
+                onPair += !before.contains(w.id) && w.fromConn == QLatin1String("p4") && w.toConn == QLatin1String("p3") ? 1 : 0;
+            std::printf("  auto 1:1: %d wire(s) made between the two picked\n", made);
+            check(made >= 1 && onPair == made, "auto 1:1: the two connectors picked wired, pin to free pin, as far as either has pins");
+            dlg3.canvas()->setSelectedBricks({});
+            check(dlg3.autoOneToOne() == 0, "auto 1:1: several shown and none picked - asked to pick two");
+        }
+        // A CABLE'S P/N given from one of its wires: every wire of the cable takes it, and the cable's colours where it has them.
+        {
+            PartsLibrary lib;
+            LibraryPart& cable = lib.add(PartKind::Cable);
+            cable.mfrPn = QStringLiteral("CBL-3");
+            setCableSpecOn(cable, cableSpecFromText(QStringLiteral("3x0.5mm2")));
+            useHarnessBuilderLibraryForTest(lib);
+            QStringList three;
+            for (const HarnessWire& w : d.wires)
+                if (w.fromConn == QLatin1String("p1") && three.size() < 3) three << w.id;
+            harnessCableWires(d, three);
+            dlg3.refresh();
+            dlg3.canvas()->setSelection({three.front()});
+            dlg3.setSelectedPart(cable.id);
+            int given = 0;
+            for (const HarnessWire& w : d.wires) given += three.contains(w.id) && w.libPart == cable.id ? 1 : 0;
+            check(given == 3, "cable P/N: picked from one of its wires, every wire of the cable takes it");
+            useHarnessBuilderLibraryForTest(PartsLibrary{});
+        }
     }
     if (std::getenv("LOOPWIRE_SHOTS")) {
         win->showTwo(QStringLiteral("c1"), QStringLiteral("c2"));

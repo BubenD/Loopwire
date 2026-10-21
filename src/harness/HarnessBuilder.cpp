@@ -2822,12 +2822,10 @@ HarnessBuild buildHarness(const HarnessDef& input) {
     }
 
     // ---- Unconnected pins ----
-    // TERMINATED ON THE PIN ITSELF: the X where the pin leaves the body, and no stub out from it - nothing is wired there
-    // for a stub to lead to. The connector is told which of its rows have none (stublessRows), and draws them so.
+    // TERMINATED AT THE PIN'S END: the X where a wire would land, out at the end of its stub - off the connector's body.
     if (L.terminateUnconnected) {
         for (size_t pi = 0; pi < placed.size(); ++pi) {
             const Placed& p = placed[pi];
-            QJsonArray stubless;
             for (int row = 0; row < static_cast<int>(p.geom.pinEnd.size()); ++row) {
                 const int pin = (row < static_cast<int>(p.pinSeq.size())) ? p.pinSeq[row] : row + 1;
                 bool wired = false;
@@ -2838,14 +2836,10 @@ HarnessBuild buildHarness(const HarnessDef& input) {
                 Entity e;
                 e.type = EntityType::NotConnected;
                 e.layer = QStringLiteral("Wires");
-                e.a = row < static_cast<int>(p.geom.pinTip.size()) ? p.geom.pinTip[row] : p.geom.pinEnd[row];
+                e.a = p.geom.pinEnd[row];
                 e.meta.insert("ncSize", std::max(2.0, p.spec.pitch * 0.3));
                 out.entities.push_back(std::move(e));
-                stubless.append(row);
             }
-            // The connectors were the first entities made, one for each placed connector, in this order.
-            if (!stubless.isEmpty() && pi < out.entities.size() && out.entities[pi].type == EntityType::Connector)
-                out.entities[pi].meta.insert("stublessRows", stubless);
         }
     }
 

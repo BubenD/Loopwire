@@ -19,6 +19,7 @@
 #include <QLineEdit>
 #include <QLineF>
 #include <QListWidget>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -356,6 +357,38 @@ QHash<QString, QRectF> WiringCanvas::markRects(bool screens) const {
     return out;
 }
 
+std::vector<QPointF> WiringCanvas::jointPath(const HarnessWire& w) const {
+    const bool fromJoint = harnessIsJointEndpoint(w.fromConn), toJoint = harnessIsJointEndpoint(w.toConn);
+    if (fromJoint == toJoint) return {};
+    const QString target = harnessJointEndpointWire(fromJoint ? w.fromConn : w.toConn);
+    const QString conn = fromJoint ? w.toConn : w.fromConn;
+    const int pin = fromJoint ? w.toPin : w.fromPin;
+    if (!shown_.contains(conn)) return {};
+    const Bar* onto = nullptr;
+    for (const Bar& bar : bars_)
+        if (bar.wire == target) onto = &bar;
+    if (!onto) return {};
+    int side = 0;
+    const QPointF exit = pinExit(conn, pin, side);
+    if (exit.isNull()) return {};
+    const double x = side < 0 ? laneLeft_ + (laneRight_ - laneLeft_) * 0.22 : laneRight_ - (laneRight_ - laneLeft_) * 0.22;
+    return {exit, QPointF(exit.x() + side * -14.0, exit.y()), QPointF(x, exit.y()), QPointF(x, onto->y)};
+}
+
+QString WiringCanvas::jointWireAt(const QPointF& p) const {
+    for (const HarnessWire& w : def_.wires) {
+        const std::vector<QPointF> pts = jointPath(w);
+        for (size_t k = 1; k < pts.size(); ++k) {
+            const QLineF seg(pts[k - 1], pts[k]);
+            const double len = seg.length();
+            if (len < 1e-9) continue;
+            const double t = std::clamp(QPointF::dotProduct(p - pts[k - 1], pts[k] - pts[k - 1]) / (len * len), 0.0, 1.0);
+            if (QLineF(p, pts[k - 1] + (pts[k] - pts[k - 1]) * t).length() <= 4.0) return w.id;
+        }
+    }
+    return {};
+}
+
 QStringList WiringCanvas::groupMarkAt(const QPointF& p) const {
     for (bool screens : {true, false}) {
         const QHash<QString, QRectF> marks = markRects(screens);
@@ -544,24 +577,13 @@ void WiringCanvas::paintEvent(QPaintEvent*) {
     }
     // ---- WIRES JOINED TO ANOTHER'S RUN: from the pin to a dot on that wire's bar ----
     for (const HarnessWire& w : def_.wires) {
-        const bool fromJoint = harnessIsJointEndpoint(w.fromConn), toJoint = harnessIsJointEndpoint(w.toConn);
-        if (fromJoint == toJoint) continue;
-        const QString target = harnessJointEndpointWire(fromJoint ? w.fromConn : w.toConn);
-        const QString conn = fromJoint ? w.toConn : w.fromConn;
-        const int pin = fromJoint ? w.toPin : w.fromPin;
-        if (!shown_.contains(conn)) continue;
-        const Bar* onto = nullptr;
-        for (const Bar& bar : bars_)
-            if (bar.wire == target) onto = &bar;
-        if (!onto) continue;
-        int side = 0;
-        const QPointF exit = pinExit(conn, pin, side);
-        const double x = side < 0 ? laneLeft_ + (laneRight_ - laneLeft_) * 0.22 : laneRight_ - (laneRight_ - laneLeft_) * 0.22;
+        const std::vector<QPointF> pts = jointPath(w);
+        if (pts.size() < 2) continue;
+        const double x = pts.back().x();
+        const Bar onto{QString(), pts.back().y()};
         QPainterPath path;
-        path.moveTo(exit);
-        path.lineTo(QPointF(exit.x() + side * -14.0, exit.y()));
-        path.lineTo(QPointF(x, exit.y()));
-        path.lineTo(QPointF(x, onto->y));
+        path.moveTo(pts.front());
+        for (size_t k = 1; k < pts.size(); ++k) path.lineTo(pts[k]);
         p.setBrush(Qt::NoBrush);
         if (selection_.contains(w.id)) {
             p.setPen(QPen(QColor(255, 170, 60), 6.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
@@ -573,7 +595,7 @@ void WiringCanvas::paintEvent(QPaintEvent*) {
         p.drawPath(path);
         p.setPen(Qt::NoPen);
         p.setBrush(QColor(235, 240, 248));
-        p.drawEllipse(QPointF(x, onto->y), 4.0, 4.0);
+        p.drawEllipse(QPointF(x, onto.y), 4.0, 4.0);
     }
     // ---- TWISTS AND SCREENS, by their bars ----
     const double twistX = laneLeft_ + 46.0, screenX = laneRight_ - 46.0;
@@ -613,7 +635,8 @@ void WiringCanvas::paintEvent(QPaintEvent*) {
             }
     }
     // ---- WHAT IS BEING DONE: the next wire offered, a line being drawn, a stroke, a bar being moved ----
-    if (ghostOn_) {
+    // THE NEXT PAIR OFFERED is not drawn - Enter still takes it, as the line under the picture says.
+    if (false && ghostOn_) {
         const QPointF a = pinCentre(ghostFrom_, ghostFromPin_), b = pinCentre(ghostTo_, ghostToPin_);
         if (!a.isNull() && !b.isNull()) {
             p.setPen(QPen(QColor(255, 209, 102, 150), 1.6, Qt::DashLine));
@@ -679,6 +702,12 @@ void WiringCanvas::paintEvent(QPaintEvent*) {
 
 void WiringCanvas::mousePressEvent(QMouseEvent* e) {
     setFocus();
+    // RIGHT-CLICKED ON A WIRE: a joint on it.
+    if (e->button() == Qt::RightButton) {
+        const QString bar = barAt(e->position() / zoom_);
+        if (!bar.isEmpty()) emit jointMenuAsked(bar, e->globalPosition().toPoint());
+        return;
+    }
     if (e->button() != Qt::LeftButton) return;
     pressing_ = true;
     moved_ = false;
@@ -804,6 +833,10 @@ void WiringCanvas::mouseReleaseEvent(QMouseEvent* e) {
         if (picked.contains(pressBrick_)) picked.removeAll(pressBrick_);
         else picked << pressBrick_;
         setSelectedBricks(picked);
+    } else if (!moved_ && !jointWireAt(now_).isEmpty()) {
+        // A WIRE JOINED TO ANOTHER'S RUN CLICKED: picked, for its part, colour, gauge in the panel.
+        const QString id = jointWireAt(now_);
+        setSelection(ctrl_ ? selection_ + QStringList{id} : QStringList{id});
     } else if (!moved_ && !groupMarkAt(now_).isEmpty()) {
         // A SCREEN'S RING OR A PAIR'S TWIST CLICKED: its wires picked.
         const QStringList ids = groupMarkAt(now_);
@@ -825,6 +858,11 @@ void WiringCanvas::keyPressEvent(QKeyEvent* e) {
     if (e->key() == Qt::Key_Escape) {
         pending_.clear();
         setSelection({});
+        // OUT OF TWISTING, SHIELDING, MAKING A CABLE: back to Select.
+        if (tool_ == Tool::Twist || tool_ == Tool::Screen || tool_ == Tool::Cable) {
+            setTool(Tool::Select);
+            emit toolPicked(Tool::Select);
+        }
     } else if (e->key() == Qt::Key_Delete || e->key() == Qt::Key_Backspace) {
         emit deleteAsked();
     } else if (e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) {
@@ -886,7 +924,7 @@ WiringDialog::WiringDialog(HarnessDef& def, std::function<void()> changed, QWidg
                                                    "another to move its end there (Ctrl: another wire instead)"},
                   {"wiringToolSelect", "Select", "Click lines to pick them (Ctrl: more), or draw a stroke across them"},
                   {"wiringToolTwist", "Twist", "Draw a stroke across lines to twist them together"},
-                  {"wiringToolScreen", "Screen", "Draw a stroke across lines to screen them - then say where the drain goes"},
+                  {"wiringToolScreen", "Shield", "Draw a stroke across lines to shield them - then say where the drain goes"},
                   {"wiringToolCable", "Cable", "Draw a stroke across lines to make them one cable"}};
     for (int i = 0; i < 5; ++i) {
         auto* b = new QToolButton(this);
@@ -894,7 +932,10 @@ WiringDialog::WiringDialog(HarnessDef& def, std::function<void()> changed, QWidg
         b->setText(QString::fromLatin1(tools[i].text));
         b->setToolTip(QString::fromLatin1(tools[i].tip));
         b->setCheckable(true);
-        b->setAutoRaise(true);
+        // FRAMED, each a button of its own - the one in use filled.
+        b->setAutoRaise(false);
+        b->setStyleSheet(QStringLiteral("QToolButton{border:1px solid #6b7785;border-radius:4px;padding:3px 10px;}"
+                                        "QToolButton:checked{background:#2b6cb0;color:white;border-color:#2b6cb0;}"));
         b->setMinimumWidth(70);
         connect(b, &QToolButton::clicked, this, [this, i] {
             canvas_->setTool(static_cast<WiringCanvas::Tool>(i));
@@ -920,7 +961,7 @@ WiringDialog::WiringDialog(HarnessDef& def, std::function<void()> changed, QWidg
     button(QStringLiteral("Auto 1:1"), "wiringAuto", QStringLiteral("Every free pin of the left connector wired to the next free pin of the right, in turn"),
            [this] { autoOneToOne(); });
     button(QStringLiteral("Place cable..."), "wiringPlaceCable", QStringLiteral("A cable from the library: its conductors from the left connector's free "
-                                                                                "pins to the right's, its pairs twisted and screens screened"),
+                                                                                "pins to the right's, its pairs twisted and shields shielded"),
            [this] {
                QStringList titles, ids;
                for (const LibraryPart& p : harnessBuilderLibrary().parts)
@@ -952,7 +993,7 @@ WiringDialog::WiringDialog(HarnessDef& def, std::function<void()> changed, QWidg
                             QStringLiteral("The second connector's pins put in the order of the first's - and the lines with them - "
                                            "so no line crosses another"));
     optShield_ = roundSwitch(QStringLiteral("By shield"), "wiringOptShield",
-                             QStringLiteral("The wires screened together on pins side by side"));
+                             QStringLiteral("The wires shielded together on pins side by side"));
     optTwist_ = roundSwitch(QStringLiteral("By twist"), "wiringOptTwist",
                             QStringLiteral("The wires twisted together on pins side by side"));
     auto* optApply = new QPushButton(QStringLiteral("Apply"), this);
@@ -977,7 +1018,7 @@ WiringDialog::WiringDialog(HarnessDef& def, std::function<void()> changed, QWidg
     // groups they make up.
     groups_ = new QListWidget(split);
     groups_->setObjectName(QStringLiteral("wiringGroups"));
-    groups_->setToolTip(QStringLiteral("The twisted pairs, screens and cables - click one to pick its wires"));
+    groups_->setToolTip(QStringLiteral("The twisted pairs, shields and cables - click one to pick its wires"));
     groups_->setSelectionMode(QAbstractItemView::ExtendedSelection);
     split->addWidget(groups_);
     connect(groups_, &QListWidget::itemClicked, this, [this](QListWidgetItem*) {
@@ -1027,7 +1068,11 @@ WiringDialog::WiringDialog(HarnessDef& def, std::function<void()> changed, QWidg
         connect(terminate_, &QToolButton::toggled, this, [this](bool on) {
             if (filling_) return;
             def_.layout.terminateUnconnected = on;
-            this->changed();
+            // ONLY THE DRAWING CHANGES: drawn again here and there, not every table of the wizard rebuilt - which is what
+            // made it slow.
+            if (layoutChanged_) layoutChanged_();
+            else if (changed_) changed_();
+            canvas_->update();
         });
         under->addWidget(terminate_);
         under->addStretch(1);
@@ -1099,7 +1144,7 @@ WiringDialog::WiringDialog(HarnessDef& def, std::function<void()> changed, QWidg
         gl->addWidget(b);
     };
     groupButton(QStringLiteral("Twisted"), "wiringMakeTwisted", WiringCanvas::Tool::Twist);
-    groupButton(QStringLiteral("Screened..."), "wiringMakeScreened", WiringCanvas::Tool::Screen);
+    groupButton(QStringLiteral("Shielded..."), "wiringMakeScreened", WiringCanvas::Tool::Screen);
     groupButton(QStringLiteral("One cable"), "wiringMakeCable", WiringCanvas::Tool::Cable);
     auto* apart = new QPushButton(QStringLiteral("Apart"), groups);
     apart->setObjectName(QStringLiteral("wiringMakeApart"));
@@ -1112,14 +1157,14 @@ WiringDialog::WiringDialog(HarnessDef& def, std::function<void()> changed, QWidg
     pl->addWidget(groups);
     // A SCREEN PICKED (every line picked in one): its own part, and how it is drained at each end.
     {
-        screenBox_ = new QGroupBox(QStringLiteral("Screen"), panel_);
+        screenBox_ = new QGroupBox(QStringLiteral("Shield"), panel_);
         screenBox_->setObjectName(QStringLiteral("wiringScreenBox"));
         auto* sf = new QFormLayout(screenBox_);
         screenPart_ = new QComboBox(screenBox_);
         screenPart_->setObjectName(QStringLiteral("wiringScreenPart"));
         screenPart_->setEditable(true);
         screenPart_->setInsertPolicy(QComboBox::NoInsert);
-        screenPart_->setToolTip(QStringLiteral("The screen's own part: one from the parts list, or a P/N typed"));
+        screenPart_->setToolTip(QStringLiteral("The shield's own part: one from the parts list, or a P/N typed"));
         sf->addRow(QStringLiteral("P/N"), screenPart_);
         connect(screenPart_, &QComboBox::activated, this, [this](int i) {
             if (filling_) return;
@@ -1145,7 +1190,7 @@ WiringDialog::WiringDialog(HarnessDef& def, std::function<void()> changed, QWidg
             screenEnd_[end]->setObjectName(end ? QStringLiteral("wiringScreenRight") : QStringLiteral("wiringScreenLeft"));
             screenPin_[end] = new QComboBox(host);
             screenPin_[end]->setObjectName(end ? QStringLiteral("wiringScreenRightTo") : QStringLiteral("wiringScreenLeftTo"));
-            screenPin_[end]->setToolTip(QStringLiteral("Where it goes: any connector's pin, any connector's shield, or another screen"));
+            screenPin_[end]->setToolTip(QStringLiteral("Where it goes: any connector's pin, any connector's shield, or another shield"));
             screenWire_[end] = new QComboBox(host);
             screenWire_[end]->setObjectName(end ? QStringLiteral("wiringScreenRightWire") : QStringLiteral("wiringScreenLeftWire"));
             screenWire_[end]->setToolTip(QStringLiteral("The hook-up wire, from the parts list"));
@@ -1212,6 +1257,18 @@ WiringDialog::WiringDialog(HarnessDef& def, std::function<void()> changed, QWidg
     connect(canvas_, &WiringCanvas::wireWithPinsMoveAsked, this, [this](const QString& id, int at) { moveWireWithPins(id, at); });
     connect(canvas_, &WiringCanvas::jointAsked, this,
             [this](const QString& conn, int pin, const QString& wire) { connectToWire(conn, pin, wire); });
+    connect(canvas_, &WiringCanvas::jointMenuAsked, this, [this](const QString& wire, const QPoint& at) {
+        QMenu menu(this);
+        menu.addAction(QStringLiteral("Add a joint on wire %1...").arg(wire), this, [this, wire] { addJointOnWire(wire); });
+        menu.exec(at);
+    });
+    connect(canvas_, &WiringCanvas::toolPicked, this, [this](WiringCanvas::Tool tool) {
+        for (int k = 0; k < 5; ++k) {
+            const QSignalBlocker hold(tools_[k]);
+            tools_[k]->setChecked(k == static_cast<int>(tool));
+        }
+        said_->setText(QStringLiteral("Select"));
+    });
     connect(canvas_, &WiringCanvas::moveAsked, this, [this](const QString& id, int at) { moveWire(id, at); });
     connect(canvas_, &WiringCanvas::strokeMade, this, [this](WiringCanvas::Tool tool, const QStringList& ids) {
         groupWires(tool, ids, tool == WiringCanvas::Tool::Screen && askDrain_ && ids.size() > 0 ? askDrain_() : QString());
@@ -1359,7 +1416,7 @@ void WiringDialog::fillGroups() {
     for (const QString& g : cables)
         add(QStringLiteral("cable"), g, [&g](const HarnessWire& w) { return w.bundle == g; });
     for (const QString& g : screens)
-        add(QStringLiteral("screened"), g, [&g](const HarnessWire& w) { return w.shieldGroup == g; });
+        add(QStringLiteral("shielded"), g, [&g](const HarnessWire& w) { return w.shieldGroup == g; });
     for (const QString& g : twists)
         add(QStringLiteral("twisted"), g, [&g](const HarnessWire& w) { return w.twistGroup == g; });
     markGroups();
@@ -1495,7 +1552,7 @@ void WiringDialog::fillScreenBox() {
     const QString g = screenOfSelection();
     screenBox_->setVisible(!g.isEmpty());
     if (g.isEmpty()) return;
-    screenBox_->setTitle(QStringLiteral("Screen %1").arg(g));
+    screenBox_->setTitle(QStringLiteral("Shield %1").arg(g));
     screenPart_->clear();
     screenPart_->addItem(QString(), QString());
     for (const LibraryPart& p : harnessBuilderLibrary().parts)
@@ -1530,7 +1587,7 @@ void WiringDialog::fillScreenBox() {
         QStringList others;
         for (const HarnessWire& w : def_.wires)
             if (!w.shieldGroup.isEmpty() && w.shieldGroup != g && !others.contains(w.shieldGroup)) others << w.shieldGroup;
-        for (const QString& o : others) to->addItem(QStringLiteral("Screen %1").arg(o), QStringLiteral("screen:") + o);
+        for (const QString& o : others) to->addItem(QStringLiteral("Shield %1").arg(o), QStringLiteral("screen:") + o);
         to->setCurrentIndex(std::max(0, to->findData(target)));
         to->setEnabled(!how.isEmpty());
         // THE HOOK-UP WIRE'S PART, from the library: only for a hook-up wire.
@@ -1542,6 +1599,32 @@ void WiringDialog::fillScreenBox() {
         wire->setCurrentIndex(std::max(0, wire->findData(wirePart)));
         wire->setVisible(how == QLatin1String("hook"));
     }
+}
+
+QString WiringDialog::addJointOnWire(const QString& wireId, const QString& pinKeyGiven) {
+    QString chosen = pinKeyGiven;
+    if (chosen.isEmpty()) {
+        // THE PIN ITS NEW WIRE GOES TO: any connector's, those free first.
+        QStringList labels, keys;
+        for (bool freeFirst : {true, false})
+            for (const HarnessConnector& c : def_.connectors)
+                for (int n : harnessPinSequence(c)) {
+                    const bool isFree = canvas_->wiresOn(c.id, n).isEmpty();
+                    if (isFree != freeFirst) continue;
+                    labels << QStringLiteral("%1 pin %2%3").arg(c.designator, harnessPinLabel(c, n), isFree ? QString() : QStringLiteral(" (wired)"));
+                    keys << pinKey(c.id, n);
+                }
+        if (keys.isEmpty()) return {};
+        bool ok = false;
+        const QString picked = QInputDialog::getItem(this, QStringLiteral("Joint on wire %1").arg(wireId),
+                                                     QStringLiteral("The joint's new wire goes to:"), labels, 0, false, &ok);
+        if (!ok) return {};
+        chosen = keys.value(labels.indexOf(picked));
+    }
+    QString conn;
+    int pin = 0;
+    if (!splitPinKey(chosen, conn, pin)) return {};
+    return connectToWire(conn, pin, wireId);
 }
 
 QString WiringDialog::connectToWire(const QString& conn, int pin, const QString& wireId) {
@@ -1715,7 +1798,7 @@ QString WiringDialog::groupWires(WiringCanvas::Tool tool, const QStringList& ids
         name = harnessScreenWires(def_, ids, drainConn, pin);
     } else if (tool == WiringCanvas::Tool::Cable) name = harnessCableWires(def_, ids);
     if (name.isEmpty()) {
-        said_->setText(tool == WiringCanvas::Tool::Screen ? QStringLiteral("Draw the stroke across the lines to screen")
+        said_->setText(tool == WiringCanvas::Tool::Screen ? QStringLiteral("Draw the stroke across the lines to shield")
                                                           : QStringLiteral("Draw the stroke across two lines or more"));
         return {};
     }
@@ -1729,11 +1812,15 @@ QString WiringDialog::groupWires(WiringCanvas::Tool tool, const QStringList& ids
 }
 
 int WiringDialog::autoOneToOne() {
-    if (!twoMode() || canvas_->shown().size() < 2) {
-        said_->setText(QStringLiteral("Auto 1:1 wires two connectors - show two"));
+    // THE TWO CONNECTORS PICKED (their bricks clicked, Ctrl for the second) - or, two shown and none picked, those two: every
+    // pin of one that is free wired to the next free pin of the other, as far as either has pins.
+    QStringList pair = canvas_->selectedBricks();
+    if (pair.size() != 2 && twoMode() && canvas_->shown().size() >= 2) pair = canvas_->shown().mid(0, 2);
+    if (pair.size() != 2) {
+        said_->setText(QStringLiteral("Auto 1:1: pick two connectors - click one's brick, Ctrl and click the other's"));
         return 0;
     }
-    const QString a = canvas_->shown().at(0), b = canvas_->shown().at(1);
+    const QString a = pair.at(0), b = pair.at(1);
     int made = 0;
     for (int pa = nextFreePinAfter(a, 0), pb = nextFreePinAfter(b, 0); pa > 0 && pb > 0;
          pa = nextFreePinAfter(a, pa), pb = nextFreePinAfter(b, pb)) {
@@ -1997,13 +2084,21 @@ void WiringDialog::applyToSelection(const std::function<void(HarnessWire&)>& edi
 
 void WiringDialog::setSelectedPart(const QString& libPartId) {
     const LibraryPart* part = libPartId.isEmpty() ? nullptr : harnessBuilderLibrary().byId(libPartId);
-    // ONE CABLE GIVEN TO THE LINES PICKED: they are made its conductors - one cable - and checked against what it is.
-    if (part && part->kind == PartKind::Cable && canvas_->selection().size() > 1) {
+    // ONE CABLE GIVEN TO THE LINES PICKED: they are made its conductors - one cable - and checked against what it is. A wire
+    // of a cable already made: the cable's P/N, given to every wire of it.
+    if (part && part->kind == PartKind::Cable) {
         QStringList ids = canvas_->selection();
         QSet<QString> bundles;
         for (const HarnessWire& w : def_.wires)
             if (ids.contains(w.id)) bundles.insert(w.bundle);
-        if (bundles.size() != 1 || bundles.contains(QString())) harnessCableWires(def_, ids);
+        if (ids.size() > 1 && (bundles.size() != 1 || bundles.contains(QString()))) {
+            harnessCableWires(def_, ids);
+        } else if (bundles.size() == 1 && !bundles.contains(QString())) {
+            for (const HarnessWire& w : def_.wires)
+                if (w.bundle == *bundles.begin() && !ids.contains(w.id)) ids << w.id;
+            const QSignalBlocker hold(canvas_);
+            canvas_->setSelection(ids);
+        }
     }
     int conductor = 0;
     applyToSelection([&](HarnessWire& w) {
@@ -2106,7 +2201,7 @@ QStringList WiringDialog::problems() const {
                 return w.fromConn == harnessInternalShieldKey(s) || w.toConn == harnessInternalShieldKey(s);
             }))
             found.push_back({rowOfGroup([&s](const HarnessWire& w) { return w.shieldGroup == s; }),
-                             QStringLiteral("Screen %1 has no drain wire").arg(s)});
+                             QStringLiteral("Shield %1 has no drain wire").arg(s)});
     // A CABLE GIVEN TO A GROUP: checked against what it is - as many conductors, each of the gauge and colour of its wire,
     // a screen where the wires are screened, twisted where they are twisted.
     QStringList cablesSeen;
@@ -2145,7 +2240,7 @@ QStringList WiringDialog::problems() const {
                 found.push_back({rowOf(o.id), QStringLiteral("Wire %1 is twisted - %2's conductor %3 is not").arg(o.id, name).arg(k + 1)});
         }
         if (screened && !cableScreened)
-            found.push_back({row, QStringLiteral("%1 has no screen - its wires are screened").arg(name)});
+            found.push_back({row, QStringLiteral("%1 has no shield - its wires are shielded").arg(name)});
     }
     std::stable_sort(found.begin(), found.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
     QStringList out;

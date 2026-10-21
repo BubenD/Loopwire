@@ -2177,8 +2177,9 @@ void applyHarnessWirePart(HarnessWire& wire, const LibraryPart& part, int conduc
         const auto cores = cableConductors(cableSpecOf(part), wire.bundle);
         if (conductor >= 0 && conductor < int(cores.size())) {
             const auto& core = cores[size_t(conductor)];
-            wire.gauge = core.gauge;
-            wire.color = core.colour;
+            // ITS COLOUR AND SIZE WHERE THE CABLE SAYS THEM: a cable that does not keeps the wire as it was.
+            if (!core.gauge.isEmpty()) wire.gauge = core.gauge;
+            if (!core.colour.isEmpty()) wire.color = core.colour;
             wire.kind = core.kind;
             wire.twistGroup = core.twistGroup;
             wire.shieldGroup = core.shieldGroup;
@@ -2519,8 +2520,10 @@ QWidget* HarnessBuilderDialog::buildWiresSection() {
     groupBtn->setText(QStringLiteral("Group as"));
     groupBtn->setToolTip(QStringLiteral("Make the selected wires (Ctrl-click for several) a twisted pair, a screened group, "
                                         "one cable or a coax - or take them out of it"));
-    groupBtn->setPopupMode(QToolButton::InstantPopup);
+    // ITS ARROW AS ADD WIRE'S IS, beside it on the right - a click anywhere on it opens the menu.
+    groupBtn->setPopupMode(QToolButton::MenuButtonPopup);
     groupBtn->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    connect(groupBtn, &QToolButton::clicked, groupBtn, &QToolButton::showMenu);
     groupBtn->setMinimumWidth(groupBtn->fontMetrics().horizontalAdvance(groupBtn->text()) + 30);
     {
         auto* menu = new QMenu(groupBtn);
@@ -2837,6 +2840,13 @@ WiringDialog* HarnessBuilderDialog::openWiringWindow() {
         wiringWindow_ = new WiringDialog(def_, [this] { reloadAll(); }, this);
         wiringWindow_->setAskDrain([this] { return askDrainConnector(); });
         wiringWindow_->setUndo([this] { undo(); }, [this] { redo(); });
+        wiringWindow_->setLayoutChanged([this] {
+            if (terminateBox_) {
+                const QSignalBlocker hush(terminateBox_);
+                terminateBox_->setChecked(def_.layout.terminateUnconnected);
+            }
+            refreshPreview();
+        });
     }
     // THE TWO THE WIRE BEING EDITED JOINS, where there is one.
     for (const HarnessWire& w : def_.wires)

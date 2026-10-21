@@ -82,6 +82,10 @@ signals:
     void wireWithPinsMoveAsked(const QString& wireId, int toShownIndex);
     // A PIN DRAGGED ONTO A WIRE'S BAR: a wire from the pin to a joint on that wire's run.
     void jointAsked(const QString& conn, int pin, const QString& wireId);
+    // A WIRE'S BAR RIGHT-CLICKED: a joint to be added on it - the pin its new wire goes to asked for.
+    void jointMenuAsked(const QString& wireId, const QPoint& globalAt);
+    // The tool changed from here (Esc out of twisting, shielding, a cable: back to Select).
+    void toolPicked(WiringCanvas::Tool tool);
     void brickSelectionChanged();
 
 protected:
@@ -100,6 +104,10 @@ public:
     // A SCREEN'S RING OR A PAIR'S TWIST under a point: the wires of that group, or none - and those a stroke crosses.
     QStringList groupMarkAt(const QPointF& p) const;
     QStringList groupMarksAcross(const QPointF& a, const QPointF& b) const;
+    // A WIRE JOINED TO ANOTHER'S RUN under a point - its line from its pin to the dot - or "".
+    QString jointWireAt(const QPointF& p) const;
+    // The way a joined wire is drawn: from its pin to the dot on the wire it joins.
+    std::vector<QPointF> jointPath(const HarnessWire& w) const;
 
 private:
     // Where each screen's ring and each pair's twist is drawn, by group: from the bars of its wires.
@@ -164,6 +172,8 @@ public:
     // How a new screen's drain is asked for (a connector, or none); undo and redo, the wizard's own.
     void setAskDrain(std::function<QString()> ask) { askDrain_ = std::move(ask); }
     void setUndo(std::function<void()> undo, std::function<void()> redo);
+    // A LAYOUT FLAG CHANGED here (Terminate unconnected): the drawing only, not every table - what the wizard does for it.
+    void setLayoutChanged(std::function<void()> f) { layoutChanged_ = std::move(f); }
     // THE HARNESS CHANGED somewhere else: drawn again, the panel filled again.
     void refresh();
 
@@ -205,6 +215,9 @@ public:
     bool moveWireWithPins(const QString& wireId, int toShownIndex);
     // A WIRE FROM A PIN TO A JOINT ON ANOTHER WIRE'S RUN (its id).
     QString connectToWire(const QString& conn, int pin, const QString& wireId);
+    // A JOINT ADDED ON A WIRE: the pin its new wire goes to picked from every connector's pins (`pinKey` "conn:pin" given
+    // straight, for the tests; empty, asked for).
+    QString addJointOnWire(const QString& wireId, const QString& pinKey = QString());
     // THE PIN STACKS OF THE CONNECTORS PICKED (none picked: every one shown): the wired pins at the top, the free ones below -
     // or, `wiredFirst` false, the other way round. How many were reordered.
     int orderStacks(bool wiredFirst);
@@ -231,6 +244,7 @@ private:
     std::function<void()> changed_;
     std::function<QString()> askDrain_;
     std::function<void()> undo_, redo_;
+    std::function<void()> layoutChanged_;
     WiringCanvas* canvas_ = nullptr;
     QScrollArea* scroll_ = nullptr;
     QComboBox* mode_ = nullptr;
