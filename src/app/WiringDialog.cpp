@@ -32,6 +32,7 @@
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 
 #include <algorithm>
 #include <cmath>
@@ -260,7 +261,7 @@ void WiringCanvas::relayout() {
         }
     const double laneW = std::max(260.0, words + 140.0);
     const double whole = 2 * kMargin + leftW + rightW + 120.0 + laneW;
-    const double shift = std::max(0.0, (width() - whole) / 2.0);
+    const double shift = std::max(0.0, (width() / zoom_ - whole) / 2.0);
     laneLeft_ = shift + kMargin + leftW + 60.0;
     laneRight_ = laneLeft_ + laneW;
     barTop_ = kMargin + 40.0;
@@ -289,12 +290,12 @@ void WiringCanvas::relayout() {
     }
     content_ = QSize(static_cast<int>(whole),
                      static_cast<int>(std::max({leftBottom, rightBottom, barTop_ + wires.size() * kRow + 2 * kRow}) + kMargin));
-    setMinimumSize(content_);
+    setMinimumSize(QSize(static_cast<int>(content_.width() * zoom_), static_cast<int>(content_.height() * zoom_)));
     updateGeometry();
     update();
 }
 
-QSize WiringCanvas::sizeHint() const { return content_; }
+QSize WiringCanvas::sizeHint() const { return QSize(static_cast<int>(content_.width() * zoom_), static_cast<int>(content_.height() * zoom_)); }
 
 // A WIDER WINDOW, a wider lane: laid out again for the width there is.
 void WiringCanvas::resizeEvent(QResizeEvent* e) {
@@ -315,21 +316,98 @@ QString WiringCanvas::barAt(const QPointF& p) const {
     return {};
 }
 
+// A BAR'S REACH ACROSS THE LANE: the whole lane for a wire from one side to the other; for one between two connectors on
+// the same side, a short stub in from that side, its label on it.
+constexpr double kStub = 96.0;
+
 QStringList WiringCanvas::barsAcross(const QPointF& a, const QPointF& b) const {
     QStringList out;
     for (const Bar& bar : bars_) {
         if ((a.y() - bar.y) * (b.y() - bar.y) > 0.0 || std::abs(a.y() - b.y()) < 1e-9) continue;
         const double t = (bar.y - a.y()) / (b.y() - a.y());
         const double x = a.x() + (b.x() - a.x()) * t;
-        if (x >= laneLeft_ - 4.0 && x <= laneRight_ + 4.0) out << bar.wire;
+        double lo = laneLeft_, hi = laneRight_;
+        if (bar.fromSide == bar.toSide) {
+            if (bar.fromSide < 0) hi = laneLeft_ + kStub;
+            else lo = laneRight_ - kStub;
+        }
+        if (x >= lo - 4.0 && x <= hi + 4.0) out << bar.wire;
     }
     return out;
+}
+
+QHash<QString, QRectF> WiringCanvas::markRects(bool screens) const {
+    QHash<QString, std::pair<double, double>> span;
+    for (const Bar& bar : bars_)
+        for (const HarnessWire& w : def_.wires) {
+            if (w.id != bar.wire) continue;
+            const QString key = screens ? w.shieldGroup : w.twistGroup;
+            if (key.isEmpty()) continue;
+            auto it = span.find(key);
+            if (it == span.end()) span.insert(key, {bar.y, bar.y});
+            else it.value() = {std::min(it.value().first, bar.y), std::max(it.value().second, bar.y)};
+        }
+    QHash<QString, QRectF> out;
+    for (auto it = span.cbegin(); it != span.cend(); ++it) {
+        const double top = it.value().first, bottom = it.value().second;
+        out.insert(it.key(), screens ? QRectF(laneRight_ - 46.0 - 12, top - kRow / 2 + 2, 24, bottom - top + kRow - 4)
+                                     : QRectF(laneLeft_ + 46.0 - 10, top - 6, 20, bottom - top + 12));
+    }
+    return out;
+}
+
+QStringList WiringCanvas::groupMarkAt(const QPointF& p) const {
+    for (bool screens : {true, false}) {
+        const QHash<QString, QRectF> marks = markRects(screens);
+        for (auto it = marks.cbegin(); it != marks.cend(); ++it)
+            if (it.value().adjusted(-3, -3, 3, 3).contains(p)) {
+                QStringList ids;
+                for (const HarnessWire& w : def_.wires)
+                    if ((screens ? w.shieldGroup : w.twistGroup) == it.key()) ids << w.id;
+                return ids;
+            }
+    }
+    return {};
+}
+
+QStringList WiringCanvas::groupMarksAcross(const QPointF& a, const QPointF& b) const {
+    QStringList ids;
+    const QLineF stroke(a, b);
+    for (bool screens : {true, false}) {
+        const QHash<QString, QRectF> marks = markRects(screens);
+        for (auto it = marks.cbegin(); it != marks.cend(); ++it) {
+            const QRectF r = it.value();
+            bool hit = r.contains(a) || r.contains(b);
+            for (const QLineF& edge : {QLineF(r.topLeft(), r.topRight()), QLineF(r.topRight(), r.bottomRight()),
+                                       QLineF(r.bottomRight(), r.bottomLeft()), QLineF(r.bottomLeft(), r.topLeft())})
+                hit = hit || stroke.intersects(edge, nullptr) == QLineF::BoundedIntersection;
+            if (!hit) continue;
+            for (const HarnessWire& w : def_.wires)
+                if ((screens ? w.shieldGroup : w.twistGroup) == it.key() && !ids.contains(w.id)) ids << w.id;
+        }
+    }
+    return ids;
+}
+
+void WiringCanvas::setZoom(double z) {
+    zoom_ = std::clamp(z, 0.3, 4.0);
+    relayout();
+}
+
+// THE WHEEL ZOOMS, about nothing in particular: the scroll area keeps where it was.
+void WiringCanvas::wheelEvent(QWheelEvent* e) {
+    const double steps = e->angleDelta().y() / 120.0;
+    if (std::abs(steps) < 1e-9) return;
+    setZoom(zoom_ * std::pow(1.15, steps));
+    emit said(QStringLiteral("Zoom %1 %").arg(qRound(zoom_ * 100.0)));
+    e->accept();
 }
 
 void WiringCanvas::paintEvent(QPaintEvent*) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
     p.fillRect(rect(), QColor(32, 36, 42));
+    p.scale(zoom_, zoom_);   // everything below laid out unzoomed
     const QHash<QString, const HarnessWire*> byId = [&] {
         QHash<QString, const HarnessWire*> m;
         for (const HarnessWire& w : def_.wires) m.insert(w.id, &w);
@@ -385,6 +463,12 @@ void WiringCanvas::paintEvent(QPaintEvent*) {
             p.setPen(QPen(on.size() > 1 ? QColor(240, 80, 70) : lit ? QColor(255, 209, 102) : QColor(150, 165, 185), on.size() > 1 || lit ? 2.4 : 1.0));
             p.setBrush(fill);
             p.drawRoundedRect(r, 3, 3);
+            // TERMINATED, NOTHING ON IT: its X, as the drawing marks it.
+            if (on.isEmpty() && def_.layout.terminateUnconnected) {
+                p.setPen(QPen(QColor(240, 120, 90), 1.4));
+                p.drawLine(r.topLeft() + QPointF(3, 3), r.bottomRight() - QPointF(3, 3));
+                p.drawLine(r.topRight() + QPointF(-3, 3), r.bottomLeft() + QPointF(3, -3));
+            }
             if (first && !here) {
                 // WIRED TO A CONNECTOR NOT SHOWN: hatched.
                 p.setBrush(QBrush(QColor(150, 160, 175), Qt::BDiagPattern));
@@ -402,23 +486,36 @@ void WiringCanvas::paintEvent(QPaintEvent*) {
         p.setFont(font());
     }
     // ---- THE WIRES: pin to its bar, across the bar, to the other pin ----
+    // THE LINES PICKED, blue; the rest of a group they are in - its cable, its screen, its pair - orange.
+    QSet<QString> mates;
+    for (const HarnessWire& w : def_.wires)
+        if (selection_.contains(w.id))
+            for (const HarnessWire& o : def_.wires)
+                if ((!w.bundle.isEmpty() && o.bundle == w.bundle) || (!w.shieldGroup.isEmpty() && o.shieldGroup == w.shieldGroup) ||
+                    (!w.twistGroup.isEmpty() && o.twistGroup == w.twistGroup))
+                    mates.insert(o.id);
     for (const Bar& bar : bars_) {
         const HarnessWire* w = byId.value(bar.wire);
         if (!w) continue;
         const bool sel = selection_.contains(bar.wire);
-        const QPointF a(bar.fromSide < 0 ? laneLeft_ : laneRight_, bar.y), b(bar.toSide < 0 ? laneLeft_ : laneRight_, bar.y);
+        const bool sameSide = bar.fromSide == bar.toSide;
+        const double edge = bar.fromSide < 0 ? laneLeft_ : laneRight_;
+        // BETWEEN TWO CONNECTORS ON ONE SIDE: both pins to the lane's edge, and a short bar in from it for its label.
+        const QPointF a(bar.fromSide < 0 ? laneLeft_ : laneRight_, bar.y),
+            b = sameSide ? QPointF(edge - bar.fromSide * kStub, bar.y) : QPointF(bar.toSide < 0 ? laneLeft_ : laneRight_, bar.y);
         const QColor base = baseColour(w->color);
         QPainterPath path;
         path.moveTo(bar.from);
         path.lineTo(QPointF(bar.from.x() + bar.fromSide * -14.0, bar.from.y()));
         path.lineTo(a);
         path.lineTo(b);
+        if (sameSide) path.moveTo(a);
         path.lineTo(QPointF(bar.to.x() + bar.toSide * -14.0, bar.to.y()));
         path.lineTo(bar.to);
         // An open path: drawn as a line, never filled - whatever brush the words before it left set.
         p.setBrush(Qt::NoBrush);
-        if (sel) {
-            p.setPen(QPen(QColor(255, 170, 60), 6.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        if (sel || mates.contains(bar.wire)) {
+            p.setPen(QPen(sel ? QColor(80, 160, 255) : QColor(255, 170, 60), 6.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
             p.drawPath(path);
         }
         p.setPen(QPen(QColor(10, 12, 16), 4.2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
@@ -433,8 +530,9 @@ void WiringCanvas::paintEvent(QPaintEvent*) {
         QString words = QStringLiteral("%1  %2").arg(w->color, wireGaugeLabel(w->gauge, true));
         if (!w->label.isEmpty()) words += QStringLiteral("  ") + w->label;
         p.setFont(small);
-        const double half = (laneRight_ - laneLeft_) / 2.0 - 70.0;
-        const QRectF text((laneLeft_ + laneRight_) / 2.0 - half, bar.y - kRow / 2 + 1, 2 * half, kRow / 2 - 1);
+        const double half = sameSide ? kStub / 2.0 - 4.0 : (laneRight_ - laneLeft_) / 2.0 - 70.0;
+        const double mid = sameSide ? (a.x() + b.x()) / 2.0 : (laneLeft_ + laneRight_) / 2.0;
+        const QRectF text(mid - half, bar.y - kRow / 2 + 1, 2 * half, kRow / 2 - 1);
         p.setPen(Qt::NoPen);
         p.setBrush(QColor(32, 36, 42, 200));
         // Behind the words only: the bar shows either side of them.
@@ -534,10 +632,18 @@ void WiringCanvas::paintEvent(QPaintEvent*) {
         QString conn, overConn;
         int pin = 0, overPin = 0;
         splitPinKey(pressPin_, conn, pin);
+        // WHERE IT WOULD GO: an orange line between the pins, on the side of the pin whose place it takes it comes from.
         if (splitPinKey(pinAt(now_), overConn, overPin) && overConn == conn && overPin != pin) {
-            p.setPen(QPen(QColor(255, 209, 102), 2.0));
-            p.setBrush(Qt::NoBrush);
-            p.drawEllipse(pinCentre(conn, overPin), kCell * 0.6, kCell * 0.6);
+            const Brick* b = brickOf(conn);
+            const HarnessConnector* c = harnessConnById(def_, conn);
+            if (b && c && b->pins.contains(overPin)) {
+                const std::vector<int> seq = harnessPinSequence(*c);
+                const bool down = std::find(seq.begin(), seq.end(), overPin) > std::find(seq.begin(), seq.end(), pin);
+                const QRectF r = b->pins.value(overPin);
+                const double y = down ? r.bottom() + 2.0 : r.top() - 2.0;
+                p.setPen(QPen(QColor(255, 150, 40), 3.0, Qt::SolidLine, Qt::RoundCap));
+                p.drawLine(QPointF(b->rect.left() + 5, y), QPointF(b->rect.right() - 5, y));
+            }
         }
         p.setPen(QPen(QColor(255, 209, 102), 1.5));
         p.setBrush(QColor(255, 209, 102, 120));
@@ -577,7 +683,7 @@ void WiringCanvas::mousePressEvent(QMouseEvent* e) {
     pressing_ = true;
     moved_ = false;
     ctrl_ = e->modifiers() & Qt::ControlModifier;
-    pressAt_ = now_ = e->position();
+    pressAt_ = now_ = (e->position() / zoom_);
     pressPin_ = tool_ == Tool::Connect || tool_ == Tool::Select ? pinAt(pressAt_) : QString();
     pressBar_ = pressPin_.isEmpty() && (tool_ == Tool::Connect || tool_ == Tool::Select) ? barAt(pressAt_) : QString();
     pressBrick_ = pressPin_.isEmpty() && pressBar_.isEmpty() ? brickAt(pressAt_) : QString();
@@ -588,7 +694,7 @@ void WiringCanvas::mousePressEvent(QMouseEvent* e) {
 
 void WiringCanvas::mouseMoveEvent(QMouseEvent* e) {
     if (!pressing_) {
-        const QString pin = pinAt(e->position());
+        const QString pin = pinAt((e->position() / zoom_));
         QString conn;
         int number = 0;
         if (splitPinKey(pin, conn, number)) {
@@ -601,7 +707,7 @@ void WiringCanvas::mouseMoveEvent(QMouseEvent* e) {
         }
         return;
     }
-    now_ = e->position();
+    now_ = (e->position() / zoom_);
     if ((now_ - pressAt_).manhattanLength() > 4) moved_ = true;
     if (!carrying_ && QLineF(pressAt_, now_).length() > 8.0) holdTimer_->stop();   // pulled away before it was caught
     update();
@@ -610,7 +716,7 @@ void WiringCanvas::mouseMoveEvent(QMouseEvent* e) {
 void WiringCanvas::mouseReleaseEvent(QMouseEvent* e) {
     if (!pressing_ || e->button() != Qt::LeftButton) return;
     pressing_ = false;
-    now_ = e->position();
+    now_ = (e->position() / zoom_);
     holdTimer_->stop();
     // A CAUGHT WIRE LET GO: moved in the list where it is let go, its pins with it.
     if (carrying_ && carryingBar_) {
@@ -683,9 +789,14 @@ void WiringCanvas::mouseReleaseEvent(QMouseEvent* e) {
             setSelection(ids);
         }
     } else if (moved_ && tool_ != Tool::Connect) {
-        // A STROKE ACROSS LINES: picked, or made twisted, screened, one cable.
-        const QStringList crossed = barsAcross(pressAt_, now_);
+        // A STROKE ACROSS LINES: picked - a screen's ring or a pair's twist it crosses, all of that group - or made twisted,
+        // screened, one cable.
+        QStringList crossed = barsAcross(pressAt_, now_);
+        if (tool_ == Tool::Select)
+            for (const QString& id : groupMarksAcross(pressAt_, now_))
+                if (!crossed.contains(id)) crossed << id;
         if (tool_ == Tool::Select) setSelection(ctrl_ ? selection_ + crossed : crossed);
+        else if (crossed.isEmpty()) emit said(QStringLiteral("The stroke crossed no line - nothing made"));
         else emit strokeMade(tool_, crossed);
     } else if (!moved_ && !pressBrick_.isEmpty()) {
         // A CONNECTOR'S BRICK CLICKED: picked (Ctrl: more, or let go of), for what is done to pin stacks.
@@ -693,6 +804,10 @@ void WiringCanvas::mouseReleaseEvent(QMouseEvent* e) {
         if (picked.contains(pressBrick_)) picked.removeAll(pressBrick_);
         else picked << pressBrick_;
         setSelectedBricks(picked);
+    } else if (!moved_ && !groupMarkAt(now_).isEmpty()) {
+        // A SCREEN'S RING OR A PAIR'S TWIST CLICKED: its wires picked.
+        const QStringList ids = groupMarkAt(now_);
+        setSelection(ctrl_ ? selection_ + ids : ids);
     } else if (!moved_) {
         pending_.clear();
         if (!ctrl_) {
@@ -902,6 +1017,19 @@ WiringDialog::WiringDialog(HarnessDef& def, std::function<void()> changed, QWidg
         connect(bottom, &QPushButton::clicked, this, [this] { orderStacks(false); });
         under->addWidget(top);
         under->addWidget(bottom);
+        under->addSpacing(20);
+        // THE PINS NOTHING IS WIRED TO, terminated - their X on the drawing, and here.
+        terminate_ = roundSwitch(QStringLiteral("Terminate unconnected"), "wiringTerminate",
+                                 QStringLiteral("Mark every pin nothing is wired to with an X - on the pin, on the drawing"));
+        terminate_->setToolTip(QStringLiteral("Mark every pin nothing is wired to with an X - on the pin, on the drawing"));
+        terminate_->setParent(middle);
+        terminate_->setChecked(def_.layout.terminateUnconnected);
+        connect(terminate_, &QToolButton::toggled, this, [this](bool on) {
+            if (filling_) return;
+            def_.layout.terminateUnconnected = on;
+            this->changed();
+        });
+        under->addWidget(terminate_);
         under->addStretch(1);
         mv->addLayout(under);
     }
@@ -943,13 +1071,7 @@ WiringDialog::WiringDialog(HarnessDef& def, std::function<void()> changed, QWidg
     label_ = new QLineEdit(panel_);
     label_->setObjectName(QStringLiteral("wiringLabel"));
     form->addRow(QStringLiteral("Label"), label_);
-    cut_ = new QDoubleSpinBox(panel_);
-    cut_->setObjectName(QStringLiteral("wiringCutLength"));
-    cut_->setRange(0, 1e9);
-    cut_->setSuffix(QStringLiteral(" mm"));
-    cut_->setSpecialValueText(QStringLiteral("Not specified"));
-    cut_->setKeyboardTracking(false);
-    form->addRow(QStringLiteral("Cut length"), cut_);
+
     auto* marks = new QWidget(panel_);
     auto* ml = new QHBoxLayout(marks);
     ml->setContentsMargins(0, 0, 0, 0);
@@ -1015,22 +1137,36 @@ WiringDialog::WiringDialog(HarnessDef& def, std::function<void()> changed, QWidg
             auto* host = new QWidget(screenBox_);
             auto* hl = new QHBoxLayout(host);
             hl->setContentsMargins(0, 0, 0, 0);
+            // EACH END: how it is drained, onto what, and - a hook-up wire - which wire.
+            auto* v = new QVBoxLayout;
+            v->setContentsMargins(0, 0, 0, 0);
+            v->setSpacing(2);
             screenEnd_[end] = new QComboBox(host);
-            screenEnd_[end]->setObjectName(end ? QStringLiteral("wiringScreenFinish") : QStringLiteral("wiringScreenStart"));
+            screenEnd_[end]->setObjectName(end ? QStringLiteral("wiringScreenRight") : QStringLiteral("wiringScreenLeft"));
             screenPin_[end] = new QComboBox(host);
-            screenPin_[end]->setObjectName(end ? QStringLiteral("wiringScreenFinishPin") : QStringLiteral("wiringScreenStartPin"));
+            screenPin_[end]->setObjectName(end ? QStringLiteral("wiringScreenRightTo") : QStringLiteral("wiringScreenLeftTo"));
+            screenPin_[end]->setToolTip(QStringLiteral("Where it goes: any connector's pin, any connector's shield, or another screen"));
+            screenWire_[end] = new QComboBox(host);
+            screenWire_[end]->setObjectName(end ? QStringLiteral("wiringScreenRightWire") : QStringLiteral("wiringScreenLeftWire"));
+            screenWire_[end]->setToolTip(QStringLiteral("The hook-up wire, from the parts list"));
             hl->addWidget(screenEnd_[end], 1);
-            hl->addWidget(screenPin_[end]);
-            sf->addRow(end ? QStringLiteral("Finish") : QStringLiteral("Start"), host);
+            hl->addWidget(screenPin_[end], 1);
+            v->addWidget(screenWire_[end]);
+            auto* box = new QWidget(screenBox_);
+            box->setLayout(v);
+            host->setParent(box);
+            v->insertWidget(0, host);
+            sf->addRow(end ? QStringLiteral("Right") : QStringLiteral("Left"), box);
             auto apply = [this, end] {
                 if (filling_) return;
                 const QString g = screenOfSelection();
                 if (g.isEmpty()) return;
-                const QString how = screenEnd_[end]->currentData().toString();
-                setScreenDrain(g, end, how, screenPin_[end]->currentData().toInt());
+                setScreenDrain(g, end, screenEnd_[end]->currentData().toString(), screenPin_[end]->currentData().toString(),
+                               screenWire_[end]->currentData().toString());
             };
             connect(screenEnd_[end], &QComboBox::activated, this, apply);
             connect(screenPin_[end], &QComboBox::activated, this, apply);
+            connect(screenWire_[end], &QComboBox::activated, this, apply);
         }
         pl->addWidget(screenBox_);
     }
@@ -1066,9 +1202,7 @@ WiringDialog::WiringDialog(HarnessDef& def, std::function<void()> changed, QWidg
     connect(label_, &QLineEdit::editingFinished, this, [this] {
         if (!filling_) setSelectedLabel(label_->text().trimmed());
     });
-    connect(cut_, &QDoubleSpinBox::valueChanged, this, [this](double mm) {
-        if (!filling_) setSelectedCutLength(mm);
-    });
+
 
     // ---- THE CANVAS INTO THE HARNESS ----
     connect(canvas_, &WiringCanvas::connectAsked, this, [this](const QString& fc, int fp, const QString& tc, int tp) { connectPins(fc, fp, tc, tp); });
@@ -1181,6 +1315,10 @@ void WiringDialog::showSeveral(const QStringList& ids) {
 }
 
 void WiringDialog::refresh() {
+    if (terminate_) {
+        const QSignalBlocker hush(terminate_);
+        terminate_->setChecked(def_.layout.terminateUnconnected);
+    }
     QStringList shown;
     for (const QString& id : canvas_->shown())
         if (harnessConnById(def_, id)) shown << id;
@@ -1260,81 +1398,88 @@ QString WiringDialog::screenEndConn(const QString& group, int end) const {
     return {};
 }
 
-QString WiringDialog::screenDrain(const QString& group, int end, int* pin) const {
+// WHICH END A DRAIN IS AT: as its label says ("drain left" / "drain right") - or, a drain made before that (a pin given when
+// the screen was made), by the connector its pin is on.
+static int drainEndOf(const HarnessWire& w, const QString& leftConn) {
+    if (w.label == QLatin1String("drain right")) return 1;
+    if (w.label == QLatin1String("drain left")) return 0;
+    const QString pinConn = harnessIsShieldEndpoint(w.fromConn) ? w.toConn : w.fromConn;
+    return pinConn == leftConn ? 0 : 1;
+}
+
+QString WiringDialog::screenDrain(const QString& group, int end, QString* target, QString* wirePart) const {
     const QString key = harnessInternalShieldKey(group);
-    const QString conn = screenEndConn(group, end);
+    const QString leftConn = screenEndConn(group, 0);
     for (const HarnessWire& w : def_.wires) {
         const bool fromScreen = w.fromConn == key, toScreen = w.toConn == key;
         if (!fromScreen && !toScreen) continue;
+        if (drainEndOf(w, leftConn) != end) continue;
         const QString other = fromScreen ? w.toConn : w.fromConn;
-        const HarnessTermination& atScreen = fromScreen ? w.fromTermination : w.toTermination;
-        if (harnessConnById(def_, other)) {
-            if (other != conn) continue;
-            if (pin) *pin = fromScreen ? w.toPin : w.fromPin;
-            return atScreen.via == QLatin1String("direct") ? QStringLiteral("pin") : QStringLiteral("hook");
+        const int otherPin = fromScreen ? w.toPin : w.fromPin;
+        if (target) {
+            QString conn;
+            HarnessSide side = HarnessSide::Left;
+            if (harnessConnById(def_, other)) *target = QStringLiteral("pin:%1:%2").arg(other).arg(otherPin);
+            else if (harnessShieldEndpointConn(other, conn, side)) *target = QStringLiteral("shield:") + conn;
+            else if (!harnessShieldEndpointGroup(other).isEmpty()) *target = QStringLiteral("screen:") + harnessShieldEndpointGroup(other);
         }
-        if (!harnessIsShieldEndpoint(other)) continue;
-        // ONE SCREEN ONTO ANOTHER: which end it is at, as its label says.
-        if (w.label != (end ? QLatin1String("drain finish") : QLatin1String("drain start"))) continue;
-        const QString onto = harnessShieldEndpointGroup(other);
-        return onto.isEmpty() ? QStringLiteral("conn") : QStringLiteral("screen:") + onto;
+        if (wirePart) *wirePart = w.libPart;
+        const HarnessTermination& atScreen = fromScreen ? w.fromTermination : w.toTermination;
+        return atScreen.via == QLatin1String("direct") ? QStringLiteral("drain") : QStringLiteral("hook");
     }
     return {};
 }
 
-bool WiringDialog::setScreenDrain(const QString& group, int end, const QString& how, int pin) {
+bool WiringDialog::setScreenDrain(const QString& group, int end, const QString& how, const QString& target, const QString& wirePart) {
     const QString key = harnessInternalShieldKey(group);
-    const QString conn = screenEndConn(group, end);
+    const QString leftConn = screenEndConn(group, 0);
     // WHAT DRAINED IT AT THAT END GOES FIRST.
-    const QString was = screenDrain(group, end);
-    if (!was.isEmpty()) {
-        for (size_t k = def_.wires.size(); k-- > 0;) {
-            const HarnessWire& w = def_.wires[k];
-            const bool fromScreen = w.fromConn == key, toScreen = w.toConn == key;
-            if (!fromScreen && !toScreen) continue;
-            const QString other = fromScreen ? w.toConn : w.fromConn;
-            const bool here = harnessConnById(def_, other) ? other == conn
-                                                           : w.label == (end ? QLatin1String("drain finish") : QLatin1String("drain start"));
-            if (here) def_.wires.erase(def_.wires.begin() + static_cast<long long>(k));
-        }
+    for (size_t k = def_.wires.size(); k-- > 0;) {
+        const HarnessWire& w = def_.wires[k];
+        if ((w.fromConn == key || w.toConn == key) && drainEndOf(w, leftConn) == end)
+            def_.wires.erase(def_.wires.begin() + static_cast<long long>(k));
     }
-    if (!how.isEmpty()) {
+    bool made = true;
+    if (!how.isEmpty() && !target.isEmpty()) {
         HarnessWire d;
         d.id = harnessFreshWireId(def_);
         d.fromConn = key;
         d.fromPin = 0;
         d.color = QStringLiteral("DRAIN");
-        d.label = end ? QStringLiteral("drain finish") : QStringLiteral("drain start");
-        if (how == QLatin1String("pin") || how == QLatin1String("hook")) {
-            if (conn.isEmpty() || pin <= 0) {
-                changed();
-                return false;
+        d.label = end ? QStringLiteral("drain right") : QStringLiteral("drain left");
+        // THE SCREEN'S OWN DRAIN, or a hook-up wire spliced onto it - a library wire, its gauge and colour with it.
+        d.fromTermination.via = how == QLatin1String("drain") ? QStringLiteral("direct") : QStringLiteral("wire");
+        if (how == QLatin1String("hook") && !wirePart.isEmpty())
+            if (const LibraryPart* part = harnessBuilderLibrary().byId(wirePart)) {
+                d.libPart = wirePart;
+                applyHarnessWirePart(d, *part, 0);
             }
-            d.toConn = conn;
-            d.toPin = pin;
-            d.label = QStringLiteral("drain");
-            // THE SCREEN'S OWN DRAIN taken to the pin, or a hook-up wire spliced onto it there.
-            d.fromTermination.via = how == QLatin1String("pin") ? QStringLiteral("direct") : QStringLiteral("wire");
-        } else if (how == QLatin1String("conn")) {
-            // ONTO THE CONNECTOR'S OWN SCREEN at that end - which it is given, where it had none.
+        // ONTO ANY END PART: a pin of any connector (a ferrule, a terminal, ...), a connector's own screen - which it is
+        // given, where it had none - or another screen.
+        if (target.startsWith(QLatin1String("pin:"))) {
+            d.toConn = target.section(QLatin1Char(':'), 1, 1);
+            d.toPin = target.section(QLatin1Char(':'), 2, 2).toInt();
+            made = harnessConnById(def_, d.toConn) && d.toPin > 0;
+        } else if (target.startsWith(QLatin1String("shield:"))) {
             HarnessConnector* c = nullptr;
             for (HarnessConnector& x : def_.connectors)
-                if (x.id == conn) c = &x;
-            if (!c) {
-                changed();
-                return false;
+                if (x.id == target.mid(7)) c = &x;
+            made = c != nullptr;
+            if (c) {
+                (c->side == HarnessSide::Left ? c->shieldLeft : c->shieldRight) = true;
+                d.toConn = harnessOverallShieldKey(c->id, c->side);
+                d.toPin = 0;
             }
-            (c->side == HarnessSide::Left ? c->shieldLeft : c->shieldRight) = true;
-            d.toConn = harnessOverallShieldKey(c->id, c->side);
+        } else if (target.startsWith(QLatin1String("screen:"))) {
+            d.toConn = harnessInternalShieldKey(target.mid(7));
             d.toPin = 0;
-        } else if (how.startsWith(QLatin1String("screen:"))) {
-            d.toConn = harnessInternalShieldKey(how.mid(7));
-            d.toPin = 0;
+        } else {
+            made = false;
         }
-        def_.wires.push_back(d);
+        if (made) def_.wires.push_back(d);
     }
     changed();
-    return true;
+    return made;
 }
 
 void WiringDialog::setScreenPart(const QString& group, const QString& libPartId, const QString& typedPn) {
@@ -1358,27 +1503,44 @@ void WiringDialog::fillScreenBox() {
     const int at = screenPart_->findData(def_.shieldParts.value(g));
     if (!def_.shieldParts.value(g).isEmpty() && at >= 0) screenPart_->setCurrentIndex(at);
     else screenPart_->setEditText(def_.shieldPns.value(g));
-    QStringList others;
-    for (const HarnessWire& w : def_.wires)
-        if (!w.shieldGroup.isEmpty() && w.shieldGroup != g && !others.contains(w.shieldGroup)) others << w.shieldGroup;
     for (int end = 0; end < 2; ++end) {
+        QString target, wirePart;
+        const QString how = screenDrain(g, end, &target, &wirePart);
         QComboBox* c = screenEnd_[end];
         c->clear();
         c->addItem(QStringLiteral("Not drained"), QString());
-        c->addItem(QStringLiteral("Drain wire to a pin"), QStringLiteral("pin"));
-        c->addItem(QStringLiteral("Hook-up wire to a pin (joint)"), QStringLiteral("hook"));
-        c->addItem(QStringLiteral("To the connector's shield"), QStringLiteral("conn"));
-        for (const QString& o : others) c->addItem(QStringLiteral("To screen %1").arg(o), QStringLiteral("screen:") + o);
-        int pin = 0;
-        const QString how = screenDrain(g, end, &pin);
+        c->addItem(QStringLiteral("Drain wire"), QStringLiteral("drain"));
+        c->addItem(QStringLiteral("Hook-up wire (joint)"), QStringLiteral("hook"));
         c->setCurrentIndex(std::max(0, c->findData(how)));
-        QComboBox* pc = screenPin_[end];
-        pc->clear();
-        if (const HarnessConnector* conn = harnessConnById(def_, screenEndConn(g, end)))
-            for (int n : harnessPinSequence(*conn))
-                pc->addItem(QStringLiteral("%1 pin %2").arg(conn->designator, harnessPinLabel(*conn, n)), n);
-        pc->setCurrentIndex(std::max(0, pc->findData(pin)));
-        pc->setVisible(how == QLatin1String("pin") || how == QLatin1String("hook") || how.isEmpty());
+        // WHERE TO: any connector's pin - its own end's connector first - any connector's screen, any other screen.
+        QComboBox* to = screenPin_[end];
+        to->clear();
+        QStringList order;
+        const QString own = screenEndConn(g, end);
+        if (!own.isEmpty()) order << own;
+        for (const HarnessConnector& x : def_.connectors)
+            if (!order.contains(x.id)) order << x.id;
+        for (const QString& id : order)
+            if (const HarnessConnector* x = harnessConnById(def_, id))
+                for (int n : harnessPinSequence(*x))
+                    to->addItem(QStringLiteral("%1 pin %2").arg(x->designator, harnessPinLabel(*x, n)), QStringLiteral("pin:%1:%2").arg(x->id).arg(n));
+        for (const QString& id : order)
+            if (const HarnessConnector* x = harnessConnById(def_, id))
+                to->addItem(QStringLiteral("%1 shield").arg(x->designator), QStringLiteral("shield:") + x->id);
+        QStringList others;
+        for (const HarnessWire& w : def_.wires)
+            if (!w.shieldGroup.isEmpty() && w.shieldGroup != g && !others.contains(w.shieldGroup)) others << w.shieldGroup;
+        for (const QString& o : others) to->addItem(QStringLiteral("Screen %1").arg(o), QStringLiteral("screen:") + o);
+        to->setCurrentIndex(std::max(0, to->findData(target)));
+        to->setEnabled(!how.isEmpty());
+        // THE HOOK-UP WIRE'S PART, from the library: only for a hook-up wire.
+        QComboBox* wire = screenWire_[end];
+        wire->clear();
+        wire->addItem(QStringLiteral("(wire, no P/N)"), QString());
+        for (const LibraryPart& p : harnessBuilderLibrary().parts)
+            if (p.kind == PartKind::Wire) wire->addItem(p.title(), p.id);
+        wire->setCurrentIndex(std::max(0, wire->findData(wirePart)));
+        wire->setVisible(how == QLatin1String("hook"));
     }
 }
 
@@ -1603,19 +1765,64 @@ int WiringDialog::optimizePinStack(bool tell) {
         if (tell) said_->setText(QStringLiteral("Switch on Avoid crossing, By shield or By twist first"));
         return 0;
     }
+    // THE TWO COLUMNS, as the picture has them: in two, the first left and the second right; in several, each on its side,
+    // one under another in the order shown. A pin's place down its column is its brick's place and its row in the stack.
+    const QStringList shown = canvas_->shown();
+    QStringList leftCol, rightCol;
+    for (int i = 0; i < shown.size(); ++i) {
+        const HarnessConnector* c = harnessConnById(def_, shown[i]);
+        if (!c) continue;
+        const bool left = twoMode() ? i == 0 : c->side == HarnessSide::Left;
+        (left ? leftCol : rightCol) << c->id;
+    }
     auto connOf = [this](const QString& id) -> HarnessConnector* {
         for (HarnessConnector& c : def_.connectors)
             if (c.id == id) return &c;
         return nullptr;
     };
-    auto positions = [](const std::vector<int>& order) {
-        QHash<int, double> pos;
-        for (size_t i = 0; i < order.size(); ++i) pos.insert(order[i], static_cast<double>(i));
-        return pos;
+    auto placeIn = [&](const QStringList& col) {
+        QHash<QString, double> place;   // "conn:pin" -> down the column
+        for (int k = 0; k < col.size(); ++k)
+            if (const HarnessConnector* c = harnessConnById(def_, col[k])) {
+                const std::vector<int> seq = harnessPinSequence(*c);
+                for (size_t r = 0; r < seq.size(); ++r) place.insert(pinKey(c->id, seq[r]), k * 10000.0 + static_cast<double>(r));
+            }
+        return place;
     };
+    // The wires drawn here, by the pins they are on.
+    QHash<QString, QList<const HarnessWire*>> onPin;
+    for (const HarnessWire& w : def_.wires) {
+        if (!shown.contains(w.fromConn) || !shown.contains(w.toConn) || w.fromPin <= 0 || w.toPin <= 0) continue;
+        onPin[pinKey(w.fromConn, w.fromPin)] << &w;
+        onPin[pinKey(w.toConn, w.toPin)] << &w;
+    }
     using Key = std::tuple<double, double, double>;
-    // THESE PINS PUT IN ORDER OF THEIR KEYS among the places they hold now; every other pin stays where it is.
-    auto reorder = [](std::vector<int>& order, const QHash<int, Key>& key) {
+    // A CONNECTOR'S WIRED PINS PUT IN ORDER: by `base` - and, as asked, a screen's or a pair's pins side by side, where the
+    // first of them is. Every other pin stays where it is.
+    auto reorder = [&](HarnessConnector& c, const std::function<double(int pin)>& base) {
+        std::vector<int> order = harnessPinSequence(c);
+        QHash<QString, double> shieldAt, twistAt;
+        QList<int> wired;
+        for (int pin : order)
+            if (onPin.contains(pinKey(c.id, pin))) wired << pin;
+        for (int pin : wired)
+            for (const HarnessWire* w : onPin.value(pinKey(c.id, pin))) {
+                const double b = base(pin);
+                if (!w->shieldGroup.isEmpty()) shieldAt[w->shieldGroup] = shieldAt.contains(w->shieldGroup) ? std::min(shieldAt[w->shieldGroup], b) : b;
+                if (!w->twistGroup.isEmpty()) twistAt[w->twistGroup] = twistAt.contains(w->twistGroup) ? std::min(twistAt[w->twistGroup], b) : b;
+            }
+        QHash<int, Key> key;
+        for (int pin : wired) {
+            const double b = base(pin);
+            double t = b, s = b;
+            for (const HarnessWire* w : onPin.value(pinKey(c.id, pin))) {
+                if (byTwist && !w->twistGroup.isEmpty()) t = std::min(t, twistAt.value(w->twistGroup));
+            }
+            s = t;
+            for (const HarnessWire* w : onPin.value(pinKey(c.id, pin)))
+                if (byShield && !w->shieldGroup.isEmpty()) s = std::min(s, shieldAt.value(w->shieldGroup));
+            key.insert(pin, Key{s, t, b});
+        }
         std::vector<size_t> places;
         std::vector<int> pins;
         for (size_t i = 0; i < order.size(); ++i)
@@ -1629,84 +1836,76 @@ int WiringDialog::optimizePinStack(bool tell) {
             moved = moved || order[places[k]] != pins[k];
             order[places[k]] = pins[k];
         }
+        if (moved) c.pinOrder = order;
         return moved;
     };
-    const QStringList shown = canvas_->shown();
     int reordered = 0;
-    bool listMoved = false;
-    for (int i = 0; i < shown.size(); ++i)
-        for (int j = i + 1; j < shown.size(); ++j) {
-            HarnessConnector* ca = connOf(shown[i]);
-            HarnessConnector* cb = connOf(shown[j]);
-            if (!ca || !cb) continue;
-            struct Link {
-                size_t wire;
-                int a, b;
-            };
-            std::vector<Link> links;
-            for (size_t k = 0; k < def_.wires.size(); ++k) {
-                const HarnessWire& w = def_.wires[k];
-                if (w.fromConn == ca->id && w.toConn == cb->id) links.push_back({k, w.fromPin, w.toPin});
-                else if (w.fromConn == cb->id && w.toConn == ca->id) links.push_back({k, w.toPin, w.fromPin});
+    // THE LEFT COLUMN: its screened and twisted wires brought side by side - and, no line to cross another, each connector's
+    // pins in the order of the right-hand connectors their wires go to, the one higher up first (its own order between).
+    QHash<QString, int> rightBrick;
+    for (int k = 0; k < rightCol.size(); ++k) rightBrick.insert(rightCol[k], k);
+    if (byShield || byTwist || cross)
+        for (const QString& id : leftCol)
+            if (HarnessConnector* c = connOf(id)) {
+                const QHash<QString, double> own = placeIn({id});
+                reordered += reorder(*c, [&](int pin) {
+                                 const double mine = own.value(pinKey(id, pin));
+                                 if (!cross) return mine;
+                                 int to = 1000;
+                                 for (const HarnessWire* w : onPin.value(pinKey(id, pin))) {
+                                     const QString other = w->fromConn == id && w->fromPin == pin ? w->toConn : w->fromConn;
+                                     if (rightBrick.contains(other)) to = std::min(to, rightBrick.value(other));
+                                 }
+                                 return to * 10000.0 + mine;
+                             })
+                                 ? 1
+                                 : 0;
             }
-            if (links.empty()) continue;
-            // EACH WIRE'S PLACE, its screen's and its pair's: a group goes where the first of it is, its wires together.
-            auto keysOf = [&](bool sideA, const std::function<double(const Link&)>& base) {
-                QHash<QString, double> shieldAt, twistAt;
-                for (const Link& l : links) {
-                    const HarnessWire& w = def_.wires[l.wire];
-                    const double b = base(l);
-                    if (!w.shieldGroup.isEmpty()) shieldAt[w.shieldGroup] = shieldAt.contains(w.shieldGroup) ? std::min(shieldAt[w.shieldGroup], b) : b;
-                    if (!w.twistGroup.isEmpty()) twistAt[w.twistGroup] = twistAt.contains(w.twistGroup) ? std::min(twistAt[w.twistGroup], b) : b;
-                }
-                QHash<int, Key> key;
-                for (const Link& l : links) {
-                    const HarnessWire& w = def_.wires[l.wire];
-                    const double b = base(l);
-                    // Not screened (or not asked): by its pair; not twisted either: by its own place.
-                    const double t = byTwist && !w.twistGroup.isEmpty() ? twistAt.value(w.twistGroup) : b;
-                    const Key k{byShield && !w.shieldGroup.isEmpty() ? shieldAt.value(w.shieldGroup) : t, t, b};
-                    const int pin = sideA ? l.a : l.b;
-                    if (!key.contains(pin) || k < key.value(pin)) key.insert(pin, k);
-                }
-                return key;
-            };
-            // THE FIRST CONNECTOR: its screened and twisted wires brought onto pins side by side.
-            std::vector<int> orderA = harnessPinSequence(*ca);
-            QHash<int, double> posA = positions(orderA);
-            if ((byShield || byTwist) && reorder(orderA, keysOf(true, [&](const Link& l) { return posA.value(l.a); }))) {
-                ca->pinOrder = orderA;
-                posA = positions(orderA);
-                ++reordered;
-            }
-            // THE SECOND: in the first's order (no line crossing another), grouped the same way.
-            std::vector<int> orderB = harnessPinSequence(*cb);
-            const QHash<int, double> posB0 = positions(orderB);
-            const auto baseB = [&](const Link& l) {
-                return cross ? posA.value(l.a) + posB0.value(l.b) * 1e-4 : posB0.value(l.b);
-            };
-            if (reorder(orderB, keysOf(false, baseB))) {
-                cb->pinOrder = orderB;
-                ++reordered;
-            }
-            // THE LINES' BARS in the same order, among the places they hold in the list.
-            if (cross) {
-                const QHash<int, double> posB = positions(orderB);
-                std::vector<size_t> places;
-                for (const Link& l : links) places.push_back(l.wire);
-                std::sort(places.begin(), places.end());
-                std::vector<Link> sorted = links;
-                std::stable_sort(sorted.begin(), sorted.end(), [&](const Link& x, const Link& y) {
-                    return std::make_pair(posA.value(x.a), posB.value(x.b)) < std::make_pair(posA.value(y.a), posB.value(y.b));
-                });
-                std::vector<HarnessWire> moved;
-                for (const Link& l : sorted) moved.push_back(def_.wires[l.wire]);
-                for (size_t k = 0; k < places.size(); ++k) {
-                    listMoved = listMoved || def_.wires[places[k]].id != moved[k].id;
-                    def_.wires[places[k]] = moved[k];
-                }
-            }
+    const QHash<QString, double> leftAt = placeIn(leftCol);
+    // THE RIGHT COLUMN: each pin where the left-hand pins its wires come from are - so no line crosses another - its wires
+    // that stay on this side after them, each connector's own order kept between those.
+    for (const QString& id : rightCol)
+        if (HarnessConnector* c = connOf(id)) {
+            const QHash<QString, double> own = placeIn({id});
+            reordered += reorder(*c, [&](int pin) {
+                             const double mine = own.value(pinKey(id, pin));
+                             if (!cross) return mine;
+                             double best = 1e12;
+                             for (const HarnessWire* w : onPin.value(pinKey(id, pin))) {
+                                 const QString other = w->fromConn == id && w->fromPin == pin ? pinKey(w->toConn, w->toPin) : pinKey(w->fromConn, w->fromPin);
+                                 if (leftAt.contains(other)) best = std::min(best, leftAt.value(other));
+                             }
+                             return best < 1e12 ? best + mine * 1e-6 : 1e9 + mine;
+                         })
+                             ? 1
+                             : 0;
         }
+    // THE LINES' BARS in the same order, among the places they hold in the list: by where they leave the left column, then
+    // where they reach the right; those between two connectors on one side after them.
+    bool listMoved = false;
+    if (cross) {
+        const QHash<QString, double> rightAt = placeIn(rightCol);
+        std::vector<size_t> places;
+        std::vector<std::pair<std::pair<double, double>, size_t>> keyed;
+        for (size_t k = 0; k < def_.wires.size(); ++k) {
+            const HarnessWire& w = def_.wires[k];
+            if (!shown.contains(w.fromConn) || !shown.contains(w.toConn) || w.fromPin <= 0 || w.toPin <= 0) continue;
+            const QString a = pinKey(w.fromConn, w.fromPin), b = pinKey(w.toConn, w.toPin);
+            const double l = leftAt.contains(a) ? leftAt.value(a) : leftAt.contains(b) ? leftAt.value(b) : 1e9;
+            const double r = rightAt.contains(a) ? rightAt.value(a) : rightAt.contains(b) ? rightAt.value(b) : 1e9;
+            // On one side only: its top pin decides, after every wire across.
+            const double first = l < 1e9 && r < 1e9 ? l : 1e10 + std::min(l < 1e9 ? l : r, r < 1e9 ? r : l);
+            places.push_back(k);
+            keyed.push_back({{first, r}, k});
+        }
+        std::stable_sort(keyed.begin(), keyed.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
+        std::vector<HarnessWire> moved;
+        for (const auto& kv : keyed) moved.push_back(def_.wires[kv.second]);
+        for (size_t k = 0; k < places.size(); ++k) {
+            listMoved = listMoved || def_.wires[places[k]].id != moved[k].id;
+            def_.wires[places[k]] = moved[k];
+        }
+    }
     if (tell) {
         said_->setText(reordered > 0 || listMoved ? QStringLiteral("Pin stacks optimised - %1 connector(s) reordered").arg(reordered)
                                                   : QStringLiteral("The pin stacks are already as the switches ask"));
@@ -1859,7 +2058,7 @@ void WiringDialog::fillPanel() {
         const int g = gauge_->findData(first->gauge);
         if (g >= 0) gauge_->setCurrentIndex(g);
         label_->setText(first->label);
-        cut_->setValue(first->cutLengthMm);
+
         print_[0]->setChecked(first->showColor);
         print_[1]->setChecked(first->showGauge);
         print_[2]->setChecked(first->showLabel);

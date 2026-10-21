@@ -29,6 +29,7 @@
 #include <QSettings>
 #include <QToolButton>
 #include <QScrollArea>
+#include <QWheelEvent>
 #include <QKeyEvent>
 #include "app/UiBits.h"
 #include "harness/Harness.h"
@@ -1688,13 +1689,17 @@ void testWiringWindow() {
         check(aBefore == harnessPinSequence(*harnessConnById(d, QStringLiteral("a"))), "pin stack: a brick not picked left as it was");
         // A SCREEN: drained at its start by a wire to a pin, at its finish onto the connector's own screen; its part.
         const QString s = dlg2.groupWires(WiringCanvas::Tool::Screen, {w1, w2});
-        check(dlg2.setScreenDrain(s, 0, QStringLiteral("pin"), 6) && dlg2.screenDrain(s, 0) == QLatin1String("pin"),
-              "screen: drained at its start by its own drain wire to a pin");
-        check(dlg2.setScreenDrain(s, 0, QStringLiteral("hook"), 6) && dlg2.screenDrain(s, 0) == QLatin1String("hook"),
-              "screen: or by a hook-up wire spliced onto it");
-        check(dlg2.setScreenDrain(s, 1, QStringLiteral("conn")) && dlg2.screenDrain(s, 1) == QLatin1String("conn") &&
+        check(dlg2.setScreenDrain(s, 0, QStringLiteral("drain"), QStringLiteral("pin:a:6")) && dlg2.screenDrain(s, 0) == QLatin1String("drain"),
+              "screen: drained at its left by its own drain wire to a pin");
+        {
+            QString target;
+            check(dlg2.setScreenDrain(s, 0, QStringLiteral("hook"), QStringLiteral("pin:b:6")) &&
+                      dlg2.screenDrain(s, 0, &target) == QLatin1String("hook") && target == QLatin1String("pin:b:6"),
+                  "screen: or by a hook-up wire spliced onto it - to any connector's pin, the other end's too");
+        }
+        check(dlg2.setScreenDrain(s, 1, QStringLiteral("drain"), QStringLiteral("shield:b")) && dlg2.screenDrain(s, 1) == QLatin1String("drain") &&
                   harnessConnById(d, QStringLiteral("b"))->shieldRight,
-              "screen: drained at its finish onto the connector's own screen - which it is given");
+              "screen: drained at its right onto the connector's own screen - which it is given");
         dlg2.setScreenPart(s, QString(), QStringLiteral("SH-123"));
         check(harnessDefFromJson(harnessDefToJson(d)).shieldPns.value(s) == QLatin1String("SH-123"), "screen: its own P/N, kept");
         const HarnessBuild screened = buildHarness(d);
@@ -1718,6 +1723,92 @@ void testWiringWindow() {
             check(said.join(QLatin1Char('|')).contains(QLatin1String("CBL-2x1's conductor")), "group P/N: a wire not as the cable's conductor is said");
             useHarnessBuilderLibraryForTest(PartsLibrary{});
         }
+        // A SCREEN'S RING CLICKED: its wires picked.
+        {
+            dlg2.canvas()->setSelection({});
+            const QPointF b1 = dlg2.canvas()->barCentre(w1), b2 = dlg2.canvas()->barCentre(w2);
+            QStringList picked;
+            for (double x = 0; x < dlg2.canvas()->width() && picked.isEmpty(); x += 3)
+                picked = dlg2.canvas()->groupMarkAt(QPointF(x, (b1.y() + b2.y()) / 2.0));
+            check(picked.contains(w1) && picked.contains(w2), "screen: its ring picks its wires");
+        }
+        // TERMINATE UNCONNECTED: the drawing's X on every pin nothing is wired to.
+        if (auto* term = dlg2.findChild<QToolButton*>(QStringLiteral("wiringTerminate"))) {
+            term->setChecked(true);
+            check(d.layout.terminateUnconnected, "terminate: switched on, the pins nothing is wired to are marked");
+        } else {
+            check(false, "terminate: a Terminate unconnected switch");
+        }
+        // A SCREEN STROKE ACROSS NOTHING makes nothing.
+        {
+            const size_t had = d.wires.size();
+            QStringList groupsBefore;
+            for (const HarnessWire& w : d.wires) groupsBefore << w.shieldGroup;
+            dlg2.groupWires(WiringCanvas::Tool::Screen, {});
+            QStringList groupsAfter;
+            for (const HarnessWire& w : d.wires) groupsAfter << w.shieldGroup;
+            check(d.wires.size() == had && groupsBefore == groupsAfter, "screen: a stroke that crosses no line places no screen");
+        }
+        // THE WHEEL ZOOMS.
+        {
+            const double z0 = dlg2.canvas()->zoom();
+            QWheelEvent wheel(QPointF(50, 50), dlg2.canvas()->mapToGlobal(QPointF(50, 50)), QPoint(), QPoint(0, 120), Qt::NoButton,
+                              Qt::NoModifier, Qt::NoScrollPhase, false);
+            QApplication::sendEvent(dlg2.canvas(), &wheel);
+            check(dlg2.canvas()->zoom() > z0 * 1.1, "zoom: the wheel zooms the wiring in");
+            dlg2.canvas()->setZoom(1.0);
+        }
+    }
+    // SEVERAL CONNECTORS, AVOID CROSSING: P1 and P4 on the left, P2 and P3 on the right - every wire across in the order it
+    // leaves the left column, each right-hand connector's pins in that order; wires between two on one side a short bar.
+    {
+        HarnessDef d;
+        for (const auto& [id, side, pins] : {std::tuple<const char*, HarnessSide, int>{"p1", HarnessSide::Left, 3},
+                                             {"p4", HarnessSide::Left, 4},
+                                             {"p2", HarnessSide::Right, 8},
+                                             {"p3", HarnessSide::Right, 6}}) {
+            HarnessConnector c;
+            c.id = QLatin1String(id);
+            c.designator = QString::fromLatin1(id).toUpper();
+            c.side = side;
+            c.pinCount = pins;
+            d.connectors.push_back(c);
+        }
+        WiringDialog dlg3(d, [] {});
+        dlg3.resize(1400, 900);
+        dlg3.show();
+        dlg3.showSeveral();
+        QApplication::processEvents();
+        for (const auto& [a, ap, b, bp] : {std::tuple<const char*, int, const char*, int>{"p1", 1, "p2", 3},
+                                           {"p1", 2, "p2", 4},
+                                           {"p1", 3, "p2", 2},
+                                           {"p4", 3, "p2", 1},
+                                           {"p4", 2, "p2", 5},
+                                           {"p4", 4, "p2", 6},
+                                           {"p2", 8, "p3", 2},
+                                           {"p2", 7, "p3", 1}})
+            dlg3.connectPins(QLatin1String(a), ap, QLatin1String(b), bp);
+        dlg3.setOptimize(true, false, false);
+        dlg3.optimizePinStack();
+        auto at = [&](const char* conn, int pin) {
+            const std::vector<int> seq = harnessPinSequence(*harnessConnById(d, QLatin1String(conn)));
+            return static_cast<int>(std::find(seq.begin(), seq.end(), pin) - seq.begin());
+        };
+        // Down the left column P1 1, 2, 3, then P4 3, 2, 4 as stacked: their P2 pins 3, 4, 2, 1, 5, 6 must go down P2 in that order.
+        std::vector<std::pair<int, int>> leftRight;   // (left place, P2 place)
+        for (const HarnessWire& w : d.wires) {
+            if (w.toConn != QLatin1String("p2")) continue;
+            const int lp = (w.fromConn == QLatin1String("p1") ? 0 : 100) + at(w.fromConn == QLatin1String("p1") ? "p1" : "p4", w.fromPin);
+            leftRight.push_back({lp, at("p2", w.toPin)});
+        }
+        std::sort(leftRight.begin(), leftRight.end());
+        bool rising = true;
+        for (size_t k = 1; k < leftRight.size(); ++k) rising = rising && leftRight[k].second > leftRight[k - 1].second;
+        check(leftRight.size() == 6 && rising, "several: avoid crossing - P2's pins in the order of the left-hand pins their wires come from");
+        QStringList sameSide;
+        for (const HarnessWire& w : d.wires)
+            if (w.fromConn == QLatin1String("p2") && w.toConn == QLatin1String("p3")) sameSide << w.id;
+        check(!sameSide.isEmpty(), "several: wires between two right-hand connectors");
     }
     if (std::getenv("LOOPWIRE_SHOTS")) {
         win->showTwo(QStringLiteral("c1"), QStringLiteral("c2"));

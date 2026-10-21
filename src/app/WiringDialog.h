@@ -91,8 +91,20 @@ protected:
     void mouseReleaseEvent(QMouseEvent* e) override;
     void keyPressEvent(QKeyEvent* e) override;
     void resizeEvent(QResizeEvent* e) override;
+    void wheelEvent(QWheelEvent* e) override;
+
+public:
+    // ZOOMED with the wheel: everything drawn and clicked at this scale (1 = as laid out).
+    double zoom() const { return zoom_; }
+    void setZoom(double z);
+    // A SCREEN'S RING OR A PAIR'S TWIST under a point: the wires of that group, or none - and those a stroke crosses.
+    QStringList groupMarkAt(const QPointF& p) const;
+    QStringList groupMarksAcross(const QPointF& a, const QPointF& b) const;
 
 private:
+    // Where each screen's ring and each pair's twist is drawn, by group: from the bars of its wires.
+    QHash<QString, QRectF> markRects(bool screens) const;
+    double zoom_ = 1.0;
     struct Brick {
         QString conn;
         QRectF rect;
@@ -196,10 +208,12 @@ public:
     // THE PIN STACKS OF THE CONNECTORS PICKED (none picked: every one shown): the wired pins at the top, the free ones below -
     // or, `wiredFirst` false, the other way round. How many were reordered.
     int orderStacks(bool wiredFirst);
-    // A SCREEN'S DRAIN AT ONE END (0 its start, 1 its finish): "" not drained, "pin" a drain wire to `pin`, "hook" a hook-up
-    // wire spliced on, to `pin`, "conn" the connector's own screen, "screen:<group>" another screen.
-    bool setScreenDrain(const QString& group, int end, const QString& how, int pin = 0);
-    QString screenDrain(const QString& group, int end, int* pin = nullptr) const;
+    // A SCREEN'S DRAIN AT ONE END (0 its left, 1 its right): how - "" not drained, "drain" its own drain wire, "hook" a
+    // hook-up wire spliced onto it (its part `wirePart`, from the library) - and where to: "pin:<connector>:<pin>" any
+    // connector's pin (a ferrule, a terminal, ...), "shield:<connector>" a connector's own screen, "screen:<group>" another.
+    bool setScreenDrain(const QString& group, int end, const QString& how, const QString& target = QString(),
+                        const QString& wirePart = QString());
+    QString screenDrain(const QString& group, int end, QString* target = nullptr, QString* wirePart = nullptr) const;
     // ITS OWN PART: a library part's id, or a P/N typed.
     void setScreenPart(const QString& group, const QString& libPartId, const QString& typedPn = QString());
     // What is wrong, one a line, in the order of the wires it is about.
@@ -244,6 +258,8 @@ private:
     QComboBox* screenPart_ = nullptr;
     QComboBox* screenEnd_[2] = {};
     QComboBox* screenPin_[2] = {};
+    QComboBox* screenWire_[2] = {};   // the hook-up wire's part, from the library
+    QToolButton* terminate_ = nullptr;
     bool filling_ = false;
     void fillGroups();
     void markGroups();
