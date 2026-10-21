@@ -1380,6 +1380,7 @@ void testWiringWindow() {
     check(win && win->isVisible() && win->twoMode() && win->canvas()->shown() == QStringList({QStringLiteral("c1"), QStringLiteral("c2")}),
           "wiring window: opened on two connectors, the first left and the first right");
     if (!win) return;
+    check(!win->isWindow() && wizard.isAncestorOf(win), "wiring view: inside the wizard, in the table's place - no window of its own");
     win->setAskDrain([] { return QStringLiteral("c2"); });
     WiringCanvas* canvas = win->canvas();
     win->resize(1600, 800);
@@ -1722,6 +1723,18 @@ void testWiringWindow() {
             std::printf("  wiring: problems [%s]\n", qPrintable(said.join(QStringLiteral(" | "))));
             check(said.join(QLatin1Char('|')).contains(QLatin1String("CBL-2x1's conductor")), "group P/N: a wire not as the cable's conductor is said");
             useHarnessBuilderLibraryForTest(PartsLibrary{});
+        }
+        // THE GROUPS PANEL: its title; the shields apart, under a heading of their own - no group.
+        {
+            auto* title = dlg2.findChild<QLabel*>(QStringLiteral("wiringGroupsTitle"));
+            auto* list = dlg2.findChild<QListWidget*>(QStringLiteral("wiringGroups"));
+            bool shieldsHead = false;
+            for (int i = 0; list && i < list->count(); ++i) shieldsHead = shieldsHead || list->item(i)->text() == QLatin1String("Shields");
+            check(title && title->text().contains(QLatin1String("Groups")) && shieldsHead,
+                  "groups: the panel titled Groups, the shields under a heading of their own");
+            bool split = false;
+            for (const QString& p : dlg2.problems()) split = split || p.contains(QLatin1String("shield"), Qt::CaseInsensitive) && p.contains(QLatin1String("between"));
+            check(!split, "groups: a shield is no group - its wires on pins apart not said");
         }
         // A SCREEN'S RING CLICKED: its wires picked.
         {

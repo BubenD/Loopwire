@@ -124,6 +124,8 @@ private:
         double y = 0.0;
         QPointF from, to;   // where its two ends meet their pins
         int fromSide = 0, toSide = 0;   // -1 the left column, 1 the right
+        int lane = 0;   // between two connectors on one side: its own lane beside that side, at laneX
+        double laneX = 0.0;
     };
     const Brick* brickOf(const QString& conn) const;
     QPointF pinExit(const QString& conn, int pin, int& side) const;

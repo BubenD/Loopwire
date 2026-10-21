@@ -317,6 +317,11 @@ private:
     QComboBox* groupByBox_ = nullptr;
     // The wiring window, once opened (not saved).
     QPointer<WiringDialog> wiringWindow_;
+    // The connections' two views, the table and the wiring view, in one place; the button that switches them.
+    QStackedWidget* wireViews_ = nullptr;
+    QWidget* wiringHost_ = nullptr;
+    QPushButton* wireViewBtn_ = nullptr;
+    void showWiringView(bool on);
     QDoubleSpinBox* textGapSpin_ = nullptr;
     QDoubleSpinBox* spliceSizeSpin_ = nullptr;
     QDoubleSpinBox* textHeightSpin_ = nullptr;

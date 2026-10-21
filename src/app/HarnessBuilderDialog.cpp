@@ -2552,13 +2552,19 @@ QWidget* HarnessBuilderDialog::buildWiresSection() {
     fillBtn->setToolTip(QStringLiteral("Give every wire the next free pin at each end, in "
                                       "order, without disturbing the pins already set"));
     connect(fillBtn, &QPushButton::clicked, this, [this] { autoFillPins(); });
-    // WIRED BY HAND, in a window of its own: the connectors drawn with their pins, wired by clicking and dragging.
-    auto* wireBtn = new QPushButton(QStringLiteral("Wire connectors..."), this);
+    // WIRED BY HAND, in this same place: the wiring view - the connectors drawn with their pins, wired by clicking and
+    // dragging - in the table's stead, and the table back again.
+    auto* wireBtn = new QPushButton(QStringLiteral("Wiring view"), this);
     wireBtn->setObjectName(QStringLiteral("harnessBuilderWireConnectors"));
-    wireBtn->setToolTip(QStringLiteral("Wire two connectors - or several - by clicking or dragging from pin to pin; twist, screen and "
-                                       "make cables with a stroke across the lines"));
+    wireBtn->setToolTip(QStringLiteral("Wire two connectors - or several - by clicking or dragging from pin to pin; twist, shield and "
+                                       "make cables with a stroke across the lines. Again: back to the table"));
     wireBtn->setAutoDefault(false);
-    connect(wireBtn, &QPushButton::clicked, this, [this] { openWiringWindow(); });
+    wireBtn->setCheckable(true);
+    wireViewBtn_ = wireBtn;
+    connect(wireBtn, &QPushButton::toggled, this, [this](bool on) {
+        if (on) openWiringWindow();
+        else showWiringView(false);
+    });
 
     auto* groupLabel = new QLabel(QStringLiteral("Group by"), this);
     groupLabel->setStyleSheet(QStringLiteral("color:#9fb4c8;"));
@@ -2672,7 +2678,17 @@ QWidget* HarnessBuilderDialog::buildWiresSection() {
     detailsClip->setProperty("sectionGripMinimum", 180);
     wireSplit_->addWidget(detailsClip);
     wireSplit_->setSizes({140, 220});
-    return section(QStringLiteral("Wire connections"), wireSplit_, this,
+    // THE CONNECTIONS SEEN TWO WAYS, in one place: the table - or the wiring view.
+    wireViews_ = new QStackedWidget(this);
+    wireViews_->setObjectName(QStringLiteral("wizardConnectionViews"));
+    wireViews_->setProperty("sectionGripMinimum", 180);
+    wireViews_->addWidget(wireSplit_);
+    wiringHost_ = new QWidget(wireViews_);
+    wiringHost_->setObjectName(QStringLiteral("wizardWiringHost"));
+    auto* wiringLay = new QVBoxLayout(wiringHost_);
+    wiringLay->setContentsMargins(0, 0, 0, 0);
+    wireViews_->addWidget(wiringHost_);
+    return section(QStringLiteral("Wire connections"), wireViews_, this,
                    QList<QWidget*>{addBtn, groupBtn, wireBtn, fillBtn, groupLabel, groupByBox_, expandBtn, collapseBtn});
 }
 
@@ -2837,7 +2853,12 @@ WiringDialog* HarnessBuilderDialog::openWiringWindow() {
         return nullptr;
     }
     if (!wiringWindow_) {
-        wiringWindow_ = new WiringDialog(def_, [this] { reloadAll(); }, this);
+        // NO WINDOW OF ITS OWN: a view inside the wizard, where the table is.
+        wiringWindow_ = new WiringDialog(def_, [this] { reloadAll(); }, wiringHost_ ? wiringHost_ : this);
+        if (wiringHost_) {
+            wiringWindow_->setWindowFlags(Qt::Widget);
+            wiringHost_->layout()->addWidget(wiringWindow_);
+        }
         wiringWindow_->setAskDrain([this] { return askDrainConnector(); });
         wiringWindow_->setUndo([this] { undo(); }, [this] { redo(); });
         wiringWindow_->setLayoutChanged([this] {
@@ -2854,10 +2875,32 @@ WiringDialog* HarnessBuilderDialog::openWiringWindow() {
             wiringWindow_->showTwo(w.fromConn, w.toConn);
             break;
         }
-    wiringWindow_->show();
-    wiringWindow_->raise();
-    wiringWindow_->activateWindow();
+    showWiringView(true);
     return wiringWindow_;
+}
+
+void HarnessBuilderDialog::showWiringView(bool on) {
+    if (wireViewBtn_ && wireViewBtn_->isChecked() != on) {
+        const QSignalBlocker hush(wireViewBtn_);
+        wireViewBtn_->setChecked(on);
+    }
+    if (!wireViews_) {
+        if (on && wiringWindow_) {
+            wiringWindow_->show();
+            wiringWindow_->raise();
+        }
+        return;
+    }
+    wireViews_->setCurrentIndex(on && wiringWindow_ ? 1 : 0);
+    // THE WHOLE WIDTH TO WIRE IN: the drawing beside the steps folded away while the wiring view shows - it is a drawing too -
+    // and back with the table.
+    if (mainSplit_ && mainSplit_->count() > 1) mainSplit_->widget(1)->setVisible(!(on && wiringWindow_));
+    // TALL ENOUGH TO WIRE IN, while it shows - the table's own height back after.
+    wireViews_->setMinimumHeight(on ? 640 : wireViews_->property("wizardSectionDefaultMin").toInt());
+    if (on && wiringWindow_) {
+        wiringWindow_->show();
+        wiringWindow_->refresh();
+    }
 }
 
 QStringList HarnessBuilderDialog::selectedOrCurrentWireIds() const {
@@ -2879,7 +2922,7 @@ QString HarnessBuilderDialog::askDrainConnector() {
         ids << c.id;
     }
     bool ok = false;
-    const QString chosen = QInputDialog::getItem(this, QStringLiteral("Screen"), QStringLiteral("The screen's drain wire:"), items, 0,
+    const QString chosen = QInputDialog::getItem(this, QStringLiteral("Shield"), QStringLiteral("The shield's drain wire:"), items, 0,
                                                  false, &ok);
     if (!ok) return QString();
     return ids.value(items.indexOf(chosen));

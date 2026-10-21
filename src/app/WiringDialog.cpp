@@ -278,6 +278,7 @@ void WiringCanvas::relayout() {
     };
     const double leftBottom = stack(leftCol, shift + kMargin);
     const double rightBottom = stack(rightCol, laneRight_ + 60.0);
+    int sameLanes[2] = {0, 0};
     for (int i = 0; i < wires.size(); ++i) {
         Bar bar;
         bar.wire = wires[i];
@@ -287,6 +288,14 @@ void WiringCanvas::relayout() {
                 bar.from = pinExit(w.fromConn, w.fromPin, bar.fromSide);
                 bar.to = pinExit(w.toConn, w.toPin, bar.toSide);
             }
+        // ONE SIDE TO THE SAME SIDE: a lane of its own beside that side; its row the middle of its two pins.
+        if (bar.fromSide == bar.toSide) {
+            bar.lane = sameLanes[bar.fromSide < 0 ? 0 : 1]++;
+            // Just off its pins: out of each, along a lane of its own beside them, up or down to the other's row, and in.
+            const double pinsEdge = bar.fromSide < 0 ? std::max(bar.from.x(), bar.to.x()) : std::min(bar.from.x(), bar.to.x());
+            bar.laneX = pinsEdge - bar.fromSide * (24.0 + bar.lane * 12.0);
+            bar.y = (bar.from.y() + bar.to.y()) / 2.0;
+        }
         bars_.push_back(bar);
     }
     content_ = QSize(static_cast<int>(whole),
@@ -312,18 +321,33 @@ QString WiringCanvas::pinAt(const QPointF& p) const {
 }
 
 QString WiringCanvas::barAt(const QPointF& p) const {
-    for (const Bar& bar : bars_)
+    for (const Bar& bar : bars_) {
+        if (bar.fromSide == bar.toSide) {
+            const double x = bar.laneX;
+            if (std::abs(p.x() - x) <= 5.0 && p.y() >= std::min(bar.from.y(), bar.to.y()) - 3 &&
+                p.y() <= std::max(bar.from.y(), bar.to.y()) + 3)
+                return bar.wire;
+            continue;
+        }
         if (std::abs(p.y() - bar.y) <= kRow / 2.0 - 1.0 && p.x() >= laneLeft_ && p.x() <= laneRight_) return bar.wire;
+    }
     return {};
 }
 
-// A BAR'S REACH ACROSS THE LANE: the whole lane for a wire from one side to the other; for one between two connectors on
-// the same side, a short stub in from that side, its label on it.
+// THE WORDS OF A WIRE BETWEEN TWO CONNECTORS ON ONE SIDE: so wide, beside its upright run.
 constexpr double kStub = 96.0;
 
 QStringList WiringCanvas::barsAcross(const QPointF& a, const QPointF& b) const {
     QStringList out;
+    const QLineF stroke(a, b);
     for (const Bar& bar : bars_) {
+        if (bar.fromSide == bar.toSide) {
+            // Its upright run, crossed.
+            const double x = bar.laneX;
+            const QLineF run(QPointF(x, bar.from.y()), QPointF(x, bar.to.y()));
+            if (stroke.intersects(run, nullptr) == QLineF::BoundedIntersection) out << bar.wire;
+            continue;
+        }
         if ((a.y() - bar.y) * (b.y() - bar.y) > 0.0 || std::abs(a.y() - b.y()) < 1e-9) continue;
         const double t = (bar.y - a.y()) / (b.y() - a.y());
         const double x = a.x() + (b.x() - a.x()) * t;
@@ -371,6 +395,11 @@ std::vector<QPointF> WiringCanvas::jointPath(const HarnessWire& w) const {
     int side = 0;
     const QPointF exit = pinExit(conn, pin, side);
     if (exit.isNull()) return {};
+    // Onto a wire between two on one side: its upright run, half way along.
+    if (onto->fromSide == onto->toSide) {
+        const double x = onto->laneX;
+        return {exit, QPointF(exit.x() + side * -14.0, exit.y()), QPointF(x, exit.y()), QPointF(x, onto->y)};
+    }
     const double x = side < 0 ? laneLeft_ + (laneRight_ - laneLeft_) * 0.22 : laneRight_ - (laneRight_ - laneLeft_) * 0.22;
     return {exit, QPointF(exit.x() + side * -14.0, exit.y()), QPointF(x, exit.y()), QPointF(x, onto->y)};
 }
@@ -519,13 +548,13 @@ void WiringCanvas::paintEvent(QPaintEvent*) {
         p.setFont(font());
     }
     // ---- THE WIRES: pin to its bar, across the bar, to the other pin ----
-    // THE LINES PICKED, blue; the rest of a group they are in - its cable, its screen, its pair - orange.
+    // THE LINES PICKED, blue; the rest of the group each is in - its twisted pair, or else its cable - orange. A shield is no
+    // group: the wires under one are not lit with it.
     QSet<QString> mates;
     for (const HarnessWire& w : def_.wires)
         if (selection_.contains(w.id))
             for (const HarnessWire& o : def_.wires)
-                if ((!w.bundle.isEmpty() && o.bundle == w.bundle) || (!w.shieldGroup.isEmpty() && o.shieldGroup == w.shieldGroup) ||
-                    (!w.twistGroup.isEmpty() && o.twistGroup == w.twistGroup))
+                if (!w.twistGroup.isEmpty() ? o.twistGroup == w.twistGroup : !w.bundle.isEmpty() && o.bundle == w.bundle)
                     mates.insert(o.id);
     for (const Bar& bar : bars_) {
         const HarnessWire* w = byId.value(bar.wire);
@@ -533,18 +562,24 @@ void WiringCanvas::paintEvent(QPaintEvent*) {
         const bool sel = selection_.contains(bar.wire);
         const bool sameSide = bar.fromSide == bar.toSide;
         const double edge = bar.fromSide < 0 ? laneLeft_ : laneRight_;
-        // BETWEEN TWO CONNECTORS ON ONE SIDE: both pins to the lane's edge, and a short bar in from it for its label.
-        const QPointF a(bar.fromSide < 0 ? laneLeft_ : laneRight_, bar.y),
-            b = sameSide ? QPointF(edge - bar.fromSide * kStub, bar.y) : QPointF(bar.toSide < 0 ? laneLeft_ : laneRight_, bar.y);
+        const QPointF a(bar.fromSide < 0 ? laneLeft_ : laneRight_, bar.y), b(bar.toSide < 0 ? laneLeft_ : laneRight_, bar.y);
         const QColor base = baseColour(w->color);
         QPainterPath path;
         path.moveTo(bar.from);
-        path.lineTo(QPointF(bar.from.x() + bar.fromSide * -14.0, bar.from.y()));
-        path.lineTo(a);
-        path.lineTo(b);
-        if (sameSide) path.moveTo(a);
-        path.lineTo(QPointF(bar.to.x() + bar.toSide * -14.0, bar.to.y()));
-        path.lineTo(bar.to);
+        if (sameSide) {
+            // BETWEEN TWO CONNECTORS ON ONE SIDE: square out of its pin to its own lane, along it to the other pin's row,
+            // and square into it.
+            const double x = bar.laneX;
+            path.lineTo(QPointF(x, bar.from.y()));
+            path.lineTo(QPointF(x, bar.to.y()));
+            path.lineTo(bar.to);
+        } else {
+            path.lineTo(QPointF(bar.from.x() + bar.fromSide * -14.0, bar.from.y()));
+            path.lineTo(a);
+            path.lineTo(b);
+            path.lineTo(QPointF(bar.to.x() + bar.toSide * -14.0, bar.to.y()));
+            path.lineTo(bar.to);
+        }
         // An open path: drawn as a line, never filled - whatever brush the words before it left set.
         p.setBrush(Qt::NoBrush);
         if (sel || mates.contains(bar.wire)) {
@@ -563,8 +598,9 @@ void WiringCanvas::paintEvent(QPaintEvent*) {
         QString words = QStringLiteral("%1  %2").arg(w->color, wireGaugeLabel(w->gauge, true));
         if (!w->label.isEmpty()) words += QStringLiteral("  ") + w->label;
         p.setFont(small);
+        // ITS WORDS: across the middle of the lane - or, between two on one side, beside its upright run.
         const double half = sameSide ? kStub / 2.0 - 4.0 : (laneRight_ - laneLeft_) / 2.0 - 70.0;
-        const double mid = sameSide ? (a.x() + b.x()) / 2.0 : (laneLeft_ + laneRight_) / 2.0;
+        const double mid = sameSide ? bar.laneX - bar.fromSide * (half + 6.0) : (laneLeft_ + laneRight_) / 2.0;
         const QRectF text(mid - half, bar.y - kRow / 2 + 1, 2 * half, kRow / 2 - 1);
         p.setPen(Qt::NoPen);
         p.setBrush(QColor(32, 36, 42, 200));
@@ -1016,11 +1052,18 @@ WiringDialog::WiringDialog(HarnessDef& def, std::function<void()> changed, QWidg
     auto* split = new QSplitter(Qt::Horizontal, this);
     // THE GROUPS, on the left: every pair, screen and cable - one clicked picks its wires; the lines picked light the
     // groups they make up.
-    groups_ = new QListWidget(split);
+    auto* groupsSide = new QWidget(split);
+    auto* gsl = new QVBoxLayout(groupsSide);
+    gsl->setContentsMargins(0, 0, 0, 0);
+    auto* groupsHead = new QLabel(QStringLiteral("<b>Groups</b>"), groupsSide);
+    groupsHead->setObjectName(QStringLiteral("wiringGroupsTitle"));
+    gsl->addWidget(groupsHead);
+    groups_ = new QListWidget(groupsSide);
     groups_->setObjectName(QStringLiteral("wiringGroups"));
-    groups_->setToolTip(QStringLiteral("The twisted pairs, shields and cables - click one to pick its wires"));
+    groups_->setToolTip(QStringLiteral("The twisted pairs and cables - and the shields - click one to pick its wires"));
     groups_->setSelectionMode(QAbstractItemView::ExtendedSelection);
-    split->addWidget(groups_);
+    gsl->addWidget(groups_, 1);
+    split->addWidget(groupsSide);
     connect(groups_, &QListWidget::itemClicked, this, [this](QListWidgetItem*) {
         QStringList ids;
         for (QListWidgetItem* it : groups_->selectedItems())
@@ -1415,10 +1458,19 @@ void WiringDialog::fillGroups() {
     }
     for (const QString& g : cables)
         add(QStringLiteral("cable"), g, [&g](const HarnessWire& w) { return w.bundle == g; });
-    for (const QString& g : screens)
-        add(QStringLiteral("shielded"), g, [&g](const HarnessWire& w) { return w.shieldGroup == g; });
     for (const QString& g : twists)
         add(QStringLiteral("twisted"), g, [&g](const HarnessWire& w) { return w.twistGroup == g; });
+    // THE SHIELDS, apart: no group - the wires under one stay where they are - but each there to be picked.
+    if (!screens.isEmpty()) {
+        auto* head = new QListWidgetItem(QStringLiteral("Shields"), groups_);
+        head->setFlags(Qt::NoItemFlags);
+        QFont f = head->font();
+        f.setBold(true);
+        head->setFont(f);
+        head->setForeground(QColor(140, 190, 255));
+    }
+    for (const QString& g : screens)
+        add(QStringLiteral("shield"), g, [&g](const HarnessWire& w) { return w.shieldGroup == g; });
     markGroups();
 }
 
@@ -1429,6 +1481,7 @@ void WiringDialog::markGroups() {
     for (int i = 0; i < groups_->count(); ++i) {
         QListWidgetItem* it = groups_->item(i);
         const QStringList ids = it->data(Qt::UserRole).toStringList();
+        if (ids.isEmpty()) continue;   // a heading
         // LIT when every wire of it is picked.
         const bool all = !sel.isEmpty() && std::all_of(ids.begin(), ids.end(), [&sel](const QString& id) { return sel.contains(id); });
         it->setSelected(all);
@@ -2175,8 +2228,9 @@ QStringList WiringDialog::problems() const {
             if (in(def_.wires[i])) return static_cast<int>(i);
         return static_cast<int>(def_.wires.size());
     };
+    // A SHIELD IS NO GROUP: its wires on pins apart is not said here.
     for (const HarnessIssue& issue : validateHarness(def_))
-        if (issue.key.startsWith(QLatin1String("twistsplit:")) || issue.key.startsWith(QLatin1String("shieldsplit:")) ||
+        if (issue.key.startsWith(QLatin1String("twistsplit:")) ||
             issue.key.startsWith(QLatin1String("twistalone:")) || issue.key.startsWith(QLatin1String("dup")) ||
             issue.key.startsWith(QLatin1String("badjoint:")))
             found.push_back({rowOf(issue.wireId), issue.message});
