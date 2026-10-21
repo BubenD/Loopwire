@@ -9,6 +9,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
+#include <QFontMetricsF>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -214,10 +215,23 @@ void WiringCanvas::relayout() {
         }
         return ids;
     }();
-    // THE LANE BETWEEN THEM: wide enough for a bar's words, and its bars one under another below the titles.
-    // Room left for a scroll bar, so the lines fit across without one.
-    const double laneW = std::max(260.0, static_cast<double>(width()) - leftW - rightW - 2 * kMargin - 140.0);
-    laneLeft_ = kMargin + leftW + 60.0;
+    // THE LANE BETWEEN THEM: as wide as the longest bar's words want, and the twist and screen marks either side of them -
+    // the connectors side by side across it, not pushed to the window's edges - its bars one under another below the
+    // titles. The two, with the lane, in the middle of the width there is.
+    QFont small = font();
+    small.setPointSizeF(std::max(6.5, small.pointSizeF() - 1.5));
+    const QFontMetricsF metrics(small);
+    double words = 120.0;
+    for (const HarnessWire& w : def_.wires)
+        if (wires.contains(w.id)) {
+            QString text = QStringLiteral("%1  %2").arg(w.color, wireGaugeLabel(w.gauge, true));
+            if (!w.label.isEmpty()) text += QStringLiteral("  ") + w.label;
+            words = std::max(words, metrics.horizontalAdvance(text) + 24.0);
+        }
+    const double laneW = std::max(260.0, words + 140.0);
+    const double whole = 2 * kMargin + leftW + rightW + 120.0 + laneW;
+    const double shift = std::max(0.0, (width() - whole) / 2.0);
+    laneLeft_ = shift + kMargin + leftW + 60.0;
     laneRight_ = laneLeft_ + laneW;
     barTop_ = kMargin + 40.0;
     auto stack = [&](std::vector<Brick>& col, double x) {
@@ -230,7 +244,7 @@ void WiringCanvas::relayout() {
         }
         return y;
     };
-    const double leftBottom = stack(leftCol, kMargin);
+    const double leftBottom = stack(leftCol, shift + kMargin);
     const double rightBottom = stack(rightCol, laneRight_ + 60.0);
     for (int i = 0; i < wires.size(); ++i) {
         Bar bar;
@@ -243,7 +257,7 @@ void WiringCanvas::relayout() {
             }
         bars_.push_back(bar);
     }
-    content_ = QSize(static_cast<int>(laneRight_ + 60.0 + rightW + kMargin),
+    content_ = QSize(static_cast<int>(whole),
                      static_cast<int>(std::max({leftBottom, rightBottom, barTop_ + wires.size() * kRow + 2 * kRow}) + kMargin));
     setMinimumSize(content_);
     updateGeometry();
@@ -370,6 +384,8 @@ void WiringCanvas::paintEvent(QPaintEvent*) {
         path.lineTo(b);
         path.lineTo(QPointF(bar.to.x() + bar.toSide * -14.0, bar.to.y()));
         path.lineTo(bar.to);
+        // An open path: drawn as a line, never filled - whatever brush the words before it left set.
+        p.setBrush(Qt::NoBrush);
         if (sel) {
             p.setPen(QPen(QColor(255, 170, 60), 6.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
             p.drawPath(path);
@@ -386,10 +402,13 @@ void WiringCanvas::paintEvent(QPaintEvent*) {
         QString words = QStringLiteral("%1  %2").arg(w->color, wireGaugeLabel(w->gauge, true));
         if (!w->label.isEmpty()) words += QStringLiteral("  ") + w->label;
         p.setFont(small);
-        const QRectF text((laneLeft_ + laneRight_) / 2.0 - 90, bar.y - kRow / 2 + 1, 180, kRow / 2 - 1);
+        const double half = (laneRight_ - laneLeft_) / 2.0 - 70.0;
+        const QRectF text((laneLeft_ + laneRight_) / 2.0 - half, bar.y - kRow / 2 + 1, 2 * half, kRow / 2 - 1);
         p.setPen(Qt::NoPen);
         p.setBrush(QColor(32, 36, 42, 200));
-        p.drawRoundedRect(text.adjusted(10, 0, -10, 0), 3, 3);
+        // Behind the words only: the bar shows either side of them.
+        const double wordsW = std::min(text.width(), QFontMetricsF(small).horizontalAdvance(words) + 12.0);
+        p.drawRoundedRect(QRectF(text.center().x() - wordsW / 2.0, text.top(), wordsW, text.height()), 3, 3);
         p.setPen(QColor(220, 228, 238));
         p.drawText(text, Qt::AlignCenter, words);
         p.setFont(font());
@@ -593,9 +612,13 @@ WiringDialog::WiringDialog(HarnessDef& def, std::function<void()> changed, QWidg
     left_->setObjectName(QStringLiteral("wiringLeft"));
     right_ = new QComboBox(two);
     right_->setObjectName(QStringLiteral("wiringRight"));
+    // The two side by side, as they are drawn.
+    left_->setMinimumWidth(180);
+    right_->setMinimumWidth(180);
     twoRow->addWidget(left_);
     twoRow->addWidget(new QLabel(QStringLiteral("↔"), two));
     twoRow->addWidget(right_);
+    twoRow->addStretch(1);
     pickers_->addWidget(two);
     several_ = new QListWidget(pickers_);
     several_->setObjectName(QStringLiteral("wiringConnectors"));

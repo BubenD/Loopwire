@@ -1379,6 +1379,16 @@ void testWiringWindow() {
     if (!win) return;
     win->setAskDrain([] { return QStringLiteral("c2"); });
     WiringCanvas* canvas = win->canvas();
+    win->resize(1600, 800);
+    QApplication::processEvents();
+    // SIDE BY SIDE, in the middle: the lane between them as wide as its words, not the window.
+    {
+        const double gap = canvas->pinCentre(QStringLiteral("c2"), 1).x() - canvas->pinCentre(QStringLiteral("c1"), 1).x();
+        const double middle = (canvas->pinCentre(QStringLiteral("c2"), 1).x() + canvas->pinCentre(QStringLiteral("c1"), 1).x()) / 2.0;
+        std::printf("  wiring window: the two %.0f apart, their middle at %.0f of %d\n", gap, middle, canvas->width());
+        check(gap > 200 && gap < 650 && std::abs(middle - canvas->width() / 2.0) < 40,
+              "wiring window: the two connectors side by side, in the middle - not at the window's edges");
+    }
     auto mouse = [&](QEvent::Type type, const QPointF& at, Qt::MouseButtons buttons, Qt::KeyboardModifiers mods = Qt::NoModifier) {
         QMouseEvent e(type, at, canvas->mapToGlobal(at), type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton, buttons, mods);
         QApplication::sendEvent(canvas, &e);
