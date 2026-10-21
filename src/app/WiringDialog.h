@@ -13,6 +13,7 @@
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
+class QGroupBox;
 class QLabel;
 class QLineEdit;
 class QListWidget;
@@ -75,8 +76,13 @@ signals:
     void deleteAsked();
     void ghostAccepted();
     void said(const QString& text);
-    // A PIN CAUGHT (held 0.2 s) AND LET GO on another pin of its connector: put there in the connector's pin stack.
+    // A PIN CAUGHT (held 0.3 s) AND LET GO on another pin of its connector: put there in the connector's pin stack.
     void pinStackMoveAsked(const QString& conn, int pin, int toPin);
+    // A WIRE'S BAR CAUGHT (held 0.3 s) AND LET GO: the wire moved there in the list, its pins with it in both stacks.
+    void wireWithPinsMoveAsked(const QString& wireId, int toShownIndex);
+    // A PIN DRAGGED ONTO A WIRE'S BAR: a wire from the pin to a joint on that wire's run.
+    void jointAsked(const QString& conn, int pin, const QString& wireId);
+    void brickSelectionChanged();
 
 protected:
     void paintEvent(QPaintEvent*) override;
@@ -119,12 +125,20 @@ private:
     QPointF pressAt_, now_;
     QString pressPin_, pressBar_;
     bool pressing_ = false, moved_ = false, ctrl_ = false;
-    // A PIN HELD STILL 0.2 S IS CAUGHT, to be put elsewhere in its connector's pin stack (not saved).
+    // A PIN (or a bar) HELD STILL 0.3 S IS CAUGHT, to be put elsewhere - its pin stack, or the list with its pins (not saved).
     QTimer* holdTimer_ = nullptr;
     bool carrying_ = false;
+    bool carryingBar_ = false;
+    // The connectors picked - clicked on their brick, Ctrl for more - for what is done to their pin stacks (not saved).
+    QStringList selectedBricks_;
+    QString pressBrick_;
 
 public:
     bool carrying() const { return carrying_; }
+    const QStringList& selectedBricks() const { return selectedBricks_; }
+    void setSelectedBricks(const QStringList& ids);
+    // The connector whose brick is under a point (not on a pin), or "".
+    QString brickAt(const QPointF& p) const;
 };
 
 // THE WIRING WINDOW: two connectors - or several - wired by clicking and dragging pins, the lines stacked in order and
@@ -174,6 +188,22 @@ public:
     bool optimizeOn() const;
     // A PIN PUT ELSEWHERE IN ITS CONNECTOR'S PIN STACK: where `toPin` is, the pins between moved up or down one.
     bool movePinInStack(const QString& conn, int pin, int toPin);
+    // A WIRE MOVED IN THE LIST WITH ITS PINS: to before the shown wire at `toShownIndex`, and on each connector its pin put
+    // where that wire's pin is in the stack.
+    bool moveWireWithPins(const QString& wireId, int toShownIndex);
+    // A WIRE FROM A PIN TO A JOINT ON ANOTHER WIRE'S RUN (its id).
+    QString connectToWire(const QString& conn, int pin, const QString& wireId);
+    // THE PIN STACKS OF THE CONNECTORS PICKED (none picked: every one shown): the wired pins at the top, the free ones below -
+    // or, `wiredFirst` false, the other way round. How many were reordered.
+    int orderStacks(bool wiredFirst);
+    // A SCREEN'S DRAIN AT ONE END (0 its start, 1 its finish): "" not drained, "pin" a drain wire to `pin`, "hook" a hook-up
+    // wire spliced on, to `pin`, "conn" the connector's own screen, "screen:<group>" another screen.
+    bool setScreenDrain(const QString& group, int end, const QString& how, int pin = 0);
+    QString screenDrain(const QString& group, int end, int* pin = nullptr) const;
+    // ITS OWN PART: a library part's id, or a P/N typed.
+    void setScreenPart(const QString& group, const QString& libPartId, const QString& typedPn = QString());
+    // What is wrong, one a line, in the order of the wires it is about.
+    QStringList problems() const;
 
 private:
     void changed();
@@ -209,7 +239,17 @@ private:
     QToolButton* optCross_ = nullptr;
     QToolButton* optShield_ = nullptr;
     QToolButton* optTwist_ = nullptr;
+    QListWidget* groups_ = nullptr;
+    QGroupBox* screenBox_ = nullptr;
+    QComboBox* screenPart_ = nullptr;
+    QComboBox* screenEnd_[2] = {};
+    QComboBox* screenPin_[2] = {};
     bool filling_ = false;
+    void fillGroups();
+    void markGroups();
+    void fillScreenBox();
+    QString screenOfSelection() const;
+    QString screenEndConn(const QString& group, int end) const;
 };
 
 } // namespace Loopwire

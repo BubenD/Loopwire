@@ -303,10 +303,18 @@ QString harnessOpenEndpointKey() { return QStringLiteral("#OPEN"); }
 
 bool harnessIsOpenEndpoint(const QString& key) { return key == QLatin1String("#OPEN"); }
 
+QString harnessJointEndpointKey(const QString& wireId) { return QStringLiteral("#JOINT:") + wireId; }
+
+bool harnessIsJointEndpoint(const QString& key) { return key.startsWith(QLatin1String("#JOINT:")); }
+
+QString harnessJointEndpointWire(const QString& key) {
+    return harnessIsJointEndpoint(key) ? key.mid(7) : QString();
+}
+
 bool harnessEndIsOpen(const QString& conn, int pin) {
     // A shield endpoint is a real termination (the drain lands on the screen's leg), so it is not open
-    // even though it has no pin number.
-    if (harnessIsShieldEndpoint(conn)) return false;
+    // even though it has no pin number. Nor is a joint on another wire's run.
+    if (harnessIsShieldEndpoint(conn) || harnessIsJointEndpoint(conn)) return false;
     return harnessIsOpenEndpoint(conn) || pin < 1;
 }
 
@@ -732,6 +740,24 @@ std::vector<HarnessIssue> validateHarness(const HarnessDef& def) {
                     c->id, w.id);
             continue;
         }
+        // A WIRE JOINED TO ANOTHER'S RUN: that wire has to be there, and the end that is not the joint a real pin.
+        if (harnessIsJointEndpoint(w.fromConn) || harnessIsJointEndpoint(w.toConn)) {
+            const bool fromJoint = harnessIsJointEndpoint(w.fromConn);
+            const QString target = harnessJointEndpointWire(fromJoint ? w.fromConn : w.toConn);
+            if (std::none_of(def.wires.begin(), def.wires.end(), [&](const HarnessWire& o) { return o.id == target && o.id != w.id; }))
+                add(QStringLiteral("badjoint:%1").arg(w.id),
+                    QStringLiteral("A wire is joined to wire \"%1\", which the harness does not have").arg(target),
+                    QString(), w.id);
+            const HarnessConnector* c = harnessConnById(def, fromJoint ? w.toConn : w.fromConn);
+            const int pin = fromJoint ? w.toPin : w.fromPin;
+            if (!c)
+                add(QStringLiteral("badconn:%1").arg(w.id), QStringLiteral("A wire joined to another has no connector end"),
+                    QString(), w.id);
+            else if (pin < 1 || pin > std::max(1, c->pinCount))
+                add(QStringLiteral("badpin:%1:%2").arg(w.id).arg(pin),
+                    QStringLiteral("%1 has no pin %2").arg(c->designator.isEmpty() ? c->id : c->designator).arg(pin), c->id, w.id);
+            continue;
+        }
         // A drain wire ends on a SCREEN, not on a pin: it is checked against the shields the
         // harness has rather than against a connector's pins.
         const QStringList shields = harnessShieldEndpoints(def);
@@ -747,6 +773,9 @@ std::vector<HarnessIssue> validateHarness(const HarnessDef& def) {
         }
         const HarnessConnector* a = harnessConnById(def, w.fromConn);
         const HarnessConnector* b = harnessConnById(def, w.toConn);
+        // SCREEN TO SCREEN: one screen drained onto another - an internal one onto its connector's overall screen, or onto
+        // another - with no pin to check.
+        if (harnessIsShieldEndpoint(w.fromConn) && harnessIsShieldEndpoint(w.toConn)) continue;
         if (shieldEnd) {
             // The other end still has to be a real pin.
             const HarnessConnector* pinSide = a ? a : b;
@@ -1313,6 +1342,14 @@ QJsonObject harnessDefToJson(const HarnessDef& def) {
     root["physicalBom"] = def.physicalBom;
     root["connectors"] = conns;
     root["wires"] = wires;
+    // A SCREEN'S OWN PART: only when one is given.
+    if (!def.shieldParts.isEmpty() || !def.shieldPns.isEmpty()) {
+        QJsonObject parts, pns;
+        for (auto it = def.shieldParts.cbegin(); it != def.shieldParts.cend(); ++it) parts[it.key()] = it.value();
+        for (auto it = def.shieldPns.cbegin(); it != def.shieldPns.cend(); ++it) pns[it.key()] = it.value();
+        if (!parts.isEmpty()) root["shieldParts"] = parts;
+        if (!pns.isEmpty()) root["shieldPns"] = pns;
+    }
     root["layout"] = lay;
     return root;
 }
@@ -1352,6 +1389,9 @@ HarnessDef harnessDefFromJson(const QJsonObject& root) {
         for (const auto& p : o.value("pinOrder").toArray()) c.pinOrder.push_back(p.toInt());
         if (!c.id.isEmpty()) loaded.connectors.push_back(c);
     }
+    const QJsonObject shieldParts = root.value("shieldParts").toObject(), shieldPns = root.value("shieldPns").toObject();
+    for (auto it = shieldParts.constBegin(); it != shieldParts.constEnd(); ++it) loaded.shieldParts.insert(it.key(), it.value().toString());
+    for (auto it = shieldPns.constBegin(); it != shieldPns.constEnd(); ++it) loaded.shieldPns.insert(it.key(), it.value().toString());
     for (const auto& v : root.value("wires").toArray()) {
         const QJsonObject o = v.toObject();
         HarnessWire w;
@@ -1907,6 +1947,9 @@ HarnessBuild buildHarness(const HarnessDef& input) {
         // as a note or a boundary rather than as the braid itself.
         e.meta.insert("lineType", QStringLiteral("solid"));
         e.meta.insert(overall ? "overallShield" : "shieldGroup", key);
+        // ITS OWN PART, where the screen has one: what the bill orders it by.
+        if (!overall && !def.shieldParts.value(key).isEmpty()) e.meta.insert("libPart", def.shieldParts.value(key));
+        if (!overall && !def.shieldPns.value(key).isEmpty()) e.meta.insert("partNumber", def.shieldPns.value(key));
         out.entities.push_back(std::move(e));
         return true;
     };
@@ -2055,6 +2098,65 @@ HarnessBuild buildHarness(const HarnessDef& input) {
                 out.entities.push_back(std::move(m));
             }
         }
+    }
+
+    // ---- Wires joined to another wire's RUN ----
+    // A wire from a pin to a JOINT partway along another wire: out of its pin, along to over the middle of that wire's
+    // longest level stretch, and square into it - an end on another wire's run, which the splice pass gives its dot.
+    for (const auto& w : def.wires) {
+        const bool fromJoint = harnessIsJointEndpoint(w.fromConn), toJoint = harnessIsJointEndpoint(w.toConn);
+        if (fromJoint == toJoint) continue;
+        const QString target = harnessJointEndpointWire(fromJoint ? w.fromConn : w.toConn);
+        const Placed* p = placedById(placed, fromJoint ? w.toConn : w.fromConn);
+        const int pin = fromJoint ? w.toPin : w.fromPin;
+        Vec2 pinPt;
+        if (!p || !pinEndOf(*p, pin, pinPt)) continue;
+        std::vector<Vec2> run;
+        for (const Routed& r : routed)
+            if (r.wireId == target) run = out.entities[r.entityIndex].points;
+        if (run.size() < 2) continue;
+        size_t best = 0;
+        double bestLen = -1.0;
+        for (size_t k = 1; k < run.size(); ++k) {
+            if (std::abs(run[k - 1].y - run[k].y) > 1e-6) continue;
+            const double len = std::abs(run[k].x - run[k - 1].x);
+            if (len > bestLen) {
+                bestLen = len;
+                best = k;
+            }
+        }
+        if (bestLen <= 1e-6) continue;   // nothing level on it to join
+        const Vec2 at{(run[best - 1].x + run[best].x) / 2.0, run[best].y};
+        const double inward = (p->conn->side == HarnessSide::Left) ? 1.0 : -1.0;
+        Entity e;
+        e.type = EntityType::Wire;
+        e.layer = QStringLiteral("Wires");
+        if (std::abs(pinPt.y - at.y) > 1e-6) {
+            e.points = {pinPt, {at.x, pinPt.y}, at};
+        } else {
+            // On the same row as the stretch it joins: off it a pitch, along, and back square into it.
+            const double off = at.y + p->spec.pitch;
+            const double out1 = pinPt.x + inward * std::max(10.0, p->spec.pitch);
+            e.points = {pinPt, {out1, pinPt.y}, {out1, off}, {at.x, off}, at};
+        }
+        e.meta.insert("wireColor", w.color);
+        e.meta.insert("wireGauge", w.gauge);
+        e.meta.insert("jointTo", target);
+        if (!w.libPart.isEmpty()) e.meta.insert("libPart", w.libPart);
+        if (!w.label.isEmpty()) e.meta.insert("wireLabel", w.label);
+        e.meta.insert("showWireLabel", w.showLabel);
+        e.meta.insert("showColorName", w.showColor);
+        e.meta.insert("showGaugeName", w.showGauge);
+        if (w.showColor || w.showGauge) e.meta.insert("annCount", 1);
+        if (L.textGap > 0.0) e.meta.insert("textGap", L.textGap);
+        for (const QString& part : wireAnnotParts())
+            setWireAnnotGapFor(e, part, L.textGap + wireAnnotDefaultGap(part));
+        if (L.wireColorMode == QLatin1String("bylayer"))
+            e.meta.insert("wireColorMode", QStringLiteral("bylayer"));
+        else
+            e.color = wireColorHex(w.color);
+        out.entities.push_back(std::move(e));
+        routed.push_back({w.id, out.entities.size() - 1});
     }
 
     // ---- Overall shields: one per connector that asks for one ----
@@ -2519,6 +2621,9 @@ HarnessBuild buildHarness(const HarnessDef& input) {
         e.meta.insert("drainWire", true);
         // A CONNECTOR'S OWN DRAIN TAKEN DIRECT to the pin: the screen's drain itself, no hook-up wire spliced on.
         if (harnessIsDrainRow(w) && wantC && wantC->drainVia != QLatin1String("wire")) e.meta.insert("drainDirect", true);
+        // AN INTERNAL SCREEN'S OWN DRAIN, asked for at its screen end: the screen's drain itself, no hook-up wire spliced.
+        if (!overall && (fromShield ? w.fromTermination : w.toTermination).via == QLatin1String("direct"))
+            e.meta.insert("drainDirect", true);
         if (!w.libPart.isEmpty()) e.meta.insert("libPart", w.libPart);
         if (!w.label.isEmpty()) e.meta.insert("wireLabel", w.label);
         e.meta.insert("showWireLabel", w.showLabel);
@@ -2547,6 +2652,57 @@ HarnessBuild buildHarness(const HarnessDef& input) {
                                    : sc.meta.value("shieldGroup").toString() == group;
             if (match && distance(sc.points.back(), leg) < 1e-6)
                 sc.meta.insert("notConnected", false);
+        }
+    }
+
+    // ---- Screen to screen: one screen's drain brought to another's leg ----
+    // An internal screen drained onto its connector's overall screen, or onto another screen: from the one leg to the other,
+    // level and then square across, the way every run goes.
+    {
+        auto legOf = [&](const QString& key, Vec2& leg) {
+            const QString group = harnessShieldEndpointGroup(key);
+            QString wantConn;
+            HarnessSide wantSide = HarnessSide::Left;
+            const bool overall = harnessShieldEndpointConn(key, wantConn, wantSide);
+            const HarnessConnector* wantC = overall ? harnessConnById(def, wantConn) : nullptr;
+            const QString overallName = wantC ? (wantC->designator.isEmpty() ? wantC->id : wantC->designator) : QString();
+            bool have = false;
+            for (const Entity& sc : out.entities) {
+                if (sc.type != EntityType::Screen || sc.points.empty()) continue;
+                const bool match = overall ? sc.meta.value("overallShield").toString() == overallName
+                                           : sc.meta.value("shieldGroup").toString() == group;
+                const int k = std::min(sc.meta.value("catch").toInt(static_cast<int>(sc.points.size())),
+                                       static_cast<int>(sc.points.size()));
+                if (!match || static_cast<int>(sc.points.size()) <= k) continue;
+                leg = sc.points.back();
+                have = true;
+                break;
+            }
+            return have;
+        };
+        for (const auto& w : def.wires) {
+            if (!harnessIsShieldEndpoint(w.fromConn) || !harnessIsShieldEndpoint(w.toConn)) continue;
+            Vec2 a, b;
+            if (!legOf(w.fromConn, a) || !legOf(w.toConn, b)) continue;
+            Entity e;
+            e.type = EntityType::Wire;
+            e.layer = QStringLiteral("Wires");
+            const double midY = std::abs(a.y - b.y) < 1e-6 ? a.y + std::max(10.0, L.shieldLegLength) : (a.y + b.y) / 2.0;
+            e.points = {a, {a.x, midY}, {b.x, midY}, b};
+            e.meta.insert("wireColor", w.color);
+            e.meta.insert("wireGauge", w.gauge);
+            e.meta.insert("drainWire", true);
+            e.meta.insert("shieldLeg", w.fromConn);
+            if (!w.libPart.isEmpty()) e.meta.insert("libPart", w.libPart);
+            if (L.wireColorMode == QLatin1String("bylayer"))
+                e.meta.insert("wireColorMode", QStringLiteral("bylayer"));
+            else
+                e.color = wireColorHex(w.color);
+            out.entities.push_back(std::move(e));
+            for (Entity& sc : out.entities)
+                if (sc.type == EntityType::Screen && !sc.points.empty() &&
+                    (distance(sc.points.back(), a) < 1e-6 || distance(sc.points.back(), b) < 1e-6))
+                    sc.meta.insert("notConnected", false);
         }
     }
 
@@ -2666,8 +2822,12 @@ HarnessBuild buildHarness(const HarnessDef& input) {
     }
 
     // ---- Unconnected pins ----
+    // TERMINATED ON THE PIN ITSELF: the X where the pin leaves the body, and no stub out from it - nothing is wired there
+    // for a stub to lead to. The connector is told which of its rows have none (stublessRows), and draws them so.
     if (L.terminateUnconnected) {
-        for (const Placed& p : placed) {
+        for (size_t pi = 0; pi < placed.size(); ++pi) {
+            const Placed& p = placed[pi];
+            QJsonArray stubless;
             for (int row = 0; row < static_cast<int>(p.geom.pinEnd.size()); ++row) {
                 const int pin = (row < static_cast<int>(p.pinSeq.size())) ? p.pinSeq[row] : row + 1;
                 bool wired = false;
@@ -2678,10 +2838,14 @@ HarnessBuild buildHarness(const HarnessDef& input) {
                 Entity e;
                 e.type = EntityType::NotConnected;
                 e.layer = QStringLiteral("Wires");
-                e.a = p.geom.pinEnd[row];
+                e.a = row < static_cast<int>(p.geom.pinTip.size()) ? p.geom.pinTip[row] : p.geom.pinEnd[row];
                 e.meta.insert("ncSize", std::max(2.0, p.spec.pitch * 0.3));
                 out.entities.push_back(std::move(e));
+                stubless.append(row);
             }
+            // The connectors were the first entities made, one for each placed connector, in this order.
+            if (!stubless.isEmpty() && pi < out.entities.size() && out.entities[pi].type == EntityType::Connector)
+                out.entities[pi].meta.insert("stublessRows", stubless);
         }
     }
 

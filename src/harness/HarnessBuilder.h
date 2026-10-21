@@ -3,6 +3,7 @@
 #include "harness/Harness.h"
 #include "model/Entity.h"
 
+#include <QHash>
 #include <QJsonObject>
 #include <QString>
 #include <QStringList>
@@ -195,6 +196,9 @@ struct HarnessDef {
     std::vector<HarnessConnector> connectors;
     std::vector<HarnessWire> wires;
     HarnessLayout layout;
+    // A SCREEN'S OWN PART, by its group name: a library part (its id), or a P/N typed. Written only when there is one.
+    QHash<QString, QString> shieldParts;
+    QHash<QString, QString> shieldPns;
 };
 
 // THE DEFINITION AS A FILE HAS IT, and back: every field of every connector, wire and the layout - what a builder
@@ -257,6 +261,10 @@ int harnessCoaxIndex(const HarnessDef& def, const HarnessWire& wire);
 // and one has to be drawable without inventing a connector for it.
 QString harnessOpenEndpointKey();
 bool harnessIsOpenEndpoint(const QString& key);
+// A JOINT ON ANOTHER WIRE'S RUN: a wire end spliced partway along that wire (a T), named by the wire it joins. Its pin is 0.
+QString harnessJointEndpointKey(const QString& wireId);
+bool harnessIsJointEndpoint(const QString& key);
+QString harnessJointEndpointWire(const QString& key);
 
 // Whether an END of a wire lands on nothing. Either it names no connector (#OPEN), or it names one but
 // has no pin: pin 0 is "not landed", which is what a row shows while it is being filled in and what a

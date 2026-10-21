@@ -10,6 +10,7 @@
 #include <QJsonArray>
 #include <QLinearGradient>
 #include <QPainter>
+#include <QSet>
 #include <QPainterPath>
 #include <QPixmap>
 #include <QImage>
@@ -2803,12 +2804,15 @@ void EntityRenderer::draw(QPainter& p, const Entity& e, const Document& doc,
         const double cupScale = e.meta.value(QStringLiteral("cupScale")).toDouble(1.0);
         const double fork = 8.0 * cupScale;   // cup depth  (world units)
         const double forkY = 5.4 * cupScale;  // cup half-height (world units)
+        // A PIN NOTHING IS WIRED TO, terminated on the pin (stublessRows): its cup, and no stub out from it.
+        QSet<int> stubless;
+        for (const QJsonValue v : e.meta.value(QStringLiteral("stublessRows")).toArray()) stubless.insert(v.toInt());
         for (int i = 0; i < spec.pinCount; ++i) {
             const Vec2 tip = g.pinTip[i];
             const Vec2 root{tip.x - xDir * fork, tip.y};
             p.drawLine(vt.toScreen({root.x, tip.y + forkY}), vt.toScreen(tip));
             p.drawLine(vt.toScreen({root.x, tip.y - forkY}), vt.toScreen(tip));
-            p.drawLine(vt.toScreen(tip), vt.toScreen(g.pinEnd[i]));
+            if (!stubless.contains(i)) p.drawLine(vt.toScreen(tip), vt.toScreen(g.pinEnd[i]));
         }
         // Pin labels (own font/size).
         const QFont baseFont = p.font();

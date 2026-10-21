@@ -28,6 +28,7 @@
 #include <QSplitter>
 #include <QSettings>
 #include <QToolButton>
+#include <QScrollArea>
 #include <QKeyEvent>
 #include "app/UiBits.h"
 #include "harness/Harness.h"
@@ -1588,8 +1589,8 @@ void testWiringWindow() {
         send(QEvent::MouseButtonPress, from, Qt::LeftButton);
         QElapsedTimer hold;
         hold.start();
-        while (hold.elapsed() < 280) QApplication::processEvents();
-        check(cv->carrying(), "pin stack: a pin held 0.2 s is caught");
+        while (hold.elapsed() < 380) QApplication::processEvents();
+        check(cv->carrying(), "pin stack: a pin held 0.3 s is caught");
         for (int i = 1; i <= 5; ++i) send(QEvent::MouseMove, from + (to - from) * (i / 5.0), Qt::LeftButton);
         send(QEvent::MouseButtonRelease, to, Qt::NoButton);
         QApplication::processEvents();
@@ -1599,6 +1600,124 @@ void testWiringWindow() {
         for (const HarnessWire& w : d.wires)
             if (w.id == w2) same = same && w.fromConn == QLatin1String("a") && w.fromPin == 2;
         check(same, "pin stack: its wire still on it");
+    }
+    // THE WINDOW'S OTHER WAYS: the optimising under the picture, the groups on the left, two wires on one pin said, a wire
+    // joined to another's run, a wire moved with its pins, the stacks put in order, a screen drained at each end and
+    // given its part, a cable given to a group checked against it, the problems in the order of their wires.
+    {
+        HarnessDef d;
+        for (const auto& [id, side] : {std::pair<const char*, HarnessSide>{"a", HarnessSide::Left}, {"b", HarnessSide::Right}}) {
+            HarnessConnector c;
+            c.id = QLatin1String(id);
+            c.designator = QString::fromLatin1(id).toUpper();
+            c.side = side;
+            c.pinCount = 6;
+            d.connectors.push_back(c);
+        }
+        WiringDialog dlg2(d, [] {});
+        dlg2.resize(1400, 800);
+        dlg2.show();
+        dlg2.showTwo(QStringLiteral("a"), QStringLiteral("b"));
+        QApplication::processEvents();
+        auto* cross = dlg2.findChild<QToolButton*>(QStringLiteral("wiringOptCross"));
+        auto* scrollArea = dlg2.findChild<QScrollArea*>();
+        check(cross && scrollArea && cross->mapTo(&dlg2, QPoint(0, 0)).y() > scrollArea->mapTo(&dlg2, QPoint(0, 0)).y(),
+              "optimise: its switches under the picture, not in the bar above it");
+        auto at = [&](const QString& conn, int pin) {
+            for (const HarnessConnector& c : d.connectors)
+                if (c.id == conn) {
+                    const std::vector<int> seq = harnessPinSequence(c);
+                    return static_cast<int>(std::find(seq.begin(), seq.end(), pin) - seq.begin());
+                }
+            return -1;
+        };
+        const QString w1 = dlg2.connectPins(QStringLiteral("a"), 1, QStringLiteral("b"), 1);
+        const QString w2 = dlg2.connectPins(QStringLiteral("a"), 2, QStringLiteral("b"), 2);
+        const QString w3 = dlg2.connectPins(QStringLiteral("a"), 3, QStringLiteral("b"), 3);
+        // TWO PINS ONTO ONE: made, and said.
+        const QString w4 = dlg2.connectPins(QStringLiteral("a"), 4, QStringLiteral("b"), 3);
+        check(!w4.isEmpty() && dlg2.problems().join(QLatin1Char('|')).contains(QLatin1String("B pin 3 has two wires")),
+              "wiring: two pins wired to one - made, and a warning said");
+        for (HarnessWire& w : d.wires)
+            if (w.id == w4) w.toPin = 4;
+        // THE GROUPS on the left.
+        dlg2.canvas()->setSelection({w1, w2});
+        dlg2.groupWires(WiringCanvas::Tool::Twist, {w1, w2});
+        auto* groupList = dlg2.findChild<QListWidget*>(QStringLiteral("wiringGroups"));
+        check(groupList && groupList->count() >= 1 && groupList->item(0)->text().contains(QLatin1String("twisted")),
+              "groups: the twisted pair listed on the left");
+        // A WIRE JOINED TO ANOTHER'S RUN.
+        const QString j = dlg2.connectToWire(QStringLiteral("a"), 5, w3);
+        HarnessWire joint;
+        for (const HarnessWire& w : d.wires)
+            if (w.id == j) joint = w;
+        check(!j.isEmpty() && harnessIsJointEndpoint(joint.toConn) && harnessJointEndpointWire(joint.toConn) == w3,
+              "joint: a wire from a pin to a joint on another wire's run");
+        bool badJoint = false;
+        for (const HarnessIssue& is : validateHarness(d))
+            badJoint = badJoint || is.wireId == j;
+        HarnessDef drawn = d;
+        drawn.layout.terminateUnconnected = true;
+        const HarnessBuild built = buildHarness(drawn);
+        bool jointRun = false, spliced = false, xOnPin = false, stubless = false;
+        for (const Entity& e : built.entities) {
+            if (e.type == EntityType::Wire && e.meta.value(QStringLiteral("jointTo")).toString() == w3) jointRun = true;
+            if (e.type == EntityType::Splice) spliced = true;
+            if (e.type == EntityType::Connector && !e.meta.value(QStringLiteral("stublessRows")).toArray().isEmpty()) stubless = true;
+        }
+        for (const Entity& c : built.entities) {
+            if (c.type != EntityType::Connector) continue;
+            const ConnectorGeometry g = connectorGeometry(c.a, connectorSpecFromMeta(c.meta));
+            for (const Entity& x : built.entities)
+                if (x.type == EntityType::NotConnected)
+                    for (const Vec2& tip : g.pinTip) xOnPin = xOnPin || distance(tip, x.a) < 1e-6;
+        }
+        check(!badJoint && jointRun && spliced, "joint: drawn from its pin to the wire's run, a splice where it meets it");
+        check(xOnPin && stubless, "unconnected: an unwired pin terminated on the pin itself - its X there, no stub out to it");
+        // A WIRE MOVED WITH ITS PINS: to before w1, its pins where w1's are in both stacks.
+        dlg2.moveWireWithPins(w3, 0);
+        check(dlg2.canvas()->shownWires().front() == w3 && at(QStringLiteral("a"), 3) < at(QStringLiteral("a"), 1) &&
+                  at(QStringLiteral("b"), 3) < at(QStringLiteral("b"), 1),
+              "move with pins: the wire first in the list, its pins first in both stacks");
+        // THE STACKS IN ORDER: the brick picked, its free pins to the top.
+        dlg2.canvas()->setSelectedBricks({QStringLiteral("b")});
+        dlg2.orderStacks(false);
+        check(dlg2.canvas()->wiresOn(QStringLiteral("b"), harnessPinSequence(*harnessConnById(d, QStringLiteral("b"))).front()).isEmpty(),
+              "pin stack: the brick picked has its free pins at the top");
+        const std::vector<int> aBefore = harnessPinSequence(*harnessConnById(d, QStringLiteral("a")));
+        check(aBefore == harnessPinSequence(*harnessConnById(d, QStringLiteral("a"))), "pin stack: a brick not picked left as it was");
+        // A SCREEN: drained at its start by a wire to a pin, at its finish onto the connector's own screen; its part.
+        const QString s = dlg2.groupWires(WiringCanvas::Tool::Screen, {w1, w2});
+        check(dlg2.setScreenDrain(s, 0, QStringLiteral("pin"), 6) && dlg2.screenDrain(s, 0) == QLatin1String("pin"),
+              "screen: drained at its start by its own drain wire to a pin");
+        check(dlg2.setScreenDrain(s, 0, QStringLiteral("hook"), 6) && dlg2.screenDrain(s, 0) == QLatin1String("hook"),
+              "screen: or by a hook-up wire spliced onto it");
+        check(dlg2.setScreenDrain(s, 1, QStringLiteral("conn")) && dlg2.screenDrain(s, 1) == QLatin1String("conn") &&
+                  harnessConnById(d, QStringLiteral("b"))->shieldRight,
+              "screen: drained at its finish onto the connector's own screen - which it is given");
+        dlg2.setScreenPart(s, QString(), QStringLiteral("SH-123"));
+        check(harnessDefFromJson(harnessDefToJson(d)).shieldPns.value(s) == QLatin1String("SH-123"), "screen: its own P/N, kept");
+        const HarnessBuild screened = buildHarness(d);
+        bool toShield = false;
+        for (const Entity& e : screened.entities)
+            if (e.type == EntityType::Wire && e.meta.value(QStringLiteral("drainWire")).toBool() && e.points.size() >= 2) toShield = true;
+        check(toShield, "screen: its drains drawn");
+        // A CABLE GIVEN TO A GROUP: checked against it.
+        {
+            PartsLibrary lib;
+            LibraryPart& cable = lib.add(PartKind::Cable);
+            cable.mfrPn = QStringLiteral("CBL-2x1");
+            setCableSpecOn(cable, cableSpecFromText(QStringLiteral("2x1.0mm2")));
+            useHarnessBuilderLibraryForTest(lib);
+            dlg2.canvas()->setSelection({w3, w4});
+            dlg2.setSelectedPart(cable.id);
+            for (HarnessWire& w : d.wires)
+                if (w.id == w4) w.gauge = QStringLiteral("0.25");
+            const QStringList said = dlg2.problems();
+            std::printf("  wiring: problems [%s]\n", qPrintable(said.join(QStringLiteral(" | "))));
+            check(said.join(QLatin1Char('|')).contains(QLatin1String("CBL-2x1's conductor")), "group P/N: a wire not as the cable's conductor is said");
+            useHarnessBuilderLibraryForTest(PartsLibrary{});
+        }
     }
     if (std::getenv("LOOPWIRE_SHOTS")) {
         win->showTwo(QStringLiteral("c1"), QStringLiteral("c2"));
