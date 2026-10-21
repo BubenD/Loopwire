@@ -27,11 +27,13 @@
 #include <QSignalBlocker>
 #include <QSplitter>
 #include <QStackedWidget>
+#include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
 
 #include <algorithm>
 #include <cmath>
+#include <tuple>
 
 namespace Loopwire {
 
@@ -74,6 +76,17 @@ WiringCanvas::WiringCanvas(HarnessDef& def, QWidget* parent) : QWidget(parent), 
     setObjectName(QStringLiteral("wiringCanvas"));
     setMouseTracking(true);
     setFocusPolicy(Qt::StrongFocus);
+    // HELD STILL ON A PIN 0.2 S: the pin caught, to be put elsewhere in its connector's pin stack.
+    holdTimer_ = new QTimer(this);
+    holdTimer_->setSingleShot(true);
+    holdTimer_->setInterval(200);
+    connect(holdTimer_, &QTimer::timeout, this, [this] {
+        if (!pressing_ || moved_ || pressPin_.isEmpty()) return;
+        carrying_ = true;
+        setCursor(Qt::ClosedHandCursor);
+        emit said(QStringLiteral("Pin caught - let it go on the pin whose place it takes in the pin stack"));
+        update();
+    });
 }
 
 void WiringCanvas::setShown(const QStringList& connIds, bool twoMode) {
@@ -459,7 +472,23 @@ void WiringCanvas::paintEvent(QPaintEvent*) {
             p.drawText(QRectF((a + b) / 2.0 - QPointF(100, 20), QSizeF(200, 16)), Qt::AlignCenter, QStringLiteral("Enter: wire it"));
         }
     }
-    if (pressing_ && moved_) {
+    if (pressing_ && carrying_) {
+        // THE PIN CAUGHT, carried under the pointer; the pin whose place it would take ringed.
+        QString conn, overConn;
+        int pin = 0, overPin = 0;
+        splitPinKey(pressPin_, conn, pin);
+        if (splitPinKey(pinAt(now_), overConn, overPin) && overConn == conn && overPin != pin) {
+            p.setPen(QPen(QColor(255, 209, 102), 2.0));
+            p.setBrush(Qt::NoBrush);
+            p.drawEllipse(pinCentre(conn, overPin), kCell * 0.6, kCell * 0.6);
+        }
+        p.setPen(QPen(QColor(255, 209, 102), 1.5));
+        p.setBrush(QColor(255, 209, 102, 120));
+        p.drawRect(QRectF(now_ - QPointF(kCell * 0.4, kCell * 0.4), QSizeF(kCell * 0.8, kCell * 0.8)));
+        p.setPen(QColor(20, 24, 30));
+        p.drawText(QRectF(now_ - QPointF(kCell * 0.4, kCell * 0.4), QSizeF(kCell * 0.8, kCell * 0.8)), Qt::AlignCenter,
+                   QString::number(pin));
+    } else if (pressing_ && moved_) {
         if (!pressPin_.isEmpty()) {
             QString conn;
             int pin = 0;
@@ -494,6 +523,8 @@ void WiringCanvas::mousePressEvent(QMouseEvent* e) {
     pressAt_ = now_ = e->position();
     pressPin_ = tool_ == Tool::Connect || tool_ == Tool::Select ? pinAt(pressAt_) : QString();
     pressBar_ = pressPin_.isEmpty() && (tool_ == Tool::Connect || tool_ == Tool::Select) ? barAt(pressAt_) : QString();
+    carrying_ = false;
+    if (!pressPin_.isEmpty()) holdTimer_->start();
     update();
 }
 
@@ -514,6 +545,7 @@ void WiringCanvas::mouseMoveEvent(QMouseEvent* e) {
     }
     now_ = e->position();
     if ((now_ - pressAt_).manhattanLength() > 4) moved_ = true;
+    if (moved_ && !carrying_) holdTimer_->stop();   // pulled away before it was caught: a wire, as ever
     update();
 }
 
@@ -521,6 +553,22 @@ void WiringCanvas::mouseReleaseEvent(QMouseEvent* e) {
     if (!pressing_ || e->button() != Qt::LeftButton) return;
     pressing_ = false;
     now_ = e->position();
+    holdTimer_->stop();
+    // A CAUGHT PIN LET GO: on another pin of its connector, it takes that one's place in the pin stack.
+    if (carrying_) {
+        carrying_ = false;
+        unsetCursor();
+        QString from, to;
+        int fromPin = 0, toPin = 0;
+        if (splitPinKey(pressPin_, from, fromPin) && splitPinKey(pinAt(now_), to, toPin) && from == to && fromPin != toPin)
+            emit pinStackMoveAsked(from, fromPin, toPin);
+        else
+            emit said(QStringLiteral("Let go on another pin of the same connector to move it there in the pin stack"));
+        pressPin_.clear();
+        pressBar_.clear();
+        update();
+        return;
+    }
     const QString releasePin = pinAt(now_);
     QString pc, rc;
     int pp = 0, rp = 0;
@@ -690,6 +738,32 @@ WiringDialog::WiringDialog(HarnessDef& def, std::function<void()> changed, QWidg
                const QString chosen = QInputDialog::getItem(this, QStringLiteral("Place cable"), QStringLiteral("Cable:"), titles, 0, false, &ok);
                if (ok) placeCable(ids.value(titles.indexOf(chosen)));
            });
+    // ---- OPTIMISED PIN STACKS: round switches for what to optimise for, and Apply. While any is on, every new connection
+    // is optimised as it is made.
+    bar->addSpacing(16);
+    bar->addWidget(new QLabel(QStringLiteral("Optimise:"), this));
+    auto roundSwitch = [&](const QString& text, const char* name, const QString& tip) {
+        auto* b = new QToolButton(this);
+        b->setObjectName(QLatin1String(name));
+        b->setText(text);
+        b->setToolTip(tip + QStringLiteral(" - while it is on, every new connection is optimised as it is made"));
+        b->setCheckable(true);
+        b->setStyleSheet(QStringLiteral("QToolButton{border:1px solid #6b7785;border-radius:11px;padding:2px 10px;}"
+                                        "QToolButton:checked{background:#2f855a;color:white;border-color:#2f855a;}"));
+        bar->addWidget(b);
+        return b;
+    };
+    optCross_ = roundSwitch(QStringLiteral("Avoid crossing"), "wiringOptCross",
+                            QStringLiteral("The second connector's pins put in the order of the first's - and the lines with them - "
+                                           "so no line crosses another"));
+    optShield_ = roundSwitch(QStringLiteral("By shield"), "wiringOptShield",
+                             QStringLiteral("The wires screened together on pins side by side"));
+    optTwist_ = roundSwitch(QStringLiteral("By twist"), "wiringOptTwist",
+                            QStringLiteral("The wires twisted together on pins side by side"));
+    button(QStringLiteral("Apply"), "wiringOptApply",
+           QStringLiteral("Optimise the pin stacks now, as the switches say - only the order the pins are drawn in changes; "
+                          "every wire stays on its pins"),
+           [this] { optimizePinStack(); });
     bar->addSpacing(16);
     button(QStringLiteral("Undo"), "wiringUndo", QStringLiteral("Take back the last change (the wizard's own undo)"), [this] {
         if (undo_) undo_();
@@ -828,6 +902,8 @@ WiringDialog::WiringDialog(HarnessDef& def, std::function<void()> changed, QWidg
     // ---- THE CANVAS INTO THE HARNESS ----
     connect(canvas_, &WiringCanvas::connectAsked, this, [this](const QString& fc, int fp, const QString& tc, int tp) { connectPins(fc, fp, tc, tp); });
     connect(canvas_, &WiringCanvas::relandAsked, this, [this](const QString& id, int end, const QString& conn, int pin) { relandEnd(id, end, conn, pin); });
+    connect(canvas_, &WiringCanvas::pinStackMoveAsked, this,
+            [this](const QString& conn, int pin, int toPin) { movePinInStack(conn, pin, toPin); });
     connect(canvas_, &WiringCanvas::moveAsked, this, [this](const QString& id, int at) { moveWire(id, at); });
     connect(canvas_, &WiringCanvas::strokeMade, this, [this](WiringCanvas::Tool tool, const QStringList& ids) {
         groupWires(tool, ids, tool == WiringCanvas::Tool::Screen && askDrain_ && ids.size() > 0 ? askDrain_() : QString());
@@ -984,6 +1060,8 @@ QString WiringDialog::connectPins(const QString& fromConn, int fromPin, const QS
         }
     }
     def_.wires.push_back(w);
+    // OPTIMISED AS IT IS MADE, while any of the round switches is on.
+    if (optimizeOn()) optimizePinStack(false);
     canvas_->setGhost(fromConn, nextFreePinAfter(fromConn, fromPin), toConn, nextFreePinAfter(toConn, toPin));
     {
         const QSignalBlocker hold(canvas_);
@@ -1065,6 +1143,155 @@ int WiringDialog::autoOneToOne() {
     return made;
 }
 
+void WiringDialog::setOptimize(bool avoidCrossing, bool byShield, bool byTwist) {
+    optCross_->setChecked(avoidCrossing);
+    optShield_->setChecked(byShield);
+    optTwist_->setChecked(byTwist);
+}
+
+bool WiringDialog::optimizeOn() const {
+    return (optCross_ && optCross_->isChecked()) || (optShield_ && optShield_->isChecked()) ||
+           (optTwist_ && optTwist_->isChecked());
+}
+
+int WiringDialog::optimizePinStack(bool tell) {
+    const bool cross = optCross_ && optCross_->isChecked();
+    const bool byShield = optShield_ && optShield_->isChecked();
+    const bool byTwist = optTwist_ && optTwist_->isChecked();
+    if (!cross && !byShield && !byTwist) {
+        if (tell) said_->setText(QStringLiteral("Switch on Avoid crossing, By shield or By twist first"));
+        return 0;
+    }
+    auto connOf = [this](const QString& id) -> HarnessConnector* {
+        for (HarnessConnector& c : def_.connectors)
+            if (c.id == id) return &c;
+        return nullptr;
+    };
+    auto positions = [](const std::vector<int>& order) {
+        QHash<int, double> pos;
+        for (size_t i = 0; i < order.size(); ++i) pos.insert(order[i], static_cast<double>(i));
+        return pos;
+    };
+    using Key = std::tuple<double, double, double>;
+    // THESE PINS PUT IN ORDER OF THEIR KEYS among the places they hold now; every other pin stays where it is.
+    auto reorder = [](std::vector<int>& order, const QHash<int, Key>& key) {
+        std::vector<size_t> places;
+        std::vector<int> pins;
+        for (size_t i = 0; i < order.size(); ++i)
+            if (key.contains(order[i])) {
+                places.push_back(i);
+                pins.push_back(order[i]);
+            }
+        std::stable_sort(pins.begin(), pins.end(), [&key](int x, int y) { return key.value(x) < key.value(y); });
+        bool moved = false;
+        for (size_t k = 0; k < places.size(); ++k) {
+            moved = moved || order[places[k]] != pins[k];
+            order[places[k]] = pins[k];
+        }
+        return moved;
+    };
+    const QStringList shown = canvas_->shown();
+    int reordered = 0;
+    bool listMoved = false;
+    for (int i = 0; i < shown.size(); ++i)
+        for (int j = i + 1; j < shown.size(); ++j) {
+            HarnessConnector* ca = connOf(shown[i]);
+            HarnessConnector* cb = connOf(shown[j]);
+            if (!ca || !cb) continue;
+            struct Link {
+                size_t wire;
+                int a, b;
+            };
+            std::vector<Link> links;
+            for (size_t k = 0; k < def_.wires.size(); ++k) {
+                const HarnessWire& w = def_.wires[k];
+                if (w.fromConn == ca->id && w.toConn == cb->id) links.push_back({k, w.fromPin, w.toPin});
+                else if (w.fromConn == cb->id && w.toConn == ca->id) links.push_back({k, w.toPin, w.fromPin});
+            }
+            if (links.empty()) continue;
+            // EACH WIRE'S PLACE, its screen's and its pair's: a group goes where the first of it is, its wires together.
+            auto keysOf = [&](bool sideA, const std::function<double(const Link&)>& base) {
+                QHash<QString, double> shieldAt, twistAt;
+                for (const Link& l : links) {
+                    const HarnessWire& w = def_.wires[l.wire];
+                    const double b = base(l);
+                    if (!w.shieldGroup.isEmpty()) shieldAt[w.shieldGroup] = shieldAt.contains(w.shieldGroup) ? std::min(shieldAt[w.shieldGroup], b) : b;
+                    if (!w.twistGroup.isEmpty()) twistAt[w.twistGroup] = twistAt.contains(w.twistGroup) ? std::min(twistAt[w.twistGroup], b) : b;
+                }
+                QHash<int, Key> key;
+                for (const Link& l : links) {
+                    const HarnessWire& w = def_.wires[l.wire];
+                    const double b = base(l);
+                    // Not screened (or not asked): by its pair; not twisted either: by its own place.
+                    const double t = byTwist && !w.twistGroup.isEmpty() ? twistAt.value(w.twistGroup) : b;
+                    const Key k{byShield && !w.shieldGroup.isEmpty() ? shieldAt.value(w.shieldGroup) : t, t, b};
+                    const int pin = sideA ? l.a : l.b;
+                    if (!key.contains(pin) || k < key.value(pin)) key.insert(pin, k);
+                }
+                return key;
+            };
+            // THE FIRST CONNECTOR: its screened and twisted wires brought onto pins side by side.
+            std::vector<int> orderA = harnessPinSequence(*ca);
+            QHash<int, double> posA = positions(orderA);
+            if ((byShield || byTwist) && reorder(orderA, keysOf(true, [&](const Link& l) { return posA.value(l.a); }))) {
+                ca->pinOrder = orderA;
+                posA = positions(orderA);
+                ++reordered;
+            }
+            // THE SECOND: in the first's order (no line crossing another), grouped the same way.
+            std::vector<int> orderB = harnessPinSequence(*cb);
+            const QHash<int, double> posB0 = positions(orderB);
+            const auto baseB = [&](const Link& l) {
+                return cross ? posA.value(l.a) + posB0.value(l.b) * 1e-4 : posB0.value(l.b);
+            };
+            if (reorder(orderB, keysOf(false, baseB))) {
+                cb->pinOrder = orderB;
+                ++reordered;
+            }
+            // THE LINES' BARS in the same order, among the places they hold in the list.
+            if (cross) {
+                const QHash<int, double> posB = positions(orderB);
+                std::vector<size_t> places;
+                for (const Link& l : links) places.push_back(l.wire);
+                std::sort(places.begin(), places.end());
+                std::vector<Link> sorted = links;
+                std::stable_sort(sorted.begin(), sorted.end(), [&](const Link& x, const Link& y) {
+                    return std::make_pair(posA.value(x.a), posB.value(x.b)) < std::make_pair(posA.value(y.a), posB.value(y.b));
+                });
+                std::vector<HarnessWire> moved;
+                for (const Link& l : sorted) moved.push_back(def_.wires[l.wire]);
+                for (size_t k = 0; k < places.size(); ++k) {
+                    listMoved = listMoved || def_.wires[places[k]].id != moved[k].id;
+                    def_.wires[places[k]] = moved[k];
+                }
+            }
+        }
+    if (tell) {
+        said_->setText(reordered > 0 || listMoved ? QStringLiteral("Pin stacks optimised - %1 connector(s) reordered").arg(reordered)
+                                                  : QStringLiteral("The pin stacks are already as the switches ask"));
+        if (reordered > 0 || listMoved) changed();
+    }
+    return reordered;
+}
+
+bool WiringDialog::movePinInStack(const QString& conn, int pin, int toPin) {
+    HarnessConnector* c = nullptr;
+    for (HarnessConnector& x : def_.connectors)
+        if (x.id == conn) c = &x;
+    if (!c || pin == toPin) return false;
+    std::vector<int> order = harnessPinSequence(*c);
+    const auto from = std::find(order.begin(), order.end(), pin);
+    const auto to = std::find(order.begin(), order.end(), toPin);
+    if (from == order.end() || to == order.end()) return false;
+    const long long at = to - order.begin();
+    order.erase(from);
+    order.insert(order.begin() + at, pin);
+    c->pinOrder = order;
+    changed();
+    said_->setText(QStringLiteral("%1 pin %2 put where pin %3 was in the pin stack").arg(c->designator).arg(pin).arg(toPin));
+    return true;
+}
+
 bool WiringDialog::acceptGhost() {
     QString fc, tc;
     int fp = 0, tp = 0;
@@ -1102,6 +1329,7 @@ int WiringDialog::placeCable(const QString& libPartId) {
         def_.wires.push_back(w);
         ++made;
     }
+    if (optimizeOn()) optimizePinStack(false);
     changed();
     said_->setText(QStringLiteral("%1: %2 conductor(s) placed").arg(part->title()).arg(made));
     return made;

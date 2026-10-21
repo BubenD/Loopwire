@@ -19,6 +19,7 @@
 #include <QPushButton>
 #include <QListWidgetItem>
 #include <QMouseEvent>
+#include <QElapsedTimer>
 #include "harness/CableSpec.h"
 #include "harness/PartsLibrary.h"
 #include <QAction>
@@ -1512,6 +1513,92 @@ void testWiringWindow() {
                   cores.front().libPart == cable.id,
               "wiring window: Place cable - its four conductors one cable, its two pairs twisted apart");
         useHarnessBuilderLibraryForTest(PartsLibrary{});
+    }
+    // OPTIMISED PIN STACKS: no line crossing another, twisted wires side by side - only the order the pins are drawn in
+    // changes, every wire on its pins as it was; done at once, and to every new connection while a switch is on.
+    {
+        HarnessDef d;
+        for (const auto& [id, side] : {std::pair<const char*, HarnessSide>{"a", HarnessSide::Left}, {"b", HarnessSide::Right}}) {
+            HarnessConnector c;
+            c.id = QLatin1String(id);
+            c.designator = QString::fromLatin1(id).toUpper();
+            c.side = side;
+            c.pinCount = 6;
+            d.connectors.push_back(c);
+        }
+        int changes = 0;
+        WiringDialog opt(d, [&changes] { ++changes; });
+        opt.resize(1400, 800);
+        opt.show();
+        opt.showTwo(QStringLiteral("a"), QStringLiteral("b"));
+        QApplication::processEvents();
+        auto at = [&](const QString& conn, int pin) {
+            for (const HarnessConnector& c : d.connectors)
+                if (c.id == conn) {
+                    const std::vector<int> seq = harnessPinSequence(c);
+                    return static_cast<int>(std::find(seq.begin(), seq.end(), pin) - seq.begin());
+                }
+            return -1;
+        };
+        const QString w1 = opt.connectPins(QStringLiteral("a"), 1, QStringLiteral("b"), 3);
+        const QString w2 = opt.connectPins(QStringLiteral("a"), 2, QStringLiteral("b"), 1);
+        const QString w3 = opt.connectPins(QStringLiteral("a"), 3, QStringLiteral("b"), 2);
+        check(at(QStringLiteral("b"), 3) > at(QStringLiteral("b"), 1), "optimise: three wires that cross, before");
+        auto* cross = opt.findChild<QToolButton*>(QStringLiteral("wiringOptCross"));
+        auto* apply = opt.findChild<QPushButton*>(QStringLiteral("wiringOptApply"));
+        check(cross && apply && opt.findChild<QToolButton*>(QStringLiteral("wiringOptShield")) &&
+                  opt.findChild<QToolButton*>(QStringLiteral("wiringOptTwist")),
+              "optimise: round switches - avoid crossing, by shield, by twist - and Apply");
+        if (cross && apply) {
+            cross->setChecked(true);
+            apply->click();
+        }
+        QApplication::processEvents();
+        std::printf("  optimise: B's pins 3, 1, 2 now at %d, %d, %d\n", at(QStringLiteral("b"), 3), at(QStringLiteral("b"), 1),
+                    at(QStringLiteral("b"), 2));
+        check(at(QStringLiteral("b"), 3) < at(QStringLiteral("b"), 1) && at(QStringLiteral("b"), 1) < at(QStringLiteral("b"), 2) &&
+                  opt.canvas()->shownWires() == QStringList({w1, w2, w3}),
+              "optimise: avoid crossing - the second connector's pins and the lines in the first's order");
+        bool kept = true;
+        for (const HarnessWire& w : d.wires)
+            if (w.id == w1) kept = kept && w.fromPin == 1 && w.toPin == 3;
+        check(kept, "optimise: every wire still on its pins - only the order they are drawn in changed");
+        // A NEW CONNECTION, the switch on: optimised as it is made.
+        const QString w4 = opt.connectPins(QStringLiteral("a"), 4, QStringLiteral("b"), 4);
+        const QString w5 = opt.connectPins(QStringLiteral("a"), 5, QStringLiteral("b"), 6);
+        const QString w6 = opt.connectPins(QStringLiteral("a"), 6, QStringLiteral("b"), 5);
+        check(at(QStringLiteral("b"), 6) < at(QStringLiteral("b"), 5), "optimise: a new connection optimised as it is made, the switch on");
+        // BY TWIST: two wires twisted together brought onto pins side by side.
+        for (HarnessWire& w : d.wires)
+            if (w.id == w1 || w.id == w4) w.twistGroup = QStringLiteral("T1");
+        opt.setOptimize(false, false, true);
+        opt.optimizePinStack();
+        check(std::abs(at(QStringLiteral("a"), 1) - at(QStringLiteral("a"), 4)) == 1, "optimise: by twist - the pair on pins side by side");
+        opt.setOptimize(false, false, false);
+        (void)w5;
+        (void)w6;
+        // A PIN CAUGHT AND PUT ELSEWHERE IN THE STACK: held 0.2 s, let go on another pin.
+        WiringCanvas* cv = opt.canvas();
+        const int was3 = at(QStringLiteral("a"), 3);
+        const QPointF from = cv->pinCentre(QStringLiteral("a"), 2), to = cv->pinCentre(QStringLiteral("a"), 3);
+        auto send = [&](QEvent::Type type, const QPointF& p, Qt::MouseButtons buttons) {
+            QMouseEvent e(type, p, cv->mapToGlobal(p), type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton, buttons, Qt::NoModifier);
+            QApplication::sendEvent(cv, &e);
+        };
+        send(QEvent::MouseButtonPress, from, Qt::LeftButton);
+        QElapsedTimer hold;
+        hold.start();
+        while (hold.elapsed() < 280) QApplication::processEvents();
+        check(cv->carrying(), "pin stack: a pin held 0.2 s is caught");
+        for (int i = 1; i <= 5; ++i) send(QEvent::MouseMove, from + (to - from) * (i / 5.0), Qt::LeftButton);
+        send(QEvent::MouseButtonRelease, to, Qt::NoButton);
+        QApplication::processEvents();
+        std::printf("  pin stack: pin 2 now at %d (pin 3 was at %d)\n", at(QStringLiteral("a"), 2), was3);
+        check(at(QStringLiteral("a"), 2) == was3, "pin stack: let go on another pin, it takes that one's place in the stack");
+        bool same = true;
+        for (const HarnessWire& w : d.wires)
+            if (w.id == w2) same = same && w.fromConn == QLatin1String("a") && w.fromPin == 2;
+        check(same, "pin stack: its wire still on it");
     }
     if (std::getenv("LOOPWIRE_SHOTS")) {
         win->showTwo(QStringLiteral("c1"), QStringLiteral("c2"));

@@ -18,6 +18,7 @@ class QLineEdit;
 class QListWidget;
 class QScrollArea;
 class QStackedWidget;
+class QTimer;
 class QToolButton;
 
 namespace Loopwire {
@@ -74,6 +75,8 @@ signals:
     void deleteAsked();
     void ghostAccepted();
     void said(const QString& text);
+    // A PIN CAUGHT (held 0.2 s) AND LET GO on another pin of its connector: put there in the connector's pin stack.
+    void pinStackMoveAsked(const QString& conn, int pin, int toPin);
 
 protected:
     void paintEvent(QPaintEvent*) override;
@@ -116,6 +119,12 @@ private:
     QPointF pressAt_, now_;
     QString pressPin_, pressBar_;
     bool pressing_ = false, moved_ = false, ctrl_ = false;
+    // A PIN HELD STILL 0.2 S IS CAUGHT, to be put elsewhere in its connector's pin stack (not saved).
+    QTimer* holdTimer_ = nullptr;
+    bool carrying_ = false;
+
+public:
+    bool carrying() const { return carrying_; }
 };
 
 // THE WIRING WINDOW: two connectors - or several - wired by clicking and dragging pins, the lines stacked in order and
@@ -157,6 +166,14 @@ public:
     void setSelectedGauge(const QString& mm2);
     void setSelectedLabel(const QString& label);
     void setSelectedCutLength(double mm);
+    // THE PIN STACKS OPTIMISED, as the round buttons ask: no lines crossing (the second connector's pins, and the wires'
+    // bars, in the order of the first's), the wires screened together on pins side by side, those twisted together too.
+    // Only the order the pins are drawn in changes - every wire stays on its pins. How many connectors were reordered.
+    int optimizePinStack(bool tell = true);
+    void setOptimize(bool avoidCrossing, bool byShield, bool byTwist);
+    bool optimizeOn() const;
+    // A PIN PUT ELSEWHERE IN ITS CONNECTOR'S PIN STACK: where `toPin` is, the pins between moved up or down one.
+    bool movePinInStack(const QString& conn, int pin, int toPin);
 
 private:
     void changed();
@@ -189,6 +206,9 @@ private:
     QLineEdit* label_ = nullptr;
     QDoubleSpinBox* cut_ = nullptr;
     QCheckBox* print_[3] = {};
+    QToolButton* optCross_ = nullptr;
+    QToolButton* optShield_ = nullptr;
+    QToolButton* optTwist_ = nullptr;
     bool filling_ = false;
 };
 
