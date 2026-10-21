@@ -1875,6 +1875,11 @@ void BrickWizardDialog::buildUi() {
     panel_->addWidget(buildLinkPage());
     panel_->addWidget(buildJointPage());
     tidyFields(panel_, 180);   // every field in the panels one short width
+    // THE STROKE MARK'S W AND L side by side on one row: a few characters each.
+    for (QDoubleSpinBox* s : {strokeGap_, strokeLen_}) {
+        s->setMinimumWidth(78);
+        s->setMaximumWidth(78);
+    }
     // THE LIBRARY PART wide enough to read its P/N and a good part of its description; the designator's height a
     // few characters.
     if (part_) {
