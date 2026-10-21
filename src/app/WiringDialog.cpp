@@ -1,6 +1,7 @@
 #include "app/WiringDialog.h"
 
 #include "app/HarnessBuilderDialog.h"
+#include "app/DrawingPreview.h"
 #include "harness/CableSpec.h"
 #include "harness/Harness.h"
 #include "harness/Harness3D.h"
@@ -26,6 +27,7 @@
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QScrollArea>
+#include <QSettings>
 #include <QSet>
 #include <QSignalBlocker>
 #include <QSplitter>
@@ -44,6 +46,7 @@ namespace Loopwire {
 namespace {
 
 constexpr double kCell = 26.0;      // a pin's square, and the gap round it
+constexpr int kPanelField = 210;   // a field of the panel, across
 constexpr double kRow = 24.0;       // a wire's bar, one under another
 constexpr double kMargin = 18.0;
 
@@ -451,6 +454,20 @@ QStringList WiringCanvas::groupMarksAcross(const QPointF& a, const QPointF& b) c
     return ids;
 }
 
+double WiringCanvas::fitZoom(const QSize& room) const {
+    if (content_.width() <= 0 || content_.height() <= 0) return 1.0;
+    return std::clamp(std::min(room.width() / double(content_.width()), room.height() / double(content_.height())), 0.3, 4.0);
+}
+
+void WiringCanvas::setWireColours(bool on) {
+    colours_ = on;
+    update();
+}
+
+QColor WiringCanvas::shownBase(const QString& code) const { return colours_ ? baseColour(code) : QColor(232, 236, 242); }
+
+QColor WiringCanvas::shownStripe(const QString& code) const { return colours_ ? stripeColour(code) : QColor(); }
+
 void WiringCanvas::setZoom(double z) {
     zoom_ = std::clamp(z, 0.3, 4.0);
     relayout();
@@ -521,7 +538,7 @@ void WiringCanvas::paintEvent(QPaintEvent*) {
             const bool here = first && shown_.contains(first->fromConn) && shown_.contains(first->toConn);
             const bool lit = pending_ == pinKey(b.conn, it.key()) || (pressing_ && pressPin_ == pinKey(b.conn, it.key()));
             QColor fill = QColor(26, 30, 36);
-            if (first && here) fill = baseColour(first->color);
+            if (first && here) fill = shownBase(first->color);
             p.setPen(QPen(on.size() > 1 ? QColor(240, 80, 70) : lit ? QColor(255, 209, 102) : QColor(150, 165, 185), on.size() > 1 || lit ? 2.4 : 1.0));
             p.setBrush(fill);
             p.drawRoundedRect(r, 3, 3);
@@ -537,7 +554,7 @@ void WiringCanvas::paintEvent(QPaintEvent*) {
                 p.drawRoundedRect(r, 3, 3);
             }
             if (first && here)
-                if (const QColor s = stripeColour(first->color); s.isValid()) {
+                if (const QColor s = shownStripe(first->color); s.isValid()) {
                     p.setPen(Qt::NoPen);
                     p.setBrush(s);
                     p.drawRect(QRectF(r.left() + 2, r.center().y() - 2, r.width() - 4, 4));
@@ -563,7 +580,7 @@ void WiringCanvas::paintEvent(QPaintEvent*) {
         const bool sameSide = bar.fromSide == bar.toSide;
         const double edge = bar.fromSide < 0 ? laneLeft_ : laneRight_;
         const QPointF a(bar.fromSide < 0 ? laneLeft_ : laneRight_, bar.y), b(bar.toSide < 0 ? laneLeft_ : laneRight_, bar.y);
-        const QColor base = baseColour(w->color);
+        const QColor base = shownBase(w->color);
         QPainterPath path;
         path.moveTo(bar.from);
         if (sameSide) {
@@ -590,7 +607,7 @@ void WiringCanvas::paintEvent(QPaintEvent*) {
         p.drawPath(path);
         p.setPen(QPen(base, 2.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         p.drawPath(path);
-        if (const QColor s = stripeColour(w->color); s.isValid()) {
+        if (const QColor s = shownStripe(w->color); s.isValid()) {
             p.setPen(QPen(s, 1.2, Qt::DashLine));
             p.drawLine(a, b);
         }
@@ -627,7 +644,7 @@ void WiringCanvas::paintEvent(QPaintEvent*) {
         }
         p.setPen(QPen(QColor(10, 12, 16), 4.2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         p.drawPath(path);
-        p.setPen(QPen(baseColour(w.color), 2.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.setPen(QPen(shownBase(w.color), 2.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         p.drawPath(path);
         p.setPen(Qt::NoPen);
         p.setBrush(QColor(235, 240, 248));
@@ -1045,6 +1062,37 @@ WiringDialog::WiringDialog(HarnessDef& def, std::function<void()> changed, QWidg
     button(QStringLiteral("Redo"), "wiringRedo", QStringLiteral("Do it again"), [this] {
         if (redo_) redo_();
     });
+    // THE BRICKS' SIZE: smaller or bigger (the wheel does the same), or as big as fits the view.
+    bar->addSpacing(16);
+    bar->addWidget(new QLabel(QStringLiteral("Bricks"), this));
+    zoomSaid_ = new QLabel(QStringLiteral("100 %"), this);
+    zoomSaid_->setObjectName(QStringLiteral("wiringZoomSaid"));
+    zoomSaid_->setMinimumWidth(42);
+    zoomSaid_->setAlignment(Qt::AlignCenter);
+    auto sized = [this](double z) {
+        canvas_->setZoom(z);
+        zoomSaid_->setText(QStringLiteral("%1 %").arg(qRound(canvas_->zoom() * 100.0)));
+        QSettings().setValue(QStringLiteral("harnessBuilder/ui/v2/wiringZoom"), canvas_->zoom());
+    };
+    button(QStringLiteral("−"), "wiringZoomOut", QStringLiteral("Smaller bricks"), [this, sized] { sized(canvas_->zoom() / 1.15); })->setMaximumWidth(30);
+    bar->addWidget(zoomSaid_);
+    button(QStringLiteral("+"), "wiringZoomIn", QStringLiteral("Bigger bricks"), [this, sized] { sized(canvas_->zoom() * 1.15); })->setMaximumWidth(30);
+    button(QStringLiteral("Fit"), "wiringZoomFit", QStringLiteral("The bricks as big as fits the view"), [this, sized] {
+        sized(canvas_->fitZoom(scroll_->viewport()->size() - QSize(8, 8)));
+    })->setMaximumWidth(44);
+    // THE WIRES IN THEIR COLOURS, or all white.
+    colours_ = new QToolButton(this);
+    colours_->setObjectName(QStringLiteral("wiringColours"));
+    colours_->setText(QStringLiteral("Wire colours"));
+    colours_->setToolTip(QStringLiteral("The wires drawn in their colours - off: all white, to see what goes where"));
+    colours_->setCheckable(true);
+    colours_->setChecked(QSettings().value(QStringLiteral("harnessBuilder/ui/v2/wiringColours"), true).toBool());
+    connect(colours_, &QToolButton::toggled, this, [this](bool on) {
+        canvas_->setWireColours(on);
+        QSettings().setValue(QStringLiteral("harnessBuilder/ui/v2/wiringColours"), on);
+    });
+    bar->addSpacing(8);
+    bar->addWidget(colours_);
     bar->addStretch(1);
     lay->addLayout(bar);
 
@@ -1078,6 +1126,12 @@ WiringDialog::WiringDialog(HarnessDef& def, std::function<void()> changed, QWidg
     scroll_->setWidgetResizable(true);
     canvas_ = new WiringCanvas(def_, scroll_);
     scroll_->setWidget(canvas_);
+    // As they were left: the colours on or off, the bricks' size.
+    canvas_->setWireColours(colours_->isChecked());
+    canvas_->setZoom(QSettings().value(QStringLiteral("harnessBuilder/ui/v2/wiringZoom"), 1.0).toDouble());
+    zoomSaid_->setText(QStringLiteral("%1 %").arg(qRound(canvas_->zoom() * 100.0)));
+    // Zoomed with the wheel too: said.
+    connect(canvas_, &WiringCanvas::said, this, [this] { zoomSaid_->setText(QStringLiteral("%1 %").arg(qRound(canvas_->zoom() * 100.0))); });
     mv->addWidget(scroll_, 1);
     // UNDER THE PICTURE: what to optimise the pin stacks for, and the stacks of the connectors picked put in order.
     {
@@ -1129,7 +1183,10 @@ WiringDialog::WiringDialog(HarnessDef& def, std::function<void()> changed, QWidg
     panelTitle_->setObjectName(QStringLiteral("wiringPanelTitle"));
     panelTitle_->setWordWrap(true);
     pl->addWidget(panelTitle_);
+    // SHORT FIELDS, the same whatever the width: each as wide as what goes in it, not as the panel.
     auto* form = new QFormLayout;
+    form->setFieldGrowthPolicy(QFormLayout::FieldsStayAtSizeHint);
+    form->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
     part_ = new QComboBox(panel_);
     part_->setObjectName(QStringLiteral("wiringPart"));
     form->addRow(QStringLiteral("Part (P/N)"), part_);
@@ -1203,6 +1260,8 @@ WiringDialog::WiringDialog(HarnessDef& def, std::function<void()> changed, QWidg
         screenBox_ = new QGroupBox(QStringLiteral("Shield"), panel_);
         screenBox_->setObjectName(QStringLiteral("wiringScreenBox"));
         auto* sf = new QFormLayout(screenBox_);
+        sf->setFieldGrowthPolicy(QFormLayout::FieldsStayAtSizeHint);
+        sf->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
         screenPart_ = new QComboBox(screenBox_);
         screenPart_->setObjectName(QStringLiteral("wiringScreenPart"));
         screenPart_->setEditable(true);
@@ -1262,8 +1321,38 @@ WiringDialog::WiringDialog(HarnessDef& def, std::function<void()> changed, QWidg
     del->setObjectName(QStringLiteral("wiringDelete"));
     del->setAutoDefault(false);
     connect(del, &QPushButton::clicked, this, [this] { deleteSelected(); });
-    pl->addWidget(del);
+    pl->addWidget(del, 0, Qt::AlignLeft);
+    // THE HARNESS AS IT WILL BE DRAWN, small, under the details - the wiring seen as the drawing has it, as it is made.
+    preview_ = new DrawingPreview(QString(), this);
+    preview_->setObjectName(QStringLiteral("wiringPreview"));
+    preview_->setKeepView(false);
+    preview_->setEmptyText(QStringLiteral("Wire the connectors - the harness is drawn here"));
+    preview_->setToolTip(QStringLiteral("The harness as Generate will draw it - wheel to zoom, drag to move"));
+    preview_->setMinimumHeight(200);
+    preview_->setMaximumHeight(260);
+    preview_->setMinimumWidth(kPanelField + 90);
+    preview_->setMaximumWidth(kPanelField + 110);
+    pl->addWidget(new QLabel(QStringLiteral("<b>As it will be drawn</b>"), panel_));
+    pl->addWidget(preview_, 0, Qt::AlignLeft);
+    previewTimer_ = new QTimer(this);
+    previewTimer_->setSingleShot(true);
+    previewTimer_->setInterval(120);
+    connect(previewTimer_, &QTimer::timeout, this, [this] {
+        preview_->setEntities(harnessPreviewEntities(def_, true));
+        preview_->fitToView();
+    });
     pl->addStretch(1);
+    // EVERY FIELD SHORT: a set width, whatever the panel's - the long part names elided rather than widening it.
+    for (QComboBox* box : panel_->findChildren<QComboBox*>()) {
+        const bool pair = box == base_ || box == stripe_ || box == screenEnd_[0] || box == screenEnd_[1] || box == screenPin_[0] ||
+                          box == screenPin_[1];
+        box->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        box->setMinimumContentsLength(8);
+        box->setFixedWidth(pair ? (kPanelField - 4) / 2 : kPanelField);
+    }
+    for (QLineEdit* edit : panel_->findChildren<QLineEdit*>())
+        if (!qobject_cast<QComboBox*>(edit->parentWidget())) edit->setFixedWidth(kPanelField);
+    panel_->setMaximumWidth(kPanelField + 140);
     split->addWidget(panel_);
     split->setStretchFactor(1, 1);
     split->setSizes({170, 860, 320});
@@ -1415,6 +1504,9 @@ void WiringDialog::showSeveral(const QStringList& ids) {
 }
 
 void WiringDialog::refresh() {
+    // The small drawing again, a moment after the last change.
+    if (previewTimer_) previewTimer_->start();
+    if (zoomSaid_) zoomSaid_->setText(QStringLiteral("%1 %").arg(qRound(canvas_->zoom() * 100.0)));
     if (terminate_) {
         const QSignalBlocker hush(terminate_);
         terminate_->setChecked(def_.layout.terminateUnconnected);

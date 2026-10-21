@@ -15,6 +15,7 @@
 #include <QApplication>
 #include <QJsonArray>
 #include <QSet>
+#include <QScreen>
 #include <QJsonDocument>
 #include <QPushButton>
 #include <QListWidgetItem>
@@ -1383,6 +1384,62 @@ void testWiringWindow() {
     check(!win->isWindow() && wizard.isAncestorOf(win), "wiring view: inside the wizard, in the table's place - no window of its own");
     win->setAskDrain([] { return QStringLiteral("c2"); });
     WiringCanvas* canvas = win->canvas();
+    // ---- THE VIEW ITSELF: short fields, a small drawing, the bricks sized, the colours switched, the wizard on the screen ----
+    {
+        QSettings settings;
+        const QVariant zoomWas = settings.value(QStringLiteral("harnessBuilder/ui/v2/wiringZoom"));
+        const QVariant coloursWas = settings.value(QStringLiteral("harnessBuilder/ui/v2/wiringColours"));
+        auto* part = win->findChild<QComboBox*>(QStringLiteral("wiringPart"));
+        auto* label = win->findChild<QLineEdit*>(QStringLiteral("wiringLabel"));
+        check(part && label && part->width() <= 220 && label->width() <= 220 && part->maximumWidth() <= 220,
+              "wiring view: the panel's fields short - a set width, not the panel's");
+        for (int i = 0; i < 6; ++i) QApplication::processEvents();
+        QElapsedTimer waited;
+        waited.start();
+        auto* preview = win->findChild<DrawingPreview*>(QStringLiteral("wiringPreview"));
+        while (preview && preview->entities().empty() && waited.elapsed() < 1500) QApplication::processEvents();
+        check(preview && preview->height() >= 200, "wiring view: a small drawing of the harness under the panel");
+        const double was = canvas->zoom();
+        if (auto* in = win->findChild<QPushButton*>(QStringLiteral("wiringZoomIn"))) in->click();
+        check(canvas->zoom() > was && win->findChild<QLabel*>(QStringLiteral("wiringZoomSaid"))->text() == QStringLiteral("%1 %").arg(qRound(canvas->zoom() * 100)),
+              "wiring view: + makes the bricks bigger, the size said");
+        if (auto* out = win->findChild<QPushButton*>(QStringLiteral("wiringZoomOut"))) out->click();
+        check(std::abs(canvas->zoom() - was) < 1e-6, "wiring view: - smaller again");
+        canvas->setZoom(1.0);
+        auto* colours = win->findChild<QToolButton*>(QStringLiteral("wiringColours"));
+        if (colours) colours->setChecked(false);
+        check(colours && !canvas->wireColours(), "wiring view: Wire colours off - the wires drawn white");
+        if (colours) colours->setChecked(true);
+        check(canvas->wireColours(), "wiring view: and on - in their colours");
+        auto* views = wizard.findChild<QWidget*>(QStringLiteral("wizardConnectionViews"));
+        auto* viewSwitch = wizard.findChild<QPushButton*>(QStringLiteral("harnessBuilderWireConnectors"));
+        const QVariant heightWas = settings.value(QStringLiteral("harnessBuilder/ui/v2/wiringHeight"));
+        check(views && viewSwitch && views->height() >= 260 && views->property("sectionGripMinimum").toInt() < 260,
+              "wiring view: tall to wire in - its grip able to make it shorter");
+        // SHORTER, as its grip leaves it: so tall again the next time it is shown.
+        if (views && viewSwitch) {
+            views->setFixedHeight(420);
+            viewSwitch->setChecked(false);
+            QApplication::processEvents();
+            const int asTable = views->height();
+            viewSwitch->setChecked(true);
+            QApplication::processEvents();
+            check(views->height() == 420 && asTable != 420, "wiring view: made shorter - the table its own height, and the view as it was left");
+        }
+        if (heightWas.isValid()) settings.setValue(QStringLiteral("harnessBuilder/ui/v2/wiringHeight"), heightWas);
+        else settings.remove(QStringLiteral("harnessBuilder/ui/v2/wiringHeight"));
+        // OFF THE SCREEN: put back inside its working area.
+        const QRect area = wizard.screen()->availableGeometry();
+        wizard.move(area.right() - 50, area.bottom() - 50);
+        wizard.keepOnScreen();
+        check(area.contains(wizard.frameGeometry().topLeft()) && wizard.frameGeometry().right() <= area.right() + 1 &&
+                  wizard.frameGeometry().bottom() <= area.bottom() + 1,
+              "wizard: moved off the screen's working area - put back inside it, its title bar in reach");
+        if (zoomWas.isValid()) settings.setValue(QStringLiteral("harnessBuilder/ui/v2/wiringZoom"), zoomWas);
+        else settings.remove(QStringLiteral("harnessBuilder/ui/v2/wiringZoom"));
+        if (coloursWas.isValid()) settings.setValue(QStringLiteral("harnessBuilder/ui/v2/wiringColours"), coloursWas);
+        else settings.remove(QStringLiteral("harnessBuilder/ui/v2/wiringColours"));
+    }
     win->resize(1600, 800);
     QApplication::processEvents();
     // SIDE BY SIDE, in the middle: the lane between them as wide as its words, not the window.

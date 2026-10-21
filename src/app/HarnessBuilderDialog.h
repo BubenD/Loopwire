@@ -82,6 +82,8 @@ public:
     void swapSelectedWireEnds();
     // THE WIRING WINDOW: the connectors drawn with their pins, wired by hand - opened on the two the wire being edited joins.
     WiringDialog* openWiringWindow();
+    // The window kept inside the screen's working area, where its title bar can be reached.
+    void keepOnScreen();
 
     // What the builder currently describes. Read-only: everything that changes a harness goes
     // through the dialog's own controls, so the definition and the tables can never disagree.

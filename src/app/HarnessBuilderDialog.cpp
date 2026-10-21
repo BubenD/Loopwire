@@ -2805,6 +2805,8 @@ void HarnessBuilderDialog::showEvent(QShowEvent* e) {
     forgetSharedLibrary();   // a part added since this window was last open is pickable now
     QDialog::showEvent(e);
     if (!wizardUiReady_) initializeWizardUi();
+    // Once it is on the screen and its frame is known: inside the working area.
+    QTimer::singleShot(0, this, [this] { keepOnScreen(); });
 }
 
 void HarnessBuilderDialog::keyPressEvent(QKeyEvent* e) {
@@ -2895,12 +2897,46 @@ void HarnessBuilderDialog::showWiringView(bool on) {
     // THE WHOLE WIDTH TO WIRE IN: the drawing beside the steps folded away while the wiring view shows - it is a drawing too -
     // and back with the table.
     if (mainSplit_ && mainSplit_->count() > 1) mainSplit_->widget(1)->setVisible(!(on && wiringWindow_));
-    // TALL ENOUGH TO WIRE IN, while it shows - the table's own height back after.
-    wireViews_->setMinimumHeight(on ? 640 : wireViews_->property("wizardSectionDefaultMin").toInt());
+    // TALL ENOUGH TO WIRE IN, while it shows - as tall as it was last left, its grip making it taller or shorter; the
+    // table's own height back after.
+    QSettings settings;
+    const QString heightKey = QStringLiteral("harnessBuilder/ui/v2/wiringHeight");
+    if (on && wiringWindow_) {
+        wireViews_->setMinimumHeight(0);
+        wireViews_->setMaximumHeight(QWIDGETSIZE_MAX);
+        wireViews_->setProperty("clipHeightManual", true);
+        wireViews_->setFixedHeight(std::max(260, settings.value(heightKey, 640).toInt()));
+        wireViews_->setProperty("wiringShown", true);
+    } else {
+        if (wireViews_->property("wiringShown").toBool()) settings.setValue(heightKey, wireViews_->height());
+        wireViews_->setProperty("wiringShown", false);
+        wireViews_->setProperty("clipHeightManual", false);
+        wireViews_->setMinimumHeight(wireViews_->property("wizardSectionDefaultMin").toInt());
+        wireViews_->setMaximumHeight(QWIDGETSIZE_MAX);
+    }
     if (on && wiringWindow_) {
         wiringWindow_->show();
         wiringWindow_->refresh();
     }
+    keepOnScreen();
+}
+
+// THE WINDOW INSIDE THE SCREEN'S WORKING AREA - never under the taskbar or the panels round it, nor off the edge, where its
+// title bar (and the buttons that minimise and close it) could not be reached.
+void HarnessBuilderDialog::keepOnScreen() {
+    if (isMaximized() || isFullScreen()) return;
+    QScreen* where = screen() ? screen() : QGuiApplication::primaryScreen();
+    if (!where) return;
+    const QRect area = where->availableGeometry();
+    const QRect frame = frameGeometry();
+    const QSize edges = frame.size() - geometry().size();
+    QSize size = geometry().size().boundedTo(area.size() - edges);
+    size = size.expandedTo(minimumSize());
+    if (size != geometry().size()) resize(size);
+    const QRect now = frameGeometry();
+    const int x = std::clamp(now.x(), area.left(), std::max(area.left(), area.right() - now.width() + 1));
+    const int y = std::clamp(now.y(), area.top(), std::max(area.top(), area.bottom() - now.height() + 1));
+    if (x != now.x() || y != now.y()) move(x, y);
 }
 
 QStringList HarnessBuilderDialog::selectedOrCurrentWireIds() const {

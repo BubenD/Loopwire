@@ -29,6 +29,8 @@ namespace Loopwire {
 // its pin, across a bar in the middle, to its other pin: the bars stacked in the order the wires are listed, which is
 // the order the table and the drawing take. A free pin an empty square; one wired, filled with its wire's colour; one
 // wired to a connector not shown, hatched.
+class DrawingPreview;
+
 class WiringCanvas : public QWidget {
     Q_OBJECT
 public:
@@ -101,6 +103,11 @@ public:
     // ZOOMED with the wheel: everything drawn and clicked at this scale (1 = as laid out).
     double zoom() const { return zoom_; }
     void setZoom(double z);
+    // THE ZOOM THAT FITS everything drawn into the width and height there is.
+    double fitZoom(const QSize& room) const;
+    // THE WIRES IN THEIR COLOURS, or all white - a picture of what goes where, without the colours.
+    void setWireColours(bool on);
+    bool wireColours() const { return colours_; }
     // A SCREEN'S RING OR A PAIR'S TWIST under a point: the wires of that group, or none - and those a stroke crosses.
     QStringList groupMarkAt(const QPointF& p) const;
     QStringList groupMarksAcross(const QPointF& a, const QPointF& b) const;
@@ -112,7 +119,11 @@ public:
 private:
     // Where each screen's ring and each pair's twist is drawn, by group: from the bars of its wires.
     QHash<QString, QRectF> markRects(bool screens) const;
+    // A wire's colour as drawn here: its own, or white while colours are off (and no stripe).
+    QColor shownBase(const QString& code) const;
+    QColor shownStripe(const QString& code) const;
     double zoom_ = 1.0;
+    bool colours_ = true;
     struct Brick {
         QString conn;
         QRectF rect;
@@ -258,6 +269,11 @@ private:
     QLabel* said_ = nullptr;
     QLabel* problems_ = nullptr;
     QWidget* panel_ = nullptr;
+    // The bricks' size said, the wire colours switch, the small drawing under the panel and its timer (not saved).
+    QLabel* zoomSaid_ = nullptr;
+    QToolButton* colours_ = nullptr;
+    DrawingPreview* preview_ = nullptr;
+    QTimer* previewTimer_ = nullptr;
     QLabel* panelTitle_ = nullptr;
     QComboBox* part_ = nullptr;
     QComboBox* base_ = nullptr;

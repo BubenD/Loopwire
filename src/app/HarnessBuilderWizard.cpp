@@ -102,6 +102,7 @@ void HarnessBuilderDialog::initializeWizardUi() {
         });
         static_cast<QVBoxLayout*>(layout())->insertWidget(1, tools);
         if (settings.contains(uiKey + "geometry")) restoreGeometry(settings.value(uiKey + "geometry").toByteArray());
+        keepOnScreen();
         for (auto* table : {connTable_, wireTable_}) {
             table->horizontalHeader()->setMinimumSectionSize(24);
             table->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
