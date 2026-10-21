@@ -1,3 +1,4 @@
+#include <map>
 // The brick harness: the model the two-pane wizard edits, and the drawing it makes.
 //
 // WHAT IS WORTH TESTING HERE
@@ -5846,13 +5847,17 @@ void testRoundFortyOne() {
     // As far apart at its end as the drawing has them there.
     double drawnLo = 1e300, drawnHi = -1e300;
     {
+        // EVERY WIRE'S END AT THE START, wherever it is in the list: a wire that stops short of the trunk is drawn as two
+        // pieces, one at each fan, so the first seven pieces are not the seven wires' starts.
         const std::vector<std::vector<Vec2>> lanes = twistedPairStrands(f);
-        for (size_t j = 0; j + 1 < lanes.size() && j / 2 < 7; j += 2)
-            if (!lanes[j].empty() && !lanes[j + 1].empty()) {
-                const double yy = (lanes[j].front().y + lanes[j + 1].front().y) / 2.0;
-                drawnLo = std::min(drawnLo, yy);
-                drawnHi = std::max(drawnHi, yy);
-            }
+        for (size_t j = 0; j + 1 < lanes.size(); j += 2)
+            for (const auto& [a, b] : {std::pair<Vec2, Vec2>{lanes[j].empty() ? Vec2{} : lanes[j].front(), lanes[j + 1].empty() ? Vec2{} : lanes[j + 1].front()},
+                                       {lanes[j].empty() ? Vec2{} : lanes[j].back(), lanes[j + 1].empty() ? Vec2{} : lanes[j + 1].back()}})
+                if (!lanes[j].empty() && !lanes[j + 1].empty() && a.x < 0.5 && b.x < 0.5) {
+                    const double yy = (a.y + b.y) / 2.0;
+                    drawnLo = std::min(drawnLo, yy);
+                    drawnHi = std::max(drawnHi, yy);
+                }
     }
     std::printf("  3d fanout: the drawing has its wire ends %.1f apart end to end\n", drawnHi - drawnLo);
     check(std::abs((endHi - endLo) - (drawnHi - drawnLo + 2.0)) < 0.6,
@@ -12980,6 +12985,70 @@ void testAnnotationDetailsStockParts() {
     doc->setDirty(false);
 }
 
+void test3DFanoutClosedEnds() {
+    auto closed=[](const Mesh3D& mesh) {
+        std::map<std::pair<int,int>,int> edges;
+        for(const auto& face:mesh.f)for(int k=0;k<3;++k) {
+            int a=face[k],b=face[(k+1)%3];if(a>b)std::swap(a,b);
+            ++edges[{a,b}];
+        }
+        if(edges.empty())return false;
+        for(const auto& edge:edges)if(edge.second!=2)return false;
+        return true;
+    };
+    Harness3DScene gallery;
+    for(const QString body:{QString(),QStringLiteral("cable"),QStringLiteral("heatshrink"),QStringLiteral("braid"),QStringLiteral("shield")}) {
+        Entity run;run.id=QStringLiteral("fanout");run.type=EntityType::TwistedPair;
+        run.points={{0,0},{65,0},{110,35},{175,35}};run.a=run.points.front();run.b=run.points.back();
+        run.meta=QJsonObject{{"twistStraight",true},{"twistWires",4},{"twistWireWidth",2.0},
+                            {"twistLane",5.0},{"twistEnds",22.0},{"twistBody",body}};
+        const auto scene=buildHarness3D({run},{});
+        std::vector<std::vector<V3>> centres;
+        for(const auto& item:scene.items) {
+            check(closed(item.mesh),"3D fanout: every wire and covering is a closed solid with finished end faces");
+            if(item.what!=QStringLiteral("wire"))continue;
+            check((item.mesh.v.size()-2)%12==0,"3D fanout: wire ring topology preserved");
+            std::vector<V3> points;
+            for(size_t i=0;i+12<=item.mesh.v.size()-2;i+=12) {
+                V3 point;for(size_t j=0;j<12;++j)point=point+item.mesh.v[i+j];
+                points.push_back(point/12.0);
+            }
+            centres.push_back(points);
+        }
+        check(centres.size()==4,"3D fanout: all four complete wires present, with both fans and a continuous body");
+        if(centres.size()==4) {
+            double closest=1e9;
+            for(size_t k=0;k<centres.size();++k)for(size_t l=0;l<k;++l)
+                for(const auto& a:centres[k])for(size_t j=1;j<centres[l].size();++j) {
+                    const auto start=centres[l][j-1],delta=centres[l][j]-start;
+                    const double len2=dot3(delta,delta);
+                    const V3 foot=start+delta*(len2>1e-12?std::clamp(dot3(a-start,delta)/len2,0.0,1.0):0.0);
+                    closest=std::min(closest,(a-foot).length());
+                }
+            if(closest<1.98)std::printf("Fanout minimum spacing (%s): %.5f\n",body.toUtf8().constData(),closest);
+            check(closest>=1.98,"3D fanout: neighbouring wires never pass through each other, including the fan transition");
+            check((centres.front().front()-centres.front().back()).length()>140,"3D fanout: each wire reaches both physical ends");
+        }
+        auto shifted=scene;
+        for(auto& item:shifted.items)for(auto& vertex:item.mesh.v)vertex.y+=gallery.runs*24;
+        gallery.items.insert(gallery.items.end(),shifted.items.begin(),shifted.items.end());++gallery.runs;
+        run.meta.insert(QStringLiteral("twistStrip"),true);
+        run.meta.insert(QStringLiteral("twistStripLen"),4.0);
+        const auto stripped=buildHarness3D({run},{});
+        int conductors=0;
+        for(const auto& item:stripped.items) {
+            check(closed(item.mesh),"3D stripped fanout: insulation shoulders and conductor cuts are closed");
+            if(item.color==QColor(184,115,51))++conductors;
+        }
+        check(conductors==8,"3D stripped fanout: all four wires have exposed copper at both ends");
+    }
+    const QString image=qEnvironmentVariable("LOOPWIRE_FANOUT_IMAGE");
+    if(!image.isEmpty()) {
+        View3DCanvas canvas;canvas.resize(1200,850);canvas.setUseGpu(false);canvas.setScene(&gallery);
+        canvas.viewFrom(QStringLiteral("iso"));canvas.fit();canvas.render(canvas.size()).save(image);
+    }
+}
+
 int run_brickharness_tests() {
     std::printf("Running brick harness tests...\n");
     fails = 0;
@@ -12993,6 +13062,7 @@ int run_brickharness_tests() {
     };
 #define ROUND(f) \
     if (wanted(#f)) f()
+    ROUND(test3DFanoutClosedEnds);
     ROUND(testLayoutSnapsTemplateBodies);
     ROUND(testStockPartsAndWrappedTies3D);
     ROUND(testRibbonArrowPolylineGrouping);

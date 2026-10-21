@@ -1,4 +1,5 @@
 #include "harness/Harness.h"
+#include "harness/RunGeometry.h"
 
 #include "geometry/Geometry.h"
 
@@ -1791,6 +1792,22 @@ const TwistCached* twistCached(const Entity& pair) {
 }
 
 } // namespace
+
+RunGeometry runGeometry(const Entity& pair) {
+    RunGeometry out;
+    if (pair.type != EntityType::TwistedPair) return out;
+    const auto* cached = twistCached(pair);
+    if (!cached || cached->frames.pos.empty()) return out;
+    const auto& f = cached->frames;
+    out.centres = f.pos; out.normals = f.n; out.along = f.u;
+    out.flushStart = f.tail; out.flushFinish = f.tailB;
+    out.stripStart = f.strip; out.stripFinish = f.stripB;
+    for (int k = 0; k < f.wires; ++k) {
+        out.startOffsets.push_back(dot(twistCentre(f,k,0)-f.pos.front(), f.n.front()));
+        out.finishOffsets.push_back(dot(twistCentre(f,k,f.pos.size()-1)-f.pos.back(), f.n.back()));
+    }
+    return out;
+}
 
 std::vector<std::vector<Vec2>> twistedPairStrands(const Entity& pair) {
     if (pair.type != EntityType::TwistedPair) return {};

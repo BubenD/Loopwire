@@ -3,6 +3,7 @@
 #include "geometry/Geometry.h"
 
 #include "harness/Harness.h"
+#include "harness/RunGeometry.h"
 #include "harness/PartsLibrary.h"
 #include "render/Render3D.h"
 #include "geometry/PartModel3D.h"
@@ -98,6 +99,31 @@ struct Cached {
 };
 
 V3 at3(const Vec2& p) { return {p.x, p.y, 0.0}; }
+
+std::vector<Vec2> straightWirePacking(int wires, double width) {
+    std::vector<Vec2> points;
+    const double pitch=width*1.06;
+    if(wires==1) return {{0,0}};
+    if(wires<=4) {
+        const double radius=pitch/(2*std::sin(M_PI/wires));
+        for(int k=0;k<wires;++k) {
+            const double angle=2*M_PI*k/wires+(wires==4?M_PI/4:0);
+            points.push_back({radius*std::cos(angle),radius*std::sin(angle)});
+        }
+    } else {
+        for(int row=-wires;row<=wires;++row)for(int col=-wires;col<=wires;++col)
+            points.push_back({(col+(std::abs(row)%2)*0.5)*pitch,row*pitch*std::sqrt(3.0)/2});
+        std::stable_sort(points.begin(),points.end(),[](const Vec2& a,const Vec2& b){return dot(a,a)<dot(b,b);});
+        points.resize(wires);
+    }
+    Vec2 mean;
+    for(const auto& p:points)mean=mean+p;
+    mean=mean/double(wires);
+    for(auto& p:points)p=p-mean;
+    std::sort(points.begin(),points.end(),[](const Vec2& a,const Vec2& b){return std::abs(a.x-b.x)>1e-8?a.x>b.x:a.y>b.y;});
+    return points;
+}
+
 
 double pathLength(const std::vector<Vec2>& path) {
     double len = 0.0;
@@ -1003,7 +1029,8 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
             continue;
         }
         if (e.type != EntityType::TwistedPair) continue;
-        const std::vector<Vec2> route = routeOf(e);
+        const RunGeometry geometry = runGeometry(e);
+        const std::vector<Vec2> route = e.meta.value(QStringLiteral("twistStraight")).toBool() && geometry.centres.size()>1 ? geometry.centres : routeOf(e);
         if (route.size() < 2 || distance(route.front(), route.back()) + (route.size() > 2 ? 1.0 : 0.0) < 1e-6) continue;
         isRun.insert(groupOf(e), true);
         ++scene.runs;
@@ -1017,10 +1044,14 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
         const double fanA = figures.spreadStart ? std::max(0.0, figures.fanLen) : 0.0;
         const double fanB = figures.spreadFinish ? std::max(0.0, figures.fanLenFinish) : 0.0;
         const bool covered = !body.isEmpty() && bodyW > 1e-6;
+        double bodyRadius=bodyW/2;
+        if(covered && e.meta.value(QStringLiteral("twistStraight")).toBool())
+            for(const auto& offset:straightWirePacking(int(geometry.startOffsets.size()),ww))
+                bodyRadius=std::max(bodyRadius,offset.length()+ww*0.5);
         // ITS BODY: a cable, or heatshrink over the wires, between where it fans out at each end.
         if (covered && total > fanA + fanB + 0.5) {
             Harness3DItem it;
-            it.smoothContours = true; it.mesh = tubeMesh(stretch(route, fanA, total - fanB), bodyW / 2.0, 18, true);
+            it.smoothContours = true; it.mesh = tubeMesh(stretch(route, fanA, total - fanB), bodyRadius, 24, true);
             const bool braided = body==QLatin1String("braid") || body==QLatin1String("shield") || e.meta.value(QStringLiteral("twistBodyBraid")).toBool();
             it.color = own(e, braided ? (body==QLatin1String("braid") ? kBraidColour : kBraidShield) : body == QLatin1String("heatshrink") ? QColor(42, 42, 46) : QColor(70, 74, 82));
             it.what = braided ? QStringLiteral("braid") : body == QLatin1String("heatshrink") ? QStringLiteral("sleeve") : QStringLiteral("run");
@@ -1035,7 +1066,7 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
             auto sleeve = [&](double s0, double s1, double width) {
                 if (s1 - s0 < 0.2) return;
                 Harness3DItem sl;
-                sl.smoothContours = true; sl.mesh = tubeMesh(stretch(route, s0, s1), std::max(width, bodyW * 1.05) / 2.0, 18, true);
+                sl.smoothContours = true; sl.mesh = tubeMesh(stretch(route, s0, s1), std::max(width/2, bodyRadius * 1.05), 24, true);
                 sl.color = QColor(28, 28, 30);
                 sl.what = QStringLiteral("transition");
                 sl.brick = brickOf(e);
@@ -1183,161 +1214,89 @@ Harness3DScene buildHarness3D(const std::vector<Entity>& ents, const std::functi
             }
             continue;
         }
-        // WHICH ENDS FAN: as the drawing says - both, unless one is.
-        const QString spreadSaid = e.meta.value(QStringLiteral("twistSpread")).toString();
-        const bool spreadStart = spreadSaid != QLatin1String("finish") && spreadSaid != QLatin1String("right");
-        const bool spreadFinish = spreadSaid != QLatin1String("start") && spreadSaid != QLatin1String("left");
-        const bool endShrink = e.meta.value(QStringLiteral("twistEndShrink")).toBool();
-        const double endShrinkLen = std::max(0.5, e.meta.value(QStringLiteral("twistEndShrinkLen")).toDouble(10.0));
-        // A FAN OF BARE WIRES: each wire where the drawing has it across the fan - the pitch it is drawn at - and gathered
-        // into a round bundle where the drawing converges them, every wire its own place in it (none on top of another).
-        if (!covered) {
-            const std::vector<std::vector<Vec2>> lanes = twistedPairStrands(e);
-            const int wires = std::max(1, e.meta.value(QStringLiteral("twistWires")).toInt(2));
-            // How far along the route a point is, and how far to one side of it.
-            auto project = [&](const Vec2& p, double& s, double& d) {
-                double best = 1e300, acc = 0.0;
-                for (size_t i = 1; i < route.size(); ++i) {
-                    const Vec2 a = route[i - 1], b = route[i];
-                    const double seg = distance(a, b);
-                    if (seg < 1e-12) continue;
-                    const Vec2 t = (b - a) / seg;
-                    const double u = std::clamp(dot(p - a, t), 0.0, seg);
-                    const Vec2 foot = a + t * u;
-                    const double dist = distance(p, foot);
-                    if (dist < best) {
-                        best = dist;
-                        s = acc + u;
-                        d = dot(p - foot, Vec2{-t.y, t.x});
-                    }
-                    acc += seg;
+        // Edge spans are drawing strokes, not wires: with a body each wire has two
+        // separate fan spans. Use the measured run frames and wire identities instead.
+        const int wires = int(geometry.startOffsets.size());
+        if (geometry.centres.size() < 2 || wires == 0) continue;
+        // Compact hexagonal packing, assigned in fan order. The previous centre-first
+        // assignment reversed neighbouring wires as they entered the bundle.
+        const std::vector<Vec2> packing=straightWirePacking(wires,ww);
+        std::vector<int> order(wires);
+        for(int k=0;k<wires;++k) order[k]=k;
+        std::stable_sort(order.begin(),order.end(),[&](int a,int b){return geometry.startOffsets[a]>geometry.startOffsets[b];});
+        std::vector<Vec2> packed(wires);
+        for(int k=0;k<wires;++k) packed[order[k]]=packing[k];
+        auto ease=[](double u){u=std::clamp(u,0.0,1.0);return u*u*(3.0-2.0*u);};
+        const double measuredTotal=geometry.along.back();
+        std::vector<std::vector<V3>> paths(wires);
+        // Subdivide the measured frames, keeping exact fan, strip and knee stations.
+        for(size_t i=1;i<geometry.centres.size();++i) {
+            const double length=geometry.along[i]-geometry.along[i-1];
+            const int count=std::max(1,int(std::ceil(length/std::max(0.15,ww*0.35))));
+            for(int j=(i==1?0:1);j<=count;++j) {
+                const double t=double(j)/count;
+                const double s=geometry.along[i-1]+t*length;
+                const Vec2 at=geometry.centres[i-1]*(1-t)+geometry.centres[i]*t;
+                const Vec2 normal=(geometry.normals[i-1]*(1-t)+geometry.normals[i]*t).normalized();
+                double gather=1.0;
+                bool finish=false;
+                if(figures.spreadStart && s<fanA) gather=ease((s-geometry.flushStart)/std::max(1e-9,fanA-geometry.flushStart));
+                if(figures.spreadFinish && s>measuredTotal-fanB) {
+                    gather=ease((measuredTotal-s-geometry.flushFinish)/std::max(1e-9,fanB-geometry.flushFinish));
+                    finish=true;
                 }
-            };
-            auto frameAt = [&](double s, V3& at, V3& across) {
-                double acc = 0.0;
-                for (size_t i = 1; i < route.size(); ++i) {
-                    const double seg = distance(route[i - 1], route[i]);
-                    if (seg < 1e-12) continue;
-                    if (acc + seg >= s || i + 1 == route.size()) {
-                        const double u = std::clamp((s - acc) / seg, 0.0, 1.0);
-                        const Vec2 t = (route[i] - route[i - 1]).normalized();
-                        at = at3(route[i - 1] + (route[i] - route[i - 1]) * u);
-                        across = V3{-t.y, t.x, 0.0};
-                        return;
-                    }
-                    acc += seg;
+                std::vector<Vec2> offsets(wires);
+                for(int k=0;k<wires;++k) {
+                    const double fan=(finish?geometry.finishOffsets:geometry.startOffsets)[k];
+                    offsets[k]={fan*(1-gather)+packed[k].x*gather,packed[k].y*gather};
                 }
-                at = at3(route.back());
-                across = V3{0.0, 1.0, 0.0};
-            };
-            // Each wire's place in the bundle: rings round its middle, one wire across apart.
-            auto packed = [&](int k, double& py, double& pz) {
-                if (wires == 1 || k == 0) {
-                    py = pz = 0.0;
-                    if (wires == 2) py = (k == 0 ? -0.5 : 0.5) * ww;
-                    if (wires == 2 || k == 0) return;
-                }
-                int ring = 1, first = 1;
-                while (k >= first + 6 * ring) {
-                    first += 6 * ring;
-                    ++ring;
-                }
-                const int inRing = std::min(6 * ring, wires - first);
-                const double ang = 2.0 * M_PI * (k - first) / std::max(1, inRing);
-                py = ring * ww * std::cos(ang);
-                pz = ring * ww * std::sin(ang);
-                if (wires == 2) py = (k == 0 ? -0.5 : 0.5) * ww, pz = 0.0;
-            };
-            auto smooth = [](double u) {
-                u = std::clamp(u, 0.0, 1.0);
-                return u * u * (3.0 - 2.0 * u);
-            };
-            const double step = std::clamp(total / 300.0, 0.15, 1.0);
-            int k = 0;
-            for (size_t j = 0; j + 1 < lanes.size() && k < wires; j += 2, ++k) {
-                const auto& ea = lanes[j];
-                const auto& eb = lanes[j + 1];
-                if (ea.size() != eb.size() || ea.size() < 2) continue;
-                // Where the drawing has this wire across the run, along it.
-                std::vector<std::pair<double, double>> sd;
-                for (size_t q = 0; q < ea.size(); ++q) {
-                    double s = 0.0, d = 0.0;
-                    project((ea[q] + eb[q]) * 0.5, s, d);
-                    sd.push_back({s, d});
-                }
-                std::sort(sd.begin(), sd.end());
-                auto drawnAt = [&](double s, bool& known) {
-                    known = !sd.empty() && s >= sd.front().first - 0.5 && s <= sd.back().first + 0.5;
-                    if (sd.empty()) return 0.0;
-                    if (s <= sd.front().first) return sd.front().second;
-                    if (s >= sd.back().first) return sd.back().second;
-                    const auto it = std::lower_bound(sd.begin(), sd.end(), std::make_pair(s, -1e300));
-                    const auto& b = *it;
-                    const auto& a = *(it - 1);
-                    const double u = b.first - a.first > 1e-9 ? (s - a.first) / (b.first - a.first) : 0.0;
-                    return a.second + (b.second - a.second) * u;
-                };
-                double py = 0.0, pz = 0.0;
-                packed(k, py, pz);
-                std::vector<V3> path;
-                for (double s = 0.0;; s += step) {
-                    const double ss = std::min(s, total);
-                    bool known = false;
-                    const double d = drawnAt(ss, known);
-                    // Gathered: fully in the bundle between the fans, spread as drawn at a fanning end.
-                    double w = 1.0;
-                    if (known) {
-                        if (spreadStart && fanA > 1e-6) w = std::min(w, smooth(ss / fanA));
-                        if (spreadFinish && fanB > 1e-6) w = std::min(w, smooth((total - ss) / fanB));
-                    }
-                    V3 at, across;
-                    frameAt(ss, at, across);
-                    path.push_back(at + across * ((1.0 - w) * d + w * py) + V3{0.0, 0.0, 1.0} * (w * pz));
-                    if (ss >= total) break;
-                }
-                Harness3DItem wi;
-                wi.smoothContours = true; wi.mesh = tubeMesh(path, ww / 2.0, 8, true);
-                wi.color = colourOf(e, k);
-                wi.what = QStringLiteral("wire");
-                wi.brick = brickOf(e);
-                scene.items.push_back(std::move(wi));
-                // HEATSHRINK OVER EACH WIRE'S END, where the drawing has it.
-                if (endShrink) {
-                    if (spreadStart) endSleeve(path, false, endShrinkLen, ww / 2.0 + 0.45, brickOf(e));
-                    if (spreadFinish) endSleeve(path, true, endShrinkLen, ww / 2.0 + 0.45, brickOf(e));
-                }
+                // Interpolating from a row to a round bundle can reduce spacing midway.
+                // Expand that section uniformly rather than allowing insulation to intersect.
+                double scale=1.0;
+                for(int k=0;k<wires;++k)for(int l=0;l<k;++l)
+                    scale=std::max(scale,ww*1.06/std::max(1e-6,distance(offsets[k],offsets[l])));
+                for(int k=0;k<wires;++k)
+                    paths[k].push_back(at3(at)+V3{normal.x,normal.y,0}*(offsets[k].x*scale)+V3{0,0,offsets[k].y*scale});
             }
-            continue;
         }
-        // ITS WIRES: each one round, where it fans out (the whole way, with no body over them).
-        const std::vector<std::vector<Vec2>> strands = twistedPairStrands(e);
-        const int wires = std::max(1, e.meta.value(QStringLiteral("twistWires")).toInt(2));
-        int k = 0;
-        for (size_t j = 0; j + 1 < strands.size() && k < wires; j += 2, ++k) {
-            const auto& ea = strands[j];
-            const auto& eb = strands[j + 1];
-            if (ea.size() != eb.size() || ea.size() < 2) continue;
-            std::vector<Vec2> c(ea.size());
-            for (size_t q = 0; q < ea.size(); ++q) c[q] = (ea[q] + eb[q]) * 0.5;
-            const double len = pathLength(c);
-            auto wire = [&](double s0, double s1) {
-                const std::vector<V3> piece = stretch(c, s0, s1);
-                if (piece.size() < 2) return;
-                Harness3DItem wi;
-                wi.smoothContours = true; wi.mesh = tubeMesh(piece, ww / 2.0, 8, false);
-                wi.color = colourOf(e, k);
-                wi.what = QStringLiteral("wire");
-                wi.brick = brickOf(e);
+        const bool endShrink=e.meta.value(QStringLiteral("twistEndShrink")).toBool();
+        const double shrinkLen=std::max(0.5,e.meta.value(QStringLiteral("twistEndShrinkLen")).toDouble(10));
+        for(int k=0;k<wires;++k) {
+            const auto& path=paths[k];
+            if(path.size()<2)continue;
+            auto piece=[&](double from,double to) {
+                std::vector<V3> out;
+                double acc=0;
+                for(size_t i=1;i<path.size();++i) {
+                    const double len=(path[i]-path[i-1]).length();
+                    if(len>1e-9 && acc+len>=from && acc<=to) {
+                        const V3 a=path[i-1]+(path[i]-path[i-1])*std::clamp((from-acc)/len,0.0,1.0);
+                        const V3 b=path[i-1]+(path[i]-path[i-1])*std::clamp((to-acc)/len,0.0,1.0);
+                        if(out.empty())out.push_back(a);
+                        if((b-out.back()).length()>1e-7)out.push_back(b);
+                    }
+                    acc+=len;
+                }
+                return out;
+            };
+            double len=0;for(size_t i=1;i<path.size();++i)len+=(path[i]-path[i-1]).length();
+            const double stripA=std::min(geometry.stripStart,len*0.45),stripB=std::min(geometry.stripFinish,len*0.45);
+            auto addWire=[&](double a,double b,double radius,const QColor& colour) {
+                if(b-a<1e-6)return;
+                Harness3DItem wi;wi.smoothContours=true;
+                wi.mesh=tubeMesh(piece(a,b),radius,12,true);
+                wi.color=colour;wi.what=QStringLiteral("wire");wi.brick=brickOf(e);
                 scene.items.push_back(std::move(wi));
             };
-            // A little into the body, so the wires are seen to go into it.
-            wire(0.0, std::min(len, fanA + 1.0));
-            wire(std::max(0.0, len - fanB - 1.0), len);
-            if (endShrink) {
-                std::vector<V3> c3;
-                for (const Vec2& q : c) c3.push_back(at3(q));
-                if (spreadStart) endSleeve(c3, false, endShrinkLen, ww / 2.0 + 0.45, brickOf(e));
-                if (spreadFinish) endSleeve(c3, true, endShrinkLen, ww / 2.0 + 0.45, brickOf(e));
+            // Closed insulation faces and closed, smaller copper conductors where stripped.
+            // Keep each complete wire under a cover too, so no artificial fan-end caps show.
+            addWire(stripA,len-stripB,ww/2.0,colourOf(e,k));
+            const QColor copper(184,115,51);
+            if(stripA>0)addWire(0,stripA,ww*kWiresRunConductor/2.0,copper);
+            if(stripB>0)addWire(len-stripB,len,ww*kWiresRunConductor/2.0,copper);
+            if(endShrink) {
+                if(figures.spreadStart)endSleeve(path,false,shrinkLen,ww/2.0+0.45,brickOf(e));
+                if(figures.spreadFinish)endSleeve(path,true,shrinkLen,ww/2.0+0.45,brickOf(e));
             }
         }
     }
