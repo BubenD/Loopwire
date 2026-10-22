@@ -124,8 +124,10 @@ public:
     QStringList groupMarksAcross(const QPointF& a, const QPointF& b) const;
     // A WIRE JOINED TO ANOTHER'S RUN under a point - its line from its pin to the dot - or "".
     QString jointWireAt(const QPointF& p) const;
+    QString jointEndpointAt(const QPointF& p) const;
     // The way a joined wire is drawn: from its pin to the dot on the wire it joins.
     std::vector<QPointF> jointPath(const HarnessWire& w) const;
+    std::vector<QPointF> wirePath(const QString& wireId) const;
 
 private:
     // Where each screen's ring and each pair's twist is drawn, by group: from the bars of its wires.
@@ -163,6 +165,7 @@ private:
     std::vector<Bar> bars_;
     double laneLeft_ = 0.0, laneRight_ = 0.0, barTop_ = 0.0;
     QSize content_{600, 400};
+    HarnessPaths jointPaths_;
     QStringList selection_;
     QString pending_;
     bool ghostOn_ = false;
@@ -251,6 +254,8 @@ public:
     // A JOINT ADDED ON A WIRE: the pin its new wire goes to picked from every connector's pins (`pinKey` "conn:pin" given
     // straight, for the tests; empty, asked for).
     QString addJointOnWire(const QString& wireId, const QString& pinKey = QString());
+    QString splitAtJoint(const QString& wireId);
+    bool promoteGroup(const QString& kind, const QString& name);
     // THE PIN STACKS OF THE CONNECTORS PICKED (none picked: every one shown): the wired pins at the top, the free ones below -
     // or, `wiredFirst` false, the other way round. How many were reordered.
     int orderStacks(bool wiredFirst);

@@ -58,14 +58,16 @@ void HarnessBuilderDialog::initializeWizardUi() {
         connTable_->setObjectName(QStringLiteral("wizardConnectorTable"));
         auto* tools = new QWidget(this);
         tools->setObjectName(QStringLiteral("wizardTools"));
+        tools->setProperty("wireTableControl", false);
         auto* bar = new WizardFlowLayout;
         tools->setLayout(bar);
         auto* fields = new QCheckBox(QStringLiteral("More fields"), tools);
         fields->setObjectName(QStringLiteral("wizardMoreFields"));
+        fields->setProperty("wireTableControl", true);
         fields->setToolTip(QStringLiteral("Show every original connector and wire column"));
         fields->setChecked(!settings.value(uiKey + "compact", true).toBool());
         compactColumns_ = !fields->isChecked();
-        grouping_ = WireGrouping::Assembly;
+        grouping_ = WireGrouping::None;
         { QSignalBlocker block(groupByBox_); groupByBox_->setCurrentIndex(groupByBox_->findData(int(grouping_))); }
         reloadWires();
         connect(fields, &QCheckBox::toggled, this, [this](bool on) {
@@ -74,6 +76,7 @@ void HarnessBuilderDialog::initializeWizardUi() {
         bar->addWidget(fields);
         auto button = [&](const QString& text, const QString& name, auto callback) {
             auto* b = new QPushButton(text, tools); b->setObjectName(name); b->setAutoDefault(false);
+            if (name == QLatin1String("wizardFitColumns")) b->setProperty("wireTableControl", true);
             connect(b, &QPushButton::clicked, this, callback); bar->addWidget(b); return b;
         };
         button(QStringLiteral("Live BOM"), QStringLiteral("wizardLiveBom"), [this] { openLiveBom(); });
@@ -100,6 +103,10 @@ void HarnessBuilderDialog::initializeWizardUi() {
             applyStepLayout(currentStep());
             fitWizardColumns(); saveWizardUi();
         });
+        if(wireViewBtn_) {
+            bar->addWidget(wireViewBtn_);
+            wireViewBtn_->setStyleSheet(QStringLiteral("QPushButton{font-weight:bold;padding:6px 14px;border:2px solid #74b9ff;border-radius:4px;}QPushButton:checked{background:#2869a5;color:white;}"));
+        }
         static_cast<QVBoxLayout*>(layout())->insertWidget(1, tools);
         if (settings.contains(uiKey + "geometry")) restoreGeometry(settings.value(uiKey + "geometry").toByteArray());
         keepOnScreen();
@@ -547,9 +554,18 @@ void HarnessBuilderDialog::openLiveBom() {
         layout->addLayout(top);
         layout->addWidget(note);
         bomTable_ = new QTableWidget(bomPanel_); bomTable_->setObjectName(QStringLiteral("wizardBomTable"));
-        bomTable_->setColumnCount(6); bomTable_->setHorizontalHeaderLabels({QStringLiteral("P/N"), QStringLiteral("Description"), QStringLiteral("Quantity"), QStringLiteral("Unit"), QStringLiteral("Used by"), QStringLiteral("Status")});
+        bomTable_->setColumnCount(6); bomTable_->setHorizontalHeaderLabels({QStringLiteral("P/N"), QStringLiteral("Description"), QStringLiteral("Qty"), QStringLiteral("Unit"), QStringLiteral("Used by"), QStringLiteral("Status")});
         bomTable_->setEditTriggers(QAbstractItemView::NoEditTriggers); bomTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
-        bomTable_->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch); layout->addWidget(bomTable_);
+        auto* header = bomTable_->horizontalHeader();
+        header->setSectionResizeMode(QHeaderView::Interactive);
+        header->setStretchLastSection(false);
+        const int widths[] = {150, 360, 64, 64, 140, 160};
+        for (int column = 0; column < 6; ++column) bomTable_->setColumnWidth(column, widths[column]);
+        header->restoreState(QSettings().value(uiKey + "bomColumns").toByteArray());
+        connect(header, &QHeaderView::sectionResized, this, [header] {
+            QSettings().setValue(uiKey + "bomColumns", header->saveState());
+        });
+        layout->addWidget(bomTable_);
         connect(bomTable_, &QTableWidget::cellClicked, this, [this](int row, int) {
             if (auto* item = bomTable_->item(row, 0)) {
                 selectWire(item->data(Qt::UserRole).toString());

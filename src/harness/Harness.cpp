@@ -2542,6 +2542,27 @@ std::vector<WireAnnot> wireAnnotsFor(const Entity& wire, const QString& part) {
         WireAnnot a;
         a.t = t;
         if (!wirePointAtFraction(wire, t, a.pos, a.dir)) return {};
+        if(wire.meta.value(QStringLiteral("annHorizontal")).toBool()) {
+            double best=1e30,travel=0;
+            const double column=wire.meta.value(QStringLiteral("annColumnX")).toDouble();
+            auto offset=[&](const QString& p){return wire.meta.value(QStringLiteral("annColumnOffset:")+p).toDouble(wireAnnotDefaultOffset(wire,p));};
+            double margin=0;
+            for(const auto& p:wireAnnotParts())margin=std::max(margin,std::abs(offset(p))+.31*wireAnnotSizeFor(wire,p)*wireAnnotPartText(wire,p).size()+2);
+            for(size_t i=1;i<wire.points.size();++i) {
+                const auto p=wire.points[i-1],q=wire.points[i];const double length=distance(p,q);
+                if(std::abs(p.y-q.y)<1e-6 && length>1e-6) {
+                    const double pad=std::min(margin,length*.45);
+                    const double center=std::clamp(column,std::min(p.x,q.x)+pad,std::max(p.x,q.x)-pad);
+                    const double score=std::abs(column-center);
+                    if(score<best) {
+                        best=score;a.pos={center+offset(part),p.y};a.dir={1,0};
+                        a.t=(travel+std::abs(a.pos.x-p.x))/std::max(1e-9,polylineLength(wire.points));
+                    }
+                }
+                travel+=length;
+            }
+            if(best>=1e29)continue;
+        }
         // Keep the text the right way up: a run heading left reads better flipped. On a VERTICAL
         // run neither the reading direction nor the side follows from the geometry, so the wire
         // says: it reads up or down, and the text sits left or right of the run.

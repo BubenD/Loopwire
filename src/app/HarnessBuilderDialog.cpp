@@ -37,6 +37,7 @@
 #include <QJsonObject>
 #include <QInputDialog>
 #include <QLabel>
+#include <QLineF>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QListWidgetItem>
@@ -702,7 +703,19 @@ public:
             if (me->button() != Qt::LeftButton) return false;
             key_ = signAt(me->position(), &a_, &b_);
             if (key_.isEmpty()) return false;
-            view_->setCursor(Qt::SizeHorCursor);
+            knees_.clear();offset_=0;
+            if(key_.startsWith(QLatin1String("knee:"))) {
+                QHash<QString,QJsonObject> unique;
+                for(const auto& e:view_->entities())for(const auto& item:e.meta.value("previewKnees").toArray()) {
+                    const auto knee=item.toObject();unique.insert(knee.value("key").toString(),knee);
+                }
+                for(const auto& knee:unique)knees_.push_back(knee);
+                std::sort(knees_.begin(),knees_.end(),[](const auto& a,const auto& b){return a.value("x").toDouble()<b.value("x").toDouble();});
+                for(const auto& knee:knees_)if(knee.value("key").toString()==key_)offset_=view_->worldAt(me->position()).x-knee.value("x").toDouble();
+            }
+            vertical_=false;
+            for(const auto& e:view_->entities())if(e.meta.value("markKey").toString()==key_)vertical_=e.meta.value("markAxis").toString()==QLatin1String("y");
+            view_->setCursor(vertical_?Qt::SizeVerCursor:Qt::SizeHorCursor);
             return true;
         case QEvent::MouseMove:
             if (key_.isEmpty()) {
@@ -733,6 +746,11 @@ private:
         const std::vector<Entity>& ents = view_->entities();
         for (auto it = ents.rbegin(); it != ents.rend(); ++it) {
             const Entity& e = *it;
+            if(e.type==EntityType::Splice && e.meta.value(QStringLiteral("markKey")).toString().startsWith(QLatin1String("joint:")) &&
+               QLineF(view_->screenAt(e.a),at).length()<=9) {
+                *a=e.meta.value(QStringLiteral("markA")).toDouble();*b=e.meta.value(QStringLiteral("markB")).toDouble();
+                return e.meta.value(QStringLiteral("markKey")).toString();
+            }
             if ((e.type != EntityType::Twist && e.type != EntityType::Screen) || e.points.empty()) continue;
             const QString key = e.meta.value(QStringLiteral("markKey")).toString();
             if (key.isEmpty()) continue;
@@ -755,11 +773,40 @@ private:
                 return key;
             }
         }
+        for(const auto& e:ents)for(const auto& value:e.meta.value("previewKnees").toArray()) {
+            const auto knee=value.toObject();const double x=knee.value("x").toDouble();
+            const auto p=view_->screenAt({x,knee.value("y0").toDouble()}),q=view_->screenAt({x,knee.value("y1").toDouble()});
+            if(std::abs(at.x()-p.x())<=6 && at.y()>=std::min(p.y(),q.y())+3 && at.y()<=std::max(p.y(),q.y())-3) {
+                *a=knee.value("a").toDouble();*b=knee.value("b").toDouble();return knee.value("key").toString();
+            }
+        }
         return {};
     }
     void put(const QPointF& at, bool done) {
+        if(!knees_.empty()) {
+            int selected=-1;double gap=0;
+            std::vector<double> x;
+            for(size_t i=0;i<knees_.size();++i) {
+                x.push_back(knees_[i].value("x").toDouble());gap=std::max(gap,knees_[i].value("gap").toDouble());
+                if(knees_[i].value("key").toString()==key_)selected=static_cast<int>(i);
+            }
+            if(selected<0)return;
+            double low=knees_[selected].value("a").toDouble(),high=knees_[selected].value("b").toDouble();
+            for(int i=0;i<selected;++i)low=std::max(low,knees_[i].value("a").toDouble()+gap*(selected-i));
+            for(size_t i=selected+1;i<knees_.size();++i)high=std::min(high,knees_[i].value("b").toDouble()-gap*(i-selected));
+            if(low>high)return;
+            x[selected]=std::clamp(view_->worldAt(at).x-offset_,low,high);
+            for(int i=selected-1;i>=0;--i)x[i]=std::min(x[i],x[i+1]-gap);
+            for(size_t i=selected+1;i<x.size();++i)x[i]=std::max(x[i],x[i-1]+gap);
+            for(size_t i=0;i<x.size();++i) {
+                const double a=knees_[i].value("a").toDouble(),b=knees_[i].value("b").toDouble();
+                if(b>a)def_().layout.markAt[knees_[i].value("key").toString()]=std::clamp((x[i]-a)/(b-a),0.,1.);
+            }
+            if(moved_)moved_(done);return;
+        }
         if (b_ <= a_) return;
-        const double x = view_->worldAt(at).x;
+        const auto point=view_->worldAt(at);
+        const double x = vertical_?point.y:point.x;
         def_().layout.markAt.insert(key_, std::clamp((x - a_) / (b_ - a_), 0.0, 1.0));
         if (moved_) moved_(done);
     }
@@ -767,6 +814,9 @@ private:
     std::function<HarnessDef&()> def_;
     std::function<void(bool)> moved_;
     QString key_;
+    bool vertical_ = false;
+    std::vector<QJsonObject> knees_;
+    double offset_ = 0;
     double a_ = 0.0, b_ = 0.0;
 };
 } // namespace
@@ -1152,7 +1202,7 @@ HarnessBuilderDialog::HarnessBuilderDialog(Editor* editor, QWidget* parent)
         connSeq_ = 0;
         wireSeq_ = 0;
         // As a builder opened afresh starts: the rows grouped by the connectors they join.
-        grouping_ = WireGrouping::Connectors;
+        grouping_ = WireGrouping::None;
         collapsedGroups_.clear();
         syncing_ = true;
         if (groupByBox_) groupByBox_->setCurrentIndex(groupByBox_->findData(static_cast<int>(grouping_)));
@@ -2030,12 +2080,13 @@ void HarnessBuilderDialog::reloadShields() {
         // HOW: the screen's own drain, or a hook-up wire spliced on.
         auto* via = new QComboBox(card);
         via->setObjectName(QStringLiteral("harnessBuilderDrainVia_") + id);
+        via->addItem(QStringLiteral("Not connected"), QString());
         via->addItem(QStringLiteral("Direct - the shield's own drain"), QStringLiteral("direct"));
         via->addItem(QStringLiteral("Through a hook-up wire"), QStringLiteral("wire"));
-        via->setCurrentIndex(c.drainVia == QLatin1String("wire") ? 1 : 0);
+        via->setCurrentIndex(c.drainTo.isEmpty()?0:c.drainVia == QLatin1String("wire") ? 2 : 1);
         connect(via, &QComboBox::currentIndexChanged, this, [changed, id, via](int i) {
             const QString pick = via->itemData(i).toString();
-            changed(id, [pick](HarnessConnector& cc) { cc.drainVia = pick; });
+            changed(id, [pick](HarnessConnector& cc) { if(pick.isEmpty())cc.drainTo.clear();else cc.drainVia = pick; });
         });
         auto* viaLabel = new QLabel(QStringLiteral("Connected"), card);
         g->addWidget(viaLabel, 2, 0);
@@ -2154,8 +2205,11 @@ void HarnessBuilderDialog::applyStepLayout(int step) {
     const bool changedOrientation=mainSplit_->orientation()!=want;
     mainSplit_->setProperty("previewStep",step);
     auto* preview=mainSplit_->widget(1);
-    preview->show();
+    const bool wiring = step == 1 && wireViews_ && wireViews_->currentIndex() == 1;
+    preview->setVisible(!wiring);
     preview->setMinimumHeight(220);
+    for (auto* control : findChildren<QWidget*>())
+        if (control->property("wireTableControl").toBool()) control->setVisible(!wiring);
     if(!changedOrientation && !changedStep)return;
     // The steps already scroll. Do not grow a whole page to its natural content
     // height: that pushed the preview below the window on Shields and Layout.
@@ -2519,6 +2573,8 @@ QList<QPair<QString, QString>> HarnessBuilderDialog::endpointChoices() const {
                                                                     : QStringLiteral("right")));
     for (const QString& key : harnessShieldEndpoints(def_))
         out << qMakePair(key, harnessShieldEndpointLabel(def_, key));
+    for (const auto& j : def_.joints)
+        out << qMakePair(harnessJointEndpointKey(j.id), QStringLiteral("Joint %1").arg(j.id));
     // A flying lead: the wire runs out and stops.
     out << qMakePair(harnessOpenEndpointKey(), QStringLiteral("Open (flying lead)"));
     return out;
@@ -2664,8 +2720,9 @@ QWidget* HarnessBuilderDialog::buildWiresSection() {
         groupBtn->setMenu(menu);
     }
 
-    auto* fillBtn = new QPushButton(QStringLiteral("Auto-fill pins"), this);
-    fillBtn->setToolTip(QStringLiteral("Give every wire the next free pin at each end, in "
+    auto* fillBtn = new QPushButton(QStringLiteral("Fill missing pins"), this);
+    fillBtn->setObjectName(QStringLiteral("harnessBuilderFillPins"));
+    fillBtn->setToolTip(QStringLiteral("Complete missing, invalid or duplicate pin assignments using free pins, in "
                                       "order, without disturbing the pins already set"));
     connect(fillBtn, &QPushButton::clicked, this, [this] { autoFillPins(); });
     // WIRED BY HAND, in this same place: the wiring view - the connectors drawn with their pins, wired by clicking and
@@ -2685,6 +2742,7 @@ QWidget* HarnessBuilderDialog::buildWiresSection() {
     auto* groupLabel = new QLabel(QStringLiteral("Group by"), this);
     groupLabel->setStyleSheet(QStringLiteral("color:#9fb4c8;"));
     groupByBox_ = new QComboBox(this);
+    groupByBox_->setObjectName(QStringLiteral("harnessBuilderGroupBy"));
     groupByBox_->addItem(QStringLiteral("None"), static_cast<int>(WireGrouping::None));
     groupByBox_->addItem(QStringLiteral("Shield"), static_cast<int>(WireGrouping::Shield));
     groupByBox_->addItem(QStringLiteral("Twist"), static_cast<int>(WireGrouping::Twist));
@@ -2804,6 +2862,8 @@ QWidget* HarnessBuilderDialog::buildWiresSection() {
     auto* wiringLay = new QVBoxLayout(wiringHost_);
     wiringLay->setContentsMargins(0, 0, 0, 0);
     wireViews_->addWidget(wiringHost_);
+    for (auto* control : QList<QWidget*>{addBtn, groupBtn, fillBtn, groupLabel, groupByBox_, expandBtn, collapseBtn})
+        control->setProperty("wireTableControl", true);
     return section(QStringLiteral("Wire connections"), wireViews_, this,
                    QList<QWidget*>{addBtn, groupBtn, wireBtn, fillBtn, groupLabel, groupByBox_, expandBtn, collapseBtn});
 }
@@ -2998,6 +3058,8 @@ WiringDialog* HarnessBuilderDialog::openWiringWindow() {
 }
 
 void HarnessBuilderDialog::showWiringView(bool on) {
+    for (auto* control : findChildren<QWidget*>())
+        if (control->property("wireTableControl").toBool()) control->setVisible(!on);
     if (wireViewBtn_ && wireViewBtn_->isChecked() != on) {
         const QSignalBlocker hush(wireViewBtn_);
         wireViewBtn_->setChecked(on);
@@ -3527,51 +3589,32 @@ void HarnessBuilderDialog::removeWire(int row) {
 }
 
 void HarnessBuilderDialog::autoFillPins() {
-    // Walk the wires in order handing out the lowest pin nobody has taken yet at each end.
-    // Pins already claimed are left alone, so this completes a part-built mapping rather
-    // than overwriting it.
-    QSet<QString> taken;
-    for (const auto& w : def_.wires) {
-        taken.insert(QStringLiteral("%1/%2").arg(w.fromConn).arg(w.fromPin));
-        taken.insert(QStringLiteral("%1/%2").arg(w.toConn).arg(w.toPin));
-    }
-    auto claim = [&taken, this](const QString& connId, int& pin) {
-        const HarnessConnector* c = harnessConnById(def_, connId);
-        if (!c) return;
-        const QString key = QStringLiteral("%1/%2").arg(connId).arg(pin);
-        // Keep a pin that is valid and only claimed by this wire.
-        if (pin >= 1 && pin <= std::max(1, c->pinCount)) return;
-        for (int p = 1; p <= std::max(1, c->pinCount); ++p) {
-            const QString k = QStringLiteral("%1/%2").arg(connId).arg(p);
-            if (taken.contains(k)) continue;
-            taken.remove(key);
-            taken.insert(k);
-            pin = p;
-            return;
-        }
-    };
-    // First fix anything out of range, then spread duplicates onto free pins.
-    for (auto& w : def_.wires) {
-        claim(w.fromConn, w.fromPin);
-        claim(w.toConn, w.toPin);
-    }
+    QHash<QString,int> reserved;
+    auto key = [](const QString& conn,int pin) { return QStringLiteral("%1/%2").arg(conn).arg(pin); };
+    for (const auto& w : def_.wires)
+        for (const auto& end : {std::make_pair(w.fromConn,w.fromPin), std::make_pair(w.toConn,w.toPin)})
+            if (const auto* c = harnessConnById(def_,end.first); c && end.second>=1 && end.second<=c->pinCount)
+                ++reserved[key(end.first,end.second)];
     QSet<QString> seen;
-    for (auto& w : def_.wires)
-        for (auto* side : {&w.fromConn, &w.toConn}) {
-            int* pin = (side == &w.fromConn) ? &w.fromPin : &w.toPin;
-            const HarnessConnector* c = harnessConnById(def_, *side);
-            if (!c) continue;
-            QString key = QStringLiteral("%1/%2").arg(*side).arg(*pin);
-            if (!seen.contains(key)) { seen.insert(key); continue; }
-            for (int p = 1; p <= std::max(1, c->pinCount); ++p) {
-                const QString k = QStringLiteral("%1/%2").arg(*side).arg(p);
-                if (seen.contains(k)) continue;
-                *pin = p;
-                seen.insert(k);
-                break;
-            }
-        }
-    reloadAll();
+    int assigned=0, unresolved=0;
+    for (auto& w : def_.wires) for (int end=0;end<2;++end) {
+        const QString conn = end ? w.toConn : w.fromConn;
+        int& pin = end ? w.toPin : w.fromPin;
+        const auto* c = harnessConnById(def_,conn);
+        if (!c) continue;
+        const QString old = key(conn,pin);
+        const bool valid = pin>=1 && pin<=c->pinCount;
+        if (valid && !seen.contains(old)) {seen.insert(old);continue;}
+        int free=0;
+        for (int candidate : harnessPinSequence(*c)) if (!reserved.value(key(conn,candidate))) {free=candidate;break;}
+        if (!free) {++unresolved;continue;}
+        if (valid) --reserved[old];
+        pin=free;++reserved[key(conn,pin)];seen.insert(key(conn,pin));++assigned;
+    }
+    if (assigned) reloadAll();
+    summaryLabel_->setText(unresolved ? QStringLiteral("%1 pin assignments filled; %2 ends still need free pins").arg(assigned).arg(unresolved)
+        : assigned ? QStringLiteral("%1 missing or duplicate pin assignments filled").arg(assigned)
+        : QStringLiteral("All connection pins are already assigned. This fills existing rows; use Add wire to create connections."));
 }
 
 void HarnessBuilderDialog::reloadWires() {
@@ -4152,13 +4195,14 @@ void HarnessBuilderDialog::buildWireRow(int row, const HarnessWire& wRef,
             // Neither a screen nor an open end has pins: the field says so rather than offering
             // a number that means nothing. A drain lands on the screen's leg; a flying lead
             // lands on nothing at all.
-            if (isShield || isOpen) {
+            if (isShield || isOpen || harnessIsJointEndpoint(key)) {
                 pin->setEnabled(false);
                 pin->setSpecialValueText(QStringLiteral("—"));
                 pin->setRange(0, 0);
                 pin->setToolTip(isShield
                                     ? QStringLiteral("A drain lands on the shield's leg, not on "
                                                    "a pin")
+                                    : harnessIsJointEndpoint(key) ? QStringLiteral("A shared wire joint has no pin number")
                                     : QStringLiteral("An open end lands on nothing"));
             }
             pin->setStyleSheet(tintStyle(tint));
@@ -4590,7 +4634,20 @@ QWidget* HarnessBuilderDialog::buildLayoutSection() {
     spliceBox_->setToolTip(QStringLiteral(
         "Mark a joint where two wires meet end to end; without it a join cannot be told from "
         "one wire passing over another"));
-    optLay->addWidget(bridgeBox_);
+    bridgeBox_->hide();
+    auto* crossingStyle = new QComboBox(optCol);
+    crossingStyle->setObjectName(QStringLiteral("harnessCrossingStyle"));
+    crossingStyle->addItem(QStringLiteral("Straight"), false);
+    crossingStyle->addItem(QStringLiteral("Arc"), true);
+    crossingStyle->setCurrentIndex(def_.layout.bridgeCrossings ? 1 : 0);
+    optLay->addWidget(new QLabel(QStringLiteral("Wire crossings"), optCol));
+    optLay->addWidget(crossingStyle);
+    connect(crossingStyle, &QComboBox::currentIndexChanged, this, [this, crossingStyle](int i) {
+        bridgeBox_->setChecked(crossingStyle->itemData(i).toBool());
+    });
+    connect(bridgeBox_, &QCheckBox::toggled, crossingStyle, [crossingStyle](bool on) {
+        const QSignalBlocker hush(crossingStyle); crossingStyle->setCurrentIndex(on ? 1 : 0);
+    });
     optLay->addWidget(terminateBox_);
     optLay->addWidget(terminateWiresBox_);
     optLay->addWidget(spliceBox_);

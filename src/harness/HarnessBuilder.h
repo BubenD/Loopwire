@@ -8,6 +8,8 @@
 #include <QString>
 #include <QStringList>
 #include <vector>
+#include <functional>
+#include <optional>
 
 namespace Loopwire {
 
@@ -196,15 +198,30 @@ struct HarnessLayout {
     // colour list is for.
 };
 
+struct HarnessJoint {
+    QString id;
+    QString fromConn, toConn;
+    int fromPin = 0, toPin = 0;
+};
+
 struct HarnessDef {
     bool physicalBom = false; // legacy drawings retain geometric BOM behaviour
     std::vector<HarnessConnector> connectors;
     std::vector<HarnessWire> wires;
+    std::vector<HarnessJoint> joints;
+    QStringList rootShields;
     HarnessLayout layout;
     // A SCREEN'S OWN PART, by its group name: a library part (its id), or a P/N typed. Written only when there is one.
     QHash<QString, QString> shieldParts;
     QHash<QString, QString> shieldPns;
 };
+
+// Split a physical conductor, retaining its first segment's id. The returned endpoint
+// is shared by both segments and any additional branches.
+QString harnessSplitWire(HarnessDef& def, const QString& wireId);
+using HarnessPaths = QHash<QString, std::vector<Vec2>>;
+HarnessPaths harnessJointPaths(const HarnessDef& def, const HarnessPaths& seeds,
+    const std::function<std::optional<Vec2>(const QString&, int)>& pinAt, double pitch);
 
 // THE DEFINITION AS A FILE HAS IT, and back: every field of every connector, wire and the layout - what a builder
 // file, a preset and the builder's own undo keep. A field a file does not have takes its default.

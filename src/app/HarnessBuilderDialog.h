@@ -320,7 +320,7 @@ private:
     enum class WireGrouping { None, Shield, Twist, Connectors, Assembly };
     // Grouped by the connector pair by default: that is how a harness is read - everything
     // running from P1 to P2, then P1 to P3 - and the groups follow the placement order.
-    WireGrouping grouping_ = WireGrouping::Connectors;
+    WireGrouping grouping_ = WireGrouping::None;
     QSet<QString> collapsedGroups_;
     QSet<QString> seenAssemblyGroups_;
     // True while an Add wire is waiting for a group header to be clicked.

@@ -14,6 +14,9 @@
 #include "model/Document.h"
 
 #include <QApplication>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QMimeData>
 #include <QJsonArray>
 #include <QSet>
 #include <QScreen>
@@ -21,6 +24,7 @@
 #include <QPushButton>
 #include <QListWidgetItem>
 #include <QMouseEvent>
+#include <QLineF>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QTimer>
@@ -1516,10 +1520,9 @@ void testWiringWindow() {
     canvas->setTool(WiringCanvas::Tool::Screen);
     const size_t before = wizard.definition().wires.size();
     strokeAcross(first.id, second);
-    const HarnessWire drain = last();
-    check(!wireOf(first.id).shieldGroup.isEmpty() && wizard.definition().wires.size() == before + 1 &&
-              drain.fromConn == harnessInternalShieldKey(wireOf(first.id).shieldGroup) && drain.toConn == QLatin1String("c2"),
-          "wiring window: a stroke with Screen - screened, its drain to the connector said");
+    check(!wireOf(first.id).shieldGroup.isEmpty() && wireOf(first.id).shieldGroup == wireOf(second).shieldGroup &&
+              wizard.definition().wires.size() == before,
+          "wiring window: a stroke with Screen creates the shield without an automatic drain wire");
     // PICKED BY A STROKE, a colour for both.
     canvas->setTool(WiringCanvas::Tool::Select);
     strokeAcross(first.id, second);
@@ -1713,7 +1716,7 @@ void testWiringWindow() {
         HarnessWire joint;
         for (const HarnessWire& w : d.wires)
             if (w.id == j) joint = w;
-        check(!j.isEmpty() && harnessIsJointEndpoint(joint.toConn) && harnessJointEndpointWire(joint.toConn) == w3,
+        check(!j.isEmpty() && harnessIsJointEndpoint(joint.toConn) && !harnessJointEndpointWire(joint.toConn).isEmpty() && d.joints.size() == 1,
               "joint: a wire from a pin to a joint on another wire's run");
         bool badJoint = false;
         for (const HarnessIssue& is : validateHarness(d))
@@ -1723,7 +1726,7 @@ void testWiringWindow() {
         const HarnessBuild built = buildHarness(drawn);
         bool jointRun = false, spliced = false, xOnPin = false, stubless = false;
         for (const Entity& e : built.entities) {
-            if (e.type == EntityType::Wire && e.meta.value(QStringLiteral("jointTo")).toString() == w3) jointRun = true;
+            if (e.type == EntityType::Wire && e.meta.value(QStringLiteral("jointTo")).toString() == harnessJointEndpointWire(joint.toConn)) jointRun = true;
             if (e.type == EntityType::Splice) spliced = true;
             if (e.type == EntityType::Connector && !e.meta.value(QStringLiteral("stublessRows")).toArray().isEmpty()) stubless = true;
         }
@@ -1738,9 +1741,8 @@ void testWiringWindow() {
         check(xOnPin && !stubless, "unconnected: an unwired pin terminated at its pin's end - off the connector's body, its stub drawn");
         // A WIRE MOVED WITH ITS PINS: to before w1, its pins where w1's are in both stacks.
         dlg2.moveWireWithPins(w3, 0);
-        check(dlg2.canvas()->shownWires().front() == w3 && at(QStringLiteral("a"), 3) < at(QStringLiteral("a"), 1) &&
-                  at(QStringLiteral("b"), 3) < at(QStringLiteral("b"), 1),
-              "move with pins: the wire first in the list, its pins first in both stacks");
+        check(dlg2.canvas()->shownWires().front() == w3 && at(QStringLiteral("a"), 3) < at(QStringLiteral("a"), 1),
+              "move with pins: the segment first in the list, its connector pin first in its stack");
         // THE STACKS IN ORDER: the brick picked, its free pins to the top.
         dlg2.canvas()->setSelectedBricks({QStringLiteral("b")});
         dlg2.orderStacks(false);
@@ -1758,9 +1760,11 @@ void testWiringWindow() {
                       dlg2.screenDrain(s, 0, &target) == QLatin1String("hook") && target == QLatin1String("pin:b:6"),
                   "screen: or by a hook-up wire spliced onto it - to any connector's pin, the other end's too");
         }
+        check(!dlg2.setScreenDrain(s,1,QStringLiteral("drain"),QStringLiteral("shield:b")),"screen: an undefined connector shield cannot be a drain target");
+        for(auto& c:d.connectors)if(c.id==QLatin1String("b"))c.shieldRight=true;
         check(dlg2.setScreenDrain(s, 1, QStringLiteral("drain"), QStringLiteral("shield:b")) && dlg2.screenDrain(s, 1) == QLatin1String("drain") &&
                   harnessConnById(d, QStringLiteral("b"))->shieldRight,
-              "screen: drained at its right onto the connector's own screen - which it is given");
+              "screen: drained at its right onto the connector's explicitly defined screen");
         dlg2.setScreenPart(s, QString(), QStringLiteral("SH-123"));
         check(harnessDefFromJson(harnessDefToJson(d)).shieldPns.value(s) == QLatin1String("SH-123"), "screen: its own P/N, kept");
         const HarnessBuild screened = buildHarness(d);
@@ -1828,7 +1832,7 @@ void testWiringWindow() {
             HarnessWire nw;
             for (const HarnessWire& w : d.wires)
                 if (w.id == added) nw = w;
-            check(!added.isEmpty() && nw.fromConn == QLatin1String("b") && nw.fromPin == 5 && harnessJointEndpointWire(nw.toConn) == w2,
+            check(!added.isEmpty() && nw.fromConn == QLatin1String("b") && nw.fromPin == 5 && !harnessJointEndpointWire(nw.toConn).isEmpty(),
                   "joint: added on a wire, its new wire to the pin picked");
             QApplication::processEvents();
             QString found;
@@ -2187,7 +2191,7 @@ void testWiringRequestedRefinements() {
         const bool hit=!dialog.canvas()->groupMarkAt({double(x),y}).isEmpty();
         if(hit && !previous)++groups;previous=hit;
     }
-    check(groups==3,"wiring marks: shields at both configured ends, one twist in the middle");
+    check(groups==4,"wiring marks: shields at both ends with the configured twists beside them");
     const QPointF pin=dialog.canvas()->pinCentre(left.id,6)*dialog.canvas()->zoom();
     QMouseEvent doubleClick(QEvent::MouseButtonDblClick,pin,pin,Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
     QApplication::sendEvent(dialog.canvas(),&doubleClick);
@@ -2221,11 +2225,528 @@ void testWiringRequestedRefinements() {
     wizard.hide();document.setDirty(false);useHarnessBuilderLibraryForTest(savedLibrary);
 }
 
+void testWiringResizeAndSharedJoints() {
+    HarnessDef def;
+    HarnessConnector a; a.id=QStringLiteral("a"); a.designator=QStringLiteral("P1"); a.pinCount=8;
+    HarnessConnector b=a; b.id=QStringLiteral("b"); b.designator=QStringLiteral("P2"); b.side=HarnessSide::Right;
+    def.connectors={a,b};
+    WiringDialog dialog(def,[]{}); dialog.resize(1300,800); dialog.show(); dialog.showTwo(a.id,b.id);
+    dialog.setOptimize(false,false,false);
+    const QString original=dialog.connectPins(a.id,1,b.id,1);
+    const QString branch=dialog.connectToWire(a.id,6,original);
+    check(def.wires.size()==3 && def.joints.size()==1,"joint split: two physical halves plus a separate branch");
+    if (def.joints.empty()) return;
+    const QString key=harnessJointEndpointKey(def.joints.front().id);
+    const auto order=harnessPinSequence(def.connectors.front());
+    check(order.size()>1 && order[0]==1 && order[1]==6,"joint branch: pin moves directly below the wired pin");
+    dialog.refresh(); QApplication::processEvents();
+    for (auto& w:def.wires) if(w.id==branch) {
+        const auto path=dialog.canvas()->jointPath(w);
+        check(path.size()>=3 && path.front().y()>path.back().y() &&
+              std::abs(path.front().y()-path[1].y())<1e-6,"joint branch: parallel run turns up into its joint");
+    }
+    const QString second=dialog.connectToWire(b.id,7,original);
+    check(!second.isEmpty() && def.joints.size()==1 && def.wires.size()==4,"joint branch: several wires share one existing joint");
+    QString continuation;
+    for(const auto& w:def.wires) if(w.fromConn==key && w.toConn==b.id) continuation=w.id;
+    dialog.canvas()->setSelection({continuation}); dialog.setSelectedColor(QStringLiteral("RD"));
+    dialog.setSelectedGauge(QStringLiteral("1.5")); dialog.setSelectedLabel(QStringLiteral("POWER"));
+    dialog.canvas()->setSelection({branch}); dialog.setSelectedColor(QStringLiteral("GN"));
+    dialog.setSelectedGauge(QStringLiteral("0.25")); dialog.setSelectedLabel(QStringLiteral("SENSE"));
+    const auto again=harnessDefFromJson(harnessDefToJson(def));
+    check(again.joints.size()==1 && again.wires.size()==4 && harnessDefToJson(again)==harnessDefToJson(def),
+          "joint split: shared nodes and independent wire properties survive save/load");
+    const auto built=buildHarness(again);
+    QHash<QString,Entity> wires;
+    int splices=0;
+    for(const auto& e:built.entities) {
+        if(e.type==EntityType::Wire)wires[e.meta.value(QStringLiteral("defWire")).toString()]=e;
+        if(e.type==EntityType::Splice)++splices;
+    }
+    check(wires.size()==4 && splices==1,"joint split: four separately generated wires and one shared splice dot");
+    if(wires.contains(original) && wires.contains(continuation) && wires.contains(branch) && wires.contains(second)) {
+        const Vec2 node=wires[original].points.back();
+        check(distance(node,wires[continuation].points.front())<1e-6 && distance(node,wires[branch].points.back())<1e-6 &&
+              distance(node,wires[second].points.back())<1e-6,"joint split: every connected segment ends at the same geometric node");
+        const auto& run=wires[continuation];
+        check(run.meta.value(QStringLiteral("wireColor")).toString()==QLatin1String("RD") &&
+              run.meta.value(QStringLiteral("wireGauge")).toString()==QLatin1String("1.5") &&
+              run.meta.value(QStringLiteral("wireLabel")).toString()==QLatin1String("POWER") &&
+              run.meta.value(QStringLiteral("showColorName")).toBool() && run.meta.value(QStringLiteral("showGaugeName")).toBool(),
+              "joint split: each new segment carries its own visible colour, gauge and label");
+    }
+    check(validateHarness(again).empty(),"joint split: shared nodes do not report invalid pins or duplicate pin connections");
+    HarnessDef legacy;legacy.connectors={a,b};
+    HarnessWire old;old.id=QStringLiteral("old");old.fromConn=a.id;old.fromPin=1;old.toConn=b.id;old.toPin=1;
+    HarnessWire oldBranch=old;oldBranch.id=QStringLiteral("oldBranch");oldBranch.fromPin=2;oldBranch.toConn=harnessJointEndpointKey(old.id);oldBranch.toPin=0;
+    legacy.wires={old,oldBranch};const auto upgraded=harnessDefFromJson(harnessDefToJson(legacy));
+    check(upgraded.joints.size()==1 && upgraded.wires.size()==3 && validateHarness(upgraded).empty(),
+          "joint split: legacy pin-to-run branches upgrade without losing their connections");
+    if(!qEnvironmentVariable("LOOPWIRE_WIRING_JOINT_IMAGE").isEmpty()) {
+        QEventLoop renderWait;QTimer::singleShot(250,&renderWait,&QEventLoop::quit);renderWait.exec();
+        dialog.grab().save(qEnvironmentVariable("LOOPWIRE_WIRING_JOINT_IMAGE"));
+    }
+    const QString nested=dialog.splitAtJoint(continuation);
+    const auto nestedBuild=buildHarness(def);
+    int count=0;for(const auto& e:nestedBuild.entities)if(e.type==EntityType::Wire && e.points.size()>=2)++count;
+    check(!nested.isEmpty() && def.joints.size()==2 && count==5,"joint split: a segment can be split again, including a wire between two joints");
+    for(const auto& w:def.wires) if(w.id==continuation) {
+        const auto path=dialog.canvas()->jointPath(w);
+        if(path.empty())break;
+        const QPointF target=path.back()*dialog.canvas()->zoom();
+        const QPointF start=dialog.canvas()->pinCentre(a.id,8)*dialog.canvas()->zoom();
+        auto mouse=[&](QEvent::Type type,const QPointF& at,Qt::MouseButtons buttons) {
+            QMouseEvent event(type,at,dialog.canvas()->mapToGlobal(at),Qt::LeftButton,buttons,Qt::NoModifier);
+            QApplication::sendEvent(dialog.canvas(),&event);
+        };
+        mouse(QEvent::MouseButtonPress,start,Qt::LeftButton);mouse(QEvent::MouseMove,target,Qt::LeftButton);
+        mouse(QEvent::MouseButtonRelease,target,Qt::NoButton);
+        break;
+    }
+    check(def.wires.size()==6 && def.joints.size()==2 && def.wires.back().toConn==nested &&
+          harnessPinSequence(def.connectors.front())[1]==8,"joint drag: a pin dropped on the second dot joins that exact node and moves beside its source pin");
+    auto* overlay=dialog.findChild<QWidget*>(QStringLiteral("wiringCmaOverlay"));
+    auto* cma=dialog.findChild<QLabel*>(QStringLiteral("wiringCma"));
+    dialog.resize(1450,900);QApplication::processEvents();
+    check(overlay && cma && overlay->isVisibleTo(&dialog) &&
+          std::abs(overlay->geometry().right()-(overlay->parentWidget()->width()-11))<=1 &&
+          std::abs(overlay->geometry().bottom()-(overlay->parentWidget()->height()-11))<=1,
+          "CMA: stays at the bottom right of the bricks viewport after resizing");
+    // A separate unsplit cable provides a child shield to drag out to the root.
+    const QString c1=dialog.connectPins(a.id,3,b.id,3),c2=dialog.connectPins(a.id,4,b.id,4);
+    const QString plainCable=dialog.groupWires(WiringCanvas::Tool::Cable,{c1,c2});
+    const QString shield=dialog.addCableShield(plainCable);
+    auto* groups=dialog.findChild<QListWidget*>(QStringLiteral("wiringGroups"));
+    QMimeData data;data.setData("application/x-loopwire-group",QJsonDocument(QJsonObject{{"kind",QStringLiteral("shield")},{"name",shield}}).toJson());
+    const QPoint drop(3,groups->viewport()->height()-5);
+    QDragEnterEvent enter(drop,Qt::MoveAction,&data,Qt::LeftButton,Qt::NoModifier);
+    QApplication::sendEvent(groups->viewport(),&enter);
+    QDropEvent release(drop,Qt::MoveAction,&data,Qt::LeftButton,Qt::NoModifier);
+    QApplication::sendEvent(groups->viewport(),&release);
+    check(def.rootShields.contains(shield) && dialog.cableOfShield(shield).isEmpty() &&
+          harnessDefFromJson(harnessDefToJson(def)).rootShields.contains(shield),"groups: a child shield dragged to root stays independent after save/load");
+    dialog.hide();
+
+    Document document; Editor editor;editor.setDocument(&document);
+    HarnessBuilderDialog wizard(&editor);wizard.loadDemand(again,QStringLiteral("wiring regressions"));
+    wizard.resize(1300,850);wizard.show();wizard.setStep(1);QApplication::processEvents();
+    wizard.openWiringWindow();QApplication::processEvents();
+    auto* split=wizard.findChild<QSplitter*>(QStringLiteral("harnessBuilderSplit"));
+    // Find the top-level split by its page/preview children when a saved layout used another name.
+    if(!split)for(auto* candidate:wizard.findChildren<QSplitter*>())
+        if(candidate->count()==2 && candidate->widget(1)->findChild<QWidget*>(QStringLiteral("harnessBuilderPreview"))) {split=candidate;break;}
+    for(const auto size:{QSize(1500,900),QSize(1100,750),QSize(1350,850)}) {
+        wizard.resize(size);QApplication::processEvents();
+        check(split && !split->widget(1)->isVisibleTo(&wizard),"interactive resize: outer preview remains hidden while wiring is open");
+    }
+    bool hidden=true;int controls=0;
+    for(auto* control:wizard.findChildren<QWidget*>())if(control->property("wireTableControl").toBool()) {++controls;hidden=hidden&&!control->isVisibleTo(&wizard);}
+    check(controls>=8 && hidden,"interactive mode: all table controls stay hidden after resizing");
+    if(!qEnvironmentVariable("LOOPWIRE_WIRING_WIZARD_IMAGE").isEmpty()) {
+        QEventLoop renderWait;QTimer::singleShot(250,&renderWait,&QEventLoop::quit);renderWait.exec();
+        wizard.grab().save(qEnvironmentVariable("LOOPWIRE_WIRING_WIZARD_IMAGE"));
+    }
+    auto* toggle=wizard.findChild<QPushButton*>(QStringLiteral("harnessBuilderWireConnectors"));toggle->click();QApplication::processEvents();
+    check(split && split->widget(1)->isVisibleTo(&wizard),"table mode: outer preview restored");
+    bool visible=true;for(auto* control:wizard.findChildren<QWidget*>())if(control->property("wireTableControl").toBool())visible=visible&&control->isVisibleTo(&wizard);
+    check(visible,"table mode: table controls restored");
+    auto* crossing=wizard.findChild<QComboBox*>(QStringLiteral("harnessCrossingStyle"));
+    crossing->setCurrentIndex(0);check(!wizard.definition().layout.bridgeCrossings,"layout: Straight disables crossing arcs");
+    crossing->setCurrentIndex(1);check(wizard.definition().layout.bridgeCrossings,"layout: Arc enables crossing bridges");
+    wizard.hide();document.setDirty(false);
+}
+
+void testWizardWiringFollowups() {
+    const auto oldBomColumns=QSettings().value(QStringLiteral("harnessBuilder/ui/v2/bomColumns"));
+    QSettings().remove(QStringLiteral("harnessBuilder/ui/v2/bomColumns"));
+    HarnessDef def;HarnessConnector a;a.id=QStringLiteral("a");a.designator=QStringLiteral("P1");a.pinCount=8;
+    HarnessConnector b=a;b.id=QStringLiteral("b");b.designator=QStringLiteral("P2");b.side=HarnessSide::Right;def.connectors={a,b};
+    Document document;Editor editor;editor.setDocument(&document);HarnessBuilderDialog wizard(&editor);wizard.show();
+    auto* grouping=wizard.findChild<QComboBox*>(QStringLiteral("harnessBuilderGroupBy"));
+    check(grouping && grouping->currentText()==QLatin1String("None"),"wizard default: Group by starts at None");
+    HarnessWire first;first.id=QStringLiteral("one");first.fromConn=a.id;first.fromPin=1;first.toConn=b.id;first.toPin=1;
+    HarnessWire duplicate=first;duplicate.id=QStringLiteral("two");duplicate.toPin=0;
+    HarnessWire reserved=first;reserved.id=QStringLiteral("three");reserved.fromPin=4;reserved.toPin=2;def.wires={first,duplicate,reserved};
+    wizard.loadDemand(def,QStringLiteral("fill pins"));wizard.setStep(1);QApplication::processEvents();
+    auto* fill=wizard.findChild<QPushButton*>(QStringLiteral("harnessBuilderFillPins"));fill->click();
+    const auto filled=wizard.definition();
+    check(filled.wires[1].fromPin==2 && filled.wires[1].toPin==3 && filled.wires[2].fromPin==4 && filled.wires[2].toPin==2,
+          "fill pins: missing and duplicate ends use free pins while preserving later valid assignments");
+    fill->click();bool explained=false;
+    for(auto* label:wizard.findChildren<QLabel*>())explained=explained||label->text().contains(QStringLiteral("already assigned"));
+    check(explained,"fill pins: explains when existing rows are already complete");
+    wizard.findChild<QPushButton*>(QStringLiteral("wizardLiveBom"))->click();QApplication::processEvents();
+    auto* bom=wizard.findChild<QTableWidget*>(QStringLiteral("wizardBomTable"));
+    check(bom && bom->horizontalHeaderItem(2)->text()==QLatin1String("Qty") && bom->columnWidth(1)>bom->columnWidth(2)*3,
+          "live BOM: wide Description and compact Qty columns");
+    if(bom) {
+        auto* header=bom->horizontalHeader();bool interactive=true;
+        for(int c=0;c<6;++c)interactive=interactive&&header->sectionResizeMode(c)==QHeaderView::Interactive;
+        const int width=header->sectionSize(1);header->resizeSection(1,width+40);
+        check(interactive && header->sectionSize(1)==width+40,"live BOM: every column supports manual border resizing");
+    }
+    wizard.hide();document.setDirty(false);
+    if(oldBomColumns.isValid())QSettings().setValue(QStringLiteral("harnessBuilder/ui/v2/bomColumns"),oldBomColumns);
+    else QSettings().remove(QStringLiteral("harnessBuilder/ui/v2/bomColumns"));
+
+    def.wires.clear();WiringDialog dialog(def,[]{});dialog.resize(1350,850);dialog.show();dialog.showTwo(a.id,b.id);
+    dialog.setOptimize(false,false,false);
+    const auto w1=dialog.connectPins(a.id,1,b.id,3),w2=dialog.connectPins(a.id,2,b.id,1),w3=dialog.connectPins(a.id,3,b.id,2);
+    const auto branch=dialog.connectToWire(a.id,5,w3);
+    dialog.setOptimize(true,false,false);dialog.optimizePinStack();
+    const auto order=harnessPinSequence(def.connectors[1]);
+    auto index=[&](int pin){return std::find(order.begin(),order.end(),pin)-order.begin();};
+    check(index(3)<index(1) && index(1)<index(2),"avoid crossing: includes split wires and shared joint connections when ordering pins");
+    check(dialog.canvas()->barCentre(w1).y()<dialog.canvas()->barCentre(w2).y() && dialog.canvas()->barCentre(w2).y()<dialog.canvas()->barCentre(w3).y(),
+          "avoid crossing: joint route rows follow the optimized ordinary wire order");
+    for(const auto& w:def.wires)if(w.id==branch) {
+        const auto path=dialog.canvas()->jointPath(w);
+        check(path.size()==5 && std::abs(path[1].y()-path[2].y())>0.1 && std::abs(path[2].y()-path[3].y())<1e-6 && path[3].y()>path[4].y(),
+              "joint branch: short exit, diagonal fan, flat run, then up into the dot");
+    }
+    dialog.canvas()->setSelection({});
+    auto* enlarge=dialog.findChild<QToolButton*>(QStringLiteral("wiringPreviewEnlarge"));
+    check(enlarge && enlarge->isEnabled(),"preview: Enlarge stays enabled with no wire selected");
+    if(enlarge)enlarge->click();QApplication::processEvents();
+    auto* big=dialog.findChild<DrawingPreview*>(QStringLiteral("wiringPreviewBig"));
+    check(big && big->window()->isVisible() && !big->entities().empty(),"preview: clicking Enlarge opens a populated drawing window without selecting a wire");
+    if(big){big->window()->hide();enlarge->click();check(big->window()->isVisible(),"preview: Enlarge restores an existing hidden preview");big->window()->close();}
+    dialog.setOptimize(false,false,false);
+    auto mouse=[&](QEvent::Type type,const QPointF& at,Qt::MouseButtons buttons) {
+        const auto point=at*dialog.canvas()->zoom();QMouseEvent event(type,point,dialog.canvas()->mapToGlobal(point),Qt::LeftButton,buttons,Qt::NoModifier);
+        QApplication::sendEvent(dialog.canvas(),&event);
+    };
+    const auto from=dialog.canvas()->barCentre(w2),to=dialog.canvas()->barCentre(w1)-QPointF(0,10);
+    mouse(QEvent::MouseButtonPress,from,Qt::LeftButton);mouse(QEvent::MouseMove,to,Qt::LeftButton);mouse(QEvent::MouseButtonRelease,to,Qt::NoButton);
+    check(def.wires.front().id==w2 && harnessPinSequence(def.connectors[0]).front()==2 && harnessPinSequence(def.connectors[1]).front()==1,
+          "wire drag: a quick drag moves the wire and both connected pins together");
+    int questions=0;dialog.setAskDrain([&]{++questions;return QString();});
+    dialog.canvas()->setTool(WiringCanvas::Tool::Screen);
+    const auto centre=(dialog.canvas()->barCentre(w1)+dialog.canvas()->barCentre(w2))*.5;
+    const QPointF top(centre.x(),std::min(dialog.canvas()->barCentre(w1).y(),dialog.canvas()->barCentre(w2).y())-8);
+    const QPointF bottom(centre.x(),std::max(dialog.canvas()->barCentre(w1).y(),dialog.canvas()->barCentre(w2).y())+8);
+    mouse(QEvent::MouseButtonPress,top,Qt::LeftButton);mouse(QEvent::MouseMove,bottom,Qt::LeftButton);mouse(QEvent::MouseButtonRelease,bottom,Qt::NoButton);
+    QString shield;for(const auto& w:def.wires)if(w.id==w1)shield=w.shieldGroup;
+    check(questions==0 && !shield.isEmpty(),"shield stroke: creates the shield without asking a drain-wire question");
+    if(!shield.isEmpty()) {
+        dialog.setScreenDrain(shield,0,QStringLiteral("drain"),QStringLiteral("pin:a:7"));
+        dialog.setScreenDrain(shield,1,QStringLiteral("terminated"));
+        check(dialog.screenDrain(shield,0)==QLatin1String("drain") && dialog.screenDrain(shield,1).isEmpty(),
+              "shield ends: legacy insulated termination is treated as not connected");
+        const auto again=harnessDefFromJson(harnessDefToJson(def));const auto built=buildHarness(again);
+        int connected=0,terminated=0;
+        for(const auto& e:built.entities)if(e.type==EntityType::Screen && e.meta.value(QStringLiteral("shieldGroup")).toString()==shield) {
+            connected+=e.meta.value(QStringLiteral("shieldEndState")).toString()==QLatin1String("connected");
+            terminated+=e.meta.value(QStringLiteral("shieldEndState")).toString()==QLatin1String("open");
+        }
+        check(connected==1 && terminated==1,"shield marks: connected and not-connected ends survive save/load");
+        dialog.setScreenDrain(shield,1,QStringLiteral("drain"),QStringLiteral("pin:b:7"));
+        const auto both=buildHarness(def);connected=0;
+        for(const auto& e:both.entities)if(e.type==EntityType::Screen && e.meta.value(QStringLiteral("shieldGroup")).toString()==shield)
+            connected+=e.meta.value(QStringLiteral("shieldEndState")).toString()==QLatin1String("connected");
+        check(connected==2,"shield marks: both ends show Connected when both are wired");
+    }
+    if(!qEnvironmentVariable("LOOPWIRE_WIRING_FOLLOWUP_IMAGE").isEmpty()) {
+        QEventLoop wait;QTimer::singleShot(200,&wait,&QEventLoop::quit);wait.exec();dialog.grab().save(qEnvironmentVariable("LOOPWIRE_WIRING_FOLLOWUP_IMAGE"));
+    }
+    dialog.hide();
+}
+
+void testJointRoutingAndPreviewDragging() {
+    HarnessDef def;
+    for(const auto& entry:{std::make_pair("a",HarnessSide::Left),std::make_pair("b",HarnessSide::Right),std::make_pair("c",HarnessSide::Right)}) {
+        HarnessConnector connector;connector.id=QLatin1String(entry.first);connector.side=entry.second;connector.pinCount=4;
+        connector.designator=entry.first[0]=='a'?QStringLiteral("P1"):entry.first[0]=='b'?QStringLiteral("P2"):QStringLiteral("P3");
+        connector.order=entry.first[0]=='c'?1:0;def.connectors.push_back(connector);
+    }
+    WiringDialog dialog(def,[]{});dialog.resize(1400,900);dialog.show();dialog.showSeveral();dialog.setOptimize(false,false,false);
+    const auto main=dialog.connectPins(QStringLiteral("a"),1,QStringLiteral("b"),2);
+    dialog.connectPins(QStringLiteral("a"),2,QStringLiteral("b"),1);
+    const auto branch=dialog.connectToWire(QStringLiteral("a"),3,main);
+    dialog.connectPins(QStringLiteral("a"),4,QStringLiteral("c"),1);
+    dialog.connectPins(QStringLiteral("b"),3,QStringLiteral("c"),2);
+    dialog.connectPins(QStringLiteral("b"),4,QStringLiteral("c"),3);
+    const QString nodeId=def.joints.front().id;
+    for(auto& w:def.wires)if(w.id==main || w.id==branch || w.fromConn==harnessJointEndpointKey(nodeId))w.color=QStringLiteral("RD");
+    dialog.refresh();QApplication::processEvents();
+    auto paths=[&] {std::vector<std::vector<QPointF>> result;for(const auto& w:def.wires)result.push_back(dialog.canvas()->wirePath(w.id));return result;};
+    auto conflicts=[](const std::vector<std::vector<QPointF>>& paths,bool overlapsOnly) {
+        int count=0;
+        for(size_t i=0;i<paths.size();++i)for(size_t j=i+1;j<paths.size();++j)
+            for(size_t a=1;a<paths[i].size();++a)for(size_t b=1;b<paths[j].size();++b) {
+                const auto p=paths[i][a-1],q=paths[i][a],r=paths[j][b-1],s=paths[j][b];
+                const auto d=q-p,e=s-r;const double length=QLineF(p,q).length();
+                if(length<1e-6 || QLineF(r,s).length()<1e-6)continue;
+                auto cross=[](const QPointF& a,const QPointF& b){return a.x()*b.y()-a.y()*b.x();};
+                if(std::abs(cross(d,e))<1e-6 && std::abs(cross(d,r-p))<1e-6) {
+                    const double t0=QPointF::dotProduct(r-p,d)/(length*length),t1=QPointF::dotProduct(s-p,d)/(length*length);
+                    if(std::min(1.,std::max(t0,t1))-std::max(0.,std::min(t0,t1))>1e-5)++count;
+                } else if(!overlapsOnly) {
+                    QPointF at;
+                    if(QLineF(p,q).intersects(QLineF(r,s),&at)==QLineF::BoundedIntersection) {
+                        auto end=[&](const auto& path){return QLineF(at,path.front()).length()<1e-5 || QLineF(at,path.back()).length()<1e-5;};
+                        if(!(end(paths[i]) && end(paths[j])))++count;
+                    }
+                }
+            }
+        return count;
+    };
+    const int initialOverlaps=conflicts(paths(),true);
+    std::printf("  routing initial overlaps: %d\n",initialOverlaps);
+    check(initialOverlaps==0,"joint rows: an added branch never overlays an unrelated wire");
+    dialog.setOptimize(true,false,false);dialog.optimizePinStack();QApplication::processEvents();
+    const auto p3=harnessPinSequence(def.connectors[2]);
+    check(p3[0]==3 && p3[1]==2 && p3[2]==1,"same-side loops: P3 order is 3, 2, 1, with the across wire below the nested loops");
+    const auto p1=harnessPinSequence(def.connectors[0]);
+    check(p1[0]==3 && p1[1]==1,"top edge joint: the short branch is above the long main wire");
+    check(std::abs(def.layout.markAt.value(QStringLiteral("connectorOffset:b")))<=1,"connector alignment: adjustment is bounded to one pin");
+    const int after=conflicts(paths(),false);std::printf("  routing optimized conflicts: %d\n",after);
+    check(after==0,"avoid crossing: the reproduced three-connector harness has no wire overlaps or crossings");
+    const auto built=buildHarness(def);
+    const Entity* joint=nullptr;const Entity* head=nullptr;
+    for(const auto& entity:built.entities) {
+        if(entity.type==EntityType::Splice && entity.meta.value(QStringLiteral("markKey")).toString()==QStringLiteral("joint:")+nodeId)joint=&entity;
+        if(entity.type==EntityType::Wire && entity.meta.value(QStringLiteral("defWire")).toString()==main)head=&entity;
+    }
+    check(head && std::all_of(head->points.begin(),head->points.end(),[&](const auto& point){return std::abs(point.y-head->points.front().y)<1e-6;}),
+          "preview alignment: the long wire remains straight after moving the short top branch and aligning the connector");
+    double nearestKnee=1e20;
+    for(const auto& entity:built.entities)if(entity.type==EntityType::Wire && !entity.meta.contains(QStringLiteral("jointTo")))
+        for(size_t i=1;i<entity.points.size();++i)if(std::abs(entity.points[i].x-entity.points[i-1].x)<1e-6 && distance(entity.points[i],entity.points[i-1])>1e-6)
+            nearestKnee=std::min(nearestKnee,entity.points[i].x);
+    check(joint && joint->a.x<nearestKnee-1,"preview joint: branch turns into the joint before the opposite wires' knees");
+    auto* preview=dialog.enlargePreview();preview->fitToView();preview->repaint();QApplication::processEvents();
+    if(joint && preview) {
+        const QString key=joint->meta.value(QStringLiteral("markKey")).toString();const double old=joint->a.x;
+        const double lo=joint->meta.value(QStringLiteral("markA")).toDouble(),hi=joint->meta.value(QStringLiteral("markB")).toDouble();
+        const auto start=preview->screenAt(joint->a),target=preview->screenAt({lo+(hi-lo)*.8,joint->a.y});
+        auto mouse=[&](QEvent::Type type,const QPointF& point,Qt::MouseButtons buttons) {
+            QMouseEvent event(type,point,preview->mapToGlobal(point),Qt::LeftButton,buttons,Qt::NoModifier);QApplication::sendEvent(preview,&event);
+        };
+        mouse(QEvent::MouseButtonPress,start,Qt::LeftButton);mouse(QEvent::MouseMove,target,Qt::LeftButton);mouse(QEvent::MouseButtonRelease,target,Qt::NoButton);
+        const auto moved=buildHarness(def);double now=old;
+        for(const auto& e:moved.entities)if(e.type==EntityType::Splice && e.meta.value(QStringLiteral("markKey")).toString()==key)now=e.a.x;
+        check(def.layout.markAt.contains(key) && now>old+5,"preview joint drag: dragging the splice moves all its connected wire ends");
+        const auto again=harnessDefFromJson(harnessDefToJson(def));
+        check(std::abs(again.layout.markAt.value(key)-def.layout.markAt.value(key))<1e-9 &&
+              again.layout.markAt.value(QStringLiteral("connectorOffset:b"))==def.layout.markAt.value(QStringLiteral("connectorOffset:b")),
+              "preview joint drag: joint position and one-pin alignment survive save/load");
+    }
+    const auto output=qEnvironmentVariable("LOOPWIRE_ROUTING_IMAGE_DIR");
+    if(!output.isEmpty()) {
+        QEventLoop wait;QTimer::singleShot(200,&wait,&QEventLoop::quit);wait.exec();
+        dialog.grab().save(output+QStringLiteral("/routing-optimized.png"));preview->grab().save(output+QStringLiteral("/routing-preview.png"));
+    }
+    preview->window()->close();dialog.hide();
+
+    HarnessDef bottom;bottom.connectors={def.connectors[0],def.connectors[1]};
+    for(auto& c:bottom.connectors)c.pinOrder={1,2,4,3};
+    WiringDialog lower(bottom,[]{});lower.showTwo(QStringLiteral("a"),QStringLiteral("b"));lower.setOptimize(false,false,false);
+    lower.connectPins(QStringLiteral("a"),1,QStringLiteral("b"),1);lower.connectPins(QStringLiteral("a"),2,QStringLiteral("b"),2);
+    const auto longWire=lower.connectPins(QStringLiteral("a"),3,QStringLiteral("b"),3);
+    lower.connectToWire(QStringLiteral("a"),4,longWire);bottom.connectors[0].pinOrder={1,2,4,3};lower.refresh();
+    lower.setOptimize(true,false,false);lower.optimizePinStack();
+    const auto pins=harnessPinSequence(bottom.connectors[0]);
+    check(pins[2]==3 && pins[3]==4,"bottom edge joint: the short wire is placed below the straight main wire");
+}
+
+void testWirePreviewConsistency() {
+    HarnessDef def;
+    for(int i=0;i<3;++i) {
+        HarnessConnector c;c.id=QString::number(i);c.designator=QStringLiteral("P%1").arg(i+1);
+        c.side=i?HarnessSide::Right:HarnessSide::Left;c.order=i==2?1:0;c.pinCount=i==0?6:i==1?2:3;
+        def.connectors.push_back(c);
+    }
+    WiringDialog dialog(def,[]{});dialog.resize(1450,850);dialog.show();dialog.showSeveral();dialog.setOptimize(false,false,false);
+    const auto normal=dialog.connectPins(QStringLiteral("0"),3,QStringLiteral("1"),2);
+    const auto first=dialog.connectPins(QStringLiteral("0"),2,QStringLiteral("1"),1);
+    dialog.connectToWire(QStringLiteral("0"),1,first);
+    const auto last=dialog.connectPins(QStringLiteral("0"),5,QStringLiteral("2"),2);
+    dialog.connectToWire(QStringLiteral("0"),4,last);
+    const auto pinOrder=def.connectors[0].pinOrder;
+    dialog.refresh();
+    check(def.connectors[0].pinOrder==pinOrder,"automatic routing preserves connector pin order");
+    int conflicts=0;
+    for(size_t i=0;i<def.wires.size();++i)for(size_t j=i+1;j<def.wires.size();++j) {
+        const auto a=dialog.canvas()->wirePath(def.wires[i].id),b=dialog.canvas()->wirePath(def.wires[j].id);
+        for(size_t m=1;m<a.size();++m)for(size_t n=1;n<b.size();++n) {
+            QPointF at;
+            if(QLineF(a[m-1],a[m]).intersects(QLineF(b[n-1],b[n]),&at)!=QLineF::BoundedIntersection)continue;
+            auto endpoint=[&](const auto& path){return QLineF(at,path.front()).length()<1e-5 || QLineF(at,path.back()).length()<1e-5;};
+            if(!(endpoint(a) && endpoint(b)))++conflicts;
+        }
+    }
+    check(conflicts==0,"automatic wire-only row ordering removes crossings in the reproduced joint layout");
+    const auto path=dialog.canvas()->wirePath(normal);
+    check(!path.empty() && std::abs(path.front().y()-dialog.canvas()->pinCentre(QStringLiteral("0"),3).y())<1,
+          "brick wire starts at P1-3");
+    auto built=buildHarness(def);
+    auto pinPoint=[&](const QString& name,int number) {
+        for(const auto& e:built.entities)if(e.type==EntityType::Connector) {
+            const auto spec=connectorSpecFromMeta(e.meta);
+            if(spec.designator==name) {
+                const int row=spec.pins.indexOf(QString::number(number));
+                if(row>=0)return connectorGeometry(e.a,spec).pinEnd[row];
+            }
+        }
+        return Vec2{1e20,1e20};
+    };
+    bool correct=false;
+    for(const auto& e:built.entities)if(e.type==EntityType::Wire && e.meta.value("defWire").toString()==normal)
+        correct=e.points.size()>=2 && distance(e.points.front(),pinPoint(QStringLiteral("P1"),3))<1e-6 && distance(e.points.back(),pinPoint(QStringLiteral("P2"),2))<1e-6;
+    check(correct,"preview P1-3 lands on the rendered P2-2 label, not P2-1");
+    for(int i=0;i<3;++i) {
+        auto* box=dialog.findChild<QCheckBox*>(QStringLiteral("wiringPrintAll%1").arg(i));
+        check(box && box->isEnabled(),"all-wire print control is available without a selection");
+        if(box) {box->setCheckState(Qt::Unchecked);box->click();}
+        for(const auto& w:def.wires)check(i==0?w.showColor:i==1?w.showGauge:w.showLabel,"bulk print applies to ordinary and split wires");
+        if(box)box->click();
+        for(const auto& w:def.wires)check(!(i==0?w.showColor:i==1?w.showGauge:w.showLabel),"bulk print can clear each marking independently");
+    }
+    built=buildHarness(def);
+    for(const auto& e:built.entities)if(e.type==EntityType::Wire && e.meta.contains("defWire"))
+        check(!e.meta.value("showColorName").toBool() && !e.meta.value("showGaugeName").toBool() && !e.meta.value("showWireLabel").toBool(),"preview respects cleared print flags on every physical wire");
+    const auto shield=dialog.groupWires(WiringCanvas::Tool::Screen,{first,normal});
+    def.layout.wireShieldAmount=1;def.layout.markAt[QStringLiteral("shield:")+shield+QStringLiteral("#0")]=.35;
+    dialog.refresh();
+    int shields=0;
+    for(const auto& e:buildHarness(def).entities)if(e.type==EntityType::Screen && e.meta.value("shieldGroup").toString()==shield) {
+        ++shields;check(e.meta.value("catch").toInt()==2,"shield remains on both selected wires before the split joint");
+    }
+    check(shields==1,"configured shield symbol count is respected");
+    const auto output=qEnvironmentVariable("LOOPWIRE_ROUTING_IMAGE_DIR");
+    if(!output.isEmpty()) {
+        dialog.grab().save(output+QStringLiteral("/wire-consistency-bricks.png"));
+        auto* preview=dialog.enlargePreview();preview->fitToView();preview->repaint();QApplication::processEvents();
+        preview->grab().save(output+QStringLiteral("/wire-consistency-preview.png"));preview->window()->close();
+    }
+    dialog.hide();
+}
+
+void testKneeBranchesAndMarkings() {
+    HarnessDef def;
+    HarnessConnector a;a.id=QStringLiteral("a");a.designator=QStringLiteral("P1");a.pinCount=10;a.pinOrder={1,2,4,3,5,6,7,8,9,10};
+    HarnessConnector b;b.id=QStringLiteral("b");b.designator=QStringLiteral("P2");b.pinCount=6;b.side=HarnessSide::Right;b.pinOrder={1,2,3,5,4,6};
+    def.connectors={a,b};
+    auto wire=[&](const char* id,int from,int to){HarnessWire w;w.id=QLatin1String(id);w.fromConn=a.id;w.fromPin=from;w.toConn=b.id;w.toPin=to;w.showColor=w.showGauge=w.showLabel=true;w.label=QStringLiteral("TEST");def.wires.push_back(w);};
+    wire("main",3,2);wire("other",5,3);wire("lower",6,5);
+    def.wires[1].label=QStringLiteral("LONGER LABEL");
+    const auto joint=harnessSplitWire(def,QStringLiteral("main"));
+    HarnessWire branch;branch.id=QStringLiteral("branch");branch.fromConn=a.id;branch.fromPin=4;branch.toConn=joint;branch.toPin=0;def.wires.push_back(branch);
+    const auto built=buildHarness(def);
+    bool straight=false;std::vector<double> gaugeColumns;
+    for(const auto& e:built.entities) {
+        if(e.type==EntityType::Wire && e.meta.value("defWire").toString()==branch.id)
+            straight=e.points.size()==2 && std::abs(e.points.front().y-e.points.back().y)<1e-6;
+        if(e.type==EntityType::Wire)for(const auto& part:wireAnnotParts())for(const auto& mark:wireAnnotsFor(e,part))
+            check(std::abs(mark.dir.y)<1e-6,"preview markings stay horizontal, including a knee's short branch");
+        if(e.type==EntityType::Wire && (e.meta.value("defWire").toString()==QLatin1String("other") || e.meta.value("defWire").toString()==QLatin1String("lower")))
+            for(const auto& mark:wireAnnotsFor(e,QStringLiteral("gauge")))gaugeColumns.push_back(mark.pos.x);
+    }
+    check(straight,"P1-4 meets the closest vertical knee with a straight branch");
+    check(gaugeColumns.size()==2 && std::abs(gaugeColumns[0]-gaugeColumns[1])<1e-6,"gauge columns align across wires with different label lengths");
+    // Both selected conductors include a knee and must remain in the mark before
+    // and after dragging it to the opposite level.
+    for(auto& w:def.wires)if(w.id==QLatin1String("other") || w.id==QLatin1String("lower")){w.twistGroup=QStringLiteral("T");w.shieldGroup=QStringLiteral("S");}
+    def.layout.twistAmount=1;def.layout.wireShieldAmount=1;
+    std::vector<double> screenLevels,twistLevels;
+    for(double fraction:{.15,.5,.85}) {
+        def.layout.markAt[QStringLiteral("shield:S#0")]=fraction;def.layout.markAt[QStringLiteral("twist:T#0")]=fraction;
+        int screens=0,twists=0;
+        for(const auto& e:buildHarness(def).entities) {
+            if(e.type==EntityType::Screen && e.meta.value("shieldGroup").toString()==QLatin1String("S")) {
+                ++screens;check(e.meta.value("catch").toInt()==2,"shield dragged past knees still catches both selected wires");
+                screenLevels.push_back((e.points[0].y+e.points[1].y)*.5);
+            }
+            if(e.type==EntityType::Twist && e.meta.value("twistGroup").toString()==QLatin1String("T")) {
+                ++twists;check(e.meta.value("wires").toArray().size()==2,"twist dragged past knees still names both selected wires");
+                twistLevels.push_back((e.points[0].y+e.points[1].y)*.5);
+            }
+        }
+        check(screens==1 && twists==1,"dragging shield and twist across knees retains both marks");
+    }
+    check(screenLevels.size()==3 && std::abs(screenLevels.front()-screenLevels.back())>1,"shield changes wire level when dragged over knees");
+    check(twistLevels.size()==3 && std::abs(twistLevels.front()-twistLevels.back())>1,"twist changes wire level when dragged over knees");
+    HarnessDef legacy=def;legacy.connectors[0].bodyBondLeft=true;
+    for(const auto& e:buildHarness(legacy).entities)check(!e.meta.contains("overallShield"),"no overall shield is drawn unless enabled in step 3");
+    WiringDialog dialog(def,[]{});dialog.resize(1450,850);dialog.showSeveral();dialog.show();
+    dialog.canvas()->setSelection({QStringLiteral("other"),QStringLiteral("lower")});dialog.refresh();
+    const auto* target=dialog.findChild<QComboBox*>(QStringLiteral("wiringScreenLeftTo"));
+    check(target && target->itemText(0)==QLatin1String("Not connected") && target->findData(QStringLiteral("shield:a"))<0,"drain target lists Not connected and omits undefined connector shields");
+    const auto* mode=dialog.findChild<QComboBox*>(QStringLiteral("wiringScreenLeft"));
+    check(mode && mode->findData(QStringLiteral("terminated"))<0,"shield dropdown has a single not-connected option");
+    for(int i=0;i<3;++i)if(const auto* box=dialog.findChild<QCheckBox*>(QStringLiteral("wiringPrintAll%1").arg(i)))check(!box->isTristate(),"bulk print controls use ordinary two-state boxes");
+    const auto output=qEnvironmentVariable("LOOPWIRE_ROUTING_IMAGE_DIR");
+    if(!output.isEmpty()) {
+        dialog.grab().save(output+QStringLiteral("/knee-marks-bricks.png"));auto* preview=dialog.enlargePreview();preview->fitToView();preview->repaint();QApplication::processEvents();preview->grab().save(output+QStringLiteral("/knee-marks-preview.png"));preview->window()->close();
+    }
+    dialog.hide();
+}
+
+void testPreviewKneeDraggingAndBranchSpacing() {
+    HarnessDef def;HarnessConnector a;a.id=QStringLiteral("a");a.pinCount=6;
+    HarnessConnector b=a;b.id=QStringLiteral("b");b.side=HarnessSide::Right;def.connectors={a,b};
+    for(int i=1;i<=3;++i) {HarnessWire w;w.id=QStringLiteral("w%1").arg(i);w.fromConn=a.id;w.fromPin=i;w.toConn=b.id;w.toPin=i+1;def.wires.push_back(w);}
+    WiringDialog dialog(def,[]{});dialog.resize(1400,850);dialog.showSeveral();dialog.show();
+    auto* preview=dialog.enlargePreview();preview->fitToView();QApplication::processEvents();
+    auto knees=[&] {
+        QHash<QString,QJsonObject> unique;
+        for(const auto& e:preview->entities())for(const auto& item:e.meta.value("previewKnees").toArray()) {
+            const auto k=item.toObject();unique[k.value("key").toString()]=k;
+        }
+        std::vector<QJsonObject> result;for(const auto& k:unique)result.push_back(k);
+        std::sort(result.begin(),result.end(),[](const auto& x,const auto& y){return x.value("x").toDouble()<y.value("x").toDouble();});return result;
+    };
+    auto drag=[&](const QJsonObject& knee,double target) {
+        const double y=(knee.value("y0").toDouble()+knee.value("y1").toDouble())*.5;
+        const QPointF start=preview->screenAt({knee.value("x").toDouble(),y}),end=preview->screenAt({target,y});
+        auto send=[&](QEvent::Type type,const QPointF& at,Qt::MouseButtons buttons) {
+            QMouseEvent event(type,at,at,type==QEvent::MouseMove?Qt::NoButton:Qt::LeftButton,buttons,Qt::NoModifier);QApplication::sendEvent(preview,&event);QApplication::processEvents();
+        };
+        send(QEvent::MouseButtonPress,start,Qt::LeftButton);send(QEvent::MouseMove,end,Qt::LeftButton);send(QEvent::MouseButtonRelease,end,Qt::NoButton);
+    };
+    const auto initial=knees();check(initial.size()==3,"preview exposes each vertical knee for dragging");
+    if(initial.size()==3) {
+        const double gap=initial[0].value("gap").toDouble(),target=initial[0].value("x").toDouble()+gap*.6;
+        drag(initial[0],target);const auto pushed=knees();
+        check(std::abs(pushed[0].value("x").toDouble()-target)<1,"dragged knee follows the pointer");
+        check(std::abs(pushed[1].value("x").toDouble()-pushed[0].value("x").toDouble()-gap)<1e-6 &&
+              std::abs(pushed[2].value("x").toDouble()-pushed[1].value("x").toDouble()-gap)<1e-6,"dragging a knee pushes its neighbours at a constant pitch");
+        const double freeTarget=pushed[0].value("x").toDouble()-gap*2;
+        drag(pushed[0],freeTarget);const auto freed=knees();
+        check(std::abs(freed[0].value("x").toDouble()-freeTarget)<1 && std::abs(freed[1].value("x").toDouble()-pushed[1].value("x").toDouble())<1e-6,
+              "a knee moves freely into empty space without pulling its neighbours");
+        const auto saved=harnessDefFromJson(harnessDefToJson(def));check(saved.layout.markAt==def.layout.markAt,"knee positions survive save/load");
+    }
+    preview->window()->close();dialog.hide();
+
+    HarnessDef crowded;a.pinCount=10;a.pinOrder={1,2,3,4,5,7,9,6,8,10};b.pinOrder={2,1,5,3,6,4};crowded.connectors={a,b};
+    auto add=[&](const char* id,int from,int to,const char* color) {HarnessWire w;w.id=QLatin1String(id);w.fromConn=a.id;w.fromPin=from;w.toConn=b.id;w.toPin=to;w.color=QLatin1String(color);w.showColor=w.showGauge=true;crowded.wires.push_back(w);};
+    add("top",1,2,"RD");add("red",2,1,"RD");add("yellow",4,5,"YE");add("green",5,3,"GN");add("violet",7,6,"VT");add("white",9,4,"WH");
+    const auto joint=harnessSplitWire(crowded,QStringLiteral("red"));HarnessWire branch;branch.id=QStringLiteral("branch");branch.fromConn=a.id;branch.fromPin=3;branch.toConn=joint;branch.color=QStringLiteral("RD");crowded.wires.push_back(branch);
+    WiringDialog bricks(crowded,[]{});bricks.resize(1450,850);bricks.showSeveral();bricks.show();QApplication::processEvents();
+    auto row=[&](const QString& id) {double longest=-1,y=0;const auto path=bricks.canvas()->wirePath(id);for(size_t i=1;i<path.size();++i)if(std::abs(path[i].y()-path[i-1].y())<1e-6) {const double length=QLineF(path[i-1],path[i]).length();if(length>longest){longest=length;y=path[i].y();}}return y;};
+    check(row(QStringLiteral("yellow"))-row(branch.id)>=23.9,"yellow wire stays below the red branch with space for its label");
+    const auto shield=bricks.groupWires(WiringCanvas::Tool::Screen,{QStringLiteral("green"),QStringLiteral("violet"),QStringLiteral("white")});
+    for(const auto& e:buildHarness(crowded).entities)if(e.type==EntityType::Screen && e.meta.value("shieldGroup").toString()==shield)
+        check(e.meta.value("rx").toDouble()<=std::max(2.,e.meta.value("ry").toDouble()/6)+1e-6,"drawing shields use a slender ellipse");
+    const auto output=qEnvironmentVariable("LOOPWIRE_ROUTING_IMAGE_DIR");if(!output.isEmpty())bricks.grab().save(output+QStringLiteral("/branch-spacing.png"));bricks.hide();
+}
+
 int run_harnessbuilder_tests() {
     g_fail = 0;
     std::printf("harness builder tests:\n");
     testWiringRequestedRefinements();
-    if(qEnvironmentVariableIsSet("LOOPWIRE_WIRING_FOCUSED"))return g_fail;
+    testWiringResizeAndSharedJoints();
+    testWizardWiringFollowups();
+    testJointRoutingAndPreviewDragging();
+    testWirePreviewConsistency();
+    testKneeBranchesAndMarkings();
+    testPreviewKneeDraggingAndBranchSpacing();
+    if(qEnvironmentVariableIsSet("LOOPWIRE_WIRING_FOCUSED")) {
+        testPhaseZero(); testPhaseOne(); testWiringWindow(); testInteractiveWiringAgain();
+        return g_fail;
+    }
     testPhaseZero();
     testPhaseOne();
     testStepsRefined();

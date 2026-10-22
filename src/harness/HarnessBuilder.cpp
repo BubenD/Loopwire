@@ -168,7 +168,7 @@ std::vector<Placed> placeConnectors(const HarnessDef& def) {
                 Placed p;
                 p.conn = c;
                 p.spec = specOf(*c);
-                p.origin = {x, y};
+                p.origin = {x, y - L.markAt.value(QStringLiteral("connectorOffset:")+c->id)*p.spec.pitch};
                 p.geom = connectorGeometry(p.origin, p.spec);
                 p.pinSeq = harnessPinSequence(*c);
                 p.trunkX = trunk;
@@ -740,22 +740,25 @@ std::vector<HarnessIssue> validateHarness(const HarnessDef& def) {
                     c->id, w.id);
             continue;
         }
-        // A WIRE JOINED TO ANOTHER'S RUN: that wire has to be there, and the end that is not the joint a real pin.
         if (harnessIsJointEndpoint(w.fromConn) || harnessIsJointEndpoint(w.toConn)) {
-            const bool fromJoint = harnessIsJointEndpoint(w.fromConn);
-            const QString target = harnessJointEndpointWire(fromJoint ? w.fromConn : w.toConn);
-            if (std::none_of(def.wires.begin(), def.wires.end(), [&](const HarnessWire& o) { return o.id == target && o.id != w.id; }))
-                add(QStringLiteral("badjoint:%1").arg(w.id),
-                    QStringLiteral("A wire is joined to wire \"%1\", which the harness does not have").arg(target),
-                    QString(), w.id);
-            const HarnessConnector* c = harnessConnById(def, fromJoint ? w.toConn : w.fromConn);
-            const int pin = fromJoint ? w.toPin : w.fromPin;
-            if (!c)
-                add(QStringLiteral("badconn:%1").arg(w.id), QStringLiteral("A wire joined to another has no connector end"),
-                    QString(), w.id);
-            else if (pin < 1 || pin > std::max(1, c->pinCount))
-                add(QStringLiteral("badpin:%1:%2").arg(w.id).arg(pin),
-                    QStringLiteral("%1 has no pin %2").arg(c->designator.isEmpty() ? c->id : c->designator).arg(pin), c->id, w.id);
+            for (const auto& end : {std::make_pair(w.fromConn, w.fromPin), std::make_pair(w.toConn, w.toPin)}) {
+                if (harnessIsJointEndpoint(end.first)) {
+                    const QString id = harnessJointEndpointWire(end.first);
+                    if (std::none_of(def.joints.begin(), def.joints.end(), [&](const auto& j) { return j.id == id; }) &&
+                        std::none_of(def.wires.begin(), def.wires.end(), [&](const auto& other) { return other.id == id && other.id != w.id; }))
+                        add(QStringLiteral("badjoint:%1").arg(w.id), QStringLiteral("Missing joint %1").arg(id), QString(), w.id);
+                } else {
+                    const auto* c = harnessConnById(def, end.first);
+                    if (!c || end.second < 1 || end.second > c->pinCount)
+                        add(QStringLiteral("badpin:%1").arg(w.id), QStringLiteral("A joint wire has an invalid pin"), end.first, w.id);
+                    else {
+                        const QString key = QStringLiteral("%1/%2").arg(end.first).arg(end.second);
+                        if (pinTaken.contains(key))
+                            add(QStringLiteral("pinbusy:%1").arg(key), QStringLiteral("%1 pin %2 has more than one wire on it").arg(c->designator).arg(end.second), c->id, w.id);
+                        else pinTaken.insert(key, w.id);
+                    }
+                }
+            }
             continue;
         }
         // A drain wire ends on a SCREEN, not on a pin: it is checked against the shields the
@@ -1344,12 +1347,19 @@ QJsonObject harnessDefToJson(const HarnessDef& def) {
     root["format"] = QStringLiteral("edraw-harness-builder");
     // Version 2: an overall shield is drawn ONCE per connector by default. A version-1 file was
     // written before that was the default, so its stored 2 was nobody's choice - see the loader.
+    // Version 5 adds shared wire joints and independent root shield parts.
     // Version 3: each row says what it is (a wire, a coax...) and which cable it belongs to - before it, a cable or a
     // coax came back from a file, a preset or Generate's own preset as loose wires.
-    root["version"] = 4;
+    root["version"] = 5;
     root["physicalBom"] = def.physicalBom;
     root["connectors"] = conns;
     root["wires"] = wires;
+    QJsonArray joints;
+    for (const auto& j : def.joints)
+        joints.append(QJsonObject{{"id", j.id}, {"fromConn", j.fromConn}, {"toConn", j.toConn},
+                                  {"fromPin", j.fromPin}, {"toPin", j.toPin}});
+    if (!joints.isEmpty()) root["joints"] = joints;
+    if (!def.rootShields.isEmpty()) root["rootShields"] = QJsonArray::fromStringList(def.rootShields);
     // A SCREEN'S OWN PART: only when one is given.
     if (!def.shieldParts.isEmpty() || !def.shieldPns.isEmpty()) {
         QJsonObject parts, pns;
@@ -1364,6 +1374,13 @@ QJsonObject harnessDefToJson(const HarnessDef& def) {
 
 HarnessDef harnessDefFromJson(const QJsonObject& root) {
     HarnessDef loaded;
+    for (const auto& value : root.value("joints").toArray()) {
+        const auto j = value.toObject();
+        const QString id = j.value("id").toString();
+        if (!id.isEmpty()) loaded.joints.push_back({id, j.value("fromConn").toString(), j.value("toConn").toString(),
+                                                  j.value("fromPin").toInt(), j.value("toPin").toInt()});
+    }
+    for (const auto& value : root.value("rootShields").toArray()) loaded.rootShields << value.toString();
     loaded.physicalBom = root.value("physicalBom").toBool(false);
     for (const auto& v : root.value("connectors").toArray()) {
         const QJsonObject o = v.toObject();
@@ -1446,7 +1463,7 @@ HarnessDef harnessDefFromJson(const QJsonObject& root) {
     loaded.layout.wireShieldAmount = lay.value("wireShieldAmount").toInt(2);
     {
         const QJsonObject marks = lay.value("markAt").toObject();
-        for (auto it = marks.begin(); it != marks.end(); ++it) loaded.layout.markAt.insert(it.key(), std::clamp(it.value().toDouble(0.5), 0.0, 1.0));
+        for (auto it = marks.begin(); it != marks.end(); ++it) loaded.layout.markAt.insert(it.key(), std::clamp(it.value().toDouble(0.5), it.key().startsWith(QLatin1String("connectorOffset:")) ? -1.0 : 0.0, 1.0));
     }
     loaded.layout.shieldLegLength = lay.value("shieldLegLength").toDouble(20.0);
     loaded.layout.leadLength = lay.value("leadLength").toDouble(0.0);
@@ -1465,6 +1482,27 @@ HarnessDef harnessDefFromJson(const QJsonObject& root) {
     loaded.layout.terminateUnconnectedWires =
         lay.value("terminateUnconnectedWires").toBool(false);
     loaded.layout.spliceAtJoins = lay.value("spliceAtJoins").toBool(true);
+    // Upgrade old pin-to-run branches to a shared node and two physical halves.
+    QStringList legacy;
+    for (const auto& w : loaded.wires) for (const auto& key : {w.fromConn, w.toConn}) {
+        if (!harnessIsJointEndpoint(key)) continue;
+        const QString id = harnessJointEndpointWire(key);
+        if (!legacy.contains(id) && std::none_of(loaded.joints.begin(), loaded.joints.end(), [&](const auto& j) { return j.id == id; }))
+            legacy << id;
+    }
+    for (const auto& id : legacy) {
+        const QString replacement = harnessSplitWire(loaded, id);
+        if (replacement.isEmpty()) continue;
+        const QString old = harnessJointEndpointKey(id);
+        for (auto& w : loaded.wires) {
+            if (w.fromConn == old) w.fromConn = replacement;
+            if (w.toConn == old) w.toConn = replacement;
+        }
+        for (auto& j : loaded.joints) {
+            if (j.fromConn == old) j.fromConn = replacement;
+            if (j.toConn == old) j.toConn = replacement;
+        }
+    }
     return loaded;
 }
 
@@ -1651,8 +1689,181 @@ void harnessSyncDrains(HarnessDef& def) {
     }
 }
 
+QString harnessSplitWire(HarnessDef& def, const QString& wireId) {
+    auto it = std::find_if(def.wires.begin(), def.wires.end(), [&](const auto& w) { return w.id == wireId; });
+    if (it == def.wires.end()) return {};
+    QString id;
+    for (int n = 1; ; ++n) {
+        id = QStringLiteral("J%1").arg(n);
+        if (std::none_of(def.joints.begin(), def.joints.end(), [&](const auto& j) { return j.id == id; }) &&
+            std::none_of(def.wires.begin(), def.wires.end(), [&](const auto& w) { return w.id == id; })) break;
+    }
+    def.joints.push_back({id, it->fromConn, it->toConn, it->fromPin, it->toPin});
+    const QString key = harnessJointEndpointKey(id);
+    HarnessWire next = *it;
+    next.id = harnessFreshWireId(def);
+    next.fromConn = key; next.fromPin = 0; next.fromTermination = {};
+    // A split does not double the manufacturing quantity.
+    next.cutLengthMm *= .5; it->cutLengthMm *= .5;
+    it->toConn = key; it->toPin = 0; it->toTermination = {};
+    it->showColor = it->showGauge = it->showLabel = true;
+    next.showColor = next.showGauge = next.showLabel = true;
+    def.wires.push_back(next);
+    return key;
+}
+
+HarnessPaths harnessJointPaths(const HarnessDef& def, const HarnessPaths& seeds,
+    const std::function<std::optional<Vec2>(const QString&, int)>& pinAt, double pitch) {
+    HarnessPaths paths = seeds, routes;
+    QHash<QString, Vec2> nodes;
+    QSet<QString> visiting;
+    std::function<std::optional<Vec2>(const QString&, int)> endpoint;
+    std::function<std::vector<Vec2>(const QString&, int, const QString&, int)> route;
+    endpoint = [&](const QString& key, int pin) -> std::optional<Vec2> {
+        if (!harnessIsJointEndpoint(key)) return pinAt(key, pin);
+        const QString id = harnessJointEndpointWire(key);
+        if (nodes.contains(id)) return nodes.value(id);
+        if (visiting.contains(id)) return {};
+        visiting.insert(id);
+        std::vector<Vec2> points;
+        for (const auto& j : def.joints) if (j.id == id) {
+            points = seeds.value(id);
+            if (points.empty()) points = route(j.fromConn, j.fromPin, j.toConn, j.toPin);
+            break;
+        }
+        // Legacy files joined an unsplit wire by id.
+        if (points.empty()) points = paths.value(id);
+        visiting.remove(id);
+        size_t best = 0; double longest = -1;
+        for (size_t i = 1; i < points.size(); ++i)
+            if (std::abs(points[i].y - points[i-1].y) < 1e-6 && distance(points[i], points[i-1]) > longest) {
+                best = i; longest = distance(points[i], points[i-1]);
+            }
+        if (!best) return {};
+        double low=std::min(points[best-1].x,points[best].x), high=std::max(points[best-1].x,points[best].x);
+        bool branchLeft=false,branchRight=false;
+        std::vector<Vec2> branchPins;
+        for(const auto& w:def.wires) {
+            const QString joint=harnessJointEndpointKey(id);
+            if(w.fromConn!=joint && w.toConn!=joint)continue;
+            const QString outer=w.fromConn==joint?w.toConn:w.fromConn;
+            const int pin=w.fromConn==joint?w.toPin:w.fromPin;
+            bool half=false;
+            for(const auto& j:def.joints)if(j.id==id)half=(j.fromConn==outer && j.fromPin==pin)||(j.toConn==outer && j.toPin==pin);
+            if(half)continue;
+            if(const auto p=pinAt(outer,pin))branchPins.push_back(*p);
+            if(const auto* c=harnessConnById(def,outer)) (c->side==HarnessSide::Left?branchLeft:branchRight)=true;
+        }
+        // A branch level with a vertical knee can meet it directly. Going past
+        // that knee to the horizontal run would cross another conductor needlessly.
+        if(branchPins.size()==1)for(size_t i=1;i<points.size();++i) {
+            const Vec2 a=points[i-1],b=points[i],pin=branchPins.front();
+            const double y0=std::min(a.y,b.y),y1=std::max(a.y,b.y);
+            if(std::abs(a.x-b.x)>1e-6 || y1-y0<1e-6 || pin.y<=y0+1e-6 || pin.y>=y1-1e-6)continue;
+            bool clear=true;
+            for(auto it=seeds.cbegin();it!=seeds.cend();++it)if(it.key()!=id) {
+                const auto& other=it.value();
+                for(size_t k=1;k<other.size();++k) {
+                    const auto c=other[k-1],d=other[k];
+                    if(std::abs(c.y-d.y)<1e-6) {
+                        if(std::abs(c.y-pin.y)<1e-6 && std::min(std::max(c.x,d.x),std::max(pin.x,a.x))-std::max(std::min(c.x,d.x),std::min(pin.x,a.x))>1e-6)clear=false;
+                    } else {
+                        const double t=(pin.y-c.y)/(d.y-c.y),x=c.x+t*(d.x-c.x);
+                        if(t>=0 && t<=1 && x>std::min(pin.x,a.x)+1e-6 && x<std::max(pin.x,a.x)-1e-6)clear=false;
+                    }
+                }
+            }
+            if(!clear)continue;
+            const double fraction=def.layout.markAt.value(QStringLiteral("joint:")+id,(pin.y-y0)/(y1-y0));
+            const Vec2 at{a.x,y0+(y1-y0)*std::clamp(fraction,0.,1.)};
+            paths[QStringLiteral("@joint:")+id]={{at.x,y0},at,{at.x,y1}};
+            routes[id]=points;nodes[id]=at;return at;
+        }
+        const double margin=std::min(std::abs(pitch), (high-low)*.12);
+        low+=margin;high-=margin;
+        for(auto it=seeds.cbegin();it!=seeds.cend();++it) {
+            if(it.key()==id)continue;
+            const auto& run=it.value();
+            for(size_t i=1;i<run.size();++i)if(std::abs(run[i].x-run[i-1].x)<1e-6 && distance(run[i],run[i-1])>1e-6) {
+                const double x=run[i].x;
+                if(branchLeft && !branchRight && x>low+margin*2 && x<high)high=std::min(high,x-margin);
+                if(branchRight && !branchLeft && x<high-margin*2 && x>low)low=std::max(low,x+margin);
+            }
+        }
+        const double fraction=def.layout.markAt.value(QStringLiteral("joint:")+id,.5);
+        const Vec2 at{low+(high-low)*std::clamp(fraction,0.0,1.0),points[best].y};
+        paths[QStringLiteral("@joint:")+id]={{low,at.y},at,{high,at.y}};
+        routes[id] = points; nodes[id] = at;
+        return at;
+    };
+    route = [&](const QString& aKey, int aPin, const QString& bKey, int bPin) -> std::vector<Vec2> {
+        const auto a = endpoint(aKey, aPin), b = endpoint(bKey, bPin);
+        if (!a || !b) return {};
+        // A half of a split follows the original route exactly, ending at the shared dot.
+        for (bool atStart : {false, true}) {
+            const QString key = atStart ? aKey : bKey;
+            if (!harnessIsJointEndpoint(key)) continue;
+            const QString id = harnessJointEndpointWire(key);
+            const auto points = routes.value(id);
+            const Vec2 outer = atStart ? *b : *a, node = atStart ? *a : *b;
+            if (points.size() < 2) continue;
+            const bool forward = distance(outer, points.front()) < 1e-6;
+            if (!forward && distance(outer, points.back()) >= 1e-6) continue;
+            std::vector<Vec2> ordered = points, half;
+            if (!forward) std::reverse(ordered.begin(), ordered.end());
+            half.push_back(ordered.front());
+            for (size_t i = 1; i < ordered.size(); ++i) {
+                if (distance(ordered[i-1], node) + distance(node, ordered[i]) <= distance(ordered[i-1], ordered[i]) + 1e-6) {
+                    half.push_back(node); break;
+                }
+                half.push_back(ordered[i]);
+            }
+            if (atStart) std::reverse(half.begin(), half.end());
+            return half;
+        }
+        if (harnessIsJointEndpoint(aKey) != harnessIsJointEndpoint(bKey)) {
+            const bool reverse = harnessIsJointEndpoint(aKey);
+            const Vec2 pin = reverse ? *b : *a, node = reverse ? *a : *b;
+            std::vector<Vec2> result;
+            if (std::abs(pin.y - node.y) > 1e-6) result = {pin, {node.x, pin.y}, node};
+            else {
+                const QString id=harnessJointEndpointWire(reverse?aKey:bKey);
+                const auto span=paths.value(QStringLiteral("@joint:")+id);
+                if(span.size()==3 && std::abs(span.front().x-span.back().x)<1e-6) {
+                    result={pin,node};if(reverse)std::reverse(result.begin(),result.end());return result;
+                }
+                const double out = pin.x + (node.x > pin.x ? pitch : -pitch);
+                result = {pin, {out, pin.y}, {out, pin.y + pitch}, {node.x, pin.y + pitch}, node};
+            }
+            if (reverse) std::reverse(result.begin(), result.end());
+            return result;
+        }
+        const auto* ca = harnessConnById(def, aKey);
+        const auto* cb = harnessConnById(def, bKey);
+        if (ca && cb && ca->side == cb->side) {
+            const double x = ca->side == HarnessSide::Left ? std::max(a->x,b->x)+pitch*2 : std::min(a->x,b->x)-pitch*2;
+            return {*a, {x,a->y}, {x,b->y}, *b};
+        }
+        if (std::abs(a->y-b->y) < 1e-6) return {*a, *b};
+        const double x = (a->x + b->x) * .5;
+        return {*a, {x, a->y}, {x, b->y}, *b};
+    };
+    for (const auto& j : def.joints) endpoint(harnessJointEndpointKey(j.id), 0);
+    for (const auto& w : def.wires)
+        if (harnessIsJointEndpoint(w.fromConn) || harnessIsJointEndpoint(w.toConn))
+            paths[w.id] = route(w.fromConn, w.fromPin, w.toConn, w.toPin);
+    return paths;
+}
+
 HarnessBuild buildHarness(const HarnessDef& input) {
     HarnessDef def = input;
+    auto undefinedShield=[&](const QString& key) {
+        QString id;HarnessSide side=HarnessSide::Left;
+        if(!harnessShieldEndpointConn(key,id,side))return false;
+        const auto* c=harnessConnById(def,id);
+        return !c || !(side==HarnessSide::Left?c->shieldLeft:c->shieldRight);
+    };
+    def.wires.erase(std::remove_if(def.wires.begin(),def.wires.end(),[&](const auto& w){return undefinedShield(w.fromConn)||undefinedShield(w.toConn);}),def.wires.end());
     if (std::any_of(def.connectors.begin(), def.connectors.end(), [](const auto& c) { return !c.drainTo.isEmpty(); })) {
         harnessSyncDrains(def);
         // Old patterns encode body bonds directly, without a drainTo setting.
@@ -1688,7 +1899,20 @@ HarnessBuild buildHarness(const HarnessDef& input) {
     // stay orthogonal and wires of one leg share a corridor.
     struct Routed { QString wireId; size_t entityIndex = 0; };
     std::vector<Routed> routed;
-    const auto wires = orderedWires(def);
+    auto wires = orderedWires(def);
+    // Joint anchors participate in the same knee planner as ordinary wires. Routing
+    // them later in isolation can overlap another net and visually change its pin.
+    std::vector<HarnessWire> anchors;
+    anchors.reserve(def.joints.size());
+    QSet<QString> anchorIds;
+    for(const auto& joint:def.joints) {
+        HarnessWire anchor;
+        anchor.id=joint.id;anchor.fromConn=joint.fromConn;anchor.fromPin=joint.fromPin;
+        anchor.toConn=joint.toConn;anchor.toPin=joint.toPin;
+        anchors.push_back(anchor);anchorIds.insert(anchor.id);
+    }
+    for(const auto& anchor:anchors)wires.push_back(&anchor);
+    HarnessPaths anchorSeeds;
 
     // Work out every wire's two ends first, then decide the ORDER of the vertical lanes —
     // the lane order is what decides whether the knees cross each other.
@@ -1756,6 +1980,17 @@ HarnessBuild buildHarness(const HarnessDef& input) {
         }
     }
 
+    QHash<QString,double> loopX;
+    for(const auto side:{HarnessSide::Left,HarnessSide::Right}) {
+        std::vector<const Leg*> loops;
+        for(const auto& leg:legs)if(leg.a->conn->side==side && leg.b->conn->side==side)loops.push_back(&leg);
+        std::stable_sort(loops.begin(),loops.end(),[](const auto* a,const auto* b){return std::abs(a->pa.y-a->pb.y)<std::abs(b->pa.y-b->pb.y);});
+        for(size_t i=0;i<loops.size();++i) {
+            const auto& leg=*loops[i];
+            loopX[leg.w->id]=side==HarnessSide::Left?std::max(leg.pa.x,leg.pb.x)+60+i*laneStep:std::min(leg.pa.x,leg.pb.x)-60-i*laneStep;
+        }
+    }
+    QHash<QString,QJsonObject> previewKnees;
     for (const Leg& L2 : legs) {
         const HarnessWire* w = L2.w;
         Entity e;
@@ -1764,16 +1999,21 @@ HarnessBuild buildHarness(const HarnessDef& input) {
         // Lanes are spaced by the CONNECTOR PITCH, so the turns sit as far apart as the pins
         // they come from, and all of them are measured from the same start line.
         const Vec2 pa = L2.pa, pb = L2.pb;
-        double midX = laneBase + L2.lane * laneStep;
+        double midX = loopX.contains(w->id)?loopX.value(w->id):laneBase + L2.lane * laneStep;
         if (L2.a->conn->side != L2.b->conn->side) {
             const double margin = std::min(laneStep, std::abs(pb.x - pa.x) * .25);
-            midX = std::clamp(midX, std::min(pa.x, pb.x) + margin, std::max(pa.x, pb.x) - margin);
+            const double a=std::min(pa.x,pb.x)+margin,b=std::max(pa.x,pb.x)-margin;
+            const QString key=QStringLiteral("knee:")+w->id;
+            if(L.markAt.contains(key))midX=a+(b-a)*L.markAt.value(key);
+            midX = std::clamp(midX,a,b);
+            if(L2.needsKnee)previewKnees.insert(key,QJsonObject{{"key",key},{"a",a},{"b",b},{"x",midX},{"gap",laneStep}});
         }
         if (!L2.needsKnee) {
             e.points = {pa, pb}; // straight across: no knee needed
         } else {
             e.points = {pa, {midX, pa.y}, {midX, pb.y}, pb};
         }
+        if(anchorIds.contains(w->id)) {anchorSeeds[w->id]=e.points;continue;}
         // A coax's signal is numbered when its cable holds more than one coax, so the two
         // conductors of each can be told apart on the drawing.
         {
@@ -1820,6 +2060,48 @@ HarnessBuild buildHarness(const HarnessDef& input) {
         out.entities.push_back(std::move(e));
     }
 
+    // Resolve shared joint nodes and route each physical segment independently.
+    HarnessPaths seeds=anchorSeeds;
+    for (const auto& r : routed) seeds[r.wireId] = out.entities[r.entityIndex].points;
+    const auto jointPaths = harnessJointPaths(def, seeds, [&](const QString& id, int pin) -> std::optional<Vec2> {
+        const auto* p = placedById(placed, id);
+        Vec2 at;
+        if (!p || !pinEndOf(*p, pin, at)) return {};
+        return at;
+    }, laneStep);
+    for (const auto& w : def.wires) {
+        if (!harnessIsJointEndpoint(w.fromConn) && !harnessIsJointEndpoint(w.toConn)) continue;
+        const auto run = jointPaths.value(w.id);
+        if (run.size() < 2) continue;
+        const QString target = harnessJointEndpointWire(harnessIsJointEndpoint(w.fromConn) ? w.fromConn : w.toConn);
+        Entity e;
+        e.type = EntityType::Wire;
+        e.layer = QStringLiteral("Wires");
+        e.points = run;
+        e.meta.insert("defWire", w.id);
+        e.meta.insert("annSize", L.textHeight);
+        e.meta.insert("colorNameMode", L.colorNameMode == QLatin1String("long") ? QStringLiteral("full") : QStringLiteral("code"));
+        if (!w.bundle.isEmpty()) e.meta.insert("bundle", w.bundle);
+        e.meta.insert("wireColor", w.color);
+        e.meta.insert("wireGauge", w.gauge);
+        e.meta.insert("jointTo", target);
+        if (!w.libPart.isEmpty()) e.meta.insert("libPart", w.libPart);
+        if (!w.label.isEmpty()) e.meta.insert("wireLabel", w.label);
+        e.meta.insert("showWireLabel", w.showLabel);
+        e.meta.insert("showColorName", w.showColor);
+        e.meta.insert("showGaugeName", w.showGauge);
+        if (w.showColor || w.showGauge) e.meta.insert("annCount", 1);
+        if (L.textGap > 0.0) e.meta.insert("textGap", L.textGap);
+        for (const QString& part : wireAnnotParts())
+            setWireAnnotGapFor(e, part, L.textGap + wireAnnotDefaultGap(part));
+        if (L.wireColorMode == QLatin1String("bylayer"))
+            e.meta.insert("wireColorMode", QStringLiteral("bylayer"));
+        else
+            e.color = wireColorHex(w.color);
+        out.entities.push_back(std::move(e));
+        routed.push_back({w.id, out.entities.size() - 1});
+    }
+
     // ---- Crossings: hop or plain cross (item 6) ----
     out.crossings = harnessCrossings(def);
     if (L.bridgeCrossings) {
@@ -1834,6 +2116,8 @@ HarnessBuild buildHarness(const HarnessDef& input) {
                     for (size_t sj = 1; sj < wj.points.size(); ++sj)
                         if (auto x = segmentSegmentIntersection(wi.points[si - 1], wi.points[si],
                                                                 wj.points[sj - 1], wj.points[sj])) {
+                            if (distance(*x, wi.points.front()) < 1e-6 || distance(*x, wi.points.back()) < 1e-6 ||
+                                distance(*x, wj.points.front()) < 1e-6 || distance(*x, wj.points.back()) < 1e-6) continue;
                             QJsonArray pt;
                             pt.append(x->x);
                             pt.append(x->y);
@@ -1863,6 +2147,7 @@ HarnessBuild buildHarness(const HarnessDef& input) {
             const Entity& we = out.entities[r.entityIndex];
             for (size_t s = 1; s < we.points.size(); ++s) {
                 const Vec2 p1 = we.points[s - 1], p2 = we.points[s];
+                if(std::abs(p2.y-p1.y)>1e-6 || std::abs(p2.x-p1.x)<1e-6)continue;
                 if ((x < std::min(p1.x, p2.x) - 1e-9) || (x > std::max(p1.x, p2.x) + 1e-9))
                     continue;
                 const double t = (std::abs(p2.x - p1.x) < 1e-9)
@@ -1876,13 +2161,38 @@ HarnessBuild buildHarness(const HarnessDef& input) {
         }
     };
 
+    // The common straight intervals on every member of a group. Moving a mark
+    // across a knee selects the next interval and therefore the new wire level.
+    auto snapGroupX = [&](const std::vector<QString>& ids,double wanted,double pad)->std::optional<double> {
+        std::vector<std::pair<double,double>> common={{-1e20,1e20}};
+        for(const auto& id:ids) {
+            std::vector<std::pair<double,double>> member,next;
+            for(const auto& r:routed)if(r.wireId==id) {
+                const auto& points=out.entities[r.entityIndex].points;
+                for(size_t i=1;i<points.size();++i)if(std::abs(points[i].y-points[i-1].y)<1e-6) {
+                    const double a=std::min(points[i].x,points[i-1].x)+pad,b=std::max(points[i].x,points[i-1].x)-pad;
+                    if(a<b)member.push_back({a,b});
+                }
+            }
+            for(const auto& a:common)for(const auto& b:member)if(std::max(a.first,b.first)<=std::min(a.second,b.second))next.push_back({std::max(a.first,b.first),std::min(a.second,b.second)});
+            common=std::move(next);
+            if(common.empty())return {};
+        }
+        std::optional<double> result;double best=1e30;
+        for(const auto& range:common) {
+            const double x=std::clamp(wanted,range.first,range.second);
+            if(std::abs(x-wanted)<best){best=std::abs(x-wanted);result=x;}
+        }
+        return result;
+    };
+
     // Placing one screen: cut the wires at world x, size the ellipse to the band, and hang
     // the drain below it. Returns the drain end so a body bond can reach it.
     const double legLen = std::max(0.0, L.shieldLegLength);
     // The proportion between a screen's two radii. The large one follows the band of wires it
     // has to enclose, so the small one follows from it - a screen keeps the same shape whatever
     // it is drawn around, instead of going from a circle to a sliver as the band grows.
-    constexpr double kShieldRatio = 3.0;
+    constexpr double kShieldRatio = 6.0;
     // A leg that terminates on something reaches as far as the Layout says. One that reaches
     // NOTHING is a stub with an X on the end: it only has to be long enough to read as a leg, and
     // drawing it full length leaves a long line pointing at nothing.
@@ -1893,8 +2203,9 @@ HarnessBuild buildHarness(const HarnessDef& input) {
         std::vector<Vec2> cuts;
         QJsonArray refs;
         QString gauge;
+        if(const auto snapped=snapGroupX(wireIds,x,3.0))x=*snapped;
         cutAt(wireIds, x, cuts, refs, gauge);
-        if (cuts.empty()) return false;
+        if(cuts.empty() || (!overall && cuts.size()!=wireIds.size()))return false;
         double yMin = cuts.front().y, yMax = cuts.front().y;
         for (const Vec2& c : cuts) { yMin = std::min(yMin, c.y); yMax = std::max(yMax, c.y); }
         // How far the outline reaches past the outermost wire it encloses: a quarter of the pin
@@ -1904,6 +2215,14 @@ HarnessBuild buildHarness(const HarnessDef& input) {
         const double pitchRef = body ? body->spec.pitch : (laneStep > 0.0 ? laneStep : 15.0);
         const double clearance = std::max(1.0, pitchRef / 4.0);
         const double pad = overall ? clearance * 1.35 : clearance;
+        if(!overall)for(int guard=0;guard<3;++guard) {
+            const double reach=std::max(2.,((yMax-yMin)*.5+pad)/kShieldRatio)+2;
+            const auto snapped=snapGroupX(wireIds,x,reach);
+            if(!snapped || std::abs(*snapped-x)<1e-6)break;
+            x=*snapped;cuts.clear();refs={};gauge.clear();cutAt(wireIds,x,cuts,refs,gauge);
+            yMin=1e20;yMax=-1e20;
+            for(const auto& cut:cuts){yMin=std::min(yMin,cut.y);yMax=std::max(yMax,cut.y);}
+        }
         const double ry = (yMax - yMin) / 2.0 + pad;
         const double rx = std::max(2.0, ry / kShieldRatio);
         Entity e;
@@ -2053,7 +2372,7 @@ HarnessBuild buildHarness(const HarnessDef& input) {
             // The same shape placeScreen will give it: half the band it encloses, plus its padding,
             // divided by the outline's aspect.
             const double ry = std::max(1, arriving - 1) * p->spec.pitch * 0.5 + p->spec.pitch * 0.34;
-            const double rx = std::max(2.0, ry / 3.0);
+            const double rx = std::max(2.0, ry / kShieldRatio);
             // Room past the overall screen for the lead's own screen AND for a twist mark, if it is
             // one of a twisted pair: both are drawn along the lead, and a lead too short for them is a
             // pair that comes out neither screened nor twisted on the drawing.
@@ -2114,65 +2433,6 @@ HarnessBuild buildHarness(const HarnessDef& input) {
         }
     }
 
-    // ---- Wires joined to another wire's RUN ----
-    // A wire from a pin to a JOINT partway along another wire: out of its pin, along to over the middle of that wire's
-    // longest level stretch, and square into it - an end on another wire's run, which the splice pass gives its dot.
-    for (const auto& w : def.wires) {
-        const bool fromJoint = harnessIsJointEndpoint(w.fromConn), toJoint = harnessIsJointEndpoint(w.toConn);
-        if (fromJoint == toJoint) continue;
-        const QString target = harnessJointEndpointWire(fromJoint ? w.fromConn : w.toConn);
-        const Placed* p = placedById(placed, fromJoint ? w.toConn : w.fromConn);
-        const int pin = fromJoint ? w.toPin : w.fromPin;
-        Vec2 pinPt;
-        if (!p || !pinEndOf(*p, pin, pinPt)) continue;
-        std::vector<Vec2> run;
-        for (const Routed& r : routed)
-            if (r.wireId == target) run = out.entities[r.entityIndex].points;
-        if (run.size() < 2) continue;
-        size_t best = 0;
-        double bestLen = -1.0;
-        for (size_t k = 1; k < run.size(); ++k) {
-            if (std::abs(run[k - 1].y - run[k].y) > 1e-6) continue;
-            const double len = std::abs(run[k].x - run[k - 1].x);
-            if (len > bestLen) {
-                bestLen = len;
-                best = k;
-            }
-        }
-        if (bestLen <= 1e-6) continue;   // nothing level on it to join
-        const Vec2 at{(run[best - 1].x + run[best].x) / 2.0, run[best].y};
-        const double inward = (p->conn->side == HarnessSide::Left) ? 1.0 : -1.0;
-        Entity e;
-        e.type = EntityType::Wire;
-        e.layer = QStringLiteral("Wires");
-        if (std::abs(pinPt.y - at.y) > 1e-6) {
-            e.points = {pinPt, {at.x, pinPt.y}, at};
-        } else {
-            // On the same row as the stretch it joins: off it a pitch, along, and back square into it.
-            const double off = at.y + p->spec.pitch;
-            const double out1 = pinPt.x + inward * std::max(10.0, p->spec.pitch);
-            e.points = {pinPt, {out1, pinPt.y}, {out1, off}, {at.x, off}, at};
-        }
-        e.meta.insert("wireColor", w.color);
-        e.meta.insert("wireGauge", w.gauge);
-        e.meta.insert("jointTo", target);
-        if (!w.libPart.isEmpty()) e.meta.insert("libPart", w.libPart);
-        if (!w.label.isEmpty()) e.meta.insert("wireLabel", w.label);
-        e.meta.insert("showWireLabel", w.showLabel);
-        e.meta.insert("showColorName", w.showColor);
-        e.meta.insert("showGaugeName", w.showGauge);
-        if (w.showColor || w.showGauge) e.meta.insert("annCount", 1);
-        if (L.textGap > 0.0) e.meta.insert("textGap", L.textGap);
-        for (const QString& part : wireAnnotParts())
-            setWireAnnotGapFor(e, part, L.textGap + wireAnnotDefaultGap(part));
-        if (L.wireColorMode == QLatin1String("bylayer"))
-            e.meta.insert("wireColorMode", QStringLiteral("bylayer"));
-        else
-            e.color = wireColorHex(w.color);
-        out.entities.push_back(std::move(e));
-        routed.push_back({w.id, out.entities.size() - 1});
-    }
-
     // ---- Overall shields: one per connector that asks for one ----
     // The OVERALL screen wraps everything arriving at that connector, so it is asked for on
     // the connector rather than per wire, and it is drawn just inboard of its own pins — the
@@ -2183,7 +2443,7 @@ HarnessBuild buildHarness(const HarnessDef& input) {
                                                                      : p.conn->shieldRight;
         const bool wantsBond = (p.conn->side == HarnessSide::Left) ? p.conn->bodyBondLeft
                                                                   : p.conn->bodyBondRight;
-        if (!wantsOverall && !wantsBond) continue;
+        if (!wantsOverall) continue;
         // Everything that reaches this connector.
         std::vector<QString> ids;
         for (const auto& w : def.wires)
@@ -2229,13 +2489,18 @@ HarnessBuild buildHarness(const HarnessDef& input) {
         if (ids.empty()) continue;
         // Span of the group's runs, so the symbols sit along the middle of it.
         double xa = 1e18, xb = -1e18;
+        double sharedA=-1e18,sharedB=1e18;
         for (const Routed& r : routed) {
             if (std::find(ids.begin(), ids.end(), r.wireId) == ids.end()) continue;
+            double memberA=1e18,memberB=-1e18;
             for (const Vec2& pt : out.entities[r.entityIndex].points) {
                 xa = std::min(xa, pt.x);
                 xb = std::max(xb, pt.x);
+                memberA=std::min(memberA,pt.x);memberB=std::max(memberB,pt.x);
             }
+            sharedA=std::max(sharedA,memberA);sharedB=std::min(sharedB,memberB);
         }
+        if(sharedA<sharedB){xa=sharedA;xb=sharedB;}
         if (xa > xb) continue;
         // How many symbols this screen gets. Twice - once near each end - for a group that runs
         // between two connectors, because that is where a screen is caught and terminated. But a group
@@ -2285,12 +2550,18 @@ HarnessBuild buildHarness(const HarnessDef& input) {
             const size_t had = out.entities.size();
             Vec2 drain;
             bool innerTerminated = false;
-            {
-                const QString endpointKey = harnessInternalShieldKey(key);
-                for (const auto& w : def.wires)
-                    if (w.fromConn == endpointKey || w.toConn == endpointKey)
-                        innerTerminated = true;
+            const QString endpointKey=harnessInternalShieldKey(key);
+            QString fromConn;
+            for(const auto& member:def.wires)if(member.shieldGroup==key){fromConn=member.fromConn;break;}
+            const auto* source=harnessConnById(def,fromConn);
+            const int visualEnd=k*2<amount?0:1;
+            const int logicalEnd=source && source->side==HarnessSide::Right?1-visualEnd:visualEnd;
+            for(const auto& w:def.wires)if(w.fromConn==endpointKey || w.toConn==endpointKey) {
+                const int end=w.label==QLatin1String("drain right")?1:w.label==QLatin1String("drain left")?0:
+                    ((w.fromConn==endpointKey?w.toConn:w.fromConn)==fromConn?0:1);
+                if(end==logicalEnd)innerTerminated=true;
             }
+            const bool insulated=false; // Legacy insulated ends are the same as not connected.
             placeScreen(ids, x, key, /*overall=*/false, /*owns=*/k == 0, drain, nullptr,
                         /*terminated=*/innerTerminated);
             // Which sign it is and the span it may be dragged along.
@@ -2299,7 +2570,20 @@ HarnessBuild buildHarness(const HarnessDef& input) {
                     out.entities[i].meta.insert("markKey", markKey);
                     out.entities[i].meta.insert("markA", xa);
                     out.entities[i].meta.insert("markB", xb);
+                    out.entities[i].meta.insert("shieldEnd",logicalEnd);
+                    out.entities[i].meta.insert("shieldEndState",innerTerminated?QStringLiteral("connected"):insulated?QStringLiteral("terminated"):QStringLiteral("open"));
                 }
+            if(innerTerminated) {
+                for(int leg=0;leg<2;++leg) {
+                    Entity tick;tick.type=EntityType::Line;tick.layer=QStringLiteral("Wires");
+                    tick.a=leg?drain+Vec2{-0.5,-1.5}:drain+Vec2{-2.5,0.5};
+                    tick.b=leg?drain+Vec2{3,2}:drain+Vec2{-0.5,-1.5};
+                    tick.meta.insert("shieldEndMark",key);out.entities.push_back(tick);
+                }
+            } else if(insulated) {
+                Entity mark;mark.type=EntityType::NotConnected;mark.layer=QStringLiteral("Wires");mark.a=drain;
+                mark.meta.insert("ncSize",2.5);mark.meta.insert("shieldEndMark",key);out.entities.push_back(mark);
+            }
         }
     }
 
@@ -2403,7 +2687,7 @@ HarnessBuild buildHarness(const HarnessDef& input) {
                 sc.meta.insert("wires", end == 0 ? refs : QJsonArray());
                 // Same proportion as every other screen: the small radius follows the large one.
                 sc.meta.insert("ry", std::max(5.0, p->spec.pitch * 0.42));
-                sc.meta.insert("rx", std::max(2.0, std::max(5.0, p->spec.pitch * 0.42) / 3.0));
+                sc.meta.insert("rx", std::max(2.0, std::max(5.0, p->spec.pitch * 0.42) / kShieldRatio));
                 sc.meta.insert("rot", 1.5707963267948966);
                 sc.meta.insert("shape", QStringLiteral("ellipse"));
                 sc.meta.insert("lineType", QStringLiteral("solid"));
@@ -2611,6 +2895,8 @@ HarnessBuild buildHarness(const HarnessDef& input) {
                                    ? e.meta.value("overallShield").toString() == overallName
                                    : e.meta.value("shieldGroup").toString() == group;
             if (!match) continue;
+            const int requestedEnd=w.label==QLatin1String("drain right")?1:w.label==QLatin1String("drain left")?0:-1;
+            if(!overall && requestedEnd>=0 && e.meta.contains("shieldEnd") && e.meta.value("shieldEnd").toInt()!=requestedEnd)continue;
             const int k = std::min(e.meta.value("catch").toInt(
                                        static_cast<int>(e.points.size())),
                                    static_cast<int>(e.points.size()));
@@ -2686,7 +2972,7 @@ HarnessBuild buildHarness(const HarnessDef& input) {
     // An internal screen drained onto its connector's overall screen, or onto another screen: from the one leg to the other,
     // level and then square across, the way every run goes.
     {
-        auto legOf = [&](const QString& key, Vec2& leg) {
+        auto legOf = [&](const QString& key, Vec2& leg, int desiredEnd) {
             const QString group = harnessShieldEndpointGroup(key);
             QString wantConn;
             HarnessSide wantSide = HarnessSide::Left;
@@ -2701,6 +2987,7 @@ HarnessBuild buildHarness(const HarnessDef& input) {
                 const int k = std::min(sc.meta.value("catch").toInt(static_cast<int>(sc.points.size())),
                                        static_cast<int>(sc.points.size()));
                 if (!match || static_cast<int>(sc.points.size()) <= k) continue;
+                if(!overall && desiredEnd>=0 && sc.meta.contains("shieldEnd") && sc.meta.value("shieldEnd").toInt()!=desiredEnd)continue;
                 leg = sc.points.back();
                 have = true;
                 break;
@@ -2710,7 +2997,8 @@ HarnessBuild buildHarness(const HarnessDef& input) {
         for (const auto& w : def.wires) {
             if (!harnessIsShieldEndpoint(w.fromConn) || !harnessIsShieldEndpoint(w.toConn)) continue;
             Vec2 a, b;
-            if (!legOf(w.fromConn, a) || !legOf(w.toConn, b)) continue;
+            const int desiredEnd=w.label==QLatin1String("drain right")?1:w.label==QLatin1String("drain left")?0:-1;
+            if (!legOf(w.fromConn, a, desiredEnd) || !legOf(w.toConn, b, -1)) continue;
             Entity e;
             e.type = EntityType::Wire;
             e.layer = QStringLiteral("Wires");
@@ -2829,13 +3117,17 @@ HarnessBuild buildHarness(const HarnessDef& input) {
             if (L.markAt.contains(markKey)) {
                 const double pad = std::min(8.0, (xb - xa) * 0.25);
                 const double put = std::clamp(xa + (xb - xa) * L.markAt.value(markKey), xa + pad, std::max(xa + pad, xb - pad));
-                cutAt(ids, put, cuts, wireIds, gauge);
-                if (static_cast<int>(cuts.size()) == want) x = put;
+                if(const auto snapped=snapGroupX(ids,put,4.0))x=*snapped;
                 cuts.clear();
                 wireIds = QJsonArray();
             }
             cutAt(ids, x, cuts, wireIds, gauge);
             if (static_cast<int>(cuts.size()) != want) continue;
+            double band=0;
+            for(const auto& a:cuts)for(const auto& b:cuts)band=std::max(band,std::abs(a.y-b.y));
+            if(const auto snapped=snapGroupX(ids,x,twistBandWidth(std::max(1,L.twistCount),band,6.0)/2+2)) {
+                x=*snapped;cuts.clear();wireIds={};gauge.clear();cutAt(ids,x,cuts,wireIds,gauge);
+            }
             Entity e;
             e.type = EntityType::Twist;
             e.layer = QStringLiteral("Wires");
@@ -3037,9 +3329,46 @@ HarnessBuild buildHarness(const HarnessDef& input) {
             e.type = EntityType::Splice;
             e.layer = QStringLiteral("Wires");
             e.a = j;
+            for(const auto& node:def.joints) {
+                const auto span=jointPaths.value(QStringLiteral("@joint:")+node.id);
+                if(span.size()==3 && distance(span[1],j)<1e-6) {
+                    e.meta.insert("markKey",QStringLiteral("joint:")+node.id);
+                    const bool vertical=std::abs(span.front().x-span.back().x)<1e-6;
+                    e.meta.insert("markAxis",vertical?QStringLiteral("y"):QStringLiteral("x"));
+                    e.meta.insert("markA",vertical?span.front().y:span.front().x);e.meta.insert("markB",vertical?span.back().y:span.back().x);
+                }
+            }
             e.meta.insert("size", L.spliceSize * .5);
             out.entities.push_back(std::move(e));
         }
+    }
+    // Markings share columns and stay on horizontal conductors, even when the
+    // path's arc-length midpoint happens to fall on a tall knee.
+    double left=1e20,right=-1e20;
+    for(const auto& p:placed)for(const auto& pin:p.geom.pinEnd){left=std::min(left,pin.x);right=std::max(right,pin.x);}
+    const QStringList annotationOrder={QStringLiteral("label"),QStringLiteral("color"),QStringLiteral("gauge")};
+    QHash<QString,double> widths,offsets;
+    for(const auto& e:out.entities)if(e.type==EntityType::Wire)for(const auto& part:annotationOrder)
+        widths[part]=std::max(widths.value(part),.62*wireAnnotSizeFor(e,part)*wireAnnotPartText(e,part).size());
+    double total=0;
+    for(const auto& part:annotationOrder)if(widths.value(part)>0)total+=widths.value(part)+6;
+    double cursor=-(std::max(0.,total-6))*.5;
+    for(const auto& part:annotationOrder)if(widths.value(part)>0){offsets[part]=cursor+widths.value(part)*.5;cursor+=widths.value(part)+6;}
+    for(auto& e:out.entities)if(e.type==EntityType::Wire && e.points.size()>1) {
+        QJsonArray handles;
+        for(size_t i=1;i<e.points.size();++i) {
+            const auto p=e.points[i-1],q=e.points[i];
+            if(std::abs(p.x-q.x)>1e-6 || std::abs(p.y-q.y)<1e-6)continue;
+            for(auto it=previewKnees.cbegin();it!=previewKnees.cend();++it)if(std::abs(it.value().value("x").toDouble()-p.x)<1e-6) {
+                auto handle=it.value();handle["y0"]=std::min(p.y,q.y);handle["y1"]=std::max(p.y,q.y);handles.append(handle);
+            }
+        }
+        if(!handles.isEmpty())e.meta["previewKnees"]=handles;
+        double high=-1e20;
+        for(const auto& p:e.points)high=std::max(high,p.x);
+        e.meta["annHorizontal"]=true;
+        e.meta["annColumnX"]=left+(right-left)*(high<(left+right)*.5+.01?.25:.8);
+        for(const auto& part:annotationOrder)e.meta[QStringLiteral("annColumnOffset:")+part]=offsets.value(part);
     }
     if (def.physicalBom && !out.entities.empty()) {
         // Store physical material rows on their own connection/connector, so
