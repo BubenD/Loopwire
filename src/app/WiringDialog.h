@@ -73,6 +73,7 @@ public:
     void relayout();
 
 signals:
+    void terminatePinAsked(const QString& conn, int pin);
     void connectAsked(const QString& fromConn, int fromPin, const QString& toConn, int toPin);
     void relandAsked(const QString& wireId, int end, const QString& conn, int pin);
     void moveAsked(const QString& wireId, int toShownIndex);
@@ -96,6 +97,7 @@ signals:
 protected:
     void paintEvent(QPaintEvent*) override;
     void mousePressEvent(QMouseEvent* e) override;
+    void mouseDoubleClickEvent(QMouseEvent* e) override;
     void mouseMoveEvent(QMouseEvent* e) override;
     void mouseReleaseEvent(QMouseEvent* e) override;
     void keyPressEvent(QKeyEvent* e) override;
@@ -104,6 +106,8 @@ protected:
 
 public:
     // ZOOMED with the wheel: everything drawn and clicked at this scale (1 = as laid out).
+    void setConnectorSpacing(double spacing);
+    double connectorSpacing() const { return connectorSpacing_; }
     double zoom() const { return zoom_; }
     void setZoom(double z);
     // THE ZOOM THAT FITS everything drawn into the width and height there is.
@@ -125,11 +129,13 @@ public:
 
 private:
     // Where each screen's ring and each pair's twist is drawn, by group: from the bars of its wires.
-    QHash<QString, QRectF> markRects(bool screens) const;
+    QMultiHash<QString, QRectF> markRects(bool screens) const;
+    QList<int> screenEnds(const QString& group) const;
     // A wire's colour as drawn here: its own, or white while colours are off (and no stripe).
     QColor shownBase(const QString& code) const;
     QColor shownStripe(const QString& code) const;
     double zoom_ = 1.0;
+    double connectorSpacing_ = 460.0;
     bool colours_ = true;
     QSet<QString> trunks_;   // the cables shown as one harness (not saved)
     struct Brick {
@@ -295,6 +301,7 @@ public:
     DrawingPreview* enlargePreview();
 private:
     QLabel* panelTitle_ = nullptr;
+    QLabel* cma_ = nullptr;
     QComboBox* part_ = nullptr;
     QComboBox* base_ = nullptr;
     QComboBox* stripe_ = nullptr;

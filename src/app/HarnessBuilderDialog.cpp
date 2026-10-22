@@ -2148,16 +2148,22 @@ void HarnessBuilderDialog::showPinMap(bool on) {
 
 void HarnessBuilderDialog::applyStepLayout(int step) {
     if (!mainSplit_) return;
-    Q_UNUSED(step);
-    // THE MENU IS THE CHOICE, including on the Wires step with every field shown.
-    const bool under = previewBottom_;
-    const Qt::Orientation want = under ? Qt::Vertical : Qt::Horizontal;
-    if (mainSplit_->orientation() == want) return;
+    const bool under=previewBottom_;
+    const Qt::Orientation want=under?Qt::Vertical:Qt::Horizontal;
+    const bool changedStep=mainSplit_->property("previewStep").toInt()!=step;
+    const bool changedOrientation=mainSplit_->orientation()!=want;
+    mainSplit_->setProperty("previewStep",step);
+    auto* preview=mainSplit_->widget(1);
+    preview->show();
+    preview->setMinimumHeight(220);
+    if(!changedOrientation && !changedStep)return;
+    // The steps already scroll. Do not grow a whole page to its natural content
+    // height: that pushed the preview below the window on Shields and Layout.
     static_cast<WizardFlowSplitter*>(mainSplit_)->releasePanes();
     mainSplit_->setOrientation(want);
-    const int room = under ? mainSplit_->height() : mainSplit_->width();
-    mainSplit_->setSizes({room * 7 / 10, room - room * 7 / 10});
-    if (under && wizardUiReady_) WizardFlowSplitter::fitNaturalColumn(mainSplit_, pages_);
+    const int room=under?mainSplit_->height():mainSplit_->width();
+    mainSplit_->setSizes({room*6/10,room-room*6/10});
+    refreshPreview();
 }
 
 void HarnessBuilderDialog::calmSpinBoxes() {

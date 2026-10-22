@@ -5,6 +5,7 @@
 #include "app/HarnessBuilderDialog.h"
 #include "app/WiringDialog.h"
 #include "harness/HarnessBuilder.h"
+#include "analysis/Cma.h"
 #include "harness/HarnessDemand.h"
 #include "system/SystemImport.h"
 #include <QDir>
@@ -21,6 +22,8 @@
 #include <QListWidgetItem>
 #include <QMouseEvent>
 #include <QElapsedTimer>
+#include <QEventLoop>
+#include <QTimer>
 #include "harness/CableSpec.h"
 #include "harness/PartsLibrary.h"
 #include <QAction>
@@ -2137,9 +2140,92 @@ void testInteractiveWiringAgain() {
     check(boxes >= 1 && wholeCable, "table mode: the cable's Library part one cell, for every wire of the cable");
 }
 
+void testWiringRequestedRefinements() {
+    const auto savedLibrary=harnessBuilderLibrary();
+    PartsLibrary library;
+    LibraryPart stranded;stranded.id=QStringLiteral("cma-stranded");stranded.kind=PartKind::Wire;
+    stranded.params={{QStringLiteral("gauge"),QStringLiteral("22")},{QStringLiteral("gaugeMode"),QStringLiteral("AWG")},
+                     {QStringLiteral("strands"),QStringLiteral("19x34 AWG")}};
+    LibraryPart nominal=stranded;nominal.id=QStringLiteral("cma-nominal");nominal.params.remove(QStringLiteral("strands"));
+    nominal.params[QStringLiteral("gauge")]=QStringLiteral("20");
+    library.parts={stranded,nominal};useHarnessBuilderLibraryForTest(library);
+    HarnessDef def;
+    HarnessConnector left;left.id=QStringLiteral("a");left.designator=QStringLiteral("P1");left.pinCount=6;
+    HarnessConnector right=left;right.id=QStringLiteral("b");right.designator=QStringLiteral("P2");right.side=HarnessSide::Right;
+    def.connectors={left,right};
+    const auto spacingWas=QSettings().value(QStringLiteral("wiring/connectorSpacing"));
+    WiringDialog dialog(def,[]{});dialog.resize(1450,850);dialog.show();dialog.showTwo(left.id,right.id);
+    dialog.setOptimize(false,false,false);
+    const auto one=dialog.connectPins(left.id,1,right.id,1),two=dialog.connectPins(left.id,2,right.id,2);
+    def.wires[0].libPart=stranded.id;def.wires[1].libPart=nominal.id;dialog.refresh();
+    dialog.canvas()->setSelection({one,two});QApplication::processEvents();
+    auto* cma=dialog.findChild<QLabel*>(QStringLiteral("wiringCma"));
+    const double wanted=19*cmaOf(34,CmaUnit::Awg)+cmaOf(20,CmaUnit::Awg);
+    check(cma && std::abs(cma->text().section(QLatin1Char(' '),0,0).toDouble()-wanted)<0.06 &&
+          cma->toolTip().contains(QStringLiteral("strand definition")),"wiring CMA: sums actual strands and nominal AWG for selected wires");
+    def.wires[0].libPart.clear();def.wires[0].gauge=QStringLiteral("0.5");dialog.refresh();dialog.canvas()->setSelection({one});
+    check(std::abs(cma->text().toDouble()-cmaFromMm2(0.5))<0.06 && cma->toolTip().contains(QStringLiteral("General nominal")),
+          "wiring CMA: an unassigned wire uses its general cross section");
+    auto* spacing=dialog.findChild<QDoubleSpinBox*>(QStringLiteral("wiringConnectorSpacing"));
+    spacing->setValue(460);const double before=dialog.canvas()->pinCentre(right.id,1).x()-dialog.canvas()->pinCentre(left.id,1).x();
+    spacing->setValue(760);const double after=dialog.canvas()->pinCentre(right.id,1).x()-dialog.canvas()->pinCentre(left.id,1).x();
+    check(after-before>290,"wiring spacing: field widens connector separation without changing zoom");
+    const QString screen=dialog.groupWires(WiringCanvas::Tool::Screen,{one,two});
+    dialog.groupWires(WiringCanvas::Tool::Twist,{one,two});
+    dialog.setScreenDrain(screen,0,QStringLiteral("drain"),QStringLiteral("pin:a:5"));
+    dialog.setScreenDrain(screen,1,QStringLiteral("drain"),QStringLiteral("pin:b:5"));
+    dialog.canvas()->setSelection({one,two});QApplication::processEvents();
+    auto* shield=dialog.findChild<QGroupBox*>(QStringLiteral("wiringScreenBox"));
+    for(const char* name:{"wiringScreenLeft","wiringScreenLeftTo","wiringScreenRight","wiringScreenRightTo"}) {
+        auto* field=shield->findChild<QComboBox*>(QLatin1String(name));
+        check(field && field->isVisibleTo(shield) && field->width()>=200 && field->height()>=20,
+              "wiring shield: each method and destination field has its own readable row");
+    }
+    const auto y=(dialog.canvas()->barCentre(one).y()+dialog.canvas()->barCentre(two).y())/2;
+    int groups=0;bool previous=false;
+    for(int x=0;x<dialog.canvas()->sizeHint().width();++x) {
+        const bool hit=!dialog.canvas()->groupMarkAt({double(x),y}).isEmpty();
+        if(hit && !previous)++groups;previous=hit;
+    }
+    check(groups==3,"wiring marks: shields at both configured ends, one twist in the middle");
+    const QPointF pin=dialog.canvas()->pinCentre(left.id,6)*dialog.canvas()->zoom();
+    QMouseEvent doubleClick(QEvent::MouseButtonDblClick,pin,pin,Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+    QApplication::sendEvent(dialog.canvas(),&doubleClick);
+    check(def.layout.pinTerminations.value(QStringLiteral("a:6")),"wiring free pin: double-click terminates this pin only");
+    const auto restored=harnessDefFromJson(harnessDefToJson(def));
+    check(restored.layout.pinTerminations.value(QStringLiteral("a:6")),"wiring free pin: termination survives save and load");
+    const auto drawn=buildHarness(def);
+    check(std::count_if(drawn.entities.begin(),drawn.entities.end(),[](const Entity& e){return e.type==EntityType::NotConnected;})==1,
+          "wiring free pin: individual termination is generated in the drawing");
+    QApplication::sendEvent(dialog.canvas(),&doubleClick);
+    check(!def.layout.pinTerminations.value(QStringLiteral("a:6"),true),"wiring free pin: double-click again removes termination");
+    const auto image=qEnvironmentVariable("LOOPWIRE_WIRING_IMAGE");
+    if(!image.isEmpty()) {
+        QEventLoop wait;QTimer::singleShot(180,&wait,&QEventLoop::quit);wait.exec();dialog.grab().save(image);
+    }
+    dialog.hide();
+    QSettings().setValue(QStringLiteral("wiring/connectorSpacing"),spacingWas);
+    Document document;Editor editor;editor.setDocument(&document);
+    HarnessBuilderDialog wizard(&editor);wizard.loadDemand(def,QStringLiteral("preview regression"));wizard.show();
+    auto* where=wizard.findChild<QComboBox*>(QStringLiteral("harnessBuilderPreviewWhere"));
+    for(int bottom:{0,1}) {
+        where->setCurrentIndex(bottom);
+        for(int step=0;step<4;++step) {
+            wizard.setStep(step);for(int i=0;i<4;++i)QApplication::processEvents();
+            auto* preview=wizard.findChild<QWidget*>(QStringLiteral("harnessBuilderPreview"));
+            const QRect visible(preview->mapTo(&wizard,QPoint()),preview->size());
+            check(preview->isVisibleTo(&wizard) && visible.height()>=150 && visible.intersected(wizard.rect()).height()>=150,
+                  "wizard preview: remains in view on Connectors, Wires, Shields and Layout, at the side or bottom");
+        }
+    }
+    wizard.hide();document.setDirty(false);useHarnessBuilderLibraryForTest(savedLibrary);
+}
+
 int run_harnessbuilder_tests() {
     g_fail = 0;
     std::printf("harness builder tests:\n");
+    testWiringRequestedRefinements();
+    if(qEnvironmentVariableIsSet("LOOPWIRE_WIRING_FOCUSED"))return g_fail;
     testPhaseZero();
     testPhaseOne();
     testStepsRefined();

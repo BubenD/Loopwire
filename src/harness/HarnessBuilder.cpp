@@ -1317,6 +1317,9 @@ QJsonObject harnessDefToJson(const HarnessDef& def) {
     lay["legGap"] = def.layout.legGap;
     lay["bridgeCrossings"] = def.layout.bridgeCrossings;
     lay["terminateUnconnected"] = def.layout.terminateUnconnected;
+    QJsonObject pinTerminations;
+    for(auto it=def.layout.pinTerminations.cbegin();it!=def.layout.pinTerminations.cend();++it) pinTerminations[it.key()]=it.value();
+    lay["pinTerminations"]=pinTerminations;
     lay["twistCount"] = def.layout.twistCount;
     lay["twistAmount"] = def.layout.twistAmount;
     lay["shieldAmount"] = def.layout.shieldAmount;
@@ -1431,6 +1434,8 @@ HarnessDef harnessDefFromJson(const QJsonObject& root) {
     loaded.layout.legGap = lay.value("legGap").toDouble(60.0);
     loaded.layout.bridgeCrossings = lay.value("bridgeCrossings").toBool(true);
     loaded.layout.terminateUnconnected = lay.value("terminateUnconnected").toBool(false);
+    const auto pinTerminations=lay.value("pinTerminations").toObject();
+    for(auto it=pinTerminations.begin();it!=pinTerminations.end();++it) loaded.layout.pinTerminations.insert(it.key(),it.value().toBool());
     loaded.layout.twistCount = lay.value("twistCount").toInt(2);
     loaded.layout.twistAmount = lay.value("twistAmount").toInt(2);
     // An overall screen is drawn once unless asked for more. A pattern written before that was
@@ -2859,7 +2864,7 @@ HarnessBuild buildHarness(const HarnessDef& input) {
 
     // ---- Unconnected pins ----
     // TERMINATED AT THE PIN'S END: the X where a wire would land, out at the end of its stub - off the connector's body.
-    if (L.terminateUnconnected) {
+    if (L.terminateUnconnected || !L.pinTerminations.isEmpty()) {
         for (size_t pi = 0; pi < placed.size(); ++pi) {
             const Placed& p = placed[pi];
             for (int row = 0; row < static_cast<int>(p.geom.pinEnd.size()); ++row) {
@@ -2868,7 +2873,7 @@ HarnessBuild buildHarness(const HarnessDef& input) {
                 for (const auto& w : def.wires)
                     if ((w.fromConn == p.conn->id && w.fromPin == pin) ||
                         (w.toConn == p.conn->id && w.toPin == pin)) { wired = true; break; }
-                if (wired) continue;
+                if (wired || !L.pinTerminations.value(p.conn->id+QStringLiteral(":")+QString::number(pin),L.terminateUnconnected)) continue;
                 Entity e;
                 e.type = EntityType::NotConnected;
                 e.layer = QStringLiteral("Wires");

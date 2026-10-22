@@ -97,7 +97,7 @@ void HarnessBuilderDialog::initializeWizardUi() {
             if (auto* position = findChild<QComboBox*>(QStringLiteral("harnessBuilderPreviewWhere")))
                 position->setCurrentIndex(previewBottom_ ? 1 : 0);
             mainSplit_->setSizes({width() * 2 / 3, width() / 3});
-            WizardFlowSplitter::fitNaturalColumn(mainSplit_, pages_);
+            applyStepLayout(currentStep());
             fitWizardColumns(); saveWizardUi();
         });
         static_cast<QVBoxLayout*>(layout())->insertWidget(1, tools);
@@ -157,8 +157,12 @@ void HarnessBuilderDialog::initializeWizardUi() {
         fitWizardColumns();
         if (mainSplit_->orientation() == Qt::Vertical) {
             const auto saved = s.value(uiKey + "flowSplit").value<QList<int>>();
-            if (!saved.isEmpty()) static_cast<WizardFlowSplitter*>(mainSplit_)->restoreFlowHeights(saved);
-            else WizardFlowSplitter::fitNaturalColumn(mainSplit_, pages_);
+            if (saved.size()==2 && saved[0]+saved[1]<=mainSplit_->height())
+                static_cast<WizardFlowSplitter*>(mainSplit_)->restoreFlowHeights(saved);
+            else {
+                static_cast<WizardFlowSplitter*>(mainSplit_)->releasePanes();
+                mainSplit_->setSizes({mainSplit_->height()*6/10,mainSplit_->height()*4/10});
+            }
         }
         const auto wireHeights = s.value(uiKey + "flowWires").value<QList<int>>();
         if (!wireHeights.isEmpty()) {
@@ -168,7 +172,24 @@ void HarnessBuilderDialog::initializeWizardUi() {
         if (s.contains(uiKey + "connectors")) connTable_->horizontalHeader()->restoreState(s.value(uiKey + "connectors").toByteArray());
         if (s.contains(uiKey + "wires")) wireTable_->horizontalHeader()->restoreState(s.value(uiKey + "wires").toByteArray());
         keepDeleteColumnLast();
-        if (s.value(uiKey + "windowWidth", 0).toInt() > width()) fitWizardColumns();
+        // Open wide enough for the widest step, not just the initially visible
+        // connectors page. Preserve a larger saved window, within the monitor.
+        int widest=0;
+        for(auto* table:{connTable_,wireTable_}) {
+            int needed=56;
+            for(int column=0;column<table->columnCount();++column)if(!table->isColumnHidden(column))
+                needed+=std::max(80,std::min(220,table->horizontalHeader()->sectionSizeHint(column)));
+            widest=std::max(widest,needed);
+        }
+        for(int step=0;step<pages_->count();++step)
+            if(auto* scroll=pages_->widget(step)->findChild<QScrollArea*>();scroll && scroll->widget())
+                widest=std::max(widest,scroll->widget()->minimumSizeHint().width()+56);
+        if(auto* display=screen()) {
+            const int room=display->availableGeometry().width()-32;
+            resize(std::min(room,std::max(width(),widest+(previewBottom_?0:340))),height());
+            keepOnScreen();
+        }
+        fitWizardColumns();
         wizardUiReady_ = true;
     });
 }

@@ -144,6 +144,7 @@ struct HarnessLayout {
     double connectorGap = 30.0; // clear space between connectors stacked on one side
     double legGap = 60.0;   // extra space between Y-split legs
     bool bridgeCrossings = true;    // draw a hop where two wires cross
+    QHash<QString, bool> pinTerminations; // Individual conn:pin overrides of the general unconnected-pin rule.
     bool terminateUnconnected = false; // X-mark every pin no wire reaches
     // X-mark a WIRE end that lands on nothing - a wire drawn to a pin that does not exist, or
     // left dangling by an edit. A pin with no wire and a wire with no pin are different faults,
